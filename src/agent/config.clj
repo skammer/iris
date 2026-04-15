@@ -22,6 +22,9 @@
          :openai-compatible {:base-url "https://api.openai.com/v1"
                              :api-key nil}}
    :storage {:sqlite {:path "data/agent.db"}}
+   :tools {:http {:enabled true
+                  :timeout-ms 30000
+                  :default-headers {"User-Agent" "clj-agent/0.1"}}}
    :api {:host "127.0.0.1"
          :port 8080}})
 

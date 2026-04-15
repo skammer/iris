@@ -6,7 +6,9 @@
    [agent.core-test]
    [agent.persistence.sqlite-test]
    [agent.llm.providers.ollama-test]
-   [agent.llm.providers.openai-compatible-test]))
+   [agent.llm.providers.openai-compatible-test]
+   [agent.tools.common.http-test]
+   [agent.tools.core-test]))
 
 (def rewritten-test-namespaces
   '[agent.api-test
@@ -14,7 +16,9 @@
     agent.core-test
     agent.persistence.sqlite-test
     agent.llm.providers.ollama-test
-    agent.llm.providers.openai-compatible-test])
+    agent.llm.providers.openai-compatible-test
+    agent.tools.common.http-test
+    agent.tools.core-test])
 
 (defn run-all-tests
   []

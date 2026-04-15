@@ -19,3 +19,9 @@
                    :openrouter {:base-url "https://openrouter.ai/api/v1"
                                 :api-key "or-key"}})]
     (is (instance? agent.llm.providers.openai_compatible.OpenAICompatibleProvider provider))))
+
+(deftest create-system-registers-default-tools
+  (let [system (core/create-system)
+        tools (core/list-tools system)]
+    (is (= [:http] (mapv :name tools)))
+    (is (= 1 (get-in (core/health-check system) [:tools :count])))))
