@@ -3,6 +3,7 @@
   (:require
    [agent.llm.core :as llm-core]
    [agent.persistence.sqlite :as sqlite]
+   [agent.tools.core :as tools]
    [cheshire.core :as json]
    [clojure.core.async :as async]
    [clojure.string :as str])
@@ -62,6 +63,13 @@
   {:role (:role message)
    :content (:content message)
    :created_at (:created-at message)})
+
+(defn- tool->response [tool]
+  {:name (name (:name tool))
+   :description (:description tool)
+   :version (:version tool)
+   :category (some-> (:category tool) name)
+   :required_permissions (mapv name (:required-permissions tool))})
 
 (defn- session-exists? [system session-id]
   (sqlite/session-exists? (:store system) session-id))
@@ -202,7 +210,12 @@
   (write-json! exchange 200 {:ok true
                              :llm (llm-core/health-check (:llm-provider system))
                              :storage (sqlite/health-check (:store system))
+                             :tools (tools/registry-health (:tool-registry system))
                              :provider (get-in system [:config :llm :provider])}))
+
+(defn- handle-list-tools [system exchange]
+  (write-json! exchange 200 {:data (mapv tool->response
+                                         (tools/list-tools (:tool-registry system)))}))
 
 (defn- handle-create-session [system exchange]
   (let [body (read-json-body exchange)
@@ -245,6 +258,9 @@
 
             (and (= method "POST") (= path ["v1" "sessions"]))
             (handle-create-session system exchange)
+
+            (and (= method "GET") (= path ["v1" "tools"]))
+            (handle-list-tools system exchange)
 
             (and (= method "GET") (= 4 (count path))
                  (= ["v1" "sessions"] (subvec path 0 2))

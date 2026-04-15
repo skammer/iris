@@ -8,7 +8,7 @@ Status below is stale. Active work follows rewritten runtime in `src/agent/core.
 3. [x] Rewrite pass 3: API validation/error model + SSE chat streaming
 4. [x] Rewrite pass 4: isolate/quarantine legacy runtime from active path
 5. [x] Rewrite pass 5: add DB schema migration/versioning
-6. [ ] Rewrite pass 6: add tool registry on rewritten core
+6. [x] Rewrite pass 6: add tool registry on rewritten core
 7. [ ] Rewrite pass 7: add orchestrator/subagent runtime on rewritten core
 
 ## Phase 1: Knowledge Base Creation
@@ -137,6 +137,7 @@ Key files created:
 - Next task: Implement basic LLM integration (Phase 3, Task 14)
 
 ## Log
+- 2026-04-16: Completed rewrite pass 6 - added rewritten tool registry, default HTTP tool, system wiring, and API tool listing/health exposure
 - 2026-04-15: Completed rewrite pass 5 - added SQLite schema migrations, explicit schema versioning, migration history, and upgrade path for unversioned legacy DBs
 - 2026-04-15: Completed rewrite pass 4 - moved legacy runtime/modules to `legacy_src`, added explicit `:legacy` alias, and made rewritten slice default classpath
 - 2026-04-15: Completed rewrite pass 3 - added API request validation, typed API errors, and SSE chat streaming with persisted streamed completions

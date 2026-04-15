@@ -8,6 +8,8 @@
    [agent.llm.providers.ollama :as ollama]
    [agent.llm.providers.openai-compatible :as openai-compatible]
    [agent.persistence.sqlite :as sqlite]
+   [agent.tools.common.http :as http-tool]
+   [agent.tools.core :as tools]
    [clojure.string :as str]))
 
 (defn create-llm-provider
@@ -44,6 +46,14 @@
   [cfg]
   (sqlite/create-store (get cfg :sqlite)))
 
+(defn create-tool-registry
+  [cfg]
+  (let [http-cfg (get cfg :http)
+        registry (tools/create-registry)]
+    (cond-> registry
+      (not= false (:enabled http-cfg))
+      (tools/register-tool (http-tool/create-http-tool http-cfg)))))
+
 (defn create-system
   ([] (create-system nil))
   ([config-path]
@@ -51,7 +61,8 @@
          llm-cfg (config/llm-config cfg)]
      {:config cfg
       :llm-provider (create-llm-provider llm-cfg)
-      :store (create-store (:storage cfg))})))
+      :store (create-store (:storage cfg))
+      :tool-registry (create-tool-registry (:tools cfg))})))
 
 (defn complete
   ([system prompt]
@@ -73,6 +84,7 @@
   [system]
   {:llm (llm-core/health-check (:llm-provider system))
    :storage (sqlite/health-check (:store system))
+   :tools (tools/registry-health (:tool-registry system))
    :provider (get-in system [:config :llm :provider])})
 
 (defn create-session!
@@ -91,6 +103,16 @@
 (defn list-messages
   [system session-id]
   (sqlite/list-messages (:store system) session-id))
+
+(defn list-tools
+  [system]
+  (tools/list-tools (:tool-registry system)))
+
+(defn execute-tool
+  ([system tool-name input]
+   (execute-tool system tool-name input {}))
+  ([system tool-name input context]
+   (tools/execute-tool (:tool-registry system) tool-name input context)))
 
 (defn complete!
   [system messages {:keys [session-id] :as opts}]
