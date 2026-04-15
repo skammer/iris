@@ -2,7 +2,9 @@
   (:require
    [agent.persistence.sqlite :as sqlite]
    [clojure.java.io :as io]
-   [clojure.test :refer :all]))
+   [clojure.test :refer :all])
+  (:import
+   (java.sql DriverManager)))
 
 (defn temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "clj-agent-" ".db")))
@@ -20,9 +22,50 @@
                                          :response "world"})
         sessions (sqlite/list-sessions store)
         messages (sqlite/list-messages store (:id session))
-        health (sqlite/health-check store)]
+        health (sqlite/health-check store)
+        history (sqlite/migration-history store)]
     (is (= 1 (count sessions)))
     (is (= 2 (count messages)))
     (is (= "hello" (:content (first messages))))
+    (is (= sqlite/latest-schema-version (sqlite/schema-version store)))
+    (is (= [1 2] (mapv :version history)))
     (is (true? (:healthy health)))
+    (is (true? (get-in health [:details :up-to-date?])))
+    (io/delete-file path true)))
+
+(deftest sqlite-upgrades-unversioned-legacy-db-test
+  (let [path (temp-db-path)]
+    (Class/forName "org.sqlite.JDBC")
+    (with-open [conn (DriverManager/getConnection (sqlite/jdbc-url path))]
+      (with-open [stmt (.createStatement conn)]
+        (.execute stmt "CREATE TABLE sessions (
+                          id TEXT PRIMARY KEY,
+                          title TEXT,
+                          created_at TEXT NOT NULL
+                        );")
+        (.execute stmt "CREATE TABLE messages (
+                          id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          session_id TEXT NOT NULL,
+                          role TEXT NOT NULL,
+                          content TEXT NOT NULL,
+                          created_at TEXT NOT NULL
+                        );")
+        (.execute stmt "CREATE TABLE completions (
+                          id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          session_id TEXT,
+                          provider TEXT NOT NULL,
+                          model TEXT,
+                          prompt TEXT,
+                          response TEXT,
+                          created_at TEXT NOT NULL
+                        );")))
+    (let [store (sqlite/create-store {:path path})
+          health (sqlite/health-check store)
+          history (sqlite/migration-history store)
+          session (sqlite/create-session! store "migrated")]
+      (is (= sqlite/latest-schema-version (sqlite/schema-version store)))
+      (is (= [1 2] (mapv :version history)))
+      (is (true? (:healthy health)))
+      (is (true? (get-in health [:details :up-to-date?])))
+      (is (string? (:id session))))
     (io/delete-file path true)))
