@@ -1,0 +1,68 @@
+(ns test.agent.llm.core-test
+  "Tests for LLM core protocols and interfaces."
+  (:require
+   [clojure.test :refer :all]
+   [agent.llm.core :as llm-core]))
+
+(deftest test-llm-protocol-definitions
+  (testing "ILLMProvider protocol exists"
+    (is (some? llm-core/ILLMProvider))
+    (is (map? (meta llm-core/ILLMProvider)))))
+
+(deftest test-protocol-methods
+  (testing "Protocol has required methods"
+    (let [protocol-methods (keys (methods llm-core/ILLMProvider))]
+      (is (some #{'complete} protocol-methods))
+      (is (some #{'stream} protocol-methods))
+      (is (some #{'embed} protocol-methods))
+      (is (some #{'list-models} protocol-methods))
+      (is (some #{'get-capabilities} protocol-methods))
+      (is (some #{'estimate-cost} protocol-methods)))))
+
+(deftest test-configuration-protocols
+  (testing "Configuration protocols exist"
+    (is (some? llm-core/ILLMProviderWithConfig))
+    (is (some? llm-core/ILLMProviderWithHealth))
+    
+    (let [config-methods (keys (methods llm-core/ILLMProviderWithConfig))]
+      (is (some #{'update-config} config-methods))
+      (is (some #{'get-config} config-methods)))
+    
+    (let [health-methods (keys (methods llm-core/ILLMProviderWithHealth))]
+      (is (some #{'health-check} health-methods)))))
+
+(deftest test-helper-functions
+  (testing "Normalize messages function"
+    (let [messages [{:role "user" :content "Hello"}
+                    {:role :assistant :content "Hi there"}
+                    {:role "system" :content "Be helpful"}]]
+      (is (vector? (llm-core/normalize-messages messages)))
+      (is (= 3 (count (llm-core/normalize-messages messages))))))
+  
+  (testing "Message validation"
+    (let [valid-messages [{:role "user" :content "Hello"}]
+          invalid-messages [{:wrong-key "user" :content "Hello"}]]
+      (is (llm-core/validate-messages? valid-messages))
+      (is (not (llm-core/validate-messages? invalid-messages))))))
+
+(deftest test-error-handling
+  (testing "Error types exist"
+    (is (some? llm-core/ProviderError))
+    (is (some? llm-core/ConfigurationError))
+    (is (some? llm-core/ConnectionError))))
+
+(comment
+  ;; Run tests
+  (run-tests 'test.agent.llm.core-test)
+  
+  ;; Manual testing
+  (require '[agent.llm.core :as llm])
+  
+  ;; Check protocol methods
+  (keys (methods llm/ILLMProvider))
+  
+  ;; Test message normalization
+  (llm/normalize-messages [{:role "user" :content "Test"}])
+  
+  ;; Test validation
+  (llm/validate-messages? [{:role "user" :content "Test"}]))

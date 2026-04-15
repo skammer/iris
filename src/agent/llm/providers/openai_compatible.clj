@@ -1,0 +1,189 @@
+(ns agent.llm.providers.openai-compatible
+  "OpenAI-compatible provider, used for OpenRouter first and other compatible APIs."
+  (:require
+   [agent.llm.core :as llm-core]
+   [cheshire.core :as json]
+   [clj-http.client :as http]
+   [clojure.core.async :as async]
+   [clojure.java.io :as io]
+   [clojure.string :as str]))
+
+(defn- trim-trailing-slash [value]
+  (str/replace (or value "") #"/+$" ""))
+
+(defn- bearer-headers [{:keys [api-key site-url app-name extra-headers]}]
+  (merge {"Content-Type" "application/json"}
+         (when api-key
+           {"Authorization" (str "Bearer " api-key)})
+         (when site-url
+           {"HTTP-Referer" site-url})
+         (when app-name
+           {"X-Title" app-name})
+         extra-headers))
+
+(defn- chat-url [base-url]
+  (str (trim-trailing-slash base-url) "/chat/completions"))
+
+(defn- embeddings-url [base-url]
+  (str (trim-trailing-slash base-url) "/embeddings"))
+
+(defn- models-url [base-url]
+  (str (trim-trailing-slash base-url) "/models"))
+
+(defn- completion-body [default-model messages opts]
+  {:model (or (:model opts) default-model)
+   :messages (llm-core/normalize-messages messages)
+   :temperature (or (:temperature opts) 0.2)
+   :max_tokens (or (:max-tokens opts) 1024)
+   :stream false})
+
+(defn- stream-body [default-model messages opts]
+  (assoc (completion-body default-model messages opts) :stream true))
+
+(defn- parse-sse-line [line]
+  (when (str/starts-with? line "data: ")
+    (let [payload (subs line 6)]
+      (when-not (= "[DONE]" payload)
+        (json/parse-string payload true)))))
+
+(defn- usage->estimate [response]
+  (let [usage (:usage response)]
+    {:tokens (or (:total_tokens usage) 0)
+     :prompt-tokens (or (:prompt_tokens usage) 0)
+     :completion-tokens (or (:completion_tokens usage) 0)
+     :cost-usd nil}))
+
+(defrecord OpenAICompatibleProvider [base-url api-key default-model site-url app-name extra-headers config]
+  llm-core/ILLMProvider
+  (complete [_ messages opts]
+    (let [response (http/post (chat-url base-url)
+                              {:headers (bearer-headers {:api-key api-key
+                                                         :site-url site-url
+                                                         :app-name app-name
+                                                         :extra-headers extra-headers})
+                               :body (json/generate-string (completion-body default-model messages opts))
+                               :as :json})]
+      (-> response :body :choices first :message :content)))
+
+  (stream [_ messages opts]
+    (let [ch (async/chan)]
+      (async/thread
+        (try
+          (let [response (http/post (chat-url base-url)
+                                    {:headers (bearer-headers {:api-key api-key
+                                                               :site-url site-url
+                                                               :app-name app-name
+                                                               :extra-headers extra-headers})
+                                     :body (json/generate-string (stream-body default-model messages opts))
+                                     :as :stream})]
+            (with-open [reader (io/reader (:body response))]
+              (doseq [line (line-seq reader)]
+                (when-let [event (parse-sse-line line)]
+                  (when-let [content (-> event :choices first :delta :content)]
+                    (async/>!! ch content))))))
+          (catch Exception e
+            (async/>!! ch {:error (.getMessage e)}))
+          (finally
+            (async/close! ch))))
+      ch))
+
+  (embed [_ text opts]
+    (let [input (if (string? text) [text] text)
+          response (http/post (embeddings-url base-url)
+                              {:headers (bearer-headers {:api-key api-key
+                                                         :site-url site-url
+                                                         :app-name app-name
+                                                         :extra-headers extra-headers})
+                               :body (json/generate-string {:model (or (:model opts) default-model)
+                                                            :input input})
+                               :as :json})
+          embeddings (mapv :embedding (-> response :body :data))]
+      (if (string? text)
+        (first embeddings)
+        embeddings)))
+
+  (list-models [_]
+    (try
+      (let [response (http/get (models-url base-url)
+                               {:headers (bearer-headers {:api-key api-key
+                                                          :site-url site-url
+                                                          :app-name app-name
+                                                          :extra-headers extra-headers})
+                                :as :json})]
+        (vec (or (-> response :body :data) [])))
+      (catch Exception _
+        [])))
+
+  (get-capabilities [_ model]
+    {:model model
+     :supports-streaming true
+     :supports-embedding true
+     :supports-tools true})
+
+  (estimate-cost [_ messages model]
+    {:tokens (llm-core/count-tokens-estimate messages)
+     :cost-usd nil
+     :model model}))
+
+(extend-type OpenAICompatibleProvider
+  llm-core/ILLMProviderWithConfig
+  (update-config [this new-config]
+    (->OpenAICompatibleProvider
+     (or (:base-url new-config) (:base-url this))
+     (or (:api-key new-config) (:api-key this))
+     (or (:default-model new-config) (:default-model this))
+     (or (:site-url new-config) (:site-url this))
+     (or (:app-name new-config) (:app-name this))
+     (or (:extra-headers new-config) (:extra-headers this))
+     (merge (:config this) new-config)))
+
+  (get-config [this]
+    {:base-url (:base-url this)
+     :default-model (:default-model this)
+     :site-url (:site-url this)
+     :app-name (:app-name this)
+     :api-key (when (:api-key this) "***REDACTED***")
+     :config (:config this)}))
+
+(extend-type OpenAICompatibleProvider
+  llm-core/ILLMProviderWithHealth
+  (health-check [this]
+    (try
+      (let [response (http/get (models-url (:base-url this))
+                               {:headers (bearer-headers {:api-key (:api-key this)
+                                                          :site-url (:site-url this)
+                                                          :app-name (:app-name this)
+                                                          :extra-headers (:extra-headers this)})
+                                :throw-exceptions false
+                                :as :json})]
+        {:healthy (= 200 (:status response))
+         :details {:status (:status response)}})
+      (catch Exception e
+        {:healthy false
+         :details {:error (.getMessage e)}})))
+
+  (get-metrics [_]
+    {:provider :openai-compatible}))
+
+(defn create-openai-compatible-provider
+  [{:keys [base-url api-key default-model model site-url app-name extra-headers]
+    :or {base-url "https://api.openai.com/v1"
+         app-name "clj-agent"}}]
+  (->OpenAICompatibleProvider base-url
+                              api-key
+                              (or default-model model "gpt-4o-mini")
+                              site-url
+                              app-name
+                              extra-headers
+                              {}))
+
+(defn create-openrouter-provider
+  [{:keys [api-key base-url model site-url app-name]
+    :or {base-url "https://openrouter.ai/api/v1"
+         app-name "clj-agent"}}]
+  (create-openai-compatible-provider
+   {:base-url base-url
+    :api-key api-key
+    :default-model (or model "openai/gpt-4o-mini")
+    :site-url site-url
+    :app-name app-name}))
