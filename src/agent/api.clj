@@ -14,11 +14,23 @@
    [agent.runtime.core :as runtime]
    [cheshire.core :as json]
    [clojure.core.async :as async]
+   [clojure.java.io :as io]
    [clojure.string :as str])
   (:import
    (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
    (java.net InetSocketAddress URLDecoder)
-   (java.nio.charset StandardCharsets)))
+   (java.nio.charset StandardCharsets)
+   (java.nio.file Files)
+   (java.util.concurrent ExecutorService Executors ThreadFactory)))
+
+(def ^:private server-executors (atom {}))
+
+(defn- daemon-thread-factory []
+  (reify ThreadFactory
+    (newThread [_ runnable]
+      (doto (Thread. runnable)
+        (.setDaemon true)
+        (.setName (str "clj-agent-http-" (System/nanoTime)))))))
 
 (defn- read-json-body [^HttpExchange exchange]
   (let [body (slurp (.getRequestBody exchange))]
@@ -39,6 +51,12 @@
     (.sendResponseHeaders exchange status (long (count bytes)))
     (with-open [os (.getResponseBody exchange)]
       (.write os bytes))))
+
+(defn- write-bytes! [^HttpExchange exchange status content-type bytes]
+  (.add (.getResponseHeaders exchange) "Content-Type" content-type)
+  (.sendResponseHeaders exchange status (long (count bytes)))
+  (with-open [os (.getResponseBody exchange)]
+    (.write os bytes)))
 
 (defn- api-error
   ([status error-code message] (api-error status error-code message nil))
@@ -62,6 +80,25 @@
 
 (defn- not-found! [exchange]
   (write-json! exchange 404 {:error "not_found"}))
+
+(defn- content-type-for-path [path]
+  (cond
+    (str/ends-with? path ".css") "text/css; charset=utf-8"
+    (str/ends-with? path ".js") "application/javascript; charset=utf-8"
+    (str/ends-with? path ".woff2") "font/woff2"
+    (str/ends-with? path ".woff") "font/woff"
+    (str/ends-with? path ".ttf") "font/ttf"
+    (str/ends-with? path ".otf") "font/otf"
+    :else "application/octet-stream"))
+
+(defn- handle-public-file [exchange path]
+  (let [relative (subs path (count "/public/"))
+        file (io/file "public" relative)
+        canonical (.getCanonicalPath file)
+        root (.getCanonicalPath (io/file "public"))]
+    (if (and (.startsWith canonical root) (.isFile file))
+      (write-bytes! exchange 200 (content-type-for-path canonical) (Files/readAllBytes (.toPath file)))
+      (not-found! exchange))))
 
 (defn- split-path [^HttpExchange exchange]
   (let [path (.getPath (.getRequestURI exchange))]
@@ -881,6 +918,10 @@
 (defn- handle-ui-index [exchange]
   (write-html! exchange 200 (ui/index-page)))
 
+(defn- handle-ui-shell [system exchange]
+  (write-html! exchange 200
+               (ui/shell-fragment system (keyword (:tab (query-params exchange))))))
+
 (defn- handle-ui-dashboard [system exchange]
   (write-html! exchange 200 (ui/dashboard-fragment system)))
 
@@ -944,6 +985,9 @@
                  (str (ui/dashboard-fragment system)
                       (ui/session-detail-fragment system session-id)
                       (ui/sessions-fragment system)))))
+
+(defn- handle-ui-events [system exchange]
+  (write-html! exchange 200 (ui/events-fragment system)))
 
 (defn- handle-ui-events-live [system exchange]
   (let [ch (async/chan 64)]
@@ -1141,13 +1185,20 @@
     (handle [_ exchange]
       (try
         (let [method (.getRequestMethod exchange)
-              path (split-path exchange)]
+              path (split-path exchange)
+              raw-path (.getPath (.getRequestURI exchange))]
           (cond
+            (and (= method "GET") (str/starts-with? raw-path "/public/"))
+            (handle-public-file exchange raw-path)
+
             (and (= method "GET") (empty? path))
             (handle-ui-index exchange)
 
             (and (= method "GET") (= path ["health"]))
             (handle-health system exchange)
+
+            (and (= method "GET") (= path ["ui" "shell"]))
+            (handle-ui-shell system exchange)
 
             (and (= method "GET") (= path ["ui" "dashboard"]))
             (handle-ui-dashboard system exchange)
@@ -1185,6 +1236,9 @@
 
             (and (= method "POST") (= path ["ui" "chat"]))
             (handle-ui-chat system exchange)
+
+            (and (= method "GET") (= path ["ui" "events"]))
+            (handle-ui-events system exchange)
 
             (and (= method "GET") (= path ["ui" "events" "live"]))
             (handle-ui-events-live system exchange)
@@ -1370,13 +1424,18 @@
 (defn start-server!
   [system {:keys [host port]}]
   (let [server (HttpServer/create (InetSocketAddress. host (int port)) 0)
-        handler (create-handler system)]
+        handler (create-handler system)
+        executor (Executors/newCachedThreadPool (daemon-thread-factory))]
     (.createContext server "/" handler)
-    (.setExecutor server nil)
+    (.setExecutor server executor)
     (.start server)
+    (swap! server-executors assoc server executor)
     server))
 
 (defn stop-server!
   [^HttpServer server]
   (when server
-    (.stop server 0)))
+    (.stop server 0)
+    (when-let [^ExecutorService executor (get @server-executors server)]
+      (.shutdownNow executor)
+      (swap! server-executors dissoc server))))

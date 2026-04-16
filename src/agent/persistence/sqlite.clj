@@ -820,9 +820,9 @@
     (get-agent-run store run-id)))
 
 (defn create-agent-run-lease!
-  [store {:keys [run-id holder-id expires-at]
+  [store {:keys [id run-id holder-id expires-at]
           :or {holder-id "runtime"}}]
-  (let [id (str (UUID/randomUUID))
+  (let [id (or id (str (UUID/randomUUID)))
         acquired-at (str (Instant/now))]
     (with-connection
       store

@@ -7,19 +7,46 @@
    [agent.persistence.sqlite :as sqlite]
    [agent.runners.core :as runners]
    [agent.runtime.core :as runtime]
+   [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [cheshire.core :as json]
    [clojure.string :as str]
    [hiccup2.core :as h]))
-
-(def ^:private page-style
-  ":root{color-scheme:light;background:#f6f1e8;color:#181512;--paper:#fffdf8;--ink:#181512;--muted:#6f6558;--line:#d9cbb8;--accent:#1b7f6a;--accent-2:#b85c38;--shadow:0 16px 40px rgba(37,27,18,.08);font-family:'IBM Plex Sans','Avenir Next','Segoe UI',sans-serif;}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top left,#fffaf1,transparent 30%),linear-gradient(180deg,#f6f1e8,#efe3d0);color:var(--ink)}main{max-width:1440px;margin:0 auto;padding:24px;display:grid;gap:18px}.hero,.panel{background:rgba(255,253,248,.94);border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow)}.hero{padding:24px 28px;display:grid;gap:8px}.hero h1{margin:0;font-size:2rem;letter-spacing:-.04em}.hero p{margin:0;color:var(--muted);max-width:70ch}.grid{display:grid;gap:18px}.grid.top{grid-template-columns:1.2fr .8fr}.grid.bottom{grid-template-columns:1fr 1fr 1fr}.panel{padding:18px}.panel h2,.panel h3{margin:0 0 12px 0;letter-spacing:-.03em}.stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.stat{padding:12px 14px;border:1px solid var(--line);border-radius:16px;background:#fff}.label{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:6px}.value{font-size:1.2rem;font-weight:700}.stack{display:grid;gap:10px}.session-link,.tool-button,button{appearance:none;border:0;border-radius:14px;background:var(--ink);color:#fff;padding:10px 14px;font:inherit;cursor:pointer}.session-link{width:100%;text-align:left;background:#fff;color:var(--ink);border:1px solid var(--line)}.session-link:hover,button:hover{filter:brightness(.98)}.session-meta,.meta,.muted{color:var(--muted);font-size:.88rem}.messages,.event-list{display:grid;gap:10px;max-height:420px;overflow:auto;padding-right:4px}.message,.event-item,.result{border:1px solid var(--line);border-radius:16px;padding:12px 14px;background:#fff}.message-role{font-size:.75rem;text-transform:uppercase;letter-spacing:.12em;color:var(--accent);margin-bottom:6px}.message-role.user{color:var(--accent-2)}.message-role.system{color:#6a4fb3}.message-role.tool{color:#7a5e12}form{display:grid;gap:10px}input,textarea,select{width:100%;padding:10px 12px;border-radius:14px;border:1px solid var(--line);background:#fff;color:var(--ink);font:inherit}textarea{min-height:120px;resize:vertical}.actions{display:flex;gap:10px;flex-wrap:wrap}.dual{display:grid;gap:12px;grid-template-columns:1fr 1fr}.code{font-family:'IBM Plex Mono','SFMono-Regular','Menlo',monospace;font-size:.88rem;white-space:pre-wrap;word-break:break-word}.empty{padding:18px;border:1px dashed var(--line);border-radius:16px;color:var(--muted);background:rgba(255,255,255,.65)}@media (max-width:1100px){.grid.top,.grid.bottom,.stats,.dual{grid-template-columns:1fr}}")
 
 (defn- render [node]
   (str (h/html node)))
 
 (defn- render-many [& nodes]
   (apply str (map render nodes)))
+
+(declare dashboard-fragment
+         sessions-fragment
+         session-detail-fragment
+         events-fragment
+         memory-prompt-fragment
+         memory-search-results-fragment
+         tools-fragment
+         tool-approvals-fragment
+         runs-fragment
+         run-detail-fragment)
+
+(def ^:private tabs
+  [{:key :overview :label "Overview"}
+   {:key :chat :label "Chat"}
+   {:key :runs :label "Runs"}
+   {:key :tools :label "Tools"}
+   {:key :memory :label "Memory"}])
+
+(defn- normalize-tab [value]
+  (let [tab (some-> value name str/lower-case keyword)]
+    (if (some #(= tab (:key %)) tabs) tab :overview)))
+
+(defn- tab-link [tab active-tab]
+  [:button.tab-link
+   {:type "button"
+    :class (when (= (:key tab) active-tab) "active")
+    "data-on:click" (str "@get('/ui/shell?tab=" (name (:key tab)) "')")}
+   (:label tab)])
 
 (defn index-page []
   (render
@@ -28,54 +55,86 @@
      [:meta {:charset "utf-8"}]
      [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
      [:title "clj-agent control plane"]
+     [:link {:rel "preconnect" :href "https://fonts.googleapis.com"}]
+     [:link {:rel "preconnect" :href "https://fonts.gstatic.com" :crossorigin true}]
+     [:link {:rel "stylesheet"
+             :href "https://fonts.googleapis.com/css2?family=Doto:wght,ROND@400..900,0..100&family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap"}]
+     [:link {:rel "stylesheet" :href "/public/app.css"}]
      [:script {:type "module"
                :src "https://cdn.jsdelivr.net/gh/starfederation/datastar@1.0.0-RC.8/bundles/datastar.js"}]
-     [:style page-style]]
+     ]
     [:body
      [:main
-      [:section.hero
-       [:h1 "clj-agent control plane"]
-       [:p "Datastar shell over rewritten runtime: sessions, live transcript, memory surfaces, persisted tool approvals."]]
-      [:section#dashboard-summary.panel
-       {"data-on-interval__duration.5s.leading" "@get('/ui/dashboard')"}
-       "Loading dashboard..."]
-      [:section.grid.top
-       [:section#sessions-panel.panel
-        {"data-on-interval__duration.5s.leading" "@get('/ui/sessions')"}
-        "Loading sessions..."]
-       [:section#session-detail-panel.panel
-        {"data-on-interval__duration.3s.leading" "@get('/ui/session-detail')"}
-        "Loading transcript..."]]
-      [:section.grid.bottom
-       [:section#events-panel.panel "Waiting for live events..."]
-       [:section.panel.stack
-        [:div#memory-prompt-panel
-         {"data-on-interval__duration.15s.leading" "@get('/ui/memory/prompt')"}
-         "Loading prompt memory..."]
-        [:form#memory-search-form
-         [:h3 "Memory Search"]
-         [:input {:type "text" :name "query" :placeholder "search messages and events"}]
-         [:div.actions
-          [:button {:type "button"
-                    "data-on:click" "@post('/ui/memory/search', {contentType: 'form', selector: '#memory-search-form'})"}
-           "Search"]]]
-        [:div#memory-search-results-panel.empty "Run memory search."]]
-       [:section.panel.stack
-        [:div#tools-panel
-         {"data-on-interval__duration.10s.leading" "@get('/ui/tools')"}
-         "Loading tools..."]
-        [:div#tool-approvals-panel
-         {"data-on-interval__duration.5s.leading" "@get('/ui/tool-approvals')"}
-         "Loading approvals..."]
-       [:div#tool-results-panel.empty "Request approval, approve/deny, then run."]]]
-      [:section.grid.top
-       [:section#runs-panel.panel
-        {"data-on-interval__duration.5s.leading" "@get('/ui/runs')"}
-        "Loading runs..."]
-       [:section#run-detail-panel.panel
-        {"data-on-interval__duration.5s.leading" "@get('/ui/run-detail')"}
-        "Loading run detail..."]]
-      [:div#events-live-bootstrap {"data-init" "@get('/ui/events/live')"}]]]]))
+      [:div#shell-fragment
+       {"data-init" "@get('/ui/shell?tab=overview')"}
+       "[LOADING...]"]]]]))
+
+(defn shell-fragment [system active-tab]
+  (let [active-tab (normalize-tab active-tab)
+        storage (sqlite/health-check (:store system))
+        runtime-health (runtime/runtime-health (:runtime-service system))
+        provider (name (get-in system [:config :llm :provider]))
+        session-count (get-in storage [:details :session-count] 0)
+        event-count (get-in storage [:details :event-count] 0)
+        port (get-in system [:config :api :port])]
+    (render
+     [:div#shell-fragment.workspace-stack
+      [:header.status-bar
+       [:div.status-block
+        [:span.status-label "mode"]
+        [:span.status-value "dark"]]
+       [:div.status-block
+        [:span.status-label "provider"]
+        [:span.status-value provider]]
+       [:div.status-block
+        [:span.status-label "port"]
+        [:span.status-value (str port)]]
+       [:div.status-block
+        [:span.status-label "sessions"]
+        [:span.status-value (str session-count)]]
+       [:div.status-block
+        [:span.status-label "runs"]
+        [:span.status-value (str (:run-count runtime-health))]]
+       [:div.status-block
+        [:span.status-label "events"]
+        [:span.status-value (str event-count)]]]
+      [:nav.shell-nav
+       (for [tab tabs]
+         (tab-link tab active-tab))]
+      (h/raw (case active-tab
+             :chat (render-many
+                    [:section.workspace-grid.two-up
+                     (h/raw (sessions-fragment system))
+                     (h/raw (session-detail-fragment system nil))])
+             :runs (render-many
+                    [:section.workspace-grid.two-up
+                     (h/raw (runs-fragment system))
+                     (h/raw (run-detail-fragment system nil))])
+             :tools (render-many
+                     [:section.workspace-grid.tools
+                      [:section.panel.stack
+                       (h/raw (tools-fragment system))]
+                      [:section.panel.stack
+                       (h/raw (tool-approvals-fragment
+                               (tool-approvals/list-requests (:store system) {:limit 50})))
+                       [:div#tool-results-panel.empty "Request approval, approve, then run."]]])
+             :memory (render-many
+                      [:section.workspace-grid.two-up
+                       [:section.panel.stack
+                        (h/raw (memory-prompt-fragment system))]
+                       [:section.panel.stack
+                        [:form#memory-search-form
+                         [:h3 "Memory Search"]
+                         [:input {:type "text" :name "query" :placeholder "search messages and events"}]
+                         [:div.actions
+                          [:button {:type "button"
+                                    "data-on:click" "@post('/ui/memory/search', {contentType: 'form', selector: '#memory-search-form'})"}
+                           "Search"]]]
+                        [:div#memory-search-results-panel.empty "Run memory search."]]])
+             (render-many
+              [:section.workspace-grid.two-up
+               (h/raw (dashboard-fragment system))
+               (h/raw (events-fragment system))])))])))
 
 (defn dashboard-fragment [system]
   (let [storage (sqlite/health-check (:store system))
@@ -134,10 +193,9 @@
         [:h2 "Transcript"]
         [:div.empty "Create session to start chatting."]]
        [:section#session-detail-panel.panel
+        {"data-on-interval__duration.3s.leading" (str "@get('/ui/session-detail?session_id=" (:id session) "')")}
         [:h2 (or (:title session) "Untitled session")]
         [:p.meta.code (:id session)]
-        [:div {:id (str "session-live-bootstrap-" (:id session))
-               "data-init" (str "@get('/ui/session/live?session_id=" (:id session) "')")}]
         (if-let [messages (seq (sqlite/list-messages (:store system) (:id session)))]
           [:div.messages
            (for [{:keys [role content created-at]} messages]
@@ -158,6 +216,7 @@
 (defn events-fragment [system]
   (render
    [:section#events-panel.panel
+    {"data-on-interval__duration.5s.leading" "@get('/ui/events')"}
     [:h2 "Live Events"]
     (if-let [events (seq (sqlite/list-events (:store system) {:limit 25}))]
       [:div.event-list

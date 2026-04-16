@@ -76,13 +76,12 @@
     (with-open [reader (java.io.PushbackReader. (io/reader file))]
       (edn/read reader))))
 
-(defn- keyword-env [name default]
-  (keyword (or (some-> (System/getenv name) str/lower-case not-empty)
-               default)))
+(defn- keyword-env [name]
+  (some-> (System/getenv name) str/lower-case not-empty keyword))
 
 (defn env-config
   []
-  (let [provider (keyword-env "AGENT_LLM_PROVIDER" "ollama")
+  (let [provider (keyword-env "AGENT_LLM_PROVIDER")
         model (or (System/getenv "AGENT_LLM_MODEL")
                   (System/getenv "OPENROUTER_MODEL")
                   (System/getenv "OLLAMA_MODEL"))
@@ -94,18 +93,16 @@
         site-url (System/getenv "OPENROUTER_SITE_URL")
         app-name (or (System/getenv "OPENROUTER_APP_NAME")
                      (System/getenv "AGENT_APP_NAME"))
-        openrouter-base-url (or (System/getenv "OPENROUTER_BASE_URL")
-                                "https://openrouter.ai/api/v1")
-        ollama-base-url (or (System/getenv "OLLAMA_BASE_URL")
-                            "http://localhost:11434")
+        openrouter-base-url (System/getenv "OPENROUTER_BASE_URL")
+        ollama-base-url (System/getenv "OLLAMA_BASE_URL")
         keep-alive (System/getenv "OLLAMA_KEEP_ALIVE")
         embedding-model (System/getenv "OLLAMA_EMBEDDING_MODEL")
-        openai-base-url (or (System/getenv "OPENAI_BASE_URL")
-                            "https://api.openai.com/v1")
+        openai-base-url (System/getenv "OPENAI_BASE_URL")
         sqlite-path (System/getenv "AGENT_SQLITE_PATH")
         api-host (System/getenv "AGENT_API_HOST")
         api-port (parse-long* (System/getenv "AGENT_API_PORT"))]
-    {:llm (cond-> {:provider provider}
+    {:llm (cond-> {}
+            provider (assoc :provider provider)
             model (assoc :model model)
             (some? timeout-ms) (assoc :timeout-ms timeout-ms)
             (some? temperature) (assoc :temperature temperature)
@@ -113,16 +110,22 @@
             (some? stream?) (assoc :stream? stream?)
             site-url (assoc :site-url site-url)
             app-name (assoc :app-name app-name)
-            true (assoc :openrouter (cond-> {:base-url openrouter-base-url}
-                                      (System/getenv "OPENROUTER_API_KEY")
-                                      (assoc :api-key (System/getenv "OPENROUTER_API_KEY"))))
-            true (assoc :ollama (cond-> {:base-url ollama-base-url}
-                                  keep-alive (assoc :keep-alive keep-alive)
-                                  embedding-model (assoc :embedding-model embedding-model)))
-            true (assoc :openai-compatible
-                        (cond-> {:base-url openai-base-url}
-                          (System/getenv "OPENAI_API_KEY")
-                          (assoc :api-key (System/getenv "OPENAI_API_KEY")))))
+            (or openrouter-base-url (System/getenv "OPENROUTER_API_KEY"))
+            (assoc :openrouter (cond-> {}
+                                 openrouter-base-url (assoc :base-url openrouter-base-url)
+                                 (System/getenv "OPENROUTER_API_KEY")
+                                 (assoc :api-key (System/getenv "OPENROUTER_API_KEY"))))
+            (or ollama-base-url keep-alive embedding-model)
+            (assoc :ollama (cond-> {}
+                             ollama-base-url (assoc :base-url ollama-base-url)
+                             keep-alive (assoc :keep-alive keep-alive)
+                             embedding-model (assoc :embedding-model embedding-model)))
+            (or openai-base-url (System/getenv "OPENAI_API_KEY"))
+            (assoc :openai-compatible
+                   (cond-> {}
+                     openai-base-url (assoc :base-url openai-base-url)
+                     (System/getenv "OPENAI_API_KEY")
+                     (assoc :api-key (System/getenv "OPENAI_API_KEY")))))
      :storage (cond-> {}
                 sqlite-path (assoc :sqlite {:path sqlite-path}))
      :api (cond-> {}
