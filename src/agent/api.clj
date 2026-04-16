@@ -6,10 +6,12 @@
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
+   [agent.runners.core :as runners]
    [agent.skills :as skills]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [agent.ui :as ui]
+   [agent.runtime.core :as runtime]
    [cheshire.core :as json]
    [clojure.core.async :as async]
    [clojure.string :as str])
@@ -172,6 +174,34 @@
    :decision_reason (:decision-reason approval)
    :created_at (:created-at approval)
    :decided_at (:decided-at approval)})
+
+(defn- run->response [run]
+  (when run
+    {:id (:id run)
+     :agent_id (:agent-id run)
+     :parent_run_id (:parent-run-id run)
+     :lease_id (:lease-id run)
+     :name (:name run)
+     :substrate (:substrate run)
+     :status (:status run)
+     :capabilities (:capabilities run)
+     :network_identity (:network-identity run)
+     :bootstrap_spec (:bootstrap-spec run)
+     :runner_metadata (:runner-metadata run)
+     :runner_options (:runner-options run)
+     :requested_by (:requested-by run)
+     :last_error (:last-error run)
+     :created_at (:created-at run)
+     :started_at (:started-at run)
+     :finished_at (:finished-at run)
+     :lease (some-> (:lease run)
+                    (update-keys #(keyword (str/replace (name %) "-" "_"))))
+     :heartbeat (some-> (:heartbeat run)
+                        (update-keys #(keyword (str/replace (name %) "-" "_"))))
+     :checkpoint (some-> (:checkpoint run)
+                         (update-keys #(keyword (str/replace (name %) "-" "_"))))
+     :pending_commands (mapv #(update-keys % (fn [k] (keyword (str/replace (name k) "-" "_"))))
+                             (:pending-commands run))}))
 
 (defn- memory-surface->response [surface]
   {:name (name (:name surface))
@@ -617,6 +647,107 @@
   (write-json! exchange 200 {:data (mapv message->response
                                          (sqlite/list-messages (:store system) session-id))}))
 
+(defn- system-list-runs [system]
+  (runtime/list-runs (:runtime-service system)))
+
+(defn- system-get-run [system run-id]
+  (runtime/get-run (:runtime-service system) run-id))
+
+(defn- system-request-run! [system request]
+  (runtime/request-run! (:runtime-service system)
+                        (runtime/create-run-request request)))
+
+(defn- system-runner-status [system run-id]
+  (when-let [run (system-get-run system run-id)]
+    (when-let [runner (get (:runner-registry system) (keyword (:substrate run)))]
+      (runners/status runner run-id))))
+
+(defn- system-launch-run! [system run-id]
+  (let [run (or (system-get-run system run-id)
+                (throw (api-error 404 "run_not_found" "Run not found")))
+        runner (or (get (:runner-registry system) (keyword (:substrate run)))
+                   (throw (api-error 404 "runner_not_found" "Runner not found")))]
+    (let [launch-result (runners/launch runner
+                                        (runners/create-run-spec
+                                         {:run-id (:id run)
+                                          :agent-id (:agent-id run)
+                                          :parent-run-id (:parent-run-id run)
+                                          :lease-id (:lease-id run)
+                                          :name (:name run)
+                                          :substrate (keyword (:substrate run))
+                                          :capabilities (:capabilities run)
+                                          :network-identity (:network-identity run)
+                                          :bootstrap-token (:bootstrap-token run)
+                                          :bootstrap-spec (:bootstrap-spec run)
+                                          :requested-by (:requested-by run)
+                                          :runner-options (:runner-options run)}))]
+      (runtime/transition-run! (:runtime-service system) run-id :launched {:runner-metadata launch-result})
+      (system-get-run system run-id))))
+
+(defn- system-signal-run! [system run-id command]
+  (let [run (or (system-get-run system run-id)
+                (throw (api-error 404 "run_not_found" "Run not found")))
+        runner (or (get (:runner-registry system) (keyword (:substrate run)))
+                   (throw (api-error 404 "runner_not_found" "Runner not found")))
+        signal-result (runners/signal runner run-id command)
+        command-type (keyword (:command-type command))]
+    (when (contains? #{:cancel :terminate :kill} command-type)
+      (runtime/transition-run! (:runtime-service system)
+                               run-id
+                               :cancelled
+                               {:runner-metadata (merge (:runner-metadata run) signal-result)}))
+    signal-result))
+
+(defn- normalize-run-request [body]
+  (let [capabilities (:capabilities body)
+        runner-options (:runner_options body)
+        network-identity (:network_identity body)]
+    (when (and (some? capabilities)
+               (not (and (vector? capabilities) (every? string? capabilities))))
+      (throw (api-error 400 "bad_request" "capabilities must be a vector of strings")))
+    (when (and (some? runner-options) (not (map? runner-options)))
+      (throw (api-error 400 "bad_request" "runner_options must be an object")))
+    (when (and (some? network-identity) (not (map? network-identity)))
+      (throw (api-error 400 "bad_request" "network_identity must be an object")))
+    {:agent-id (:agent_id body)
+     :parent-run-id (:parent_run_id body)
+     :name (:name body)
+     :substrate (or (some-> (:substrate body) keyword) :local-process)
+     :capabilities (or capabilities [])
+     :network-identity network-identity
+     :runner-options runner-options
+     :requested-by (or (:requested_by body) "api")
+     :auto-launch? (true? (:auto_launch body))}))
+
+(defn- handle-list-runs [system exchange]
+  (write-json! exchange 200 {:data (mapv run->response (system-list-runs system))}))
+
+(defn- handle-get-run [system exchange run-id]
+  (if-let [run (system-get-run system run-id)]
+    (write-json! exchange 200
+                 {:data (assoc (run->response run)
+                               :runner_status (system-runner-status system run-id))})
+    (throw (api-error 404 "run_not_found" "Run not found"))))
+
+(defn- handle-create-run [system exchange]
+  (let [request (normalize-run-request (read-json-body exchange))
+        run (system-request-run! system request)
+        launched-run (when (:auto-launch? request)
+                       (system-launch-run! system (:id run)))]
+    (write-json! exchange
+                 201
+                 {:data (run->response (or launched-run (system-get-run system (:id run))))})))
+
+(defn- handle-launch-run [system exchange run-id]
+  (write-json! exchange 200 {:data (run->response (system-launch-run! system run-id))}))
+
+(defn- handle-signal-run [system exchange run-id]
+  (let [body (read-json-body exchange)
+        command-type (:command_type body)]
+    (ensure-string! :command_type command-type)
+    (write-json! exchange 200
+                 {:data (system-signal-run! system run-id {:command-type command-type})})))
+
 (defn- handle-chat-completions [system exchange]
   (let [{:keys [messages session-id stream?]}
         (normalize-chat-request (read-json-body exchange))]
@@ -957,6 +1088,26 @@
 
             (and (= method "POST") (= path ["v1" "sessions"]))
             (handle-create-session system exchange)
+
+            (and (= method "GET") (= path ["v1" "runs"]))
+            (handle-list-runs system exchange)
+
+            (and (= method "POST") (= path ["v1" "runs"]))
+            (handle-create-run system exchange)
+
+            (and (= method "GET") (= 3 (count path))
+                 (= ["v1" "runs"] (subvec path 0 2)))
+            (handle-get-run system exchange (nth path 2))
+
+            (and (= method "POST") (= 4 (count path))
+                 (= ["v1" "runs"] (subvec path 0 2))
+                 (= "launch" (nth path 3)))
+            (handle-launch-run system exchange (nth path 2))
+
+            (and (= method "POST") (= 4 (count path))
+                 (= ["v1" "runs"] (subvec path 0 2))
+                 (= "signal" (nth path 3)))
+            (handle-signal-run system exchange (nth path 2))
 
             (and (= method "GET") (= path ["v1" "tools"]))
             (handle-list-tools system exchange)

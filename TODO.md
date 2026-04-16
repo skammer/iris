@@ -40,7 +40,8 @@ Reference:
 
 ### Phase C: Execution Substrates
 
-10. [ ] Implement `local-process` runner.
+10. [x] Implement `local-process` runner.
+   Added in `src/agent/runners/local_process.clj` and wired into active system/API.
 11. [ ] Implement `bubblewrap` runner.
 12. [ ] Implement `docker/podman` runner.
 13. [ ] Define later runner interfaces:
@@ -129,7 +130,8 @@ Reference:
 4. [x] Distributed subagent runtime phase A/B:
    Added runner protocol, run registry, leases, heartbeats, commands, checkpoints, and runtime service baseline.
 5. [ ] Execution substrates:
-   Start with local-process and bubblewrap runners, then docker/podman.
+   `local-process` is done.
+   Next: `bubblewrap`, then docker/podman.
 6. [ ] Event/broker abstraction:
    SQLite/local first, NATS JetStream next.
 7. [ ] Agent-to-agent interop:

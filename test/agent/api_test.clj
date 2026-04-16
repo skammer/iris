@@ -99,6 +99,7 @@
         store (sqlite/create-store {:path path})
         event-bus (core/create-event-bus)
         event-sink (core/create-event-sink store event-bus)
+        runtime-service (core/create-runtime-service store event-sink)
         system (assoc base-system
                       :llm-provider (->TestProvider)
                       :store store
@@ -106,6 +107,8 @@
                       :event-sink event-sink
                       :tool-registry (core/create-tool-registry (:tools (:config base-system)) event-sink store)
                       :memory-service (memory/create-memory-service (:memory (:config base-system)) store)
+                      :runtime-service runtime-service
+                      :runner-registry (core/create-runner-registry runtime-service)
                       :orchestrator (core/create-orchestrator (:orchestrator (:config base-system)) event-sink)
                       :config (assoc (:config base-system)
                                      :api {:host "127.0.0.1" :port port}
@@ -115,6 +118,21 @@
       (let [bad-session (http-post (str base-url "/v1/sessions") {:title 42})
             bad-chat (http-post (str base-url "/v1/chat/completions")
                                 {:messages [{:role "bogus" :content "hello"}]})
+            created-run (http-post (str base-url "/v1/runs")
+                                   {:agent_id "runner-agent"
+                                    :name "runner"
+                                    :substrate "local-process"
+                                    :runner_options {:command ["sh" "-lc" "sleep 30"]
+                                                     :working-dir "."}
+                                    :auto_launch true})
+            created-run-body (json/parse-string (:body created-run) true)
+            run-id (get-in created-run-body [:data :id])
+            fetched-run (http-get (str base-url "/v1/runs/" run-id))
+            fetched-run-body (json/parse-string (:body fetched-run) true)
+            signaled-run (http-post (str base-url "/v1/runs/" run-id "/signal")
+                                    {:command_type "cancel"})
+            list-runs (http-get (str base-url "/v1/runs"))
+            list-runs-body (json/parse-string (:body list-runs) true)
             ui-index (http-get base-url)
             ui-dashboard (http-get (str base-url "/ui/dashboard"))
             health (http-get (str base-url "/health"))
@@ -201,6 +219,15 @@
             messages-body (json/parse-string (:body messages) true)]
         (is (= 400 (:status bad-session)))
         (is (= 400 (:status bad-chat)))
+        (is (= 201 (:status created-run)))
+        (is (= "launched" (get-in created-run-body [:data :status])))
+        (is (= "local-process" (get-in created-run-body [:data :substrate])))
+        (is (= 200 (:status fetched-run)))
+        (is (= true (get-in fetched-run-body [:data :runner_status :alive])))
+        (is (number? (get-in fetched-run-body [:data :runner_status :pid])))
+        (is (= 200 (:status signaled-run)))
+        (is (= 200 (:status list-runs)))
+        (is (= [run-id] (mapv :id (:data list-runs-body))))
         (is (= 200 (:status ui-index)))
         (is (str/includes? (:body ui-index) "datastar.js"))
         (is (= 200 (:status ui-dashboard)))
