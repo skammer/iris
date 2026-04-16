@@ -2,6 +2,7 @@
   "Canonical composition root for the rewrite."
   (:gen-class)
   (:require
+   [agent.channels.core :as channel-adapters]
    [agent.api :as api]
    [agent.config :as config]
    [agent.llm.core :as llm-core]
@@ -9,6 +10,7 @@
    [agent.llm.providers.openai-compatible :as openai-compatible]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
+   [agent.skills :as skills]
    [agent.tools.common.http :as http-tool]
    [agent.tools.core :as tools]
    [clojure.string :as str]))
@@ -47,28 +49,79 @@
   [cfg]
   (sqlite/create-store (get cfg :sqlite)))
 
+(defn create-event-sink
+  [store]
+  (fn [event]
+    (sqlite/log-event! store event)))
+
 (defn create-tool-registry
-  [cfg]
+  [cfg event-sink]
   (let [http-cfg (get cfg :http)
-        registry (tools/create-registry)]
+        registry (tools/create-registry
+                  {:event-sink event-sink
+                   :before-execute (fn [_] nil)
+                   :after-execute (fn [_] nil)})]
     (cond-> registry
       (not= false (:enabled http-cfg))
       (tools/register-tool (http-tool/create-http-tool http-cfg)))))
 
 (defn create-orchestrator
-  [_cfg]
-  (orchestrator/create-orchestrator))
+  [_cfg event-sink]
+  (orchestrator/create-orchestrator {:event-sink event-sink}))
+
+(defn create-skills-registry
+  [cfg]
+  (skills/create-registry cfg))
+
+(defn create-channel-adapter-registry
+  [cfg]
+  (let [registry (channel-adapters/create-registry)
+        specs [{:key :telegram
+                :display-name "Telegram"
+                :inbound-mode :polling
+                :capabilities #{:supports-outbound :supports-streaming :supports-voice-ingest :supports-reactions :supports-location :supports-otp}}
+               {:key :discord
+                :display-name "Discord"
+                :inbound-mode :gateway
+                :capabilities #{:supports-outbound :supports-streaming :supports-interactive :supports-threads :supports-voice-ingest :supports-reactions}}
+               {:key :slack
+                :display-name "Slack"
+                :inbound-mode :socket-mode
+                :capabilities #{:supports-outbound :supports-streaming :supports-interactive :supports-threads :supports-reactions}}]]
+    (reduce
+     (fn [acc {:keys [key display-name inbound-mode capabilities]}]
+       (channel-adapters/register-adapter
+        acc
+        (channel-adapters/create-adapter
+         {:description
+          (channel-adapters/create-adapter-description
+           key
+           display-name
+           inbound-mode
+           capabilities
+           :public-url-required? false
+           :config-schema {:enabled :boolean})
+          :health-fn (fn []
+                       {:healthy true
+                        :enabled (true? (get-in cfg [key :enabled]))})})))
+     registry
+     specs)))
 
 (defn create-system
   ([] (create-system nil))
   ([config-path]
    (let [cfg (config/load-config config-path)
-         llm-cfg (config/llm-config cfg)]
+         llm-cfg (config/llm-config cfg)
+         store (create-store (:storage cfg))
+         event-sink (create-event-sink store)]
      {:config cfg
       :llm-provider (create-llm-provider llm-cfg)
-      :store (create-store (:storage cfg))
-      :tool-registry (create-tool-registry (:tools cfg))
-      :orchestrator (create-orchestrator (:orchestrator cfg))})))
+      :store store
+      :event-sink event-sink
+      :tool-registry (create-tool-registry (:tools cfg) event-sink)
+      :skills-registry (create-skills-registry (:skills cfg))
+      :channel-adapter-registry (create-channel-adapter-registry (:channel-adapters cfg))
+      :orchestrator (create-orchestrator (:orchestrator cfg) event-sink)})))
 
 (defn complete
   ([system prompt]
@@ -91,13 +144,25 @@
   {:llm (llm-core/health-check (:llm-provider system))
    :storage (sqlite/health-check (:store system))
    :tools (tools/registry-health (:tool-registry system))
+   :skills (skills/registry-health (:skills-registry system))
+   :channel-adapters (channel-adapters/registry-health (:channel-adapter-registry system))
    :orchestrator (orchestrator/health-check (:orchestrator system))
    :provider (get-in system [:config :llm :provider])})
+
+(defn log-event!
+  [system event]
+  ((:event-sink system) event))
 
 (defn create-session!
   ([system] (create-session! system nil))
   ([system title]
-   (sqlite/create-session! (:store system) title)))
+   (let [session (sqlite/create-session! (:store system) title)]
+     (log-event! system
+                 {:event-type :session.created
+                  :entity-type :session
+                  :entity-id (:id session)
+                  :payload {:title title}})
+     session)))
 
 (defn list-sessions
   [system]
@@ -114,6 +179,19 @@
 (defn list-tools
   [system]
   (tools/list-tools (:tool-registry system)))
+
+(defn list-skills
+  [system]
+  (skills/list-skills (:skills-registry system)))
+
+(defn list-channel-adapters
+  [system]
+  (channel-adapters/list-adapters (:channel-adapter-registry system)))
+
+(defn list-events
+  ([system] (list-events system {}))
+  ([system opts]
+   (sqlite/list-events (:store system) opts)))
 
 (defn execute-tool
   ([system tool-name input]
@@ -171,6 +249,12 @@
                              :model (get-in system [:config :llm :model])
                              :prompt (:content user-message)
                              :response content})
+    (log-event! system
+                {:event-type :completion.completed
+                 :entity-type :session
+                 :entity-id session-id
+                 :payload {:provider (name (get-in system [:config :llm :provider]))
+                           :model (get-in system [:config :llm :model])}})
     {:content content}))
 
 (defn start-api!

@@ -22,7 +22,11 @@
 
 (deftest create-system-registers-default-tools
   (let [system (core/create-system)
-        tools (core/list-tools system)]
+        tools (core/list-tools system)
+        adapters (core/list-channel-adapters system)]
     (is (= [:http] (mapv :name tools)))
+    (is (= ["Discord" "Slack" "Telegram"] (mapv :display-name adapters)))
+    (is (empty? (core/list-skills system)))
     (is (= 1 (get-in (core/health-check system) [:tools :count])))
+    (is (= 3 (get-in (core/health-check system) [:channel-adapters :count])))
     (is (= 0 (get-in (core/health-check system) [:orchestrator :agent-count])))))

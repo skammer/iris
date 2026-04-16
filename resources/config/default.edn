@@ -14,6 +14,10 @@
  :tools {:http {:enabled true
                 :timeout-ms 30000
                 :default-headers {"User-Agent" "clj-agent/0.1"}}}
+ :skills {:dirs ["skills"]}
+ :channel-adapters {:telegram {:enabled false}
+                    :discord {:enabled false}
+                    :slack {:enabled false}}
  :orchestrator {:enabled true}
  :api {:host "127.0.0.1"
        :port 8080}}
