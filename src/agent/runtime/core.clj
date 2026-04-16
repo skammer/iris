@@ -26,7 +26,7 @@
    :event-sink event-sink})
 
 (defn create-run-request
-  [{:keys [agent-id parent-run-id name substrate capabilities network-identity requested-by]
+  [{:keys [agent-id parent-run-id name substrate capabilities network-identity runner-options requested-by]
     :or {substrate :local-process
          capabilities []}}]
   {:agent-id (or agent-id (str "agent-" (UUID/randomUUID)))
@@ -35,6 +35,7 @@
    :substrate substrate
    :capabilities (vec capabilities)
    :network-identity network-identity
+   :runner-options runner-options
    :requested-by (or requested-by "system")})
 
 (defn request-run!
@@ -59,6 +60,7 @@
                                        :status :requested
                                        :capabilities (:capabilities request)
                                        :network-identity (:network-identity request)
+                                       :runner-options (:runner-options request)
                                        :bootstrap-token bootstrap-token
                                        :bootstrap-spec bootstrap-spec
                                        :requested-by (:requested-by request)})

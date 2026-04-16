@@ -8,6 +8,7 @@
    [agent.memory.core-test]
    [agent.orchestrator-test]
    [agent.persistence.sqlite-test]
+   [agent.runners.local-process-test]
    [agent.runtime.core-test]
    [agent.skills-test]
    [agent.tools.common.fs-test]
@@ -25,6 +26,7 @@
     agent.memory.core-test
     agent.orchestrator-test
     agent.persistence.sqlite-test
+    agent.runners.local-process-test
     agent.runtime.core-test
     agent.skills-test
     agent.tools.common.fs-test

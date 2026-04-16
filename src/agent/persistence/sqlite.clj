@@ -8,7 +8,7 @@
    (java.time Instant)
    (java.util UUID)))
 
-(def latest-schema-version 5)
+(def latest-schema-version 6)
 
 (defn- ensure-parent-dir! [path]
   (let [file (io/file path)
@@ -221,6 +221,21 @@
   (execute-ddl! conn "CREATE INDEX IF NOT EXISTS idx_agent_run_checkpoints_run_created
                       ON agent_run_checkpoints(run_id, created_at DESC);"))
 
+(defn- column-exists? [conn table-name column-name]
+  (with-open [stmt (.prepareStatement conn (str "PRAGMA table_info(" table-name ")"))
+              rs (.executeQuery stmt)]
+    (loop []
+      (if (.next rs)
+        (if (= column-name (.getString rs "name"))
+          true
+          (recur))
+        false))))
+
+(defn- migration-6! [conn]
+  (ensure-schema-migrations-table! conn)
+  (when-not (column-exists? conn "agent_runs" "runner_options_json")
+    (execute-ddl! conn "ALTER TABLE agent_runs ADD COLUMN runner_options_json TEXT;")))
+
 (def ^:private migrations
   [{:version 1
     :name "initial-schema"
@@ -236,7 +251,10 @@
     :up migration-4!}
    {:version 5
     :name "distributed-run-registry"
-    :up migration-5!}])
+    :up migration-5!}
+   {:version 6
+    :name "agent-runner-options"
+    :up migration-6!}])
 
 (defn- bootstrap-legacy-version! [conn]
   (when (and (zero? (get-user-version conn))
@@ -631,7 +649,7 @@
 (defn create-agent-run!
   [store {:keys [id agent-id parent-run-id lease-id name substrate status capabilities
                  network-identity bootstrap-token bootstrap-spec runner-metadata
-                 requested-by last-error]
+                 runner-options requested-by last-error]
           :or {status "requested"}}]
   (let [id (or id (str (UUID/randomUUID)))
         created-at (str (Instant/now))]
@@ -639,8 +657,8 @@
       store
       (fn [conn]
         (with-open [stmt (.prepareStatement conn
-                                           "INSERT INTO agent_runs (id, agent_id, parent_run_id, lease_id, name, substrate, status, capabilities_json, network_identity_json, bootstrap_token, bootstrap_spec_json, runner_metadata_json, requested_by, last_error, created_at, started_at, finished_at)
-                                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)")]
+                                           "INSERT INTO agent_runs (id, agent_id, parent_run_id, lease_id, name, substrate, status, capabilities_json, network_identity_json, bootstrap_token, bootstrap_spec_json, runner_metadata_json, runner_options_json, requested_by, last_error, created_at, started_at, finished_at)
+                                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)")]
           (.setString stmt 1 id)
           (.setString stmt 2 agent-id)
           (.setString stmt 3 parent-run-id)
@@ -653,9 +671,10 @@
           (.setString stmt 10 bootstrap-token)
           (.setString stmt 11 (json-string bootstrap-spec))
           (.setString stmt 12 (json-string runner-metadata))
-          (.setString stmt 13 requested-by)
-          (.setString stmt 14 last-error)
-          (.setString stmt 15 created-at)
+          (.setString stmt 13 (json-string runner-options))
+          (.setString stmt 14 requested-by)
+          (.setString stmt 15 last-error)
+          (.setString stmt 16 created-at)
           (.executeUpdate stmt))))
     {:id id
      :agent-id agent-id
@@ -669,6 +688,7 @@
      :bootstrap-token bootstrap-token
      :bootstrap-spec bootstrap-spec
      :runner-metadata runner-metadata
+     :runner-options runner-options
      :requested-by requested-by
      :last-error last-error
      :created-at created-at
@@ -681,7 +701,7 @@
     store
     (fn [conn]
       (with-open [stmt (.prepareStatement conn
-                                         "SELECT id, agent_id, parent_run_id, lease_id, name, substrate, status, capabilities_json, network_identity_json, bootstrap_token, bootstrap_spec_json, runner_metadata_json, requested_by, last_error, created_at, started_at, finished_at
+                                         "SELECT id, agent_id, parent_run_id, lease_id, name, substrate, status, capabilities_json, network_identity_json, bootstrap_token, bootstrap_spec_json, runner_metadata_json, runner_options_json, requested_by, last_error, created_at, started_at, finished_at
                                           FROM agent_runs
                                           WHERE id = ?")]
         (.setString stmt 1 run-id)
@@ -699,6 +719,7 @@
              :bootstrap-token (.getString rs "bootstrap_token")
              :bootstrap-spec (parse-json-string (.getString rs "bootstrap_spec_json"))
              :runner-metadata (parse-json-string (.getString rs "runner_metadata_json"))
+             :runner-options (parse-json-string (.getString rs "runner_options_json"))
              :requested-by (.getString rs "requested_by")
              :last-error (.getString rs "last_error")
              :created-at (.getString rs "created_at")
@@ -712,7 +733,7 @@
      store
      (fn [conn]
        (with-open [stmt (.prepareStatement conn
-                                          "SELECT id, agent_id, parent_run_id, lease_id, name, substrate, status, capabilities_json, network_identity_json, bootstrap_token, bootstrap_spec_json, runner_metadata_json, requested_by, last_error, created_at, started_at, finished_at
+                                          "SELECT id, agent_id, parent_run_id, lease_id, name, substrate, status, capabilities_json, network_identity_json, bootstrap_token, bootstrap_spec_json, runner_metadata_json, runner_options_json, requested_by, last_error, created_at, started_at, finished_at
                                            FROM agent_runs
                                            WHERE (? IS NULL OR status = ?)
                                              AND (? IS NULL OR parent_run_id = ?)
@@ -738,6 +759,7 @@
                                  :bootstrap-token (.getString rs "bootstrap_token")
                                  :bootstrap-spec (parse-json-string (.getString rs "bootstrap_spec_json"))
                                  :runner-metadata (parse-json-string (.getString rs "runner_metadata_json"))
+                                 :runner-options (parse-json-string (.getString rs "runner_options_json"))
                                  :requested-by (.getString rs "requested_by")
                                  :last-error (.getString rs "last_error")
                                  :created-at (.getString rs "created_at")
@@ -757,6 +779,8 @@
                               (json-string (:bootstrap-spec updates)))
         runner-metadata-json (when (contains? updates :runner-metadata)
                                (json-string (:runner-metadata updates)))
+        runner-options-json (when (contains? updates :runner-options)
+                              (json-string (:runner-options updates)))
         started-at (or (:started-at updates)
                        (when (= status "running") (str (Instant/now))))
         finished-at (or (:finished-at updates)
@@ -773,6 +797,7 @@
                                                 capabilities_json = COALESCE(?, capabilities_json),
                                                 bootstrap_spec_json = COALESCE(?, bootstrap_spec_json),
                                                 runner_metadata_json = COALESCE(?, runner_metadata_json),
+                                                runner_options_json = COALESCE(?, runner_options_json),
                                                 last_error = COALESCE(?, last_error),
                                                 started_at = COALESCE(?, started_at),
                                                 finished_at = COALESCE(?, finished_at)
@@ -783,10 +808,11 @@
           (.setString stmt 4 capabilities-json)
           (.setString stmt 5 bootstrap-spec-json)
           (.setString stmt 6 runner-metadata-json)
-          (.setString stmt 7 (:last-error updates))
-          (.setString stmt 8 started-at)
-          (.setString stmt 9 finished-at)
-          (.setString stmt 10 run-id)
+          (.setString stmt 7 runner-options-json)
+          (.setString stmt 8 (:last-error updates))
+          (.setString stmt 9 started-at)
+          (.setString stmt 10 finished-at)
+          (.setString stmt 11 run-id)
           (let [updated (.executeUpdate stmt)]
             (when (zero? updated)
               (throw (ex-info "Agent run not found" {:type :run-not-found

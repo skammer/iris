@@ -11,6 +11,8 @@
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
+   [agent.runners.core :as runners]
+   [agent.runners.local-process :as local-process]
    [agent.runtime.core :as runtime]
    [agent.skills :as skills]
    [agent.tools.common.fs :as fs-tool]
@@ -116,6 +118,27 @@
   (runtime/create-runtime-service {:store store
                                    :event-sink event-sink}))
 
+(defn- runner-exit-status [run exit-code]
+  (cond
+    (contains? #{"cancelled" "completed" "failed"} (:status run)) nil
+    (zero? exit-code) :completed
+    :else :failed))
+
+(defn create-runner-registry
+  [runtime-service]
+  {:local-process
+   (local-process/create-local-process-runner
+    {:on-exit (fn [run-id {:keys [exit-code]}]
+                (when-let [run (runtime/get-run runtime-service run-id)]
+                  (when-let [status (runner-exit-status run exit-code)]
+                    (runtime/transition-run! runtime-service
+                                             run-id
+                                             status
+                                             {:last-error (when-not (zero? exit-code)
+                                                            (str "Process exited with code " exit-code))
+                                              :runner-metadata (assoc (:runner-metadata run)
+                                                                      :exit-code exit-code)}))))})})
+
 (defn create-channel-adapter-registry
   [cfg]
   (let [registry (channel-adapters/create-registry)
@@ -157,7 +180,8 @@
          llm-cfg (config/llm-config cfg)
          store (create-store (:storage cfg))
          event-bus (create-event-bus)
-         event-sink (create-event-sink store event-bus)]
+         event-sink (create-event-sink store event-bus)
+         runtime-service (create-runtime-service store event-sink)]
      {:config cfg
       :llm-provider (create-llm-provider llm-cfg)
       :store store
@@ -166,7 +190,8 @@
       :tool-registry (create-tool-registry (:tools cfg) event-sink store)
       :skills-registry (create-skills-registry (:skills cfg))
       :memory-service (create-memory-service (:memory cfg) store)
-      :runtime-service (create-runtime-service store event-sink)
+      :runtime-service runtime-service
+      :runner-registry (create-runner-registry runtime-service)
       :channel-adapter-registry (create-channel-adapter-registry (:channel-adapters cfg))
       :orchestrator (create-orchestrator (:orchestrator cfg) event-sink)})))
 
@@ -325,6 +350,58 @@
 (defn transition-run!
   [system run-id status & [opts]]
   (runtime/transition-run! (:runtime-service system) run-id status opts))
+
+(defn runner-status
+  [system run-id]
+  (when-let [run (get-run system run-id)]
+    (when-let [runner (get (:runner-registry system) (keyword (:substrate run)))]
+      (runners/status runner run-id))))
+
+(defn launch-run!
+  [system run-id]
+  (let [run (or (get-run system run-id)
+                (throw (ex-info "Run not found" {:type :run-not-found
+                                                 :run-id run-id})))
+        runner (or (get (:runner-registry system) (keyword (:substrate run)))
+                   (throw (ex-info "No runner for substrate"
+                                   {:type :runner-not-found
+                                    :substrate (:substrate run)})))
+        launch-result (runners/launch runner
+                                      (runners/create-run-spec
+                                       {:run-id (:id run)
+                                        :agent-id (:agent-id run)
+                                        :parent-run-id (:parent-run-id run)
+                                        :lease-id (:lease-id run)
+                                        :name (:name run)
+                                        :substrate (keyword (:substrate run))
+                                        :capabilities (:capabilities run)
+                                        :network-identity (:network-identity run)
+                                        :bootstrap-token (:bootstrap-token run)
+                                        :bootstrap-spec (:bootstrap-spec run)
+                                        :requested-by (:requested-by run)
+                                        :runner-options (:runner-options run)}))]
+    (transition-run! system run-id :launched {:runner-metadata launch-result})
+    (get-run system run-id)))
+
+(defn signal-run!
+  [system run-id command]
+  (let [run (or (get-run system run-id)
+                (throw (ex-info "Run not found" {:type :run-not-found
+                                                 :run-id run-id})))
+        runner (or (get (:runner-registry system) (keyword (:substrate run)))
+                   (throw (ex-info "No runner for substrate"
+                                   {:type :runner-not-found
+                                    :substrate (:substrate run)})))
+        signal-result (runners/signal runner run-id command)
+        command-type (cond
+                       (keyword? command) command
+                       (map? command) (keyword (:command-type command))
+                       (string? command) (keyword command)
+                       :else nil)]
+    (when (contains? #{:cancel :terminate :kill} command-type)
+      (transition-run! system run-id :cancelled {:runner-metadata (merge (:runner-metadata run)
+                                                                         signal-result)}))
+    signal-result))
 
 (defn spawn-agent!
   [system spec]
