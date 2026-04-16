@@ -24,8 +24,21 @@
    :storage {:sqlite {:path "data/agent.db"}}
    :tools {:http {:enabled true
                   :timeout-ms 30000
-                  :default-headers {"User-Agent" "clj-agent/0.1"}}}
+                  :default-headers {"User-Agent" "clj-agent/0.1"}}
+           :fs {:enabled true
+                :roots ["."]
+                :max-read-bytes 1048576}
+           :shell {:enabled true
+                   :roots ["."]
+                   :working-dir "."
+                   :timeout-ms 30000}}
    :skills {:dirs ["skills"]}
+   :memory {:prompt {:paths ["MEMORY.md"]}
+            :search {:default-limit 20}
+            :graph {:enabled false
+                    :backend :datahike
+                    :datahike {:path "data/memory-graph"
+                               :keep-history? true}}}
    :channel-adapters {:telegram {:enabled false}
                       :discord {:enabled false}
                       :slack {:enabled false}}

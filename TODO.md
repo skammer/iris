@@ -1,5 +1,149 @@
 # TODO
 
+## Distributed Subagent Runtime
+
+Reference:
+- `log/distributed-subagent-runtime-plan-2026-04-16.md`
+
+### Phase A: Runtime Model
+
+1. [x] Define distributed run model:
+   Add explicit `run-id`, `agent-id`, `parent-run-id`, `lease-id`, `capabilities`, network identity, checkpoint sequence.
+   Added durable run model in `src/agent/persistence/sqlite.clj` and `src/agent/runtime/core.clj`.
+2. [x] Define runner protocol:
+   `launch`, `signal`, `status`, `stop`.
+   Added substrate-independent contract in `src/agent/runners/core.clj`.
+3. [x] Define child bootstrap contract:
+   Bootstrap token/spec, registration handshake, capability advertisement, heartbeat start, reconnect behavior.
+   Added basic bootstrap spec contract in `src/agent/runners/core.clj` and `src/agent/runtime/core.clj`.
+4. [x] Define command/event/checkpoint contracts:
+   Parent-to-child commands, child-to-parent events, durable checkpoints, ACK semantics.
+   Added durable command/checkpoint primitives in `src/agent/runtime/core.clj`.
+
+### Phase B: Local/Durable Control Plane
+
+5. [x] Add run registry to SQLite:
+   Tables for runs, leases, heartbeats, commands, checkpoints, runner metadata.
+   Added in schema v5 in `src/agent/persistence/sqlite.clj`.
+6. [x] Add durable command inbox:
+   Commands must survive disconnects and support polling fallback.
+   Added durable command records and pending command listing in SQLite/runtime service.
+7. [x] Add heartbeat + lease logic:
+   Detect stale workers, expiry, reclaim/retry policy.
+   Added basic lease acquire/renew/release and heartbeat persistence; stale-run policy still needs follow-up.
+8. [x] Add checkpoint persistence:
+   Child writes periodic checkpoints; parent can recover last known state.
+   Added checkpoint persistence and latest checkpoint lookup.
+9. [x] Add run lifecycle events:
+   Requested, launched, registered, heartbeat, checkpointed, paused, resumed, cancelled, completed, failed, expired.
+   Added durable lifecycle/event emission baseline in runtime service.
+
+### Phase C: Execution Substrates
+
+10. [ ] Implement `local-process` runner.
+11. [ ] Implement `bubblewrap` runner.
+12. [ ] Implement `docker/podman` runner.
+13. [ ] Define later runner interfaces:
+   VM, k8s job, SSH remote.
+14. [ ] Ensure same child runtime shim works in all substrates.
+
+### Phase D: Streaming + Fallback
+
+15. [ ] Add live subagent event stream:
+   Realtime logs/progress/status when connection healthy.
+16. [ ] Add polling/checkup fallback:
+   Parent can fetch latest run state, heartbeat, checkpoint, pending commands.
+17. [ ] Add stream resume/catch-up model:
+   Resume from sequence/checkpoint after disconnect.
+18. [ ] Add long-running task handling:
+   Slow/intermittent links, reconnect, eventual completion retrieval.
+
+### Phase E: Network Identity Plane
+
+19. [ ] Define network identity model:
+   Stable logical ID plus optional overlay address.
+20. [ ] Add Headscale/Tailscale integration plan:
+   Node identity, private addressing, ACL/grants, per-agent reachability.
+21. [ ] Define policy mapping between runtime identity and network identity.
+22. [ ] Add Yggdrasil as optional later transport/plugin plan:
+   Not default control plane.
+
+### Phase F: Broker/Event Plane
+
+23. [ ] Define event stream abstraction:
+   SQLite/local backend first, NATS JetStream backend next.
+24. [ ] Design subjects/topics:
+   `agent.events.<run-id>`, `agent.cmd.<run-id>`, `agent.hb.<run-id>`, `agent.checkpoint.<run-id>`.
+25. [ ] Add durable replay/catch-up semantics for events and commands.
+26. [ ] Add request/reply channel for control commands.
+
+### Phase G: Agent-To-Agent Interop
+
+27. [ ] Define interop model separate from parent-child orchestration.
+28. [ ] Define logical addressing:
+   Route by logical agent ID first, direct network address second.
+29. [ ] Define capability advertisement/discovery contract.
+30. [ ] Define peer trust + permission model:
+   Which agents may message/call/request work from which other agents.
+31. [ ] Define agent-to-agent request/reply protocol:
+   `discover`, `describe-capabilities`, `send-message`, `request-task`, `stream-events`, `checkpoint`, `cancel`, `ack`.
+32. [ ] Define direct vs routed communication rules:
+   Direct when policy/network allow, routed via broker/control plane otherwise.
+33. [ ] Add peer quotas/rate limits.
+34. [ ] Add delivery guarantees:
+   At-most-once vs at-least-once choice per message/task class.
+35. [ ] Add agent-to-agent audit trail:
+   Who contacted whom, when, under what permission/capability grant.
+
+### Phase H: Security/Policy
+
+36. [ ] Add per-run execution policy:
+   CPU/memory/fs/net/tool limits, TTL, cost/token ceilings.
+37. [ ] Add broker subject-scoped credentials / permissions.
+38. [ ] Add network ACL/grants templates for per-agent restrictions.
+39. [ ] Add deny-by-default policy for direct agent-to-agent connectivity.
+
+### Phase I: UI/Operator Visibility
+
+40. [ ] Add run dashboard:
+   Runs, substrates, heartbeats, checkpoints, last event, last error.
+41. [ ] Add run log/progress views with stream + catch-up.
+42. [ ] Add operator actions:
+   pause, resume, cancel, retry, inspect checkpoint, resend command.
+43. [ ] Add agent interop visibility:
+   peer links, active conversations, permissions, rate-limit hits.
+
+## Active Next Steps
+
+1. [x] Live transcript streaming:
+   Added session-scoped SSE for transcript/completions.
+   Transcript panel now patches from Datastar session-live stream instead of interval polling.
+   Reused event bus with `message.appended` / `completion.completed` session events.
+2. [x] Persisted tool approval flow:
+   Replaced raw UI permission checkboxes with approval requests/decisions stored in SQLite.
+   Added explicit approve/deny/run flow and audit trail for sensitive tool calls.
+   `shell` now defaults to denied unless approval explicitly allows it.
+3. [ ] Shell policy hardening:
+   Add command allowlist + working-dir restrictions + deny-by-default behavior.
+   Persist full request/result/error metadata for auditability.
+4. [x] Distributed subagent runtime phase A/B:
+   Added runner protocol, run registry, leases, heartbeats, commands, checkpoints, and runtime service baseline.
+5. [ ] Execution substrates:
+   Start with local-process and bubblewrap runners, then docker/podman.
+6. [ ] Event/broker abstraction:
+   SQLite/local first, NATS JetStream next.
+7. [ ] Agent-to-agent interop:
+   Add logical addressing, capability exchange, routed/direct messaging, peer policy.
+8. [ ] Channel adapter implementation:
+   Start Telegram first.
+   Map inbound messages onto current session/agent/channel model.
+9. [ ] Personality/profile system:
+   Profiles should bundle prompt, provider/model prefs, tool policy, and memory defaults.
+10. [ ] Deeper graph memory:
+   Move from raw Datahike prototype to richer entity/relation extraction + recall path.
+11. [ ] Examples/docs tranche:
+   Add local UI walkthrough, approval flow demo, Telegram bot example, personality presets, graph memory demo.
+
 ## Next Iterations Planning
 
 1. [x] First research tranche:
@@ -31,23 +175,25 @@
 9. [x] `core.async.flow` experiment plan:
    Design minimal spike for agent execution graph with retry/branching/tool steps.
    Define success criteria: clarity, debuggability, cancellation, observability, testability.
-10. [ ] Pi-mono analysis plan:
+10. [x] Pi-mono analysis plan:
    Inventory tools, agent roles, orchestration model, memory model, UI model, sandbox model, repo layout, and execution graph patterns.
-   Extract concrete capabilities and reusable patterns, not inspiration-level notes.
-11. [ ] Moltis analysis plan:
+   Extracted concrete capabilities and reusable patterns in `log/pi-mono-analysis.md` and `log/next-iterations-source-analysis-2026-04-16.md`.
+11. [x] Moltis analysis plan:
    Inventory tools, security model, plugin/modularity story, orchestration/runtime model, deployment shape, and integration surfaces.
-   Extract concrete capabilities and reusable patterns, not inspiration-level notes.
-12. [ ] Inspiration comparison report:
+   Extracted concrete capabilities and reusable patterns in `log/moltis-architecture-analysis.md` and `log/next-iterations-source-analysis-2026-04-16.md`.
+12. [x] Inspiration comparison report:
    Compare pi-mono vs moltis vs rewritten runtime on tools, orchestration, memory, UI, channels, sandboxing, observability, and extensibility.
-   Identify gaps to close in priority order.
+   Captured comparison-level implications and gap priorities in `log/next-iterations-source-analysis-2026-04-16.md` and `log/next-iterations-research-2026-04-16.md`.
 13. [ ] Tool expansion roadmap:
    Define first-class rewritten tools beyond `:http`: filesystem, shell, web fetch, structured web search, sqlite query, repo inspection, document conversion, scraping/browser automation, task tracker integration.
 14. [ ] Tool capability model:
    Add planning for permission model, audit trail, timeout/retry semantics, structured schemas, tool discovery, and tool composition.
-15. [ ] Web UI planning:
+15. [x] Web UI planning:
    Design Datastar-based UI architecture for sessions, agents, channels, logs, tool traces, memory/graph views, and live streaming updates.
-16. [ ] Web UI technical spike plan:
+   Initial Datastar UI architecture now implemented in rewritten runtime.
+16. [x] Web UI technical spike plan:
    Decide transport model, backend endpoint shape, incremental update strategy, auth model, and minimal operator dashboard scope.
+   Chosen shape now implemented: Datastar HTML fragments + SSE, local/dev-first, minimal operator dashboard.
 17. [ ] Example applications plan:
    Define examples for researcher, automated developer, product manager, judge, orchestrator, plus small single-agent CLI/API demos.
 18. [ ] Agent personalities plan:
@@ -57,8 +203,9 @@
    Define inbound event normalization, outbound formatting, auth/secrets handling, rate limiting, and delivery guarantees.
 20. [ ] Logging/observability follow-up:
    Plan how orchestrator events, tool calls, channel traffic, and graph operations should be persisted and visualized.
-21. [ ] Prioritization pass:
+21. [x] Prioritization pass:
    Order next implementation iterations after research: knowledge graph choice, tool expansion, UI shell, channel adapter base, examples, personality model.
+   Current active order tracked in `## Active Next Steps` above.
 
 ## Rewrite Track
 Status below is stale. Active work follows rewritten runtime in `src/agent/core.clj`.

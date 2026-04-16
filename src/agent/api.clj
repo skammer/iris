@@ -3,16 +3,19 @@
   (:require
    [agent.channels.core :as channel-adapters]
    [agent.llm.core :as llm-core]
+   [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
    [agent.skills :as skills]
+   [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
+   [agent.ui :as ui]
    [cheshire.core :as json]
    [clojure.core.async :as async]
    [clojure.string :as str])
   (:import
    (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
-   (java.net InetSocketAddress)
+   (java.net InetSocketAddress URLDecoder)
    (java.nio.charset StandardCharsets)))
 
 (defn- read-json-body [^HttpExchange exchange]
@@ -24,6 +27,13 @@
 (defn- write-json! [^HttpExchange exchange status payload]
   (let [bytes (.getBytes (json/generate-string payload) StandardCharsets/UTF_8)]
     (.add (.getResponseHeaders exchange) "Content-Type" "application/json")
+    (.sendResponseHeaders exchange status (long (count bytes)))
+    (with-open [os (.getResponseBody exchange)]
+      (.write os bytes))))
+
+(defn- write-html! [^HttpExchange exchange status html]
+  (let [bytes (.getBytes html StandardCharsets/UTF_8)]
+    (.add (.getResponseHeaders exchange) "Content-Type" "text/html; charset=utf-8")
     (.sendResponseHeaders exchange status (long (count bytes)))
     (with-open [os (.getResponseBody exchange)]
       (.write os bytes))))
@@ -56,6 +66,34 @@
     (->> (str/split path #"/")
          (remove str/blank?)
          vec)))
+
+(defn- decode-url-component [value]
+  (URLDecoder/decode (or value "") StandardCharsets/UTF_8))
+
+(defn- merge-param [m key value]
+  (let [existing (get m key)]
+    (cond
+      (nil? existing) (assoc m key value)
+      (vector? existing) (assoc m key (conj existing value))
+      :else (assoc m key [existing value]))))
+
+(defn- parse-urlencoded [value]
+  (if (str/blank? value)
+    {}
+    (reduce
+     (fn [acc pair]
+       (let [[raw-k raw-v] (str/split pair #"=" 2)
+             key (keyword (decode-url-component raw-k))
+             val (decode-url-component raw-v)]
+         (merge-param acc key val)))
+     {}
+     (str/split value #"&"))))
+
+(defn- query-params [^HttpExchange exchange]
+  (parse-urlencoded (.getRawQuery (.getRequestURI exchange))))
+
+(defn- read-form-body [^HttpExchange exchange]
+  (parse-urlencoded (slurp (.getRequestBody exchange))))
 
 (defn- session->response [session]
   {:id (:id session)
@@ -123,6 +161,26 @@
    :payload (:payload event)
    :created_at (:created-at event)})
 
+(defn- approval->response [approval]
+  {:id (:id approval)
+   :tool_name (:tool-name approval)
+   :status (:status approval)
+   :input (:input approval)
+   :requested_by (:requested-by approval)
+   :reason (:reason approval)
+   :actor (:actor approval)
+   :decision_reason (:decision-reason approval)
+   :created_at (:created-at approval)
+   :decided_at (:decided-at approval)})
+
+(defn- memory-surface->response [surface]
+  {:name (name (:name surface))
+   :type (name (:type surface))
+   :writable (:writable surface)
+   :enabled (:enabled surface)
+   :paths (:paths surface)
+   :default_limit (:default-limit surface)})
+
 (defn- session-exists? [system session-id]
   (sqlite/session-exists? (:store system) session-id))
 
@@ -152,6 +210,40 @@
   (when-not (and (vector? value) (every? string? value))
     (throw (api-error 400 "bad_request"
                       (str (name field) " must be a vector of strings")))))
+
+(defn- tool-error->api-error [error]
+  (case (:type (ex-data error))
+    :tool-not-found (api-error 404 "tool_not_found" (.getMessage error))
+    :permission-denied (api-error 403 "permission_denied" (.getMessage error)
+                                  {:required_permissions (mapv name (:required-permissions (ex-data error)))
+                                   :actual_permissions (mapv name (:actual-permissions (ex-data error)))})
+    :validation-failed (api-error 400 "validation_failed" (.getMessage error) (dissoc (ex-data error) :type))
+    :path-not-allowed (api-error 403 "path_not_allowed" (.getMessage error) (dissoc (ex-data error) :type))
+    :not-found (api-error 404 "not_found" (.getMessage error) (dissoc (ex-data error) :type))
+    :not-directory (api-error 400 "not_directory" (.getMessage error) (dissoc (ex-data error) :type))
+    :file-too-large (api-error 400 "file_too_large" (.getMessage error) (dissoc (ex-data error) :type))
+    :timeout (api-error 408 "timeout" (.getMessage error) (dissoc (ex-data error) :type))
+    :approval-not-found (api-error 404 "approval_not_found" (.getMessage error) (dissoc (ex-data error) :type))
+    :approval-not-approved (api-error 409 "approval_not_approved" (.getMessage error) (dissoc (ex-data error) :type))
+    :tool-blocked (api-error 403 "tool_blocked" (.getMessage error) (dissoc (ex-data error) :type))
+    error))
+
+(defn- emit-system-event!
+  [system event]
+  (if-let [sink (:event-sink system)]
+    (sink event)
+    (sqlite/log-event! (:store system) event)))
+
+(defn- append-session-message!
+  [system session-id role content]
+  (let [message (sqlite/append-message! (:store system) session-id role content)]
+    (emit-system-event! system
+                        {:event-type :message.appended
+                         :entity-type :session
+                         :entity-id session-id
+                         :payload {:role role
+                                   :content content}})
+    message))
 
 (defn- normalize-chat-request [body]
   (let [messages (:messages body)
@@ -191,20 +283,20 @@
         user-message (last (filter #(= "user" (:role %)) messages))]
     (when session-id
       (when-let [prompt (:content user-message)]
-        (sqlite/append-message! (:store system) session-id "user" prompt))
-      (sqlite/append-message! (:store system) session-id "assistant" content))
+        (append-session-message! system session-id "user" prompt))
+      (append-session-message! system session-id "assistant" content))
     (sqlite/log-completion! (:store system)
                             {:session-id session-id
                              :provider provider
                              :model (get-in system [:config :llm :model])
                              :prompt (:content user-message)
                              :response content})
-    (sqlite/log-event! (:store system)
-                       {:event-type :completion.completed
-                        :entity-type :session
-                        :entity-id session-id
-                        :payload {:provider provider
-                                  :model (get-in system [:config :llm :model])}})))
+    (emit-system-event! system
+                        {:event-type :completion.completed
+                         :entity-type :session
+                         :entity-id session-id
+                         :payload {:provider provider
+                                   :model (get-in system [:config :llm :model])}})))
 
 (defn- complete! [system messages {:keys [session-id]}]
   (let [provider (:llm-provider system)
@@ -232,6 +324,18 @@
 
 (defn- write-sse-done! [stream]
   (write-sse-bytes! stream "data: [DONE]\n\n"))
+
+(defn- compact-html [html]
+  (-> html
+      (str/replace #"\s+" " ")
+      str/trim))
+
+(defn- write-datastar-patch! [stream html]
+  (write-sse-bytes! stream
+                    (str "event: datastar-patch-elements\n"
+                         "data: elements "
+                         (compact-html html)
+                         "\n\n")))
 
 (defn- handle-chat-completions-stream [system exchange messages session-id]
   (let [stream-id (str "chatcmpl-" (System/currentTimeMillis))
@@ -280,6 +384,7 @@
                              :storage (sqlite/health-check (:store system))
                              :tools (tools/registry-health (:tool-registry system))
                              :skills (skills/registry-health (:skills-registry system))
+                             :memory (memory/health-check (:memory-service system))
                              :channel-adapters (channel-adapters/registry-health (:channel-adapter-registry system))
                              :orchestrator (orchestrator/health-check (:orchestrator system))
                              :provider (get-in system [:config :llm :provider])}))
@@ -299,6 +404,83 @@
 (defn- handle-list-events [system exchange]
   (write-json! exchange 200 {:data (mapv event->response
                                          (sqlite/list-events (:store system) {:limit 100}))}))
+
+(defn- handle-events-stream [system exchange]
+  (let [stream-id (str "events-" (System/currentTimeMillis))
+        ch (async/chan 64)]
+    (async/tap (get-in system [:event-bus :mult]) ch)
+    (try
+      (.add (.getResponseHeaders exchange) "Content-Type" "text/event-stream")
+      (.add (.getResponseHeaders exchange) "Cache-Control" "no-cache")
+      (.sendResponseHeaders exchange 200 0)
+      (with-open [stream (.getResponseBody exchange)]
+        (loop []
+          (when-let [event (async/<!! ch)]
+            (write-sse-chunk! stream {:id stream-id
+                                      :object "event.chunk"
+                                      :event (event->response event)})
+            (recur))))
+      (catch Exception e
+        (throw e))
+      (finally
+        (async/untap (get-in system [:event-bus :mult]) ch)
+        (async/close! ch)))))
+
+(defn- handle-memory-surfaces [system exchange]
+  (write-json! exchange 200 {:data (mapv memory-surface->response
+                                         (memory/list-surfaces (:memory-service system)))}))
+
+(defn- handle-memory-prompt [system exchange]
+  (write-json! exchange 200
+               (memory/read-prompt-memory (:memory-service system))))
+
+(defn- handle-memory-search [system exchange]
+  (let [body (read-json-body exchange)
+        query (:query body)
+        limit (:limit body)]
+    (ensure-string! :query query)
+    (when (and (some? limit) (not (integer? limit)))
+      (throw (api-error 400 "bad_request" "limit must be an integer")))
+    (write-json! exchange 200
+                 (memory/search-memory (:memory-service system) query
+                                       (cond-> {}
+                                         limit (assoc :limit limit))))))
+
+(defn- normalize-graph-fact [body]
+  (doseq [field [:subject :predicate :object]]
+    (ensure-string! field (get body field)))
+  (cond-> {:subject (:subject body)
+           :predicate (:predicate body)
+           :object (:object body)}
+    (:id body) (assoc :id (:id body))
+    (:type body) (assoc :type (:type body))
+    (:source body) (assoc :source (:source body))
+    (:session_id body) (assoc :session-id (:session_id body))
+    (:tags body) (assoc :tags (vec (:tags body)))))
+
+(defn- handle-memory-graph-save [system exchange]
+  (let [fact (normalize-graph-fact (read-json-body exchange))]
+    (try
+      (write-json! exchange 201
+                   {:data (memory/save-graph-fact! (:memory-service system) fact)})
+      (catch Exception e
+        (if (= :graph-memory-disabled (:type (ex-data e)))
+          (throw (api-error 409 "graph_memory_disabled" "Graph memory backend is disabled"))
+          (throw e))))))
+
+(defn- handle-memory-graph-query [system exchange]
+  (let [body (read-json-body exchange)
+        query (:query body)
+        limit (:limit body)]
+    (when (and (some? query) (not (string? query)))
+      (throw (api-error 400 "bad_request" "query must be a string")))
+    (when (and (some? limit) (not (integer? limit)))
+      (throw (api-error 400 "bad_request" "limit must be an integer")))
+    (write-json! exchange 200
+                 {:data (memory/query-graph-memory (:memory-service system)
+                                                   query
+                                                   (cond-> {}
+                                                     limit (assoc :limit limit)))})))
 
 (defn- handle-create-agent [system exchange]
   (let [body (read-json-body exchange)
@@ -420,11 +602,11 @@
     (when (and (some? title) (not (string? title)))
       (throw (api-error 400 "bad_request" "title must be a string")))
     (let [session (sqlite/create-session! (:store system) title)]
-      (sqlite/log-event! (:store system)
-                         {:event-type :session.created
-                          :entity-type :session
-                          :entity-id (:id session)
-                          :payload {:title title}})
+      (emit-system-event! system
+                          {:event-type :session.created
+                           :entity-type :session
+                           :entity-id (:id session)
+                           :payload {:title title}})
       (write-json! exchange 201 (session->response session)))))
 
 (defn- handle-list-sessions [system exchange]
@@ -444,6 +626,267 @@
       (let [result (complete! system messages {:session-id session-id})]
         (write-json! exchange 200 (openai-style-completion system session-id (:content result)))))))
 
+(defn- normalize-permissions [value]
+  (cond
+    (nil? value) #{}
+    (string? value) #{(keyword value)}
+    (vector? value) (set (map keyword value))
+    :else (throw (api-error 400 "bad_request" "permissions must be a string or vector of strings"))))
+
+(defn- tool-input-from-map [tool-name body]
+  (case tool-name
+    :fs (cond-> {:action (:action body)
+                 :path (:path body)}
+          (contains? body :content) (assoc :content (:content body)))
+    :shell (cond-> {:command (:command body)}
+             (not (str/blank? (:working_dir body))) (assoc :working-dir (:working_dir body)))
+    (throw (api-error 400 "bad_request" "Unsupported tool"))))
+
+(defn- execution-context [tool-name input {:keys [permissions approval-id user request-id]}]
+  (let [granted (if approval-id
+                  (tool-approvals/granted-permissions tool-name input)
+                  permissions)]
+    {:permissions granted
+     :approval-id approval-id
+     :user (or user "api")
+     :request-id request-id}))
+
+(defn- handle-execute-tool [system exchange tool-name]
+  (let [body (read-json-body exchange)
+        input (:input body)
+        permissions (normalize-permissions (:permissions body))
+        approval-id (:approval_id body)
+        tool-key (keyword tool-name)]
+    (when-not (map? input)
+      (throw (api-error 400 "bad_request" "input must be an object")))
+    (try
+      (write-json! exchange 200
+                   {:data (tools/execute-tool (:tool-registry system)
+                                              tool-key
+                                              input
+                                              (execution-context tool-key input
+                                                                 {:permissions permissions
+                                                                  :approval-id approval-id
+                                                                  :user "api"}))})
+      (catch Exception e
+        (throw (tool-error->api-error e))))))
+
+(defn- handle-ui-index [exchange]
+  (write-html! exchange 200 (ui/index-page)))
+
+(defn- handle-ui-dashboard [system exchange]
+  (write-html! exchange 200 (ui/dashboard-fragment system)))
+
+(defn- handle-ui-sessions [system exchange]
+  (write-html! exchange 200 (ui/sessions-fragment system)))
+
+(defn- handle-ui-create-session [system exchange]
+  (let [body (read-form-body exchange)
+        title (:title body)
+        session (sqlite/create-session! (:store system) (not-empty title))]
+    (emit-system-event! system
+                        {:event-type :session.created
+                         :entity-type :session
+                         :entity-id (:id session)
+                         :payload {:title (not-empty title)
+                                   :source :ui}})
+    (write-html! exchange 201
+                 (str (ui/dashboard-fragment system)
+                      (ui/sessions-fragment system)
+                      (ui/session-detail-fragment system (:id session))))))
+
+(defn- handle-ui-session-detail [system exchange]
+  (write-html! exchange 200
+               (ui/session-detail-fragment system (:session_id (query-params exchange)))))
+
+(defn- relevant-session-event? [event session-id]
+  (and (= "session" (:entity-type event))
+       (= session-id (:entity-id event))
+       (contains? #{"message.appended" "completion.completed" "session.created"} (:event-type event))))
+
+(defn- handle-ui-session-live [system exchange]
+  (let [session-id (:session_id (query-params exchange))
+        ch (async/chan 64)]
+    (ensure-string! :session_id session-id)
+    (ensure-session-exists! system session-id)
+    (async/tap (get-in system [:event-bus :mult]) ch)
+    (try
+      (.add (.getResponseHeaders exchange) "Content-Type" "text/event-stream")
+      (.add (.getResponseHeaders exchange) "Cache-Control" "no-cache")
+      (.sendResponseHeaders exchange 200 0)
+      (with-open [stream (.getResponseBody exchange)]
+        (write-datastar-patch! stream (ui/session-detail-fragment system session-id))
+        (loop []
+          (when-let [event (async/<!! ch)]
+            (when (relevant-session-event? event session-id)
+              (write-datastar-patch! stream (ui/session-detail-fragment system session-id)))
+            (recur))))
+      (finally
+        (async/untap (get-in system [:event-bus :mult]) ch)
+        (async/close! ch)))))
+
+(defn- handle-ui-chat [system exchange]
+  (let [body (read-form-body exchange)
+        session-id (:session_id body)
+        prompt (:prompt body)]
+    (ensure-string! :session_id session-id)
+    (ensure-string! :prompt prompt)
+    (ensure-session-exists! system session-id)
+    (complete! system [{:role "user" :content prompt}] {:session-id session-id})
+    (write-html! exchange 200
+                 (str (ui/dashboard-fragment system)
+                      (ui/session-detail-fragment system session-id)
+                      (ui/sessions-fragment system)))))
+
+(defn- handle-ui-events-live [system exchange]
+  (let [ch (async/chan 64)]
+    (async/tap (get-in system [:event-bus :mult]) ch)
+    (try
+      (.add (.getResponseHeaders exchange) "Content-Type" "text/event-stream")
+      (.add (.getResponseHeaders exchange) "Cache-Control" "no-cache")
+      (.sendResponseHeaders exchange 200 0)
+      (with-open [stream (.getResponseBody exchange)]
+        (write-datastar-patch! stream (ui/events-fragment system))
+        (loop []
+          (when (async/<!! ch)
+            (write-datastar-patch! stream (ui/events-fragment system))
+            (recur))))
+      (finally
+        (async/untap (get-in system [:event-bus :mult]) ch)
+        (async/close! ch)))))
+
+(defn- handle-ui-memory-prompt [system exchange]
+  (write-html! exchange 200 (ui/memory-prompt-fragment system)))
+
+(defn- handle-ui-memory-search [system exchange]
+  (let [body (read-form-body exchange)
+        query (:query body)]
+    (ensure-string! :query query)
+    (write-html! exchange 200
+                 (ui/memory-search-results-fragment
+                  (memory/search-memory (:memory-service system) query)))))
+
+(defn- ui-tool-input [body]
+  (tool-input-from-map (keyword (:tool body)) body))
+
+(defn- handle-ui-tools [system exchange]
+  (write-html! exchange 200 (ui/tools-fragment system)))
+
+(defn- handle-list-tool-approvals [system exchange]
+  (write-json! exchange 200
+               {:data (mapv approval->response
+                            (tool-approvals/list-requests (:store system)
+                                                          {:status (:status (query-params exchange))
+                                                           :limit 100}))}))
+
+(defn- handle-create-tool-approval [system exchange]
+  (let [body (read-json-body exchange)
+        tool-name (keyword (:tool body))
+        input (:input body)]
+    (when-not (map? input)
+      (throw (api-error 400 "bad_request" "input must be an object")))
+    (write-json! exchange 201
+                 {:data (approval->response
+                         (tool-approvals/create-request!
+                          (:store system)
+                          {:tool-name tool-name
+                           :input input
+                           :requested-by (or (:requested_by body) "api")
+                           :reason (:reason body)}))})))
+
+(defn- handle-decide-tool-approval [system exchange approval-id status]
+  (let [body (read-json-body exchange)
+        actor (or (:actor body) "api")
+        reason (:reason body)
+        updated (case status
+                  :approved (tool-approvals/approve! (:store system) approval-id actor reason)
+                  :denied (tool-approvals/deny! (:store system) approval-id actor reason))]
+    (emit-system-event! system
+                        {:event-type (keyword (str "tool.approval." (name status)))
+                         :entity-type :tool_approval
+                         :entity-id approval-id
+                         :payload {:tool-name (:tool-name updated)
+                                   :actor actor}})
+    (write-json! exchange 200 {:data (approval->response updated)})))
+
+(defn- handle-ui-tool-approvals [system exchange]
+  (write-html! exchange 200
+               (ui/tool-approvals-fragment
+                (tool-approvals/list-requests (:store system) {:limit 50}))))
+
+(defn- handle-ui-tool-approval-request [system exchange]
+  (let [body (read-form-body exchange)
+        tool-name (keyword (:tool body))
+        input (ui-tool-input body)
+        approval (tool-approvals/create-request!
+                  (:store system)
+                  {:tool-name tool-name
+                   :input input
+                   :requested-by "ui"
+                   :reason (:reason body)})]
+    (emit-system-event! system
+                        {:event-type :tool.approval.requested
+                         :entity-type :tool_approval
+                         :entity-id (:id approval)
+                         :payload {:tool-name (name tool-name)}})
+    (write-html! exchange 201
+                 (str (ui/tool-approvals-fragment
+                       (tool-approvals/list-requests (:store system) {:limit 50}))
+                      (ui/tool-results-fragment
+                       tool-name
+                       201
+                       {:approval_id (:id approval)
+                        :status (:status approval)})))))
+
+(defn- handle-ui-tool-approval-decision [system exchange approval-id status]
+  (let [body (read-form-body exchange)
+        actor (or (:actor body) "operator")
+        reason (:reason body)
+        updated (case status
+                  :approved (tool-approvals/approve! (:store system) approval-id actor reason)
+                  :denied (tool-approvals/deny! (:store system) approval-id actor reason))]
+    (emit-system-event! system
+                        {:event-type (keyword (str "tool.approval." (name status)))
+                         :entity-type :tool_approval
+                         :entity-id approval-id
+                         :payload {:tool-name (:tool-name updated)
+                                   :actor actor}})
+    (write-html! exchange 200
+                 (str (ui/tool-approvals-fragment
+                       (tool-approvals/list-requests (:store system) {:limit 50}))
+                      (ui/tool-results-fragment
+                       (keyword (:tool-name updated))
+                       200
+                       {:approval_id approval-id
+                        :status (:status updated)})))))
+
+(defn- handle-ui-tool-approval-run [system exchange approval-id]
+  (let [{:keys [tool-name input permissions]} (tool-approvals/resolve-approved-request (:store system) approval-id)]
+    (try
+      (write-html! exchange 200
+                   (str (ui/tool-approvals-fragment
+                         (tool-approvals/list-requests (:store system) {:limit 50}))
+                        (ui/tool-results-fragment
+                         tool-name
+                         200
+                         {:result (tools/execute-tool (:tool-registry system)
+                                                      tool-name
+                                                      input
+                                                      (execution-context tool-name input
+                                                                         {:approval-id approval-id
+                                                                          :permissions permissions
+                                                                          :user "ui"}))})))
+      (catch Exception e
+        (let [api-e (tool-error->api-error e)]
+          (write-html! exchange
+                       (:status (ex-data api-e))
+                       (ui/tool-results-fragment
+                        tool-name
+                        (:status (ex-data api-e))
+                        {:error (:error (ex-data api-e))
+                         :message (.getMessage api-e)
+                         :details (:details (ex-data api-e))})))))))
+
 (defn create-handler
   [system]
   (reify HttpHandler
@@ -452,8 +895,62 @@
         (let [method (.getRequestMethod exchange)
               path (split-path exchange)]
           (cond
+            (and (= method "GET") (empty? path))
+            (handle-ui-index exchange)
+
             (and (= method "GET") (= path ["health"]))
             (handle-health system exchange)
+
+            (and (= method "GET") (= path ["ui" "dashboard"]))
+            (handle-ui-dashboard system exchange)
+
+            (and (= method "GET") (= path ["ui" "sessions"]))
+            (handle-ui-sessions system exchange)
+
+            (and (= method "POST") (= path ["ui" "sessions"]))
+            (handle-ui-create-session system exchange)
+
+            (and (= method "GET") (= path ["ui" "session-detail"]))
+            (handle-ui-session-detail system exchange)
+
+            (and (= method "GET") (= path ["ui" "session" "live"]))
+            (handle-ui-session-live system exchange)
+
+            (and (= method "POST") (= path ["ui" "chat"]))
+            (handle-ui-chat system exchange)
+
+            (and (= method "GET") (= path ["ui" "events" "live"]))
+            (handle-ui-events-live system exchange)
+
+            (and (= method "GET") (= path ["ui" "memory" "prompt"]))
+            (handle-ui-memory-prompt system exchange)
+
+            (and (= method "POST") (= path ["ui" "memory" "search"]))
+            (handle-ui-memory-search system exchange)
+
+            (and (= method "GET") (= path ["ui" "tools"]))
+            (handle-ui-tools system exchange)
+
+            (and (= method "GET") (= path ["ui" "tool-approvals"]))
+            (handle-ui-tool-approvals system exchange)
+
+            (and (= method "POST") (= path ["ui" "tool-approvals" "request"]))
+            (handle-ui-tool-approval-request system exchange)
+
+            (and (= method "POST") (= 4 (count path))
+                 (= ["ui" "tool-approvals"] (subvec path 0 2))
+                 (= "approve" (nth path 3)))
+            (handle-ui-tool-approval-decision system exchange (nth path 2) :approved)
+
+            (and (= method "POST") (= 4 (count path))
+                 (= ["ui" "tool-approvals"] (subvec path 0 2))
+                 (= "deny" (nth path 3)))
+            (handle-ui-tool-approval-decision system exchange (nth path 2) :denied)
+
+            (and (= method "POST") (= 4 (count path))
+                 (= ["ui" "tool-approvals"] (subvec path 0 2))
+                 (= "run" (nth path 3)))
+            (handle-ui-tool-approval-run system exchange (nth path 2))
 
             (and (= method "GET") (= path ["v1" "sessions"]))
             (handle-list-sessions system exchange)
@@ -464,6 +961,27 @@
             (and (= method "GET") (= path ["v1" "tools"]))
             (handle-list-tools system exchange)
 
+            (and (= method "POST") (= 4 (count path))
+                 (= ["v1" "tools"] (subvec path 0 2))
+                 (= "execute" (nth path 3)))
+            (handle-execute-tool system exchange (nth path 2))
+
+            (and (= method "GET") (= path ["v1" "tool-approvals"]))
+            (handle-list-tool-approvals system exchange)
+
+            (and (= method "POST") (= path ["v1" "tool-approvals"]))
+            (handle-create-tool-approval system exchange)
+
+            (and (= method "POST") (= 4 (count path))
+                 (= ["v1" "tool-approvals"] (subvec path 0 2))
+                 (= "approve" (nth path 3)))
+            (handle-decide-tool-approval system exchange (nth path 2) :approved)
+
+            (and (= method "POST") (= 4 (count path))
+                 (= ["v1" "tool-approvals"] (subvec path 0 2))
+                 (= "deny" (nth path 3)))
+            (handle-decide-tool-approval system exchange (nth path 2) :denied)
+
             (and (= method "GET") (= path ["v1" "skills"]))
             (handle-list-skills system exchange)
 
@@ -472,6 +990,24 @@
 
             (and (= method "GET") (= path ["v1" "events"]))
             (handle-list-events system exchange)
+
+            (and (= method "GET") (= path ["v1" "events" "stream"]))
+            (handle-events-stream system exchange)
+
+            (and (= method "GET") (= path ["v1" "memory" "surfaces"]))
+            (handle-memory-surfaces system exchange)
+
+            (and (= method "GET") (= path ["v1" "memory" "prompt"]))
+            (handle-memory-prompt system exchange)
+
+            (and (= method "POST") (= path ["v1" "memory" "search"]))
+            (handle-memory-search system exchange)
+
+            (and (= method "POST") (= path ["v1" "memory" "graph" "facts"]))
+            (handle-memory-graph-save system exchange)
+
+            (and (= method "POST") (= path ["v1" "memory" "graph" "query"]))
+            (handle-memory-graph-query system exchange)
 
             (and (= method "GET") (= path ["v1" "agents"]))
             (handle-list-agents system exchange)
