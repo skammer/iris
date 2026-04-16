@@ -14,10 +14,13 @@
    (java.net URI)
    (java.net.http HttpClient HttpRequest HttpResponse$BodyHandlers)))
 
-(defrecord TestProvider []
+(defrecord TestProvider [messages*]
   llm-core/ILLMProvider
-  (complete [_ _ _] "test-response")
-  (stream [_ _ _]
+  (complete [_ messages _]
+    (reset! messages* messages)
+    "test-response")
+  (stream [_ messages _]
+    (reset! messages* messages)
     (let [ch (async/chan)]
       (async/thread
         (async/>!! ch "hello")
@@ -96,12 +99,13 @@
         port (free-port)
         base-url (str "http://127.0.0.1:" port)
         base-system (core/create-system)
+        messages* (atom nil)
         store (sqlite/create-store {:path path})
         event-bus (core/create-event-bus)
         event-sink (core/create-event-sink store event-bus)
         runtime-service (core/create-runtime-service store event-sink)
         system (assoc base-system
-                      :llm-provider (->TestProvider)
+                      :llm-provider (->TestProvider messages*)
                       :store store
                       :event-bus event-bus
                       :event-sink event-sink
@@ -228,7 +232,7 @@
             session-id (:id created-body)
             ui-created (http-post-form (str base-url "/ui/sessions") "title=ui-test")
             session-detail (http-get (str base-url "/ui/session-detail?session_id=" session-id))
-            session-live-bootstrap (http-get (str base-url "/ui/session-detail?session_id=" session-id))
+            session-messages (http-get (str base-url "/ui/session-messages?session_id=" session-id))
             completion (http-post (str base-url "/v1/chat/completions")
                                   {:session_id session-id
                                    :prompt "hello"})
@@ -318,7 +322,8 @@
         (is (str/includes? (:body ui-created) "ui-test"))
         (is (= 200 (:status session-detail)))
         (is (str/includes? (:body session-detail) session-id))
-        (is (str/includes? (:body session-live-bootstrap) "/ui/session-detail?session_id="))
+        (is (= 200 (:status session-messages)))
+        (is (str/includes? (:body session-detail) "/ui/session-messages?session_id="))
         (is (= 200 (:status completion)))
         (is (= 200 (:status ui-chat)))
         (is (str/includes? (:body ui-chat) "test-response"))
@@ -336,7 +341,11 @@
         (is (= "hello ui" (get-in messages-body [:data 2 :content])))
         (is (= "test-response" (get-in messages-body [:data 3 :content])))
         (is (= "hello" (get-in messages-body [:data 4 :content])))
-        (is (= "hello world" (get-in messages-body [:data 5 :content]))))
+        (is (= "hello world" (get-in messages-body [:data 5 :content])))
+        (is (= ["user" "assistant" "user" "assistant" "user"]
+               (mapv :role @messages*)))
+        (is (= ["hello" "test-response" "hello ui" "test-response" "hello"]
+               (mapv :content @messages*))))
       (finally
         (api/stop-server! server)
         (io/delete-file path true)))))

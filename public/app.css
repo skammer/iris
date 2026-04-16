@@ -73,6 +73,10 @@ main {
   gap: 12px;
 }
 
+agent-chat-panel {
+  display: block;
+}
+
 .panel,
 .shell-nav,
 .status-bar {
@@ -273,6 +277,7 @@ button {
   padding: 14px 16px;
   background: var(--surface-raised);
   border-left: 2px solid transparent;
+  border-radius: 0;
 }
 
 button:hover,
@@ -343,6 +348,10 @@ select:focus-visible {
   color: var(--success);
 }
 
+.message-role.assistant {
+  color: var(--accent);
+}
+
 .message-role.system {
   color: var(--warning);
 }
@@ -383,10 +392,41 @@ textarea {
   resize: vertical;
 }
 
+#chat-form {
+  align-items: start;
+}
+
+#chat-form .chat-input {
+  min-height: 0;
+  resize: none;
+  overflow: hidden;
+  padding: 12px 14px;
+  border: 1px solid var(--border-visible);
+  background: var(--surface-raised);
+}
+
+#chat-form .chat-input:focus-visible {
+  border-color: var(--text-display);
+}
+
 .actions {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.chat-status {
+  color: var(--warning);
+}
+
+#chat-form.is-loading button[type="submit"] {
+  border-color: var(--warning);
+  color: var(--text-display);
+}
+
+#chat-form.is-loading button[type="submit"]::after {
+  content: " ...";
+  color: var(--warning);
 }
 
 .dual {
@@ -434,6 +474,10 @@ textarea {
 
 .result {
   border-left: 2px solid var(--warning);
+}
+
+.message.is-error {
+  border-left: 2px solid var(--accent);
 }
 
 ::-webkit-scrollbar {

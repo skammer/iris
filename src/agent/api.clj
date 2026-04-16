@@ -371,18 +371,36 @@
       :else
       (throw (api-error 400 "bad_request" "Expected messages vector or prompt string")))))
 
+(defn- session-context-messages [system session-id]
+  (if session-id
+    (mapv (fn [{:keys [role content]}]
+            {:role role
+             :content content})
+          (sqlite/list-messages (:store system) session-id))
+    []))
+
+(defn- attach-session-context [system {:keys [messages session-id] :as request}]
+  (if (and session-id (seq messages))
+    (assoc request :messages (into (session-context-messages system session-id) messages))
+    request))
+
+(defn- latest-user-prompt [messages]
+  (:content (last (filter #(= "user" (:role %)) messages))))
+
+(defn- persist-user-message! [system messages session-id]
+  (when-let [prompt (and session-id (latest-user-prompt messages))]
+    (append-session-message! system session-id "user" prompt)))
+
 (defn- persist-completion! [system messages content {:keys [session-id]}]
   (let [provider (name (get-in system [:config :llm :provider]))
-        user-message (last (filter #(= "user" (:role %)) messages))]
+        prompt (latest-user-prompt messages)]
     (when session-id
-      (when-let [prompt (:content user-message)]
-        (append-session-message! system session-id "user" prompt))
       (append-session-message! system session-id "assistant" content))
     (sqlite/log-completion! (:store system)
                             {:session-id session-id
                              :provider provider
                              :model (get-in system [:config :llm :model])
-                             :prompt (:content user-message)
+                             :prompt prompt
                              :response content})
     (emit-system-event! system
                         {:event-type :completion.completed
@@ -392,6 +410,7 @@
                                    :model (get-in system [:config :llm :model])}})))
 
 (defn- complete! [system messages {:keys [session-id]}]
+  (persist-user-message! system messages session-id)
   (let [provider (:llm-provider system)
         content (llm-core/complete provider messages {})]
     (persist-completion! system messages content {:session-id session-id})
@@ -436,6 +455,7 @@
         model (get-in system [:config :llm :model])
         chunks (llm-core/stream (:llm-provider system) messages {})]
     (try
+      (persist-user-message! system messages session-id)
       (.add (.getResponseHeaders exchange) "Content-Type" "text/event-stream")
       (.add (.getResponseHeaders exchange) "Cache-Control" "no-cache")
       (.sendResponseHeaders exchange 200 0)
@@ -863,7 +883,8 @@
 
 (defn- handle-chat-completions [system exchange]
   (let [{:keys [messages session-id stream?]}
-        (normalize-chat-request (read-json-body exchange))]
+        (attach-session-context system
+                                (normalize-chat-request (read-json-body exchange)))]
     (ensure-session-exists! system session-id)
     (if stream?
       (handle-chat-completions-stream system exchange messages session-id)
@@ -946,6 +967,13 @@
 (defn- handle-ui-session-detail [system exchange]
   (write-html! exchange 200
                (ui/session-detail-fragment system (:session_id (query-params exchange)))))
+
+(defn- handle-ui-session-messages [system exchange]
+  (let [session-id (:session_id (query-params exchange))]
+    (ensure-string! :session_id session-id)
+    (ensure-session-exists! system session-id)
+    (write-html! exchange 200
+                 (ui/session-messages-fragment system session-id))))
 
 (defn- relevant-session-event? [event session-id]
   (and (= "session" (:entity-type event))
@@ -1230,6 +1258,9 @@
 
             (and (= method "GET") (= path ["ui" "session-detail"]))
             (handle-ui-session-detail system exchange)
+
+            (and (= method "GET") (= path ["ui" "session-messages"]))
+            (handle-ui-session-messages system exchange)
 
             (and (= method "GET") (= path ["ui" "session" "live"]))
             (handle-ui-session-live system exchange)
