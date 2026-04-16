@@ -160,6 +160,21 @@
   [runtime run-id]
   (sqlite/list-agent-run-commands (:store runtime) run-id {:status "pending"}))
 
+(defn list-commands
+  ([runtime run-id] (list-commands runtime run-id {}))
+  ([runtime run-id opts]
+   (sqlite/list-agent-run-commands (:store runtime) run-id opts)))
+
+(defn list-heartbeats
+  ([runtime run-id] (list-heartbeats runtime run-id {}))
+  ([runtime run-id opts]
+   (sqlite/list-agent-run-heartbeats (:store runtime) run-id opts)))
+
+(defn list-checkpoints
+  ([runtime run-id] (list-checkpoints runtime run-id {}))
+  ([runtime run-id opts]
+   (sqlite/list-agent-run-checkpoints (:store runtime) run-id opts)))
+
 (defn acknowledge-command!
   [runtime run-id command-id]
   (sqlite/update-agent-run-command! (:store runtime) command-id {:status :acknowledged})

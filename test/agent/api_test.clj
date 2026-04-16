@@ -127,12 +127,38 @@
                                     :auto_launch true})
             created-run-body (json/parse-string (:body created-run) true)
             run-id (get-in created-run-body [:data :id])
+            _ (core/register-run! system run-id
+                                  {:capabilities [:chat]
+                                   :network-identity {:logical-id "agent://runner"}
+                                   :runner-metadata {:pid 100}})
+            _ (core/heartbeat-run! system run-id
+                                   {:sequence-no 1
+                                    :status :running
+                                    :metrics {:cpu 0.1}
+                                    :lease-id (get-in (core/get-run system run-id) [:lease :id])})
+            _ (core/checkpoint-run! system run-id
+                                    {:sequence-no 1
+                                     :checkpoint-type :state
+                                     :state {:step "exec"}})
+            command-entry (core/enqueue-run-command! system run-id
+                                                     {:command-type :pause
+                                                      :payload {:reason "test"}})
             fetched-run (http-get (str base-url "/v1/runs/" run-id))
             fetched-run-body (json/parse-string (:body fetched-run) true)
+            run-heartbeats (http-get (str base-url "/v1/runs/" run-id "/heartbeats?since_sequence=1"))
+            run-heartbeats-body (json/parse-string (:body run-heartbeats) true)
+            run-checkpoints (http-get (str base-url "/v1/runs/" run-id "/checkpoints?since_sequence=1"))
+            run-checkpoints-body (json/parse-string (:body run-checkpoints) true)
+            run-commands (http-get (str base-url "/v1/runs/" run-id "/commands?status=pending"))
+            run-commands-body (json/parse-string (:body run-commands) true)
+            run-events (http-get (str base-url "/v1/runs/" run-id "/events?limit=20"))
+            run-events-body (json/parse-string (:body run-events) true)
             signaled-run (http-post (str base-url "/v1/runs/" run-id "/signal")
                                     {:command_type "cancel"})
             list-runs (http-get (str base-url "/v1/runs"))
             list-runs-body (json/parse-string (:body list-runs) true)
+            ui-runs (http-get (str base-url "/ui/runs"))
+            ui-run-detail (http-get (str base-url "/ui/run-detail?run_id=" run-id))
             ui-index (http-get base-url)
             ui-dashboard (http-get (str base-url "/ui/dashboard"))
             health (http-get (str base-url "/health"))
@@ -225,9 +251,23 @@
         (is (= 200 (:status fetched-run)))
         (is (= true (get-in fetched-run-body [:data :runner_status :alive])))
         (is (number? (get-in fetched-run-body [:data :runner_status :pid])))
+        (is (= 200 (:status run-heartbeats)))
+        (is (= 1 (count (:data run-heartbeats-body))))
+        (is (= 1 (get-in run-heartbeats-body [:data 0 :sequence_no])))
+        (is (= 200 (:status run-checkpoints)))
+        (is (= 1 (count (:data run-checkpoints-body))))
+        (is (= "state" (get-in run-checkpoints-body [:data 0 :checkpoint_type])))
+        (is (= 200 (:status run-commands)))
+        (is (= [(:id command-entry)] (mapv :id (:data run-commands-body))))
+        (is (= 200 (:status run-events)))
+        (is (some #{"agent.run.heartbeat"} (map :event_type (:data run-events-body))))
         (is (= 200 (:status signaled-run)))
         (is (= 200 (:status list-runs)))
         (is (= [run-id] (mapv :id (:data list-runs-body))))
+        (is (= 200 (:status ui-runs)))
+        (is (str/includes? (:body ui-runs) "Create Run"))
+        (is (= 200 (:status ui-run-detail)))
+        (is (str/includes? (:body ui-run-detail) "Latest checkpoint"))
         (is (= 200 (:status ui-index)))
         (is (str/includes? (:body ui-index) "datastar.js"))
         (is (= 200 (:status ui-dashboard)))

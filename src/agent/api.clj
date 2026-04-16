@@ -203,6 +203,32 @@
      :pending_commands (mapv #(update-keys % (fn [k] (keyword (str/replace (name k) "-" "_"))))
                              (:pending-commands run))}))
 
+(defn- heartbeat->response [heartbeat]
+  {:run_id (:run-id heartbeat)
+   :sequence_no (:sequence-no heartbeat)
+   :status (:status heartbeat)
+   :metrics (:metrics heartbeat)
+   :observed_at (:observed-at heartbeat)})
+
+(defn- checkpoint->response [checkpoint]
+  {:id (:id checkpoint)
+   :run_id (:run-id checkpoint)
+   :sequence_no (:sequence-no checkpoint)
+   :checkpoint_type (:checkpoint-type checkpoint)
+   :state (:state checkpoint)
+   :created_at (:created-at checkpoint)})
+
+(defn- run-command->response [command]
+  {:id (:id command)
+   :run_id (:run-id command)
+   :command_type (:command-type command)
+   :payload (:payload command)
+   :status (:status command)
+   :created_at (:created-at command)
+   :acknowledged_at (:acknowledged-at command)
+   :completed_at (:completed-at command)
+   :error (:error command)})
+
 (defn- memory-surface->response [surface]
   {:name (name (:name surface))
    :type (name (:type surface))
@@ -748,6 +774,56 @@
     (write-json! exchange 200
                  {:data (system-signal-run! system run-id {:command-type command-type})})))
 
+(defn- parse-int-param [value field]
+  (when (some? value)
+    (try
+      (Integer/parseInt (str value))
+      (catch Exception _
+        (throw (api-error 400 "bad_request" (str field " must be an integer")))))))
+
+(defn- handle-run-heartbeats [system exchange run-id]
+  (let [params (query-params exchange)
+        limit (parse-int-param (:limit params) "limit")
+        since-sequence (parse-int-param (:since_sequence params) "since_sequence")]
+    (write-json! exchange 200
+                 {:data (mapv heartbeat->response
+                              (runtime/list-heartbeats (:runtime-service system) run-id
+                                                       (cond-> {}
+                                                         limit (assoc :limit limit)
+                                                         since-sequence (assoc :since-sequence since-sequence))))})))
+
+(defn- handle-run-checkpoints [system exchange run-id]
+  (let [params (query-params exchange)
+        limit (parse-int-param (:limit params) "limit")
+        since-sequence (parse-int-param (:since_sequence params) "since_sequence")]
+    (write-json! exchange 200
+                 {:data (mapv checkpoint->response
+                              (runtime/list-checkpoints (:runtime-service system) run-id
+                                                        (cond-> {}
+                                                          limit (assoc :limit limit)
+                                                          since-sequence (assoc :since-sequence since-sequence))))})))
+
+(defn- handle-run-commands [system exchange run-id]
+  (let [params (query-params exchange)
+        limit (parse-int-param (:limit params) "limit")
+        status (:status params)]
+    (write-json! exchange 200
+                 {:data (mapv run-command->response
+                              (runtime/list-commands (:runtime-service system) run-id
+                                                     (cond-> {}
+                                                       limit (assoc :limit limit)
+                                                       status (assoc :status status))))})))
+
+(defn- handle-run-events [system exchange run-id]
+  (let [params (query-params exchange)
+        limit (parse-int-param (:limit params) "limit")]
+    (write-json! exchange 200
+                 {:data (mapv event->response
+                              (sqlite/list-events (:store system)
+                                                  (cond-> {:entity-type :agent_run
+                                                           :entity-id run-id}
+                                                    limit (assoc :limit limit))))})))
+
 (defn- handle-chat-completions [system exchange]
   (let [{:keys [messages session-id stream?]}
         (normalize-chat-request (read-json-body exchange))]
@@ -897,6 +973,47 @@
                  (ui/memory-search-results-fragment
                   (memory/search-memory (:memory-service system) query)))))
 
+(defn- split-command-plain [command]
+  (let [trimmed (str/trim (or command ""))]
+    (when (str/blank? trimmed)
+      (throw (api-error 400 "bad_request" "command must be a non-blank string")))
+    (when (re-find #"[|&;<>$`(){}\[\]\\'\"]" trimmed)
+      (throw (api-error 400 "bad_request" "command contains unsupported shell metacharacters")))
+    (vec (remove str/blank? (str/split trimmed #"\s+")))))
+
+(defn- handle-ui-runs [system exchange]
+  (write-html! exchange 200 (ui/runs-fragment system)))
+
+(defn- handle-ui-run-detail [system exchange]
+  (write-html! exchange 200
+               (ui/run-detail-fragment system (:run_id (query-params exchange)))))
+
+(defn- handle-ui-create-run [system exchange]
+  (let [body (read-form-body exchange)
+        run (system-request-run! system
+                                 {:agent-id (not-empty (:agent_id body))
+                                  :name (not-empty (:name body))
+                                  :substrate (keyword (or (:substrate body) "local-process"))
+                                  :runner-options {:command (split-command-plain (:command body))
+                                                   :working-dir (or (:working_dir body) ".")}
+                                  :requested-by "ui"})
+        _ (system-launch-run! system (:id run))]
+    (write-html! exchange 201
+                 (str (ui/runs-fragment system)
+                      (ui/run-detail-fragment system (:id run))))))
+
+(defn- handle-ui-run-launch [system exchange run-id]
+  (system-launch-run! system run-id)
+  (write-html! exchange 200
+               (str (ui/runs-fragment system)
+                    (ui/run-detail-fragment system run-id))))
+
+(defn- handle-ui-run-signal [system exchange run-id]
+  (system-signal-run! system run-id {:command-type "cancel"})
+  (write-html! exchange 200
+               (str (ui/runs-fragment system)
+                    (ui/run-detail-fragment system run-id))))
+
 (defn- ui-tool-input [body]
   (tool-input-from-map (keyword (:tool body)) body))
 
@@ -1041,6 +1158,25 @@
             (and (= method "POST") (= path ["ui" "sessions"]))
             (handle-ui-create-session system exchange)
 
+            (and (= method "GET") (= path ["ui" "runs"]))
+            (handle-ui-runs system exchange)
+
+            (and (= method "POST") (= path ["ui" "runs"]))
+            (handle-ui-create-run system exchange)
+
+            (and (= method "GET") (= path ["ui" "run-detail"]))
+            (handle-ui-run-detail system exchange)
+
+            (and (= method "POST") (= 4 (count path))
+                 (= ["ui" "runs"] (subvec path 0 2))
+                 (= "launch" (nth path 3)))
+            (handle-ui-run-launch system exchange (nth path 2))
+
+            (and (= method "POST") (= 4 (count path))
+                 (= ["ui" "runs"] (subvec path 0 2))
+                 (= "signal" (nth path 3)))
+            (handle-ui-run-signal system exchange (nth path 2))
+
             (and (= method "GET") (= path ["ui" "session-detail"]))
             (handle-ui-session-detail system exchange)
 
@@ -1098,6 +1234,26 @@
             (and (= method "GET") (= 3 (count path))
                  (= ["v1" "runs"] (subvec path 0 2)))
             (handle-get-run system exchange (nth path 2))
+
+            (and (= method "GET") (= 4 (count path))
+                 (= ["v1" "runs"] (subvec path 0 2))
+                 (= "heartbeats" (nth path 3)))
+            (handle-run-heartbeats system exchange (nth path 2))
+
+            (and (= method "GET") (= 4 (count path))
+                 (= ["v1" "runs"] (subvec path 0 2))
+                 (= "checkpoints" (nth path 3)))
+            (handle-run-checkpoints system exchange (nth path 2))
+
+            (and (= method "GET") (= 4 (count path))
+                 (= ["v1" "runs"] (subvec path 0 2))
+                 (= "commands" (nth path 3)))
+            (handle-run-commands system exchange (nth path 2))
+
+            (and (= method "GET") (= 4 (count path))
+                 (= ["v1" "runs"] (subvec path 0 2))
+                 (= "events" (nth path 3)))
+            (handle-run-events system exchange (nth path 2))
 
             (and (= method "POST") (= 4 (count path))
                  (= ["v1" "runs"] (subvec path 0 2))

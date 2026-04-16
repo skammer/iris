@@ -11,6 +11,7 @@
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
+   [agent.runners.bubblewrap :as bubblewrap]
    [agent.runners.core :as runners]
    [agent.runners.local-process :as local-process]
    [agent.runtime.core :as runtime]
@@ -137,7 +138,20 @@
                                              {:last-error (when-not (zero? exit-code)
                                                             (str "Process exited with code " exit-code))
                                               :runner-metadata (assoc (:runner-metadata run)
-                                                                      :exit-code exit-code)}))))})})
+                                                                      :exit-code exit-code)}))))})
+   :bubblewrap
+   (bubblewrap/create-bubblewrap-runner
+    {:delegate (local-process/create-local-process-runner
+                {:on-exit (fn [run-id {:keys [exit-code]}]
+                            (when-let [run (runtime/get-run runtime-service run-id)]
+                              (when-let [status (runner-exit-status run exit-code)]
+                                (runtime/transition-run! runtime-service
+                                                         run-id
+                                                         status
+                                                         {:last-error (when-not (zero? exit-code)
+                                                                        (str "Process exited with code " exit-code))
+                                                          :runner-metadata (assoc (:runner-metadata run)
+                                                                                  :exit-code exit-code)}))))})})})
 
 (defn create-channel-adapter-registry
   [cfg]
@@ -338,6 +352,21 @@
 (defn pending-run-commands
   [system run-id]
   (runtime/pending-commands (:runtime-service system) run-id))
+
+(defn list-run-commands
+  ([system run-id] (list-run-commands system run-id {}))
+  ([system run-id opts]
+   (runtime/list-commands (:runtime-service system) run-id opts)))
+
+(defn list-run-heartbeats
+  ([system run-id] (list-run-heartbeats system run-id {}))
+  ([system run-id opts]
+   (runtime/list-heartbeats (:runtime-service system) run-id opts)))
+
+(defn list-run-checkpoints
+  ([system run-id] (list-run-checkpoints system run-id {}))
+  ([system run-id opts]
+   (runtime/list-checkpoints (:runtime-service system) run-id opts)))
 
 (defn acknowledge-run-command!
   [system run-id command-id]

@@ -20,7 +20,10 @@
          :shell {:enabled true
                  :roots ["."]
                  :working-dir "."
-                 :timeout-ms 30000}}
+                 :timeout-ms 30000
+                 :deny-by-default? true
+                 :allowed-commands ["printf" "pwd" "ls" "echo" "cat" "rg" "git"]
+                 :max-output-bytes 65536}}
  :skills {:dirs ["skills"]}
  :memory {:prompt {:paths ["MEMORY.md"]}
           :search {:default-limit 20}

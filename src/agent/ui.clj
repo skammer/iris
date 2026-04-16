@@ -5,6 +5,8 @@
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
+   [agent.runners.core :as runners]
+   [agent.runtime.core :as runtime]
    [agent.tools.core :as tools]
    [cheshire.core :as json]
    [clojure.string :as str]
@@ -65,7 +67,14 @@
         [:div#tool-approvals-panel
          {"data-on-interval__duration.5s.leading" "@get('/ui/tool-approvals')"}
          "Loading approvals..."]
-        [:div#tool-results-panel.empty "Request approval, approve/deny, then run."]]]
+       [:div#tool-results-panel.empty "Request approval, approve/deny, then run."]]]
+      [:section.grid.top
+       [:section#runs-panel.panel
+        {"data-on-interval__duration.5s.leading" "@get('/ui/runs')"}
+        "Loading runs..."]
+       [:section#run-detail-panel.panel
+        {"data-on-interval__duration.5s.leading" "@get('/ui/run-detail')"}
+        "Loading run detail..."]]
       [:div#events-live-bootstrap {"data-init" "@get('/ui/events/live')"}]]]]))
 
 (defn dashboard-fragment [system]
@@ -270,5 +279,89 @@
           (when-let [reason (:reason approval)]
             [:div.meta (str "reason: " reason)])
           [:div.code (json/generate-string (:input approval) {:pretty true})]
-          [:div.actions (approval-actions approval)]])]
+         [:div.actions (approval-actions approval)]])]
       [:div.empty "No tool approvals yet."])]))
+
+(defn runs-fragment [system]
+  (let [runs (runtime/list-runs (:runtime-service system) {:limit 50})]
+    (render
+     [:section#runs-panel.panel
+      {"data-on-interval__duration.5s.leading" "@get('/ui/runs')"}
+      [:h2 "Runs"]
+      (if (seq runs)
+        [:div.stack
+         (for [{:keys [id name agent-id substrate status created-at]} runs]
+           [:button.session-link
+            {:type "button"
+             "data-on:click" (str "@get('/ui/run-detail?run_id=" id "')")}
+            [:strong (or name id)]
+            [:div.session-meta.code (str agent-id " / " substrate)]
+            [:div.session-meta (str status " / " created-at)]])]
+        [:div.empty "No runs yet."])
+      [:form#create-run-form
+       [:h3 "Create Run"]
+       [:input {:type "text" :name "name" :placeholder "optional name"}]
+       [:input {:type "text" :name "agent_id" :placeholder "agent id"}]
+       [:select {:name "substrate"}
+        [:option {:value "local-process"} "local-process"]
+        [:option {:value "bubblewrap"} "bubblewrap"]]
+       [:input {:type "text" :name "command" :placeholder "printf hello"}]
+       [:input {:type "text" :name "working_dir" :value "." :placeholder "working dir"}]
+       [:div.actions
+        [:button {:type "button"
+                  "data-on:click" "@post('/ui/runs', {contentType: 'form', selector: '#create-run-form'})"}
+         "Create + launch"]]]])))
+
+(defn run-detail-fragment [system run-id]
+  (let [runs (runtime/list-runs (:runtime-service system) {:limit 50})
+        run (or (when run-id (runtime/get-run (:runtime-service system) run-id))
+                (when-let [candidate (first runs)]
+                  (runtime/get-run (:runtime-service system) (:id candidate))))
+        runner-status (when run
+                        (when-let [runner (get (:runner-registry system) (keyword (:substrate run)))]
+                          (runners/status runner (:id run))))]
+    (render
+     (if-not run
+       [:section#run-detail-panel.panel
+        [:h2 "Run Detail"]
+        [:div.empty "No runs yet."]]
+       [:section#run-detail-panel.panel
+        {"data-on-interval__duration.5s.leading" (str "@get('/ui/run-detail?run_id=" (:id run) "')")}
+        [:h2 (or (:name run) (:id run))]
+        [:div.meta.code (:id run)]
+        [:div.meta (str "agent: " (:agent-id run) " | substrate: " (:substrate run) " | status: " (:status run))]
+        (when runner-status
+          [:div.result
+           [:strong "Runner"]
+           [:div.code (json/generate-string runner-status {:pretty true})]])
+        (when-let [heartbeat (:heartbeat run)]
+          [:div.result
+           [:strong "Latest heartbeat"]
+           [:div.code (json/generate-string heartbeat {:pretty true})]])
+        (when-let [checkpoint (:checkpoint run)]
+          [:div.result
+           [:strong "Latest checkpoint"]
+           [:div.code (json/generate-string checkpoint {:pretty true})]])
+        (when-let [commands (seq (:pending-commands run))]
+          [:div.result
+           [:strong "Pending commands"]
+           [:div.code (json/generate-string commands {:pretty true})]])
+        [:div.actions
+         [:form {:id (str "run-launch-" (:id run))}
+          [:button {:type "button"
+                    "data-on:click" (str "@post('/ui/runs/" (:id run) "/launch', {contentType: 'form', selector: '#run-launch-" (:id run) "'})")}
+           "Launch"]]
+         [:form {:id (str "run-cancel-" (:id run))}
+          [:button {:type "button"
+                    "data-on:click" (str "@post('/ui/runs/" (:id run) "/signal', {contentType: 'form', selector: '#run-cancel-" (:id run) "'})")}
+           "Cancel"]]]
+        [:div.result
+         [:strong "Catch-up"]
+         [:div.code (json/generate-string
+                     {:heartbeats (runtime/list-heartbeats (:runtime-service system) (:id run) {:limit 5})
+                      :checkpoints (runtime/list-checkpoints (:runtime-service system) (:id run) {:limit 5})
+                      :commands (runtime/list-commands (:runtime-service system) (:id run) {:limit 5})
+                      :events (sqlite/list-events (:store system) {:entity-type :agent_run
+                                                                   :entity-id (:id run)
+                                                                   :limit 10})}
+                     {:pretty true})]]]))))

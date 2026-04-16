@@ -943,6 +943,37 @@
              :metrics (parse-json-string (.getString rs "metrics_json"))
              :observed-at (.getString rs "observed_at")}))))))
 
+(defn list-agent-run-heartbeats
+  ([store run-id] (list-agent-run-heartbeats store run-id {}))
+  ([store run-id {:keys [since-sequence limit] :or {limit 100}}]
+   (with-connection
+     store
+     (fn [conn]
+       (with-open [stmt (.prepareStatement conn
+                                          "SELECT run_id, sequence_no, status, metrics_json, observed_at
+                                           FROM agent_run_heartbeats
+                                           WHERE run_id = ?
+                                             AND (? IS NULL OR sequence_no >= ?)
+                                           ORDER BY sequence_no ASC, observed_at ASC
+                                           LIMIT ?")]
+         (.setString stmt 1 run-id)
+         (if (some? since-sequence)
+           (.setInt stmt 2 (int since-sequence))
+           (.setNull stmt 2 java.sql.Types/INTEGER))
+         (if (some? since-sequence)
+           (.setInt stmt 3 (int since-sequence))
+           (.setNull stmt 3 java.sql.Types/INTEGER))
+         (.setInt stmt 4 (int limit))
+         (with-open [rs (.executeQuery stmt)]
+           (loop [acc []]
+             (if (.next rs)
+               (recur (conj acc {:run-id (.getString rs "run_id")
+                                 :sequence-no (.getInt rs "sequence_no")
+                                 :status (.getString rs "status")
+                                 :metrics (parse-json-string (.getString rs "metrics_json"))
+                                 :observed-at (.getString rs "observed_at")}))
+               acc))))))))
+
 (defn enqueue-agent-run-command!
   [store {:keys [run-id command-type payload]
           :or {payload {}}}]
@@ -1072,6 +1103,38 @@
              :checkpoint-type (.getString rs "checkpoint_type")
              :state (parse-json-string (.getString rs "state_json"))
              :created-at (.getString rs "created_at")}))))))
+
+(defn list-agent-run-checkpoints
+  ([store run-id] (list-agent-run-checkpoints store run-id {}))
+  ([store run-id {:keys [since-sequence limit] :or {limit 100}}]
+   (with-connection
+     store
+     (fn [conn]
+       (with-open [stmt (.prepareStatement conn
+                                          "SELECT id, run_id, sequence_no, checkpoint_type, state_json, created_at
+                                           FROM agent_run_checkpoints
+                                           WHERE run_id = ?
+                                             AND (? IS NULL OR sequence_no >= ?)
+                                           ORDER BY sequence_no ASC, created_at ASC
+                                           LIMIT ?")]
+         (.setString stmt 1 run-id)
+         (if (some? since-sequence)
+           (.setInt stmt 2 (int since-sequence))
+           (.setNull stmt 2 java.sql.Types/INTEGER))
+         (if (some? since-sequence)
+           (.setInt stmt 3 (int since-sequence))
+           (.setNull stmt 3 java.sql.Types/INTEGER))
+         (.setInt stmt 4 (int limit))
+         (with-open [rs (.executeQuery stmt)]
+           (loop [acc []]
+             (if (.next rs)
+               (recur (conj acc {:id (.getString rs "id")
+                                 :run-id (.getString rs "run_id")
+                                 :sequence-no (.getInt rs "sequence_no")
+                                 :checkpoint-type (.getString rs "checkpoint_type")
+                                 :state (parse-json-string (.getString rs "state_json"))
+                                 :created-at (.getString rs "created_at")}))
+               acc))))))))
 
 (defn health-check
   [store]
