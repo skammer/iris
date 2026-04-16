@@ -54,12 +54,28 @@
   [store approval-id actor reason]
   (sqlite/decide-tool-approval! store approval-id :denied actor reason))
 
+(defn- canonicalize-input [input]
+  (cond
+    (map? input)
+    (->> input
+         (remove (fn [[k v]]
+                   (or (nil? v)
+                       (and (= k :argv) (vector? v)))))
+         (map (fn [[k v]]
+                [k (cond
+                     (keyword? v) (name v)
+                     (vector? v) (mapv #(if (keyword? %) (name %) %) v)
+                     :else v)]))
+         (into (sorted-map)))
+    :else input))
+
 (defn valid-approval?
   [approval tool-name input]
   (and approval
        (= "approved" (:status approval))
        (= (name tool-name) (:tool-name approval))
-       (= input (:input approval))))
+       (= (canonicalize-input input)
+          (canonicalize-input (:input approval)))))
 
 (defn resolve-approved-request
   [store approval-id]

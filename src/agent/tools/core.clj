@@ -118,7 +118,8 @@
                        :request-id (:request-id context*)
                        :payload {:tool-name (name tool-name)
                                  :source (name (:source tool-description))
-                                 :user (:user context*)}})
+                                 :user (:user context*)
+                                 :input validated-input}})
          (when-let [decision (when-let [before-execute (:before-execute registry)]
                                (before-execute (hook-context tool-description validated-input context*)))]
            (when (:block decision)
@@ -146,7 +147,9 @@
                            :entity-id (name tool-name)
                            :request-id (:request-id context*)
                            :payload {:tool-name (name tool-name)
-                                     :source (name (:source tool-description))}})
+                                     :source (name (:source tool-description))
+                                     :input validated-input
+                                     :result final-result}})
              final-result)
            (catch Exception e
              (when-let [postprocess (:after-execute registry)]
@@ -160,6 +163,7 @@
                            :request-id (:request-id context*)
                            :payload {:tool-name (name tool-name)
                                      :source (name (:source tool-description))
+                                     :input validated-input
                                      :error (.getMessage e)}})
              (throw e))))))))
 

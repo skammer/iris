@@ -42,7 +42,8 @@ Reference:
 
 10. [x] Implement `local-process` runner.
    Added in `src/agent/runners/local_process.clj` and wired into active system/API.
-11. [ ] Implement `bubblewrap` runner.
+11. [x] Implement `bubblewrap` runner.
+   Added in `src/agent/runners/bubblewrap.clj` and wired into active system/UI/API.
 12. [ ] Implement `docker/podman` runner.
 13. [ ] Define later runner interfaces:
    VM, k8s job, SSH remote.
@@ -52,10 +53,12 @@ Reference:
 
 15. [ ] Add live subagent event stream:
    Realtime logs/progress/status when connection healthy.
-16. [ ] Add polling/checkup fallback:
+16. [x] Add polling/checkup fallback:
    Parent can fetch latest run state, heartbeat, checkpoint, pending commands.
-17. [ ] Add stream resume/catch-up model:
+   Added run catch-up APIs for heartbeats/checkpoints/commands/events and UI catch-up view.
+17. [x] Add stream resume/catch-up model:
    Resume from sequence/checkpoint after disconnect.
+   Added sequence-based heartbeats/checkpoints listing and run event catch-up endpoints.
 18. [ ] Add long-running task handling:
    Slow/intermittent links, reconnect, eventual completion retrieval.
 
@@ -124,14 +127,14 @@ Reference:
    Replaced raw UI permission checkboxes with approval requests/decisions stored in SQLite.
    Added explicit approve/deny/run flow and audit trail for sensitive tool calls.
    `shell` now defaults to denied unless approval explicitly allows it.
-3. [ ] Shell policy hardening:
-   Add command allowlist + working-dir restrictions + deny-by-default behavior.
-   Persist full request/result/error metadata for auditability.
+3. [x] Shell policy hardening:
+   Added command allowlist + working-dir restrictions + deny-by-default behavior.
+   Persisted request/result/error metadata via tool execution event audit trail.
 4. [x] Distributed subagent runtime phase A/B:
    Added runner protocol, run registry, leases, heartbeats, commands, checkpoints, and runtime service baseline.
 5. [ ] Execution substrates:
-   `local-process` is done.
-   Next: `bubblewrap`, then docker/podman.
+   `local-process` and `bubblewrap` are done.
+   Next: docker/podman.
 6. [ ] Event/broker abstraction:
    SQLite/local first, NATS JetStream next.
 7. [ ] Agent-to-agent interop:
@@ -196,6 +199,8 @@ Reference:
 16. [x] Web UI technical spike plan:
    Decide transport model, backend endpoint shape, incremental update strategy, auth model, and minimal operator dashboard scope.
    Chosen shape now implemented: Datastar HTML fragments + SSE, local/dev-first, minimal operator dashboard.
+16.1 [x] Runtime run dashboard/UI:
+   Added run list/detail UI, create+launch flow, runner status, latest heartbeat/checkpoint, pending commands, and catch-up panel.
 17. [ ] Example applications plan:
    Define examples for researcher, automated developer, product manager, judge, orchestrator, plus small single-agent CLI/API demos.
 18. [ ] Agent personalities plan:

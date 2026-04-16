@@ -5,6 +5,8 @@
    [clojure.java.io :as io]
    [clojure.string :as str]))
 
+(def ^:private shell-metachar-pattern #"[|&;<>$`(){}\[\]\\'\"]")
+
 (defn- canonical-path [path]
   (.getCanonicalPath (io/file path)))
 
@@ -24,18 +26,62 @@
     candidate))
 
 (defn- validate-input [input]
-  (when-not (and (string? (:command input)) (not (str/blank? (:command input))))
-    (throw (tools/validation-error "command must be a non-blank string" {:input input})))
-  input)
+  (cond
+    (vector? (:argv input))
+    (do
+      (when-not (and (seq (:argv input)) (every? string? (:argv input)))
+        (throw (tools/validation-error "argv must be a non-empty vector of strings" {:input input})))
+      (assoc input :argv (vec (:argv input))))
+
+    (and (string? (:command input)) (not (str/blank? (:command input))))
+    (let [command (str/trim (:command input))]
+      (when (re-find shell-metachar-pattern command)
+        (throw (tools/validation-error
+                "command contains unsupported shell metacharacters; use plain argv/command only"
+                {:command command})))
+      (let [argv (->> (str/split command #"\s+")
+                      (remove str/blank?)
+                      vec)]
+        (when (empty? argv)
+          (throw (tools/validation-error "command must not be empty" {:input input})))
+        (assoc input :argv argv)))
+
+    :else
+    (throw (tools/validation-error "command or argv is required" {:input input}))))
 
 (defn- wait-for [^Process process timeout-ms]
   (.waitFor process timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS))
+
+(defn- ensure-allowed-command! [config argv]
+  (let [allowed (set (:allowed-commands config))
+        binary (first argv)]
+    (when (and (:deny-by-default? config)
+               (not (contains? allowed binary)))
+      (throw (tools/tool-error :command-not-allowed
+                               "Command is not in shell allowlist"
+                               {:command binary
+                                :allowed-commands (vec (:allowed-commands config))})))))
+
+(defn- slurp-limited [stream max-bytes]
+  (with-open [in stream]
+    (let [buffer (byte-array 4096)
+          out (java.io.ByteArrayOutputStream.)]
+      (loop [remaining max-bytes]
+        (when (pos? remaining)
+          (let [read-count (.read in buffer 0 (min (alength buffer) remaining))]
+            (when (pos? read-count)
+              (.write out buffer 0 read-count)
+              (recur (- remaining read-count))))))
+      (.toString out "UTF-8"))))
 
 (defn create-shell-tool
   [opts]
   (let [config (merge {:roots ["."]
                        :working-dir "."
-                       :timeout-ms 30000}
+                       :timeout-ms 30000
+                       :deny-by-default? true
+                       :allowed-commands ["printf" "pwd" "ls" "echo" "cat" "rg" "git"]
+                       :max-output-bytes 65536}
                       opts)
         roots (mapv canonical-path (:roots config))]
     (tools/create-tool
@@ -47,33 +93,34 @@
        :timeout-ms (:timeout-ms config)
        :required-permissions #{:shell-exec}
        :input-schema {:required [:command]
-                      :optional [:working-dir :timeout-ms]}
+                      :optional [:argv :working-dir :timeout-ms]}
        :source :builtin)
       :validate-fn validate-input
       :health-fn (fn []
                    {:healthy true
                     :details {:roots roots
-                              :working-dir (canonical-path (:working-dir config))}})
+                              :working-dir (canonical-path (:working-dir config))
+                              :deny-by-default? (:deny-by-default? config)
+                              :allowed-commands (:allowed-commands config)}})
       :execute-fn
       (fn [input _context]
         (let [working-dir (resolve-working-dir! roots (or (:working-dir input) (:working-dir config)))
               timeout-ms (long (or (:timeout-ms input) (:timeout-ms config)))
-              shell (if (.startsWith (System/getProperty "os.name") "Windows") "cmd" "sh")
-              shell-args (if (= shell "cmd")
-                           ["/c" (:command input)]
-                           ["-lc" (:command input)])
-              process (.start (doto (ProcessBuilder. (into [shell] shell-args))
+              argv (:argv input)
+              _ (ensure-allowed-command! config argv)
+              process (.start (doto (ProcessBuilder. argv)
                                 (.directory (io/file working-dir))))
               finished? (wait-for process timeout-ms)
-              stdout (future (slurp (.getInputStream process)))
-              stderr (future (slurp (.getErrorStream process)))]
+              stdout (future (slurp-limited (.getInputStream process) (:max-output-bytes config)))
+              stderr (future (slurp-limited (.getErrorStream process) (:max-output-bytes config)))]
           (when-not finished?
             (.destroyForcibly process)
             (throw (tools/tool-error :timeout
                                      "Shell command timed out"
-                                     {:command (:command input)
+                                     {:argv argv
                                       :timeout-ms timeout-ms})))
-          {:command (:command input)
+          {:argv argv
+           :command (str/join " " argv)
            :working-dir working-dir
            :exit (.exitValue process)
            :stdout @stdout
