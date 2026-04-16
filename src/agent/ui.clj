@@ -22,6 +22,7 @@
 (declare dashboard-fragment
          sessions-fragment
          session-detail-fragment
+         session-messages-fragment
          events-fragment
          memory-prompt-fragment
          memory-search-results-fragment
@@ -62,6 +63,7 @@
      [:link {:rel "stylesheet" :href "/public/app.css"}]
      [:script {:type "module"
                :src "https://cdn.jsdelivr.net/gh/starfederation/datastar@1.0.0-RC.8/bundles/datastar.js"}]
+     [:script {:type "module" :src "/public/app.js"}]
      ]
     [:body
      [:main
@@ -192,26 +194,36 @@
        [:section#session-detail-panel.panel
         [:h2 "Transcript"]
         [:div.empty "Create session to start chatting."]]
-       [:section#session-detail-panel.panel
-        {"data-on-interval__duration.3s.leading" (str "@get('/ui/session-detail?session_id=" (:id session) "')")}
+       [:agent-chat-panel#session-detail-panel.panel
+        {:data-session-id (:id session)}
         [:h2 (or (:title session) "Untitled session")]
         [:p.meta.code (:id session)]
-        (if-let [messages (seq (sqlite/list-messages (:store system) (:id session)))]
-          [:div.messages
-           (for [{:keys [role content created-at]} messages]
-             [:article.message
-              [:div.message-role {:class role} role]
-              [:div.code content]
-              [:div.meta created-at]])]
-          [:div.empty "No messages yet."])
+        (h/raw (session-messages-fragment system (:id session)))
         [:form#chat-form
-         [:h3 "Send Prompt"]
+         {"data-on:submit" "@chatSubmit()"}
          [:input {:type "hidden" :name "session_id" :value (:id session)}]
-         [:textarea {:name "prompt" :placeholder "Ask model something concrete"}]
+         [:textarea.chat-input {:name "prompt"
+                                :rows 1
+                                "data-on:input" "@chatInput()"
+                                "data-on:keydown" "@chatKeydown()"
+                                :placeholder "Ask model something concrete"}]
+         [:div#chat-status.meta.chat-status {:hidden true} "thinking..."]
          [:div.actions
-          [:button {:type "button"
-                    "data-on:click" "@post('/ui/chat', {contentType: 'form', selector: '#chat-form'})"}
+          [:button {:type "submit"}
            "Send"]]]]))))
+
+(defn session-messages-fragment [system session-id]
+  (render
+   [:div#session-messages-panel
+    {"data-on-interval__duration.3s" (str "@get('/ui/session-messages?session_id=" session-id "')")}
+    (if-let [messages (seq (sqlite/list-messages (:store system) session-id))]
+      [:div.messages
+       (for [{:keys [role content created-at]} messages]
+         [:article.message
+          [:div.message-role {:class role} role]
+          [:div.code content]
+          [:div.meta created-at]])]
+      [:div.empty "No messages yet."])]))
 
 (defn events-fragment [system]
   (render

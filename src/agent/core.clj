@@ -483,11 +483,12 @@
 
 (defn complete!
   [system messages {:keys [session-id] :as opts}]
-  (let [content (complete system messages opts)
-        user-message (last (filter #(= "user" (:role %)) messages))]
+  (let [user-message (last (filter #(= "user" (:role %)) messages))]
     (when session-id
       (when-let [prompt (:content user-message)]
-        (append-session-message! system session-id "user" prompt))
+        (append-session-message! system session-id "user" prompt)))
+    (let [content (complete system messages opts)]
+    (when session-id
       (append-session-message! system session-id "assistant" content))
     (sqlite/log-completion! (:store system)
                             {:session-id session-id
@@ -501,7 +502,7 @@
                  :entity-id session-id
                  :payload {:provider (name (get-in system [:config :llm :provider]))
                            :model (get-in system [:config :llm :model])}})
-    {:content content}))
+    {:content content})))
 
 (defn start-api!
   [system]
