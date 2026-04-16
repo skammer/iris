@@ -266,6 +266,7 @@
         (is (= [run-id] (mapv :id (:data list-runs-body))))
         (is (= 200 (:status ui-runs)))
         (is (str/includes? (:body ui-runs) "Create Run"))
+        (is (str/includes? (:body ui-runs) "seatbelt"))
         (is (= 200 (:status ui-run-detail)))
         (is (str/includes? (:body ui-run-detail) "Latest checkpoint"))
         (is (= 200 (:status ui-index)))

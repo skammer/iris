@@ -304,7 +304,8 @@
        [:input {:type "text" :name "agent_id" :placeholder "agent id"}]
        [:select {:name "substrate"}
         [:option {:value "local-process"} "local-process"]
-        [:option {:value "bubblewrap"} "bubblewrap"]]
+        [:option {:value "bubblewrap"} "bubblewrap"]
+        [:option {:value "seatbelt"} "seatbelt"]]
        [:input {:type "text" :name "command" :placeholder "printf hello"}]
        [:input {:type "text" :name "working_dir" :value "." :placeholder "working dir"}]
        [:div.actions

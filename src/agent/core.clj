@@ -14,6 +14,7 @@
    [agent.runners.bubblewrap :as bubblewrap]
    [agent.runners.core :as runners]
    [agent.runners.local-process :as local-process]
+   [agent.runners.seatbelt :as seatbelt]
    [agent.runtime.core :as runtime]
    [agent.skills :as skills]
    [agent.tools.common.fs :as fs-tool]
@@ -125,33 +126,27 @@
     (zero? exit-code) :completed
     :else :failed))
 
+(defn- create-exit-aware-local-runner
+  [runtime-service]
+  (local-process/create-local-process-runner
+   {:on-exit (fn [run-id {:keys [exit-code]}]
+               (when-let [run (runtime/get-run runtime-service run-id)]
+                 (when-let [status (runner-exit-status run exit-code)]
+                   (runtime/transition-run! runtime-service
+                                            run-id
+                                            status
+                                            {:last-error (when-not (zero? exit-code)
+                                                           (str "Process exited with code " exit-code))
+                                             :runner-metadata (assoc (:runner-metadata run)
+                                                                     :exit-code exit-code)}))))}))
+
 (defn create-runner-registry
   [runtime-service]
-  {:local-process
-   (local-process/create-local-process-runner
-    {:on-exit (fn [run-id {:keys [exit-code]}]
-                (when-let [run (runtime/get-run runtime-service run-id)]
-                  (when-let [status (runner-exit-status run exit-code)]
-                    (runtime/transition-run! runtime-service
-                                             run-id
-                                             status
-                                             {:last-error (when-not (zero? exit-code)
-                                                            (str "Process exited with code " exit-code))
-                                              :runner-metadata (assoc (:runner-metadata run)
-                                                                      :exit-code exit-code)}))))})
-   :bubblewrap
-   (bubblewrap/create-bubblewrap-runner
-    {:delegate (local-process/create-local-process-runner
-                {:on-exit (fn [run-id {:keys [exit-code]}]
-                            (when-let [run (runtime/get-run runtime-service run-id)]
-                              (when-let [status (runner-exit-status run exit-code)]
-                                (runtime/transition-run! runtime-service
-                                                         run-id
-                                                         status
-                                                         {:last-error (when-not (zero? exit-code)
-                                                                        (str "Process exited with code " exit-code))
-                                                          :runner-metadata (assoc (:runner-metadata run)
-                                                                                  :exit-code exit-code)}))))})})})
+  {:local-process (create-exit-aware-local-runner runtime-service)
+   :bubblewrap (bubblewrap/create-bubblewrap-runner
+                {:delegate (create-exit-aware-local-runner runtime-service)})
+   :seatbelt (seatbelt/create-seatbelt-runner
+              {:delegate (create-exit-aware-local-runner runtime-service)})})
 
 (defn create-channel-adapter-registry
   [cfg]
