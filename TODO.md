@@ -137,6 +137,9 @@ Reference:
 5. [ ] Execution substrates:
    `local-process`, `bubblewrap`, and macOS `seatbelt` are done.
    Next: docker/podman.
+5.1 [x] Child runtime shim MVP:
+   Added `src/agent/runtime/child.clj` with bootstrap/register/heartbeat/checkpoint/command-poll loop.
+   `local-process` now defaults to launching real child agent runtime when no explicit command is supplied.
 6. [ ] Event/broker abstraction:
    SQLite/local first, NATS JetStream next.
 7. [ ] Agent-to-agent interop:

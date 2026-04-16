@@ -15,6 +15,7 @@
    [agent.runners.core :as runners]
    [agent.runners.local-process :as local-process]
    [agent.runners.seatbelt :as seatbelt]
+   [agent.runtime.child :as runtime-child]
    [agent.runtime.core :as runtime]
    [agent.skills :as skills]
    [agent.tools.common.fs :as fs-tool]
@@ -23,6 +24,7 @@
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [clojure.core.async :as async]
+   [clojure.java.io :as io]
    [clojure.string :as str]))
 
 (defn create-llm-provider
@@ -247,6 +249,22 @@
                            :content content}})
     message))
 
+(defn- default-child-env
+  [system]
+  {"AGENT_SQLITE_PATH" (-> system :config :storage :sqlite :path io/file .getAbsolutePath)})
+
+(defn- prepare-runner-options
+  [system run]
+  (let [runner-options (or (:runner-options run) {})]
+    (cond-> runner-options
+      (= "local-process" (:substrate run))
+      ((fn [opts]
+         (let [env* (merge (default-child-env system) (or (:env opts) {}))]
+           (cond-> (assoc opts :env env*)
+             (not (seq (:command opts)))
+             (assoc :command (runtime-child/current-child-command)
+                    :working-dir (or (:working-dir opts) ".")))))))))
+
 (defn create-session!
   ([system] (create-session! system nil))
   ([system title]
@@ -403,7 +421,7 @@
                                         :bootstrap-token (:bootstrap-token run)
                                         :bootstrap-spec (:bootstrap-spec run)
                                         :requested-by (:requested-by run)
-                                        :runner-options (:runner-options run)}))]
+                                        :runner-options (prepare-runner-options system run)}))]
     (transition-run! system run-id :launched {:runner-metadata launch-result})
     (get-run system run-id)))
 

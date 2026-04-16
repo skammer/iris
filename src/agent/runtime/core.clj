@@ -65,7 +65,8 @@
                                        :bootstrap-spec bootstrap-spec
                                        :requested-by (:requested-by request)})
         lease (sqlite/create-agent-run-lease! (:store runtime)
-                                              {:run-id (:id run)
+                                              {:id lease-id
+                                               :run-id (:id run)
                                                :holder-id "control-plane"
                                                :expires-at (plus-seconds default-lease-duration-seconds)})]
     (emit-event! runtime

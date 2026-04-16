@@ -3,3 +3,4 @@
 target
 *.db
 *.pdf
+config/*.local.edn
