@@ -24,4 +24,5 @@
   (let [system (core/create-system)
         tools (core/list-tools system)]
     (is (= [:http] (mapv :name tools)))
-    (is (= 1 (get-in (core/health-check system) [:tools :count])))))
+    (is (= 1 (get-in (core/health-check system) [:tools :count])))
+    (is (= 0 (get-in (core/health-check system) [:orchestrator :agent-count])))))
