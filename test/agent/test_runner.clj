@@ -5,12 +5,16 @@
    [clojure.test :as t]
    [agent.config-test]
    [agent.core-test]
+   [agent.memory.core-test]
    [agent.orchestrator-test]
    [agent.persistence.sqlite-test]
+   [agent.runtime.core-test]
    [agent.skills-test]
+   [agent.tools.common.fs-test]
    [agent.llm.providers.ollama-test]
    [agent.llm.providers.openai-compatible-test]
    [agent.tools.common.http-test]
+    [agent.tools.common.shell-test]
    [agent.tools.core-test]))
 
 (def rewritten-test-namespaces
@@ -18,12 +22,16 @@
     agent.channels.core-test
     agent.config-test
     agent.core-test
+    agent.memory.core-test
     agent.orchestrator-test
     agent.persistence.sqlite-test
+    agent.runtime.core-test
     agent.skills-test
+    agent.tools.common.fs-test
     agent.llm.providers.ollama-test
     agent.llm.providers.openai-compatible-test
     agent.tools.common.http-test
+    agent.tools.common.shell-test
     agent.tools.core-test])
 
 (defn run-all-tests

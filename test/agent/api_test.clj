@@ -3,6 +3,7 @@
    [agent.api :as api]
    [agent.core :as core]
    [agent.llm.core :as llm-core]
+   [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [cheshire.core :as json]
    [clojure.core.async :as async]
@@ -72,8 +73,17 @@
                    (.getErrorStream conn)
                    (.getInputStream conn))
           response-body (if stream (slurp stream) "")]
-      {:status status
-       :body response-body})))
+    {:status status
+     :body response-body})))
+
+(defn http-post-form [url form-body]
+  (let [request (-> (HttpRequest/newBuilder (URI/create url))
+                    (.header "Content-Type" "application/x-www-form-urlencoded")
+                    (.POST (java.net.http.HttpRequest$BodyPublishers/ofString form-body))
+                    .build)
+        response (.send (http-client) request (HttpResponse$BodyHandlers/ofString))]
+    {:status (.statusCode response)
+     :body (.body response)}))
 
 (defn sse-data-lines [body]
   (->> (str/split-lines body)
@@ -87,12 +97,15 @@
         base-url (str "http://127.0.0.1:" port)
         base-system (core/create-system)
         store (sqlite/create-store {:path path})
-        event-sink (core/create-event-sink store)
+        event-bus (core/create-event-bus)
+        event-sink (core/create-event-sink store event-bus)
         system (assoc base-system
                       :llm-provider (->TestProvider)
                       :store store
+                      :event-bus event-bus
                       :event-sink event-sink
-                      :tool-registry (core/create-tool-registry (:tools (:config base-system)) event-sink)
+                      :tool-registry (core/create-tool-registry (:tools (:config base-system)) event-sink store)
+                      :memory-service (memory/create-memory-service (:memory (:config base-system)) store)
                       :orchestrator (core/create-orchestrator (:orchestrator (:config base-system)) event-sink)
                       :config (assoc (:config base-system)
                                      :api {:host "127.0.0.1" :port port}
@@ -102,12 +115,47 @@
       (let [bad-session (http-post (str base-url "/v1/sessions") {:title 42})
             bad-chat (http-post (str base-url "/v1/chat/completions")
                                 {:messages [{:role "bogus" :content "hello"}]})
+            ui-index (http-get base-url)
+            ui-dashboard (http-get (str base-url "/ui/dashboard"))
             health (http-get (str base-url "/health"))
             health-body (json/parse-string (:body health) true)
             tools (http-get (str base-url "/v1/tools"))
             tools-body (json/parse-string (:body tools) true)
+            tool-exec (http-post (str base-url "/v1/tools/fs/execute")
+                                 {:input {:action "list" :path "."}
+                                  :permissions ["filesystem-read"]})
+            tool-exec-body (json/parse-string (:body tool-exec) true)
+            shell-exec-blocked (http-post (str base-url "/v1/tools/shell/execute")
+                                          {:input {:command "printf hello"}})
+            shell-approval-create (http-post (str base-url "/v1/tool-approvals")
+                                             {:tool "shell"
+                                              :input {:command "printf hello"}
+                                              :reason "test shell"})
+            shell-approval-create-body (json/parse-string (:body shell-approval-create) true)
+            approval-id (get-in shell-approval-create-body [:data :id])
+            shell-approval-approve (http-post (str base-url "/v1/tool-approvals/" approval-id "/approve")
+                                              {:actor "tester"
+                                               :reason "ok"})
+            shell-approved-exec (http-post (str base-url "/v1/tools/shell/execute")
+                                           {:input {:command "printf hello"}
+                                            :approval_id approval-id})
+            shell-approved-exec-body (json/parse-string (:body shell-approved-exec) true)
             skills (http-get (str base-url "/v1/skills"))
             skills-body (json/parse-string (:body skills) true)
+            memory-surfaces (http-get (str base-url "/v1/memory/surfaces"))
+            memory-surfaces-body (json/parse-string (:body memory-surfaces) true)
+            prompt-memory (http-get (str base-url "/v1/memory/prompt"))
+            prompt-memory-body (json/parse-string (:body prompt-memory) true)
+            ui-prompt-memory (http-get (str base-url "/ui/memory/prompt"))
+            memory-search (http-post (str base-url "/v1/memory/search")
+                                     {:query "hello"})
+            memory-search-body (json/parse-string (:body memory-search) true)
+            ui-memory-search (http-post-form (str base-url "/ui/memory/search")
+                                             "query=hello")
+            graph-save (http-post (str base-url "/v1/memory/graph/facts")
+                                  {:subject "alice"
+                                   :predicate "likes"
+                                   :object "clojure"})
             channel-adapters (http-get (str base-url "/v1/channel-adapters"))
             channel-adapters-body (json/parse-string (:body channel-adapters) true)
             created-agent (http-post (str base-url "/v1/agents")
@@ -134,9 +182,14 @@
             created (http-post (str base-url "/v1/sessions") {:title "api-test"})
             created-body (json/parse-string (:body created) true)
             session-id (:id created-body)
+            ui-created (http-post-form (str base-url "/ui/sessions") "title=ui-test")
+            session-detail (http-get (str base-url "/ui/session-detail?session_id=" session-id))
+            session-live-bootstrap (http-get (str base-url "/ui/session-detail?session_id=" session-id))
             completion (http-post (str base-url "/v1/chat/completions")
                                   {:session_id session-id
                                    :prompt "hello"})
+            ui-chat (http-post-form (str base-url "/ui/chat")
+                                    (str "session_id=" session-id "&prompt=hello+ui"))
             streamed (http-post-legacy (str base-url "/v1/chat/completions")
                                        {:session_id session-id
                                         :prompt "hello"
@@ -148,15 +201,38 @@
             messages-body (json/parse-string (:body messages) true)]
         (is (= 400 (:status bad-session)))
         (is (= 400 (:status bad-chat)))
+        (is (= 200 (:status ui-index)))
+        (is (str/includes? (:body ui-index) "datastar.js"))
+        (is (= 200 (:status ui-dashboard)))
+        (is (str/includes? (:body ui-dashboard) "Runtime Snapshot"))
         (is (= 200 (:status health)))
-        (is (= 1 (get-in health-body [:tools :count])))
+        (is (= 3 (get-in health-body [:tools :count])))
+        (is (= true (get-in health-body [:memory :healthy])))
         (is (= 3 (get-in health-body [:channel-adapters :count])))
         (is (= 0 (get-in health-body [:orchestrator :agent-count])))
         (is (= 200 (:status tools)))
-        (is (= ["http"] (mapv :name (:data tools-body))))
+        (is (= ["fs" "http" "shell"] (mapv :name (:data tools-body))))
         (is (= "builtin" (get-in tools-body [:data 0 :source])))
+        (is (= 200 (:status tool-exec)))
+        (is (vector? (get-in tool-exec-body [:data :entries])))
+        (is (= 403 (:status shell-exec-blocked)))
+        (is (= 201 (:status shell-approval-create)))
+        (is (= 200 (:status shell-approval-approve)))
+        (is (= 200 (:status shell-approved-exec)))
+        (is (= "hello" (get-in shell-approved-exec-body [:data :stdout])))
         (is (= 200 (:status skills)))
         (is (= [] (:data skills-body)))
+        (is (= 200 (:status memory-surfaces)))
+        (is (= ["prompt" "search" "graph"] (mapv :name (:data memory-surfaces-body))))
+        (is (= 200 (:status prompt-memory)))
+        (is (string? (:combined prompt-memory-body)))
+        (is (= 200 (:status ui-prompt-memory)))
+        (is (str/includes? (:body ui-prompt-memory) "Prompt Memory"))
+        (is (= 200 (:status memory-search)))
+        (is (= "hello" (:query memory-search-body)))
+        (is (= 200 (:status ui-memory-search)))
+        (is (str/includes? (:body ui-memory-search) "Search Results"))
+        (is (= 409 (:status graph-save)))
         (is (= 200 (:status channel-adapters)))
         (is (= ["discord" "slack" "telegram"] (mapv :name (:data channel-adapters-body))))
         (is (= 201 (:status created-agent)))
@@ -170,7 +246,14 @@
         (is (= 200 (:status channels)))
         (is (= [channel-id] (mapv :id (:data channels-body))))
         (is (= 201 (:status created)))
+        (is (= 201 (:status ui-created)))
+        (is (str/includes? (:body ui-created) "ui-test"))
+        (is (= 200 (:status session-detail)))
+        (is (str/includes? (:body session-detail) session-id))
+        (is (str/includes? (:body session-live-bootstrap) "/ui/session/live?session_id="))
         (is (= 200 (:status completion)))
+        (is (= 200 (:status ui-chat)))
+        (is (str/includes? (:body ui-chat) "test-response"))
         (is (= 200 (:status streamed)))
         (is (some #(str/includes? % "\"content\":\"hello\"") streamed-lines))
         (is (some #(str/includes? % "\"content\":\" world\"") streamed-lines))
@@ -180,9 +263,12 @@
         (is (some #{"agent.created"} (map :event_type (:data events-body))))
         (is (some #{"channel.created"} (map :event_type (:data events-body))))
         (is (some #{"completion.completed"} (map :event_type (:data events-body))))
-        (is (= 4 (count (:data messages-body))))
+        (is (= 6 (count (:data messages-body))))
         (is (= "test-response" (get-in messages-body [:data 1 :content])))
-        (is (= "hello world" (get-in messages-body [:data 3 :content]))))
+        (is (= "hello ui" (get-in messages-body [:data 2 :content])))
+        (is (= "test-response" (get-in messages-body [:data 3 :content])))
+        (is (= "hello" (get-in messages-body [:data 4 :content])))
+        (is (= "hello world" (get-in messages-body [:data 5 :content]))))
       (finally
         (api/stop-server! server)
         (io/delete-file path true)))))

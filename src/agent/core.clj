@@ -8,11 +8,17 @@
    [agent.llm.core :as llm-core]
    [agent.llm.providers.ollama :as ollama]
    [agent.llm.providers.openai-compatible :as openai-compatible]
+   [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
+   [agent.runtime.core :as runtime]
    [agent.skills :as skills]
+   [agent.tools.common.fs :as fs-tool]
    [agent.tools.common.http :as http-tool]
+   [agent.tools.common.shell :as shell-tool]
+   [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
+   [clojure.core.async :as async]
    [clojure.string :as str]))
 
 (defn create-llm-provider
@@ -49,21 +55,49 @@
   [cfg]
   (sqlite/create-store (get cfg :sqlite)))
 
+(defn create-event-bus
+  []
+  (let [source (async/chan (async/sliding-buffer 256))
+        mult (async/mult source)]
+    {:source source
+     :mult mult}))
+
 (defn create-event-sink
-  [store]
+  [store bus]
   (fn [event]
-    (sqlite/log-event! store event)))
+    (let [recorded (sqlite/log-event! store event)]
+      (async/put! (:source bus) recorded)
+      recorded)))
+
+(defn subscribe-events
+  [system]
+  (let [ch (async/chan 64)]
+    (async/tap (get-in system [:event-bus :mult]) ch)
+    ch))
+
+(defn unsubscribe-events
+  [system ch]
+  (async/untap (get-in system [:event-bus :mult]) ch)
+  (async/close! ch))
 
 (defn create-tool-registry
-  [cfg event-sink]
+  [cfg event-sink store]
   (let [http-cfg (get cfg :http)
+        fs-cfg (get cfg :fs)
+        shell-cfg (get cfg :shell)
         registry (tools/create-registry
                   {:event-sink event-sink
-                   :before-execute (fn [_] nil)
+                   :before-execute (tool-approvals/create-policy-hook store)
                    :after-execute (fn [_] nil)})]
     (cond-> registry
       (not= false (:enabled http-cfg))
-      (tools/register-tool (http-tool/create-http-tool http-cfg)))))
+      (tools/register-tool (http-tool/create-http-tool http-cfg))
+
+      (not= false (:enabled fs-cfg))
+      (tools/register-tool (fs-tool/create-fs-tool fs-cfg))
+
+      (not= false (:enabled shell-cfg))
+      (tools/register-tool (shell-tool/create-shell-tool shell-cfg)))))
 
 (defn create-orchestrator
   [_cfg event-sink]
@@ -72,6 +106,15 @@
 (defn create-skills-registry
   [cfg]
   (skills/create-registry cfg))
+
+(defn create-memory-service
+  [cfg store]
+  (memory/create-memory-service cfg store))
+
+(defn create-runtime-service
+  [store event-sink]
+  (runtime/create-runtime-service {:store store
+                                   :event-sink event-sink}))
 
 (defn create-channel-adapter-registry
   [cfg]
@@ -113,13 +156,17 @@
    (let [cfg (config/load-config config-path)
          llm-cfg (config/llm-config cfg)
          store (create-store (:storage cfg))
-         event-sink (create-event-sink store)]
+         event-bus (create-event-bus)
+         event-sink (create-event-sink store event-bus)]
      {:config cfg
       :llm-provider (create-llm-provider llm-cfg)
       :store store
+      :event-bus event-bus
       :event-sink event-sink
-      :tool-registry (create-tool-registry (:tools cfg) event-sink)
+      :tool-registry (create-tool-registry (:tools cfg) event-sink store)
       :skills-registry (create-skills-registry (:skills cfg))
+      :memory-service (create-memory-service (:memory cfg) store)
+      :runtime-service (create-runtime-service store event-sink)
       :channel-adapter-registry (create-channel-adapter-registry (:channel-adapters cfg))
       :orchestrator (create-orchestrator (:orchestrator cfg) event-sink)})))
 
@@ -145,6 +192,8 @@
    :storage (sqlite/health-check (:store system))
    :tools (tools/registry-health (:tool-registry system))
    :skills (skills/registry-health (:skills-registry system))
+   :memory (memory/health-check (:memory-service system))
+   :runtime (runtime/runtime-health (:runtime-service system))
    :channel-adapters (channel-adapters/registry-health (:channel-adapter-registry system))
    :orchestrator (orchestrator/health-check (:orchestrator system))
    :provider (get-in system [:config :llm :provider])})
@@ -152,6 +201,17 @@
 (defn log-event!
   [system event]
   ((:event-sink system) event))
+
+(defn- append-session-message!
+  [system session-id role content]
+  (let [message (sqlite/append-message! (:store system) session-id role content)]
+    (log-event! system
+                {:event-type :message.appended
+                 :entity-type :session
+                 :entity-id session-id
+                 :payload {:role role
+                           :content content}})
+    message))
 
 (defn create-session!
   ([system] (create-session! system nil))
@@ -193,11 +253,78 @@
   ([system opts]
    (sqlite/list-events (:store system) opts)))
 
+(defn memory-surfaces
+  [system]
+  (memory/list-surfaces (:memory-service system)))
+
+(defn read-prompt-memory
+  [system]
+  (memory/read-prompt-memory (:memory-service system)))
+
+(defn search-memory
+  ([system query] (search-memory system query {}))
+  ([system query opts]
+   (memory/search-memory (:memory-service system) query opts)))
+
+(defn save-graph-fact!
+  [system fact]
+  (memory/save-graph-fact! (:memory-service system) fact))
+
+(defn query-graph-memory
+  ([system query] (query-graph-memory system query {}))
+  ([system query opts]
+   (memory/query-graph-memory (:memory-service system) query opts)))
+
 (defn execute-tool
   ([system tool-name input]
    (execute-tool system tool-name input {}))
   ([system tool-name input context]
    (tools/execute-tool (:tool-registry system) tool-name input context)))
+
+(defn request-run!
+  [system request]
+  (runtime/request-run! (:runtime-service system) request))
+
+(defn list-runs
+  ([system] (list-runs system {}))
+  ([system opts]
+   (runtime/list-runs (:runtime-service system) opts)))
+
+(defn get-run
+  [system run-id]
+  (runtime/get-run (:runtime-service system) run-id))
+
+(defn register-run!
+  [system run-id registration]
+  (runtime/register-run! (:runtime-service system) run-id registration))
+
+(defn heartbeat-run!
+  [system run-id heartbeat]
+  (runtime/heartbeat! (:runtime-service system) run-id heartbeat))
+
+(defn checkpoint-run!
+  [system run-id checkpoint]
+  (runtime/checkpoint! (:runtime-service system) run-id checkpoint))
+
+(defn enqueue-run-command!
+  [system run-id command]
+  (runtime/enqueue-command! (:runtime-service system) run-id command))
+
+(defn pending-run-commands
+  [system run-id]
+  (runtime/pending-commands (:runtime-service system) run-id))
+
+(defn acknowledge-run-command!
+  [system run-id command-id]
+  (runtime/acknowledge-command! (:runtime-service system) run-id command-id))
+
+(defn complete-run-command!
+  [system run-id command-id status error]
+  (runtime/complete-command! (:runtime-service system) run-id command-id status error))
+
+(defn transition-run!
+  [system run-id status & [opts]]
+  (runtime/transition-run! (:runtime-service system) run-id status opts))
 
 (defn spawn-agent!
   [system spec]
@@ -241,8 +368,8 @@
         user-message (last (filter #(= "user" (:role %)) messages))]
     (when session-id
       (when-let [prompt (:content user-message)]
-        (sqlite/append-message! (:store system) session-id "user" prompt))
-      (sqlite/append-message! (:store system) session-id "assistant" content))
+        (append-session-message! system session-id "user" prompt))
+      (append-session-message! system session-id "assistant" content))
     (sqlite/log-completion! (:store system)
                             {:session-id session-id
                              :provider (get-in system [:config :llm :provider])

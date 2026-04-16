@@ -36,9 +36,11 @@
     (is (= "session.created" (:event-type (first events))))
     (is (= "hello" (:content (first messages))))
     (is (= sqlite/latest-schema-version (sqlite/schema-version store)))
-    (is (= [1 2 3] (mapv :version history)))
+    (is (= [1 2 3 4 5] (mapv :version history)))
     (is (true? (:healthy health)))
     (is (= 1 (get-in health [:details :event-count])))
+    (is (= 0 (get-in health [:details :tool-approval-count])))
+    (is (= 0 (get-in health [:details :agent-run-count])))
     (is (true? (get-in health [:details :up-to-date?])))
     (io/delete-file path true)))
 
@@ -73,7 +75,7 @@
           history (sqlite/migration-history store)
           session (sqlite/create-session! store "migrated")]
       (is (= sqlite/latest-schema-version (sqlite/schema-version store)))
-      (is (= [1 2 3] (mapv :version history)))
+      (is (= [1 2 3 4 5] (mapv :version history)))
       (is (true? (:healthy health)))
       (is (true? (get-in health [:details :up-to-date?])))
       (is (string? (:id session))))
