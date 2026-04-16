@@ -44,10 +44,12 @@ Reference:
    Added in `src/agent/runners/local_process.clj` and wired into active system/API.
 11. [x] Implement `bubblewrap` runner.
    Added in `src/agent/runners/bubblewrap.clj` and wired into active system/UI/API.
-12. [ ] Implement `docker/podman` runner.
-13. [ ] Define later runner interfaces:
+12. [x] Implement `seatbelt` runner for macOS.
+   Added in `src/agent/runners/seatbelt.clj` and wired into active system/UI/API.
+13. [ ] Implement `docker/podman` runner.
+14. [ ] Define later runner interfaces:
    VM, k8s job, SSH remote.
-14. [ ] Ensure same child runtime shim works in all substrates.
+15. [ ] Ensure same child runtime shim works in all substrates.
 
 ### Phase D: Streaming + Fallback
 
@@ -133,7 +135,7 @@ Reference:
 4. [x] Distributed subagent runtime phase A/B:
    Added runner protocol, run registry, leases, heartbeats, commands, checkpoints, and runtime service baseline.
 5. [ ] Execution substrates:
-   `local-process` and `bubblewrap` are done.
+   `local-process`, `bubblewrap`, and macOS `seatbelt` are done.
    Next: docker/podman.
 6. [ ] Event/broker abstraction:
    SQLite/local first, NATS JetStream next.

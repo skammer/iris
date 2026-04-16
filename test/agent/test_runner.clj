@@ -9,6 +9,7 @@
    [agent.orchestrator-test]
    [agent.persistence.sqlite-test]
    [agent.runners.local-process-test]
+   [agent.runners.seatbelt-test]
    [agent.runtime.core-test]
    [agent.skills-test]
    [agent.tools.common.fs-test]
@@ -27,6 +28,7 @@
     agent.orchestrator-test
     agent.persistence.sqlite-test
     agent.runners.local-process-test
+    agent.runners.seatbelt-test
     agent.runtime.core-test
     agent.skills-test
     agent.tools.common.fs-test

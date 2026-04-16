@@ -23,9 +23,13 @@
 (deftest create-system-registers-default-tools
   (let [system (core/create-system)
         tools (core/list-tools system)
-        adapters (core/list-channel-adapters system)]
+        adapters (core/list-channel-adapters system)
+        runner-keys (-> system :runner-registry keys set)]
     (is (= [:fs :http :shell] (mapv :name tools)))
     (is (= ["Discord" "Slack" "Telegram"] (mapv :display-name adapters)))
+    (is (contains? runner-keys :local-process))
+    (is (contains? runner-keys :bubblewrap))
+    (is (contains? runner-keys :seatbelt))
     (is (empty? (core/list-skills system)))
     (is (= 3 (count (core/memory-surfaces system))))
     (is (= 3 (get-in (core/health-check system) [:tools :count])))
