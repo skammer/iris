@@ -7,6 +7,7 @@
    [agent.llm.core :as llm-core]
    [agent.llm.providers.ollama :as ollama]
    [agent.llm.providers.openai-compatible :as openai-compatible]
+   [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
    [agent.tools.common.http :as http-tool]
    [agent.tools.core :as tools]
@@ -54,6 +55,10 @@
       (not= false (:enabled http-cfg))
       (tools/register-tool (http-tool/create-http-tool http-cfg)))))
 
+(defn create-orchestrator
+  [_cfg]
+  (orchestrator/create-orchestrator))
+
 (defn create-system
   ([] (create-system nil))
   ([config-path]
@@ -62,7 +67,8 @@
      {:config cfg
       :llm-provider (create-llm-provider llm-cfg)
       :store (create-store (:storage cfg))
-      :tool-registry (create-tool-registry (:tools cfg))})))
+      :tool-registry (create-tool-registry (:tools cfg))
+      :orchestrator (create-orchestrator (:orchestrator cfg))})))
 
 (defn complete
   ([system prompt]
@@ -85,6 +91,7 @@
   {:llm (llm-core/health-check (:llm-provider system))
    :storage (sqlite/health-check (:store system))
    :tools (tools/registry-health (:tool-registry system))
+   :orchestrator (orchestrator/health-check (:orchestrator system))
    :provider (get-in system [:config :llm :provider])})
 
 (defn create-session!
@@ -113,6 +120,42 @@
    (execute-tool system tool-name input {}))
   ([system tool-name input context]
    (tools/execute-tool (:tool-registry system) tool-name input context)))
+
+(defn spawn-agent!
+  [system spec]
+  (orchestrator/spawn-agent! (:orchestrator system) spec))
+
+(defn list-agents
+  [system]
+  (orchestrator/list-agents (:orchestrator system)))
+
+(defn list-agent-messages
+  [system agent-id]
+  (orchestrator/list-agent-messages (:orchestrator system) agent-id))
+
+(defn send-agent-message!
+  [system agent-id message]
+  (orchestrator/send-agent-message! (:orchestrator system) (:llm-provider system) agent-id message))
+
+(defn create-channel!
+  [system spec]
+  (orchestrator/create-channel! (:orchestrator system) spec))
+
+(defn list-channels
+  [system]
+  (orchestrator/list-channels (:orchestrator system)))
+
+(defn list-channel-messages
+  [system channel-id]
+  (orchestrator/list-channel-messages (:orchestrator system) channel-id))
+
+(defn post-channel-message!
+  [system channel-id message]
+  (orchestrator/post-channel-message! (:orchestrator system) channel-id message))
+
+(defn consume-agent-inbox!
+  [system agent-id]
+  (orchestrator/consume-agent-inbox! (:orchestrator system) (:llm-provider system) agent-id))
 
 (defn complete!
   [system messages {:keys [session-id] :as opts}]

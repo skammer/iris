@@ -1,5 +1,65 @@
 # TODO
 
+## Next Iterations Planning
+
+1. [x] First research tranche:
+   Captured initial findings in `log/next-iterations-research-2026-04-16.md`.
+   Covers: KG shortlist, `core.async.flow` usage/fit, and first capability snapshots for `pi-mono` and `moltis`.
+2. [x] Inspiration source deep-dive tranche:
+   Captured source-level findings in `log/next-iterations-source-analysis-2026-04-16.md`.
+   Covers: `pi-mono` agent/channel/tool patterns, `moltis` channel/tool/memory/sandbox patterns, and direct implications for rewritten runtime.
+3. [x] Knowledge graph strategy:
+   Compare embeddable/easy-deploy options first, then client-server options.
+   Evaluation criteria: embeddable, operational simplicity, query power, inference support, docs quality, ecosystem health, Clojure/JVM fit, migration path, backup story, licensing.
+   First-pass decision captured in `log/knowledge-graph-decision-matrix-2026-04-16.md`.
+4. [x] Knowledge graph options research:
+   Investigate Asami, Datahike, XTDB graph-like modeling, Apache Jena/TDB2, RDF4J, Neo4j, Memgraph, TerminusDB, Oxigraph, Kuzu, ArcadeDB.
+   Separate into: embedded-first, server-first, RDF/semantic, property-graph.
+5. [x] Knowledge graph decision matrix:
+   Produce shortlist with “best local default”, “best production upgrade path”, “best semantic reasoning option”.
+   Include deployment notes, persistence model, indexing, inference limitations, and maintenance risk.
+6. [x] Knowledge graph prototype plan:
+   Define 2-3 benchmark tasks: fact storage, multi-hop retrieval, agent memory linking, decision trace storage, lightweight inference.
+   Use same dataset/task shapes across candidates.
+7. [x] `core.async.flow` investigation:
+   Confirm whether rewritten runtime uses it anywhere active.
+   If not, document exact reasons: complexity, fit mismatch, missing need, debugging cost, ecosystem maturity, runtime constraints.
+   Captured in `log/core-async-flow-spike-plan-2026-04-16.md` and `log/next-iterations-source-analysis-2026-04-16.md`.
+8. [x] `core.async.flow` adoption decision:
+   Evaluate whether it should model agent execution graphs, tool pipelines, channel routing, orchestration DAGs, or none.
+   Compare against plain `core.async`, immutable orchestration state machines, and custom step graph approach.
+9. [x] `core.async.flow` experiment plan:
+   Design minimal spike for agent execution graph with retry/branching/tool steps.
+   Define success criteria: clarity, debuggability, cancellation, observability, testability.
+10. [ ] Pi-mono analysis plan:
+   Inventory tools, agent roles, orchestration model, memory model, UI model, sandbox model, repo layout, and execution graph patterns.
+   Extract concrete capabilities and reusable patterns, not inspiration-level notes.
+11. [ ] Moltis analysis plan:
+   Inventory tools, security model, plugin/modularity story, orchestration/runtime model, deployment shape, and integration surfaces.
+   Extract concrete capabilities and reusable patterns, not inspiration-level notes.
+12. [ ] Inspiration comparison report:
+   Compare pi-mono vs moltis vs rewritten runtime on tools, orchestration, memory, UI, channels, sandboxing, observability, and extensibility.
+   Identify gaps to close in priority order.
+13. [ ] Tool expansion roadmap:
+   Define first-class rewritten tools beyond `:http`: filesystem, shell, web fetch, structured web search, sqlite query, repo inspection, document conversion, scraping/browser automation, task tracker integration.
+14. [ ] Tool capability model:
+   Add planning for permission model, audit trail, timeout/retry semantics, structured schemas, tool discovery, and tool composition.
+15. [ ] Web UI planning:
+   Design Datastar-based UI architecture for sessions, agents, channels, logs, tool traces, memory/graph views, and live streaming updates.
+16. [ ] Web UI technical spike plan:
+   Decide transport model, backend endpoint shape, incremental update strategy, auth model, and minimal operator dashboard scope.
+17. [ ] Example applications plan:
+   Define examples for researcher, automated developer, product manager, judge, orchestrator, plus small single-agent CLI/API demos.
+18. [ ] Agent personalities plan:
+   Define configurable personality system: role prompts, constraints, tool allowlists, escalation rules, communication style, memory policy, evaluation policy.
+19. [ ] Pluggable channels plan:
+   Design channel adapter interface for Telegram, Discord, Slack, email, webhook, Matrix/IRC/other candidates.
+   Define inbound event normalization, outbound formatting, auth/secrets handling, rate limiting, and delivery guarantees.
+20. [ ] Logging/observability follow-up:
+   Plan how orchestrator events, tool calls, channel traffic, and graph operations should be persisted and visualized.
+21. [ ] Prioritization pass:
+   Order next implementation iterations after research: knowledge graph choice, tool expansion, UI shell, channel adapter base, examples, personality model.
+
 ## Rewrite Track
 Status below is stale. Active work follows rewritten runtime in `src/agent/core.clj`.
 
@@ -9,7 +69,7 @@ Status below is stale. Active work follows rewritten runtime in `src/agent/core.
 4. [x] Rewrite pass 4: isolate/quarantine legacy runtime from active path
 5. [x] Rewrite pass 5: add DB schema migration/versioning
 6. [x] Rewrite pass 6: add tool registry on rewritten core
-7. [ ] Rewrite pass 7: add orchestrator/subagent runtime on rewritten core
+7. [x] Rewrite pass 7: add orchestrator/subagent runtime on rewritten core
 
 ## Phase 1: Knowledge Base Creation
 1. [x] Analyze core.async.flow guide and understand flow-based programming for agents
@@ -137,6 +197,11 @@ Key files created:
 - Next task: Implement basic LLM integration (Phase 3, Task 14)
 
 ## Log
+- 2026-04-16: Started next-iterations research; added `log/next-iterations-research-2026-04-16.md` covering KG shortlist, `core.async.flow` fit, and initial `pi-mono`/`moltis` capability snapshots
+- 2026-04-16: Added `log/next-iterations-source-analysis-2026-04-16.md` with source-level findings from `pi-mono` and `moltis`, local `core.async.flow` usage verification, and concrete implications for rewritten runtime
+- 2026-04-16: Added `log/knowledge-graph-decision-matrix-2026-04-16.md` with first-pass KG shortlist, scoring matrix, and prototype benchmark plan
+- 2026-04-16: Added `log/core-async-flow-spike-plan-2026-04-16.md` with adoption decision and isolated orchestration spike plan
+- 2026-04-16: Completed rewrite pass 7 - added rewritten in-memory orchestrator, subagents, channels, agent/channel API routes, and orchestrator health exposure
 - 2026-04-16: Completed rewrite pass 6 - added rewritten tool registry, default HTTP tool, system wiring, and API tool listing/health exposure
 - 2026-04-15: Completed rewrite pass 5 - added SQLite schema migrations, explicit schema versioning, migration history, and upgrade path for unversioned legacy DBs
 - 2026-04-15: Completed rewrite pass 4 - moved legacy runtime/modules to `legacy_src`, added explicit `:legacy` alias, and made rewritten slice default classpath

@@ -2,6 +2,7 @@
   "Minimal HTTP API for rewritten runtime."
   (:require
    [agent.llm.core :as llm-core]
+   [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
    [agent.tools.core :as tools]
    [cheshire.core :as json]
@@ -71,6 +72,29 @@
    :category (some-> (:category tool) name)
    :required_permissions (mapv name (:required-permissions tool))})
 
+(defn- agent->response [agent]
+  {:id (:id agent)
+   :name (:name agent)
+   :role (:role agent)
+   :parent_id (:parent-id agent)
+   :status (:status agent)
+   :created_at (:created-at agent)
+   :message_count (:message-count agent)})
+
+(defn- channel->response [channel]
+  {:id (:id channel)
+   :name (:name channel)
+   :participants (vec (:participants channel))
+   :created_at (:created-at channel)
+   :message_count (:message-count channel)})
+
+(defn- channel-message->response [message]
+  {:id (:id message)
+   :sender_id (:sender-id message)
+   :channel_id (:channel-id message)
+   :content (:content message)
+   :created_at (:created-at message)})
+
 (defn- session-exists? [system session-id]
   (sqlite/session-exists? (:store system) session-id))
 
@@ -90,6 +114,16 @@
 (defn- ensure-session-exists! [system session-id]
   (when (and session-id (not (session-exists? system session-id)))
     (throw (api-error 404 "session_not_found" "Session not found"))))
+
+(defn- ensure-string! [field value]
+  (when-not (and (string? value) (not (str/blank? value)))
+    (throw (api-error 400 "bad_request"
+                      (str (name field) " must be a non-blank string")))))
+
+(defn- ensure-string-vec! [field value]
+  (when-not (and (vector? value) (every? string? value))
+    (throw (api-error 400 "bad_request"
+                      (str (name field) " must be a vector of strings")))))
 
 (defn- normalize-chat-request [body]
   (let [messages (:messages body)
@@ -211,11 +245,126 @@
                              :llm (llm-core/health-check (:llm-provider system))
                              :storage (sqlite/health-check (:store system))
                              :tools (tools/registry-health (:tool-registry system))
+                             :orchestrator (orchestrator/health-check (:orchestrator system))
                              :provider (get-in system [:config :llm :provider])}))
 
 (defn- handle-list-tools [system exchange]
   (write-json! exchange 200 {:data (mapv tool->response
                                          (tools/list-tools (:tool-registry system)))}))
+
+(defn- handle-create-agent [system exchange]
+  (let [body (read-json-body exchange)
+        name (or (:name body) "Subagent")
+        role (or (:role body) "worker")
+        parent-id (:parent_id body)
+        system-prompt (:system_prompt body)]
+    (when parent-id
+      (ensure-string! :parent_id parent-id))
+    (when system-prompt
+      (ensure-string! :system_prompt system-prompt))
+    (write-json! exchange 201
+                 (agent->response
+                  (orchestrator/spawn-agent! (:orchestrator system)
+                                             {:name name
+                                              :role role
+                                              :parent-id parent-id
+                                              :system-prompt system-prompt})))))
+
+(defn- handle-list-agents [system exchange]
+  (write-json! exchange 200 {:data (mapv agent->response
+                                         (orchestrator/list-agents (:orchestrator system)))}))
+
+(defn- handle-agent-messages [system exchange agent-id]
+  (try
+    (write-json! exchange 200 {:data (mapv message->response
+                                           (orchestrator/list-agent-messages (:orchestrator system) agent-id))})
+    (catch Exception e
+      (if (= :agent-not-found (:type (ex-data e)))
+        (throw (api-error 404 "agent_not_found" "Agent not found"))
+        (throw e)))))
+
+(defn- handle-agent-message [system exchange agent-id]
+  (let [body (read-json-body exchange)
+        role (or (:role body) "user")
+        content (:content body)]
+    (ensure-string! :content content)
+    (try
+      (let [result (orchestrator/send-agent-message! (:orchestrator system)
+                                                     (:llm-provider system)
+                                                     agent-id
+                                                     {:role role
+                                                      :content content})]
+        (write-json! exchange 200
+                     {:agent (agent->response (:agent result))
+                      :input (message->response (:input result))
+                      :response (message->response (:response result))}))
+      (catch Exception e
+        (if (= :agent-not-found (:type (ex-data e)))
+          (throw (api-error 404 "agent_not_found" "Agent not found"))
+          (throw e))))))
+
+(defn- handle-consume-agent-inbox [system exchange agent-id]
+  (try
+    (let [result (orchestrator/consume-agent-inbox! (:orchestrator system)
+                                                    (:llm-provider system)
+                                                    agent-id)]
+      (write-json! exchange 200
+                   {:agent (agent->response (:agent result))
+                    :consumed (:consumed result)
+                    :response (some-> (:response result) message->response)}))
+    (catch Exception e
+      (if (= :agent-not-found (:type (ex-data e)))
+        (throw (api-error 404 "agent_not_found" "Agent not found"))
+        (throw e)))))
+
+(defn- handle-create-channel [system exchange]
+  (let [body (read-json-body exchange)
+        name (or (:name body) "Channel")
+        participants (or (:participants body) [])]
+    (ensure-string-vec! :participants participants)
+    (try
+      (write-json! exchange 201
+                   (channel->response
+                    (orchestrator/create-channel! (:orchestrator system)
+                                                  {:name name
+                                                   :participants participants})))
+      (catch Exception e
+        (if (= :agent-not-found (:type (ex-data e)))
+          (throw (api-error 404 "agent_not_found" "Channel participant not found"))
+          (throw e))))))
+
+(defn- handle-list-channels [system exchange]
+  (write-json! exchange 200 {:data (mapv channel->response
+                                         (orchestrator/list-channels (:orchestrator system)))}))
+
+(defn- handle-channel-messages [system exchange channel-id]
+  (try
+    (write-json! exchange 200 {:data (mapv channel-message->response
+                                           (orchestrator/list-channel-messages (:orchestrator system) channel-id))})
+    (catch Exception e
+      (if (= :channel-not-found (:type (ex-data e)))
+        (throw (api-error 404 "channel_not_found" "Channel not found"))
+        (throw e)))))
+
+(defn- handle-channel-message [system exchange channel-id]
+  (let [body (read-json-body exchange)
+        sender-id (:sender_id body)
+        content (:content body)]
+    (ensure-string! :sender_id sender-id)
+    (ensure-string! :content content)
+    (try
+      (write-json! exchange 201
+                   (channel-message->response
+                    (orchestrator/post-channel-message! (:orchestrator system)
+                                                        channel-id
+                                                        {:sender-id sender-id
+                                                         :content content})))
+      (catch Exception e
+        (case (:type (ex-data e))
+          :channel-not-found (throw (api-error 404 "channel_not_found" "Channel not found"))
+          :agent-not-found (throw (api-error 404 "agent_not_found" "Agent not found"))
+          :permission-denied (throw (api-error 403 "permission_denied" "Sender is not a participant"))
+          (throw e))))))
 
 (defn- handle-create-session [system exchange]
   (let [body (read-json-body exchange)
@@ -261,6 +410,44 @@
 
             (and (= method "GET") (= path ["v1" "tools"]))
             (handle-list-tools system exchange)
+
+            (and (= method "GET") (= path ["v1" "agents"]))
+            (handle-list-agents system exchange)
+
+            (and (= method "POST") (= path ["v1" "agents"]))
+            (handle-create-agent system exchange)
+
+            (and (= method "GET") (= 4 (count path))
+                 (= ["v1" "agents"] (subvec path 0 2))
+                 (= "messages" (nth path 3)))
+            (handle-agent-messages system exchange (nth path 2))
+
+            (and (= method "POST") (= 4 (count path))
+                 (= ["v1" "agents"] (subvec path 0 2))
+                 (= "messages" (nth path 3)))
+            (handle-agent-message system exchange (nth path 2))
+
+            (and (= method "POST") (= 5 (count path))
+                 (= ["v1" "agents"] (subvec path 0 2))
+                 (= "inbox" (nth path 3))
+                 (= "consume" (nth path 4)))
+            (handle-consume-agent-inbox system exchange (nth path 2))
+
+            (and (= method "GET") (= path ["v1" "channels"]))
+            (handle-list-channels system exchange)
+
+            (and (= method "POST") (= path ["v1" "channels"]))
+            (handle-create-channel system exchange)
+
+            (and (= method "GET") (= 4 (count path))
+                 (= ["v1" "channels"] (subvec path 0 2))
+                 (= "messages" (nth path 3)))
+            (handle-channel-messages system exchange (nth path 2))
+
+            (and (= method "POST") (= 4 (count path))
+                 (= ["v1" "channels"] (subvec path 0 2))
+                 (= "messages" (nth path 3)))
+            (handle-channel-message system exchange (nth path 2))
 
             (and (= method "GET") (= 4 (count path))
                  (= ["v1" "sessions"] (subvec path 0 2))

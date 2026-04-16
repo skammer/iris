@@ -4,6 +4,7 @@
    [clojure.test :as t]
    [agent.config-test]
    [agent.core-test]
+   [agent.orchestrator-test]
    [agent.persistence.sqlite-test]
    [agent.llm.providers.ollama-test]
    [agent.llm.providers.openai-compatible-test]
@@ -14,6 +15,7 @@
   '[agent.api-test
     agent.config-test
     agent.core-test
+    agent.orchestrator-test
     agent.persistence.sqlite-test
     agent.llm.providers.ollama-test
     agent.llm.providers.openai-compatible-test
