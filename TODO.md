@@ -197,6 +197,7 @@ Key files created:
 - Next task: Implement basic LLM integration (Phase 3, Task 14)
 
 ## Log
+- 2026-04-16: Implemented next-runtime foundation tranche: SQLite event log, tool provenance/hooks, filesystem-backed skills registry, and pluggable channel adapter registry with API exposure
 - 2026-04-16: Started next-iterations research; added `log/next-iterations-research-2026-04-16.md` covering KG shortlist, `core.async.flow` fit, and initial `pi-mono`/`moltis` capability snapshots
 - 2026-04-16: Added `log/next-iterations-source-analysis-2026-04-16.md` with source-level findings from `pi-mono` and `moltis`, local `core.async.flow` usage verification, and concrete implications for rewritten runtime
 - 2026-04-16: Added `log/knowledge-graph-decision-matrix-2026-04-16.md` with first-pass KG shortlist, scoring matrix, and prototype benchmark plan

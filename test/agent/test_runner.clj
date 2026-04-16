@@ -1,11 +1,13 @@
 (ns agent.test-runner
   (:require
    [agent.api-test]
+   [agent.channels.core-test]
    [clojure.test :as t]
    [agent.config-test]
    [agent.core-test]
    [agent.orchestrator-test]
    [agent.persistence.sqlite-test]
+   [agent.skills-test]
    [agent.llm.providers.ollama-test]
    [agent.llm.providers.openai-compatible-test]
    [agent.tools.common.http-test]
@@ -13,10 +15,12 @@
 
 (def rewritten-test-namespaces
   '[agent.api-test
+    agent.channels.core-test
     agent.config-test
     agent.core-test
     agent.orchestrator-test
     agent.persistence.sqlite-test
+    agent.skills-test
     agent.llm.providers.ollama-test
     agent.llm.providers.openai-compatible-test
     agent.tools.common.http-test

@@ -1,9 +1,11 @@
 (ns agent.api
   "Minimal HTTP API for rewritten runtime."
   (:require
+   [agent.channels.core :as channel-adapters]
    [agent.llm.core :as llm-core]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
+   [agent.skills :as skills]
    [agent.tools.core :as tools]
    [cheshire.core :as json]
    [clojure.core.async :as async]
@@ -70,7 +72,24 @@
    :description (:description tool)
    :version (:version tool)
    :category (some-> (:category tool) name)
-   :required_permissions (mapv name (:required-permissions tool))})
+   :required_permissions (mapv name (:required-permissions tool))
+   :source (some-> (:source tool) name)
+   :source_details (:source-details tool)})
+
+(defn- skill->response [skill]
+  {:name (:name skill)
+   :description (:description skill)
+   :path (:path skill)
+   :base_dir (:base-dir skill)
+   :source (some-> (:source skill) name)})
+
+(defn- channel-adapter->response [adapter]
+  {:name (name (:name adapter))
+   :display_name (:display-name adapter)
+   :inbound_mode (name (:inbound-mode adapter))
+   :capabilities (mapv name (:capabilities adapter))
+   :public_url_required (:public-url-required? adapter)
+   :source (some-> (:source adapter) name)})
 
 (defn- agent->response [agent]
   {:id (:id agent)
@@ -94,6 +113,15 @@
    :channel_id (:channel-id message)
    :content (:content message)
    :created_at (:created-at message)})
+
+(defn- event->response [event]
+  {:id (:id event)
+   :event_type (:event-type event)
+   :entity_type (:entity-type event)
+   :entity_id (:entity-id event)
+   :request_id (:request-id event)
+   :payload (:payload event)
+   :created_at (:created-at event)})
 
 (defn- session-exists? [system session-id]
   (sqlite/session-exists? (:store system) session-id))
@@ -170,7 +198,13 @@
                              :provider provider
                              :model (get-in system [:config :llm :model])
                              :prompt (:content user-message)
-                             :response content})))
+                             :response content})
+    (sqlite/log-event! (:store system)
+                       {:event-type :completion.completed
+                        :entity-type :session
+                        :entity-id session-id
+                        :payload {:provider provider
+                                  :model (get-in system [:config :llm :model])}})))
 
 (defn- complete! [system messages {:keys [session-id]}]
   (let [provider (:llm-provider system)
@@ -245,12 +279,26 @@
                              :llm (llm-core/health-check (:llm-provider system))
                              :storage (sqlite/health-check (:store system))
                              :tools (tools/registry-health (:tool-registry system))
+                             :skills (skills/registry-health (:skills-registry system))
+                             :channel-adapters (channel-adapters/registry-health (:channel-adapter-registry system))
                              :orchestrator (orchestrator/health-check (:orchestrator system))
                              :provider (get-in system [:config :llm :provider])}))
 
 (defn- handle-list-tools [system exchange]
   (write-json! exchange 200 {:data (mapv tool->response
                                          (tools/list-tools (:tool-registry system)))}))
+
+(defn- handle-list-skills [system exchange]
+  (write-json! exchange 200 {:data (mapv skill->response
+                                         (skills/list-skills (:skills-registry system)))}))
+
+(defn- handle-list-channel-adapters [system exchange]
+  (write-json! exchange 200 {:data (mapv channel-adapter->response
+                                         (channel-adapters/list-adapters (:channel-adapter-registry system)))}))
+
+(defn- handle-list-events [system exchange]
+  (write-json! exchange 200 {:data (mapv event->response
+                                         (sqlite/list-events (:store system) {:limit 100}))}))
 
 (defn- handle-create-agent [system exchange]
   (let [body (read-json-body exchange)
@@ -372,6 +420,11 @@
     (when (and (some? title) (not (string? title)))
       (throw (api-error 400 "bad_request" "title must be a string")))
     (let [session (sqlite/create-session! (:store system) title)]
+      (sqlite/log-event! (:store system)
+                         {:event-type :session.created
+                          :entity-type :session
+                          :entity-id (:id session)
+                          :payload {:title title}})
       (write-json! exchange 201 (session->response session)))))
 
 (defn- handle-list-sessions [system exchange]
@@ -410,6 +463,15 @@
 
             (and (= method "GET") (= path ["v1" "tools"]))
             (handle-list-tools system exchange)
+
+            (and (= method "GET") (= path ["v1" "skills"]))
+            (handle-list-skills system exchange)
+
+            (and (= method "GET") (= path ["v1" "channel-adapters"]))
+            (handle-list-channel-adapters system exchange)
+
+            (and (= method "GET") (= path ["v1" "events"]))
+            (handle-list-events system exchange)
 
             (and (= method "GET") (= path ["v1" "agents"]))
             (handle-list-agents system exchange)

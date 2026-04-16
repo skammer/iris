@@ -1,13 +1,14 @@
 (ns agent.persistence.sqlite
   "SQLite-backed persistence for sessions, messages, and completion logs."
   (:require
+   [cheshire.core :as json]
    [clojure.java.io :as io])
   (:import
    (java.sql DriverManager)
    (java.time Instant)
    (java.util UUID)))
 
-(def latest-schema-version 2)
+(def latest-schema-version 3)
 
 (defn- ensure-parent-dir! [path]
   (let [file (io/file path)
@@ -17,6 +18,12 @@
 
 (defn jdbc-url [path]
   (str "jdbc:sqlite:" path))
+
+(defn- normalize-name [value]
+  (cond
+    (nil? value) nil
+    (keyword? value) (name value)
+    :else (str value)))
 
 (defn- execute-ddl! [conn sql]
   (with-open [stmt (.createStatement conn)]
@@ -68,7 +75,8 @@
 (defn- legacy-schema-present? [conn]
   (or (table-exists? conn "sessions")
       (table-exists? conn "messages")
-      (table-exists? conn "completions")))
+      (table-exists? conn "completions")
+      (table-exists? conn "agent_events")))
 
 (defn- migration-1! [conn]
   (ensure-schema-migrations-table! conn)
@@ -102,13 +110,34 @@
   (execute-ddl! conn "CREATE INDEX IF NOT EXISTS idx_completions_created
                       ON completions(created_at);"))
 
+(defn- migration-3! [conn]
+  (ensure-schema-migrations-table! conn)
+  (execute-ddl! conn "CREATE TABLE IF NOT EXISTS agent_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        event_type TEXT NOT NULL,
+                        entity_type TEXT,
+                        entity_id TEXT,
+                        request_id TEXT,
+                        payload TEXT,
+                        created_at TEXT NOT NULL
+                      );")
+  (execute-ddl! conn "CREATE INDEX IF NOT EXISTS idx_agent_events_created
+                      ON agent_events(created_at DESC);")
+  (execute-ddl! conn "CREATE INDEX IF NOT EXISTS idx_agent_events_entity
+                      ON agent_events(entity_type, entity_id, created_at DESC);")
+  (execute-ddl! conn "CREATE INDEX IF NOT EXISTS idx_agent_events_request
+                      ON agent_events(request_id, created_at DESC);"))
+
 (def ^:private migrations
   [{:version 1
     :name "initial-schema"
     :up migration-1!}
    {:version 2
     :name "completion-created-index"
-    :up migration-2!}])
+    :up migration-2!}
+   {:version 3
+    :name "event-log"
+    :up migration-3!}])
 
 (defn- bootstrap-legacy-version! [conn]
   (when (and (zero? (get-user-version conn))
@@ -268,6 +297,68 @@
      :response response
      :created-at created-at}))
 
+(defn log-event!
+  [store {:keys [event-type entity-type entity-id request-id payload created-at]}]
+  (let [created-at* (or created-at (str (Instant/now)))
+        event-type* (normalize-name event-type)
+        entity-type* (normalize-name entity-type)
+        payload-json (when (some? payload) (json/generate-string payload))]
+    (with-connection
+      store
+      (fn [conn]
+        (with-open [stmt (.prepareStatement conn
+                                           "INSERT INTO agent_events (event_type, entity_type, entity_id, request_id, payload, created_at)
+                                            VALUES (?, ?, ?, ?, ?, ?)")]
+          (.setString stmt 1 event-type*)
+          (.setString stmt 2 entity-type*)
+          (.setString stmt 3 entity-id)
+          (.setString stmt 4 request-id)
+          (.setString stmt 5 payload-json)
+          (.setString stmt 6 created-at*)
+          (.executeUpdate stmt))))
+    {:event-type event-type*
+     :entity-type entity-type*
+     :entity-id entity-id
+     :request-id request-id
+     :payload payload
+     :created-at created-at*}))
+
+(defn list-events
+  ([store] (list-events store {}))
+  ([store {:keys [entity-type entity-id request-id limit]
+           :or {limit 100}}]
+   (let [entity-type* (normalize-name entity-type)]
+     (with-connection
+       store
+       (fn [conn]
+         (with-open [stmt (.prepareStatement conn
+                                            "SELECT id, event_type, entity_type, entity_id, request_id, payload, created_at
+                                             FROM agent_events
+                                             WHERE (? IS NULL OR entity_type = ?)
+                                               AND (? IS NULL OR entity_id = ?)
+                                               AND (? IS NULL OR request_id = ?)
+                                             ORDER BY id DESC
+                                             LIMIT ?")]
+           (.setString stmt 1 entity-type*)
+           (.setString stmt 2 entity-type*)
+           (.setString stmt 3 entity-id)
+           (.setString stmt 4 entity-id)
+           (.setString stmt 5 request-id)
+           (.setString stmt 6 request-id)
+           (.setInt stmt 7 (int limit))
+           (with-open [rs (.executeQuery stmt)]
+             (loop [acc []]
+               (if (.next rs)
+                 (let [payload-json (.getString rs "payload")]
+                   (recur (conj acc {:id (.getLong rs "id")
+                                     :event-type (.getString rs "event_type")
+                                     :entity-type (.getString rs "entity_type")
+                                     :entity-id (.getString rs "entity_id")
+                                     :request-id (.getString rs "request_id")
+                                     :payload (when payload-json (json/parse-string payload-json true))
+                                     :created-at (.getString rs "created_at")})))
+                 acc)))))))))
+
 (defn health-check
   [store]
   (try
@@ -277,13 +368,20 @@
         (with-open [stmt (.prepareStatement conn "SELECT COUNT(*) AS n FROM sessions")
                     rs (.executeQuery stmt)]
           (.next rs)
-          (let [schema-version (get-user-version conn)]
-          {:healthy true
-           :details {:path (:path store)
-                     :session-count (.getInt rs "n")
-                     :schema-version schema-version
-                     :latest-schema-version latest-schema-version
-                     :up-to-date? (= schema-version latest-schema-version)}}))))
+          (let [schema-version (get-user-version conn)
+                event-count (if (table-exists? conn "agent_events")
+                              (with-open [event-stmt (.prepareStatement conn "SELECT COUNT(*) AS n FROM agent_events")
+                                          event-rs (.executeQuery event-stmt)]
+                                (.next event-rs)
+                                (.getInt event-rs "n"))
+                              0)]
+            {:healthy true
+             :details {:path (:path store)
+                       :session-count (.getInt rs "n")
+                       :event-count event-count
+                       :schema-version schema-version
+                       :latest-schema-version latest-schema-version
+                       :up-to-date? (= schema-version latest-schema-version)}}))))
     (catch Exception e
       {:healthy false
        :details {:path (:path store)

@@ -14,6 +14,11 @@
 (defn- random-id [prefix]
   (str prefix "-" (UUID/randomUUID)))
 
+(defn- emit-event!
+  [orchestrator event]
+  (when-let [sink (:event-sink orchestrator)]
+    (sink event)))
+
 (defn- agent-view [agent]
   {:id (:id agent)
    :name (:name agent)
@@ -48,9 +53,11 @@
     (map #(select-keys % [:role :content]) (:messages agent)))))
 
 (defn create-orchestrator
-  []
-  {:agents (atom {})
-   :channels (atom {})})
+  ([] (create-orchestrator {}))
+  ([{:keys [event-sink]}]
+   {:agents (atom {})
+    :channels (atom {})
+    :event-sink event-sink}))
 
 (defn health-check
   [orchestrator]
@@ -73,6 +80,13 @@
                :messages []
                :inbox (async/chan 64)}]
     (swap! (:agents orchestrator) assoc (:id agent) agent)
+    (emit-event! orchestrator
+                 {:event-type :agent.created
+                  :entity-type :agent
+                  :entity-id (:id agent)
+                  :payload {:name (:name agent)
+                            :role (:role agent)
+                            :parent-id (:parent-id agent)}})
     (agent-view agent)))
 
 (defn list-agents
@@ -99,21 +113,27 @@
                      :field :content})))
   (let [input-message {:role role
                        :content content
-                       :created-at (now)}]
-    (let [agent-before (get @(:agents orchestrator) agent-id)
-          agent-after-input (update agent-before :messages conj input-message)
-          completion (llm-core/complete llm-provider (build-llm-messages agent-after-input) {})
-          assistant-message {:role "assistant"
-                             :content completion
-                             :created-at (now)}]
-      (swap! (:agents orchestrator)
-             assoc agent-id
-             (-> agent-after-input
-                 (assoc :status "idle")
-                 (update :messages conj assistant-message)))
-      {:agent (agent-view (get @(:agents orchestrator) agent-id))
-       :input input-message
-       :response assistant-message})))
+                       :created-at (now)}
+        agent-before (ensure-agent! orchestrator agent-id)
+        agent-after-input (update agent-before :messages conj input-message)
+        completion (llm-core/complete llm-provider (build-llm-messages agent-after-input) {})
+        assistant-message {:role "assistant"
+                           :content completion
+                           :created-at (now)}]
+    (swap! (:agents orchestrator)
+           assoc agent-id
+           (-> agent-after-input
+               (assoc :status "idle")
+               (update :messages conj assistant-message)))
+    (emit-event! orchestrator
+                 {:event-type :agent.message.processed
+                  :entity-type :agent
+                  :entity-id agent-id
+                  :payload {:input-role role
+                            :response-role "assistant"}})
+    {:agent (agent-view (get @(:agents orchestrator) agent-id))
+     :input input-message
+     :response assistant-message}))
 
 (defn create-channel!
   [orchestrator {:keys [name participants]
@@ -129,6 +149,12 @@
                    :messages []
                    :bus (async/chan 128)}]
       (swap! (:channels orchestrator) assoc (:id channel) channel)
+      (emit-event! orchestrator
+                   {:event-type :channel.created
+                    :entity-type :channel
+                    :entity-id (:id channel)
+                    :payload {:name (:name channel)
+                              :participants (vec participant-set)}})
       (channel-view channel))))
 
 (defn list-channels
@@ -173,6 +199,12 @@
                          :channel-id channel-id
                          :sender-id sender-id}]
           (async/>!! (:inbox (ensure-agent! orchestrator participant-id)) delivered)))
+      (emit-event! orchestrator
+                   {:event-type :channel.message.posted
+                    :entity-type :channel
+                    :entity-id channel-id
+                    :payload {:sender-id sender-id
+                              :message-id (:id message)}})
       message)))
 
 (defn consume-agent-inbox!
@@ -197,6 +229,11 @@
                (-> agent-after-input
                    (assoc :status "idle")
                    (update :messages conj assistant-message)))
+        (emit-event! orchestrator
+                     {:event-type :agent.inbox.consumed
+                      :entity-type :agent
+                      :entity-id agent-id
+                      :payload {:consumed (count drained)}})
         {:agent (agent-view (get @(:agents orchestrator) agent-id))
          :consumed (count drained)
          :response assistant-message}))))
