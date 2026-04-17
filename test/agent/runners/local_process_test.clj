@@ -27,3 +27,24 @@
     (is (true? (:alive status-before)))
     (is (some? exit-result))
     (is (false? (:alive status-after)))))
+
+(deftest local-process-runner-captures-stdout-and-stderr-test
+  (let [events* (atom [])
+        exits (promise)
+        runner (local-process/create-local-process-runner
+                {:on-exit (fn [_run-id result]
+                            (deliver exits result))
+                 :on-output (fn [_run-id output]
+                              (swap! events* conj output))})
+        run-spec (runners/create-run-spec
+                  {:run-id "run-local-output"
+                   :agent-id "agent-local"
+                   :substrate :local-process
+                   :bootstrap-token "token"
+                   :bootstrap-spec {:run-id "run-local-output"}
+                   :runner-options {:command ["sh" "-lc" "printf out-line; printf err-line >&2"]
+                                    :working-dir "."}})]
+    (runners/launch runner run-spec)
+    (is (= 0 (:exit-code (deref exits 5000 nil))))
+    (is (= #{"out-line" "err-line"} (set (map :line @events*))))
+    (is (= #{"stdout" "stderr"} (set (map (comp name :stream) @events*))))))

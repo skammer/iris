@@ -45,14 +45,16 @@
    :channel-adapters {:telegram {:enabled false}
                       :discord {:enabled false}
                       :slack {:enabled false}}
-   :runners {:docker {:image nil
+   :runners {:docker {:image "clojure:temurin-21-alpine"
                       :container-working-dir "/workspace"
                       :container-data-dir "/agent-data"
+                      :container-home-dir "/root"
                       :host-working-dir "."
                       :share-network? false}
-             :podman {:image nil
+             :podman {:image "clojure:temurin-21-alpine"
                       :container-working-dir "/workspace"
                       :container-data-dir "/agent-data"
+                      :container-home-dir "/root"
                       :host-working-dir "."
                       :share-network? false}}
    :orchestrator {:enabled true}

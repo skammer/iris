@@ -28,6 +28,15 @@
             ["-e" (str (name k) "=" v)])
           env-map))
 
+(defn- container-env
+  [run-spec runner-options]
+  (merge
+   {"AGENT_RUN_ID" (:run-id run-spec)
+    "AGENT_AGENT_ID" (:agent-id run-spec)
+    "AGENT_BOOTSTRAP_TOKEN" (or (:bootstrap-token run-spec) "")
+    "AGENT_BOOTSTRAP_SPEC" (pr-str (:bootstrap-spec run-spec))}
+   (or (:env runner-options) {})))
+
 (defn- container-name [engine run-id]
   (str (name engine) "-run-"
        (-> run-id
@@ -65,7 +74,7 @@
                                   "/workspace")
                  :command (:command runner-options)
                  :mounts (:mounts runner-options)
-                 :env (:env runner-options)
+                 :env (container-env run-spec runner-options)
                  :share-network? (true? (:share-network? runner-options))})]
       (runners/launch delegate
                       (assoc run-spec

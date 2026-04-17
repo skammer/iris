@@ -5,6 +5,7 @@
    [clojure.java.io :as io]
    [clojure.string :as str])
   (:import
+   (java.io BufferedReader InputStreamReader)
    (java.time Instant)))
 
 (defn- now [] (str (Instant/now)))
@@ -32,7 +33,19 @@
        :alive alive?
        :exit-code (when-not alive? (.exitValue process))})))
 
-(defrecord LocalProcessRunner [processes on-exit]
+(defn- consume-lines
+  [run-id stream-name input-stream on-output]
+  (future
+    (with-open [reader (BufferedReader. (InputStreamReader. input-stream))]
+      (loop []
+        (when-let [line (.readLine reader)]
+          (when on-output
+            (on-output run-id {:stream stream-name
+                               :line line
+                               :captured-at (now)}))
+          (recur))))))
+
+(defrecord LocalProcessRunner [processes on-exit on-output]
   runners/IRunner
   (launch [_ run-spec]
     (let [runner-options (:runner-options run-spec)
@@ -41,8 +54,7 @@
           env-extra (or (:env runner-options) {})
           process-builder (ProcessBuilder. command)
           process (doto process-builder
-                    (.directory (io/file working-dir))
-                    (.redirectErrorStream true))
+                    (.directory (io/file working-dir)))
           env (.environment process-builder)]
       (.put env "AGENT_RUN_ID" (:run-id run-spec))
       (.put env "AGENT_AGENT_ID" (:agent-id run-spec))
@@ -52,6 +64,8 @@
         (.put env (name k) (str v)))
       (let [started-at (now)
             process* (.start process-builder)
+            _ (consume-lines (:run-id run-spec) :stdout (.getInputStream process*) on-output)
+            _ (consume-lines (:run-id run-spec) :stderr (.getErrorStream process*) on-output)
             entry {:run-id (:run-id run-spec)
                    :process process*
                    :pid (process-pid process*)
@@ -97,5 +111,5 @@
 
 (defn create-local-process-runner
   ([] (create-local-process-runner {}))
-  ([{:keys [on-exit]}]
-   (->LocalProcessRunner (atom {}) on-exit)))
+  ([{:keys [on-exit on-output]}]
+   (->LocalProcessRunner (atom {}) on-exit on-output)))

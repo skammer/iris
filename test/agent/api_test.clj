@@ -11,7 +11,9 @@
    [clojure.string :as str]
    [clojure.test :refer :all])
   (:import
+   (java.io BufferedReader InputStreamReader)
    (java.net URI)
+   (java.net URL)
    (java.net.http HttpClient HttpRequest HttpResponse$BodyHandlers)))
 
 (defrecord TestProvider [messages*]
@@ -93,6 +95,27 @@
        (filter #(str/starts-with? % "data: "))
        (map #(subs % 6))
        vec))
+
+(defn read-sse-data-lines
+  [url line-count trigger-fn]
+  (let [result (promise)
+        worker (future
+                 (with-open [stream (.getInputStream (.openConnection (URL. url)))
+                             reader (BufferedReader. (InputStreamReader. stream))]
+                   (let [lines (loop [acc []]
+                                 (if (>= (count acc) line-count)
+                                   acc
+                                   (if-let [line (.readLine reader)]
+                                     (recur (if (str/starts-with? line "data: ")
+                                              (conj acc (subs line 6))
+                                              acc))
+                                     acc)))]
+                     (deliver result lines))))]
+    (Thread/sleep 250)
+    (trigger-fn)
+    (let [lines (deref result 10000 nil)]
+      (future-cancel worker)
+      lines)))
 
 (deftest api-session-chat-flow-test
   (let [path (temp-db-path)
@@ -359,6 +382,62 @@
                (mapv :role @messages*)))
         (is (= ["hello" "test-response" "hello ui" "test-response" "hello"]
                (mapv :content @messages*))))
+      (finally
+        (api/stop-server! server)
+        (io/delete-file path true)))))
+
+(deftest api-run-stream-test
+  (let [path (temp-db-path)
+        port (free-port)
+        base-url (str "http://127.0.0.1:" port)
+        base-system (core/create-system)
+        store (sqlite/create-store {:path path})
+        event-bus (core/create-event-bus)
+        event-sink (core/create-event-sink store event-bus)
+        runtime-service (core/create-runtime-service store event-sink)
+        system (assoc base-system
+                      :llm-provider (->TestProvider (atom nil))
+                      :store store
+                      :event-bus event-bus
+                      :event-sink event-sink
+                      :runtime-service runtime-service
+                      :runner-registry (core/create-runner-registry runtime-service)
+                      :config (assoc (:config base-system)
+                                     :api {:host "127.0.0.1" :port port}
+                                     :storage {:sqlite {:path path}}))
+        server (api/start-server! system {:host "127.0.0.1" :port port})]
+    (try
+      (let [run (core/request-run! system {:agent-id "stream-agent"
+                                           :name "stream-run"
+                                           :substrate :local-process
+                                           :requested-by "tester"})
+            run-id (:id run)
+            stream-lines (read-sse-data-lines
+                          (str base-url "/v1/runs/" run-id "/stream")
+                          4
+                          #(do
+                             (core/register-run! system run-id
+                                                 {:capabilities [:chat]
+                                                  :network-identity {:logical-id "agent://stream"}})
+                             (core/heartbeat-run! system run-id
+                                                  {:sequence-no 1
+                                                   :status :running
+                                                   :metrics {:phase "boot"}
+                                                   :lease-id (get-in (core/get-run system run-id) [:lease :id])})
+                             (core/log-event! system
+                                              {:event-type :agent.run.output
+                                               :entity-type :agent_run
+                                               :entity-id run-id
+                                               :payload {:stream "stdout"
+                                                         :line "hello from child"}})))]
+        (is (= 4 (count stream-lines)))
+        (is (= "snapshot" (:type (json/parse-string (first stream-lines) true))))
+        (is (= "event" (:type (json/parse-string (second stream-lines) true))))
+        (is (= "agent.run.registered"
+               (get-in (json/parse-string (second stream-lines) true) [:data :event_type])))
+        (is (some #{"agent.run.output"}
+                  (map #(get-in (json/parse-string % true) [:data :event_type])
+                       (rest stream-lines)))))
       (finally
         (api/stop-server! server)
         (io/delete-file path true)))))

@@ -139,9 +139,15 @@
                                             run-id
                                             status
                                             {:last-error (when-not (zero? exit-code)
-                                                           (str "Process exited with code " exit-code))
+                                                            (str "Process exited with code " exit-code))
                                              :runner-metadata (assoc (:runner-metadata run)
-                                                                     :exit-code exit-code)}))))}))
+                                                                     :exit-code exit-code)}))))
+    :on-output (fn [run-id {:keys [stream line captured-at]}]
+                 (runtime/log-run-output! runtime-service
+                                          run-id
+                                          {:stream stream
+                                           :line line
+                                           :captured-at captured-at}))}))
 
 (defn create-runner-registry
   [runtime-service]
@@ -268,6 +274,11 @@
     mounts
     (conj (vec mounts) {:source source :target target :mode mode})))
 
+(defn- ensure-mount-if-exists [mounts source target mode]
+  (if (.exists (io/file source))
+    (ensure-mount mounts source target mode)
+    mounts))
+
 (defn- prepare-container-runner-options
   [system substrate runner-options]
   (let [runner-cfg (get-in system [:config :runners substrate] {})
@@ -284,11 +295,17 @@
         container-data-dir (or (:container-data-dir runner-options)
                                (:container-data-dir runner-cfg)
                                "/agent-data")
+        container-home-dir (or (:container-home-dir runner-options)
+                               (:container-home-dir runner-cfg)
+                               "/root")
+        host-m2-dir (absolute-path (str (System/getProperty "user.home") "/.m2"))
         container-sqlite-path (str container-data-dir "/" (.getName sqlite-file))
         mounts* (-> (vec (or (:mounts runner-options) []))
                     (ensure-mount host-working-dir container-working-dir :rw)
-                    (ensure-mount sqlite-host-dir container-data-dir :rw))
-        env* (merge {"AGENT_SQLITE_PATH" container-sqlite-path}
+                    (ensure-mount sqlite-host-dir container-data-dir :rw)
+                    (ensure-mount-if-exists host-m2-dir (str container-home-dir "/.m2") :rw))
+        env* (merge {"AGENT_SQLITE_PATH" container-sqlite-path
+                     "HOME" container-home-dir}
                     (or (:env runner-options) {}))]
     (cond-> (assoc runner-options
                    :image (or (:image runner-options)
@@ -297,6 +314,7 @@
                    :env env*
                    :host-working-dir host-working-dir
                    :container-working-dir container-working-dir
+                   :container-home-dir container-home-dir
                    :container-data-dir container-data-dir
                    :share-network? (boolean (or (:share-network? runner-options)
                                                 (:share-network? runner-cfg))))

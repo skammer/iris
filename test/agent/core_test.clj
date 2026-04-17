@@ -41,18 +41,23 @@
 
 (deftest prepare-runner-options-adds-container-child-defaults
   (let [system {:config {:storage {:sqlite {:path "data/agent.db"}}
-                         :runners {:docker {:image "clj-agent:test"
+                         :runners {:docker {:image "clojure:temurin-21-alpine"
                                             :container-working-dir "/workspace"
                                             :container-data-dir "/agent-data"
+                                            :container-home-dir "/root"
                                             :host-working-dir "."
                                             :share-network? false}}}}
         prepared (#'agent.core/prepare-runner-options
                   system
                   {:substrate "docker"
                    :runner-options {}})]
-    (is (= "clj-agent:test" (:image prepared)))
+    (is (= "clojure:temurin-21-alpine" (:image prepared)))
     (is (= ["clojure" "-M" "-m" "agent.runtime.child"] (:command prepared)))
     (is (= "/workspace" (:container-working-dir prepared)))
+    (is (= "/root" (:container-home-dir prepared)))
     (is (= "/agent-data/agent.db" (get (:env prepared) "AGENT_SQLITE_PATH")))
-    (is (= 2 (count (:mounts prepared))))
-    (is (= #{"/workspace" "/agent-data"} (set (map :target (:mounts prepared)))))))
+    (is (= "/root" (get (:env prepared) "HOME")))
+    (is (<= 2 (count (:mounts prepared))))
+    (is (every? #{:rw :ro} (map :mode (:mounts prepared))))
+    (is (contains? (set (map :target (:mounts prepared))) "/workspace"))
+    (is (contains? (set (map :target (:mounts prepared))) "/agent-data"))))
