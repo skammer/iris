@@ -971,6 +971,9 @@
 (defn- handle-ui-dashboard [system exchange]
   (write-html! exchange 200 (ui/dashboard-fragment system)))
 
+(defn- handle-ui-operator-board [system exchange]
+  (write-html! exchange 200 (ui/operator-board-fragment system)))
+
 (defn- handle-ui-sessions [system exchange]
   (write-html! exchange 200 (ui/sessions-fragment system)))
 
@@ -1272,6 +1275,9 @@
 
             (and (= method "GET") (= path ["ui" "dashboard"]))
             (handle-ui-dashboard system exchange)
+
+            (and (= method "GET") (= path ["ui" "operator-board"]))
+            (handle-ui-operator-board system exchange)
 
             (and (= method "GET") (= path ["ui" "sessions"]))
             (handle-ui-sessions system exchange)
