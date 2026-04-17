@@ -216,6 +216,16 @@
                             :last-error last-error}})
     run))
 
+(defn log-run-output!
+  [runtime run-id {:keys [stream line captured-at]}]
+  (emit-event! runtime
+               {:event-type :agent.run.output
+                :entity-type :agent_run
+                :entity-id run-id
+                :payload {:stream (name stream)
+                          :line line
+                          :captured-at captured-at}}))
+
 (defn runtime-health
   [runtime]
   (let [runs (sqlite/list-agent-runs (:store runtime) {:limit 1000})

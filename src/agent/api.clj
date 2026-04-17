@@ -881,6 +881,31 @@
                                                            :entity-id run-id}
                                                     limit (assoc :limit limit))))})))
 
+(defn- relevant-run-event? [event run-id]
+  (and (= "agent_run" (:entity-type event))
+       (= run-id (:entity-id event))))
+
+(defn- handle-run-events-stream [system exchange run-id]
+  (let [ch (async/chan 64)]
+    (async/tap (get-in system [:event-bus :mult]) ch)
+    (try
+      (.add (.getResponseHeaders exchange) "Content-Type" "text/event-stream")
+      (.add (.getResponseHeaders exchange) "Cache-Control" "no-cache")
+      (.sendResponseHeaders exchange 200 0)
+      (with-open [stream (.getResponseBody exchange)]
+        (when-let [run (system-get-run system run-id)]
+          (write-sse-chunk! stream {:type "snapshot"
+                                    :run (run->response run)}))
+        (loop []
+          (when-let [event (async/<!! ch)]
+            (when (relevant-run-event? event run-id)
+              (write-sse-chunk! stream {:type "event"
+                                        :data (event->response event)}))
+            (recur))))
+      (finally
+        (async/untap (get-in system [:event-bus :mult]) ch)
+        (async/close! ch)))))
+
 (defn- handle-chat-completions [system exchange]
   (let [{:keys [messages session-id stream?]}
         (attach-session-context system
@@ -1352,6 +1377,11 @@
                  (= ["v1" "runs"] (subvec path 0 2))
                  (= "events" (nth path 3)))
             (handle-run-events system exchange (nth path 2))
+
+            (and (= method "GET") (= 4 (count path))
+                 (= ["v1" "runs"] (subvec path 0 2))
+                 (= "stream" (nth path 3)))
+            (handle-run-events-stream system exchange (nth path 2))
 
             (and (= method "POST") (= 4 (count path))
                  (= ["v1" "runs"] (subvec path 0 2))

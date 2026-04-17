@@ -1,6 +1,8 @@
 (ns agent.runners.docker-podman-test
   (:require
+   [agent.runners.core :as runners]
    [agent.runners.docker-podman :as docker-podman]
+   [clojure.string :as str]
    [clojure.test :refer :all]))
 
 (deftest build-docker-argv-test
@@ -32,3 +34,28 @@
     (is (= "podman" (first argv)))
     (is (not-any? #{"none"} argv))
     (is (= ["printf" "hello"] (subvec argv (- (count argv) 2))))))
+
+(deftest docker-runner-forwards-bootstrap-env-test
+  (let [captured (atom nil)
+        delegate (reify runners/IRunner
+                   (launch [_ run-spec]
+                     (reset! captured run-spec)
+                     {:ok true})
+                   (signal [_ _ _] nil)
+                   (status [_ _] nil)
+                   (stop [_ _] nil))
+        runner (docker-podman/create-docker-podman-runner {:delegate delegate
+                                                           :engine-binary "docker"})
+        run-spec (runners/create-run-spec
+                  {:run-id "run-1"
+                   :agent-id "agent-1"
+                   :bootstrap-token "token-1"
+                   :bootstrap-spec {:run-id "run-1"}
+                   :runner-options {:image "clj-agent:test"
+                                    :command ["clojure" "-M" "-m" "agent.runtime.child"]}})]
+    (runners/launch runner run-spec)
+    (let [argv (get-in @captured [:runner-options :command])]
+      (is (some #{"AGENT_RUN_ID=run-1"} argv))
+      (is (some #{"AGENT_AGENT_ID=agent-1"} argv))
+      (is (some #{"AGENT_BOOTSTRAP_TOKEN=token-1"} argv))
+      (is (some #(str/includes? % "AGENT_BOOTSTRAP_SPEC={:run-id \"run-1\"}") argv)))))

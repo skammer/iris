@@ -424,6 +424,20 @@
           [:div.result
            [:strong "Pending commands"]
            [:div.code (json/generate-string commands {:pretty true})]])
+        (when-let [output-events (seq (->> (sqlite/list-events (:store system)
+                                                               {:entity-type :agent_run
+                                                                :entity-id (:id run)
+                                                                :limit 20})
+                                           (filter #(= "agent.run.output" (:event-type %)))))]
+          [:div.result
+           [:strong "Recent output"]
+           [:div.code
+            (->> output-events
+                 reverse
+                 (map (fn [event]
+                        (let [{:keys [stream line]} (:payload event)]
+                          (str "[" stream "] " line))))
+                 (str/join "\n"))]])
         [:div.actions
          [:form {:id (str "run-launch-" (:id run))}
           [:button {:type "button"
