@@ -146,7 +146,14 @@
         adapter-health (channel-adapters/registry-health (:channel-adapter-registry system))
         agent-health (orchestrator/health-check (:orchestrator system))
         recent-runs (runtime/list-runs (:runtime-service system) {:limit 6})
-        pending-approvals (count (tool-approvals/list-requests (:store system) {:status "pending" :limit 100}))]
+        pending-approvals (count (tool-approvals/list-requests (:store system) {:status "pending" :limit 100}))
+        status-counts (reduce (fn [acc run]
+                                (update acc (:status run) (fnil inc 0)))
+                              {}
+                              (runtime/list-runs (:runtime-service system) {:limit 200}))
+        attention-runs (->> recent-runs
+                            (filter #(contains? #{"failed" "cancelled"} (:status %)))
+                            (take 4))]
     (render
      [:section#dashboard-summary.panel
       {"data-on-interval__duration.5s.leading" "@get('/ui/dashboard')"}
@@ -174,7 +181,25 @@
            (for [{:keys [id substrate status created-at]} recent-runs]
              [:div.meta
               (str id " | " substrate " | " status " | " created-at)])]
-          [:div.meta "none"])]]])))
+          [:div.meta "none"])]
+       [:div.result
+        [:strong "Run status"]
+        (if (seq status-counts)
+          [:div.stack
+           (for [[status count] (sort-by key status-counts)]
+             [:div.meta (str status " | " count)])]
+          [:div.meta "none"])]
+       [:div.result
+        [:strong "Attention"]
+        (if (seq attention-runs)
+          [:div.stack
+           (for [{:keys [id status last-error]} attention-runs]
+             [:div.meta
+              (str id " | " status
+                   (when (seq last-error)
+                     (str " | " last-error)))])]
+          [:div.meta "none"])]
+       ]])))
 
 (defn sessions-fragment [system]
   (let [sessions (sqlite/list-sessions (:store system))]
@@ -427,12 +452,21 @@
                                                  :entity-id (:id run)
                                                  :limit 50})
                              (filter #(= "agent.run.output" (:event-type %)))))
+        output-lines (map (fn [event]
+                            (let [{:keys [stream line]} (:payload event)]
+                              (str "[" stream "] " line)))
+                          (reverse output-events))
         recent-events (when run
                         (remove #(= "agent.run.output" (:event-type %))
                                 (sqlite/list-events (:store system)
                                                     {:entity-type :agent_run
                                                      :entity-id (:id run)
-                                                     :limit 12})))]
+                                                     :limit 12})))
+        failure-events (when run
+                         (filter (fn [{:keys [event-type payload]}]
+                                   (or (#{"agent.run.failed" "agent.run.cancelled"} event-type)
+                                       (= "failed" (:status payload))))
+                                 recent-events))]
     (render
      (if-not run
        [:div
@@ -451,6 +485,10 @@
               " | substrate: " (:substrate run)
               " | status: " (:status run)
               " | requested: " (:created-at run))]
+        (when (seq (:last-error run))
+          [:div.result.diagnostic-result
+           [:strong "Failure diagnostics"]
+           [:div.code (:last-error run)]])
         [:div.run-grid
          (json-result "Runner" runner-status)
          (when-let [heartbeat (:heartbeat run)]
@@ -459,18 +497,25 @@
            (json-result "Latest checkpoint" checkpoint))
          (when-let [commands (seq (:pending-commands run))]
            (json-result "Pending commands" commands))]
-        (when-let [events (seq output-events)]
-          [:div.result
-           [:strong "Recent output"]
-           [:div.code
-            (->> events
-                 reverse
-                 (map (fn [event]
-                        (let [{:keys [stream line]} (:payload event)]
-                          (str "[" stream "] " line))))
-                 (str/join "\n"))]])
+        [:div.result
+         [:strong "Recent output"]
+         [:div#run-output-panel.code
+          {:data-run-output-tail true}
+          (if (seq output-lines)
+            (str/join "\n" output-lines)
+            "[waiting for output]")]]
+        (when-let [events (seq failure-events)]
+          [:div.result.diagnostic-result
+           [:strong "Recent failures"]
+           [:div.stack
+            (for [{:keys [event-type created-at payload]} events]
+              [:article.event-item
+               [:strong event-type]
+               [:div.code (json/generate-string payload)]
+               [:div.meta created-at]])]])
         (when-let [events (seq recent-events)]
-          [:div.result
+          [:div#run-events-panel.result
+           {:data-run-events-list true}
            [:strong "Recent events"]
            [:div.stack
             (for [{:keys [event-type created-at payload]} events]
