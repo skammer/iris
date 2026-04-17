@@ -24,6 +24,9 @@
    :name (:name agent)
    :role (:role agent)
    :parent-id (:parent-id agent)
+   :logical-address (:logical-address agent)
+   :capabilities (vec (sort (:capabilities agent)))
+   :allow-direct? (true? (:allow-direct? agent))
    :status (:status agent)
    :created-at (:created-at agent)
    :message-count (count (:messages agent))})
@@ -56,8 +59,21 @@
   ([] (create-orchestrator {}))
   ([{:keys [event-sink]}]
    {:agents (atom {})
-    :channels (atom {})
+   :channels (atom {})
     :event-sink event-sink}))
+
+(defn- logical-address [agent-id]
+  (str "agent://" agent-id))
+
+(defn- ensure-agent-by-ref!
+  [orchestrator value]
+  (or (get @(:agents orchestrator) value)
+      (some (fn [[_ agent]]
+              (when (= value (:logical-address agent))
+                agent))
+            @(:agents orchestrator))
+      (throw (ex-info "Agent not found" {:type :agent-not-found
+                                        :agent-ref value}))))
 
 (defn health-check
   [orchestrator]
@@ -66,28 +82,37 @@
    :channel-count (count @(:channels orchestrator))})
 
 (defn spawn-agent!
-  [orchestrator {:keys [name role parent-id system-prompt]
+  [orchestrator {:keys [name role parent-id system-prompt capabilities allow-direct? logical-address]
                  :or {name "Subagent"
-                      role "worker"}}]
+                      role "worker"
+                      capabilities []}}]
   (let [created-at (now)
         agent {:id (random-id "agent")
                :name name
                :role role
                :parent-id parent-id
                :system-prompt system-prompt
+               :logical-address logical-address
+               :capabilities (set capabilities)
+               :allow-direct? (true? allow-direct?)
                :status "idle"
                :created-at created-at
                :messages []
                :inbox (async/chan 64)}]
-    (swap! (:agents orchestrator) assoc (:id agent) agent)
-    (emit-event! orchestrator
-                 {:event-type :agent.created
-                  :entity-type :agent
-                  :entity-id (:id agent)
-                  :payload {:name (:name agent)
-                            :role (:role agent)
-                            :parent-id (:parent-id agent)}})
-    (agent-view agent)))
+    (let [resolved-address (or logical-address (agent.orchestrator/logical-address (:id agent)))
+          agent* (assoc agent :logical-address resolved-address)]
+      (swap! (:agents orchestrator) assoc (:id agent*) agent*)
+      (emit-event! orchestrator
+                   {:event-type :agent.created
+                    :entity-type :agent
+                    :entity-id (:id agent*)
+                    :payload {:name (:name agent*)
+                              :role (:role agent*)
+                              :parent-id (:parent-id agent*)
+                              :logical-address (:logical-address agent*)
+                              :capabilities (vec (:capabilities agent*))
+                              :allow-direct? (:allow-direct? agent*)}})
+      (agent-view agent*))))
 
 (defn list-agents
   [orchestrator]
@@ -99,6 +124,30 @@
 (defn get-agent
   [orchestrator agent-id]
   (some-> (ensure-agent! orchestrator agent-id) agent-view))
+
+(defn describe-agent-interop
+  [orchestrator agent-ref]
+  (let [agent (ensure-agent-by-ref! orchestrator agent-ref)]
+    {:id (:id agent)
+     :logical-address (:logical-address agent)
+     :capabilities (vec (sort (:capabilities agent)))
+     :allow-direct? (true? (:allow-direct? agent))
+     :status (:status agent)}))
+
+(defn register-agent-capabilities!
+  [orchestrator agent-ref {:keys [capabilities allow-direct?]}]
+  (let [agent (ensure-agent-by-ref! orchestrator agent-ref)
+        updated (-> agent
+                    (assoc :capabilities (set capabilities))
+                    (assoc :allow-direct? (true? allow-direct?)))]
+    (swap! (:agents orchestrator) assoc (:id agent) updated)
+    (emit-event! orchestrator
+                 {:event-type :agent.interop.capabilities.updated
+                  :entity-type :agent
+                  :entity-id (:id agent)
+                  :payload {:capabilities (vec (:capabilities updated))
+                            :allow-direct? (:allow-direct? updated)}})
+    (describe-agent-interop orchestrator (:id agent))))
 
 (defn list-agent-messages
   [orchestrator agent-id]
@@ -134,6 +183,56 @@
     {:agent (agent-view (get @(:agents orchestrator) agent-id))
      :input input-message
      :response assistant-message}))
+
+(defn- choose-interop-route [from-agent to-agent requested-route]
+  (let [direct-allowed? (and (:allow-direct? from-agent) (:allow-direct? to-agent))]
+    (case requested-route
+      :direct (if direct-allowed?
+                :direct
+                (throw (ex-info "Direct interop denied"
+                                {:type :permission-denied
+                                 :reason :direct-not-allowed})))
+      :routed :routed
+      (if direct-allowed? :direct :routed))))
+
+(defn send-interop-message!
+  [orchestrator from-agent-ref to-agent-ref {:keys [message-type content route request-id]
+                                             :or {message-type "request"}}]
+  (when-not (and (string? content) (not (str/blank? content)))
+    (throw (ex-info "content must be a non-blank string"
+                    {:type :validation-failed
+                     :field :content})))
+  (let [from-agent (ensure-agent-by-ref! orchestrator from-agent-ref)
+        to-agent (ensure-agent-by-ref! orchestrator to-agent-ref)
+        route* (choose-interop-route from-agent to-agent
+                                     (when route (keyword (str/lower-case (name route)))))
+        envelope {:id (random-id "interop")
+                  :request-id request-id
+                  :message-type message-type
+                  :from-agent-id (:id from-agent)
+                  :to-agent-id (:id to-agent)
+                  :from-address (:logical-address from-agent)
+                  :to-address (:logical-address to-agent)
+                  :route (name route*)
+                  :content content
+                  :created-at (now)}]
+    (async/>!! (:inbox to-agent)
+               {:role "user"
+                :content (str "[interop:" message-type "] "
+                              (:logical-address from-agent) ": " content)
+                :created-at (:created-at envelope)
+                :interop envelope})
+    (emit-event! orchestrator
+                 {:event-type :agent.interop.message.sent
+                  :entity-type :agent
+                  :entity-id (:id from-agent)
+                  :payload envelope})
+    (emit-event! orchestrator
+                 {:event-type :agent.interop.message.delivered
+                  :entity-type :agent
+                  :entity-id (:id to-agent)
+                  :payload envelope})
+    envelope))
 
 (defn create-channel!
   [orchestrator {:keys [name participants]

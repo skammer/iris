@@ -174,9 +174,24 @@
    :name (:name agent)
    :role (:role agent)
    :parent_id (:parent-id agent)
+   :logical_address (:logical-address agent)
+   :capabilities (vec (:capabilities agent))
+   :allow_direct (:allow-direct? agent)
    :status (:status agent)
    :created_at (:created-at agent)
    :message_count (:message-count agent)})
+
+(defn- interop->response [interop]
+  {:id (:id interop)
+   :request_id (:request-id interop)
+   :message_type (:message-type interop)
+   :from_agent_id (:from-agent-id interop)
+   :to_agent_id (:to-agent-id interop)
+   :from_address (:from-address interop)
+   :to_address (:to-address interop)
+   :route (:route interop)
+   :content (:content interop)
+   :created_at (:created-at interop)})
 
 (defn- channel->response [channel]
   {:id (:id channel)
@@ -601,18 +616,23 @@
         name (or (:name body) "Subagent")
         role (or (:role body) "worker")
         parent-id (:parent_id body)
-        system-prompt (:system_prompt body)]
+        system-prompt (:system_prompt body)
+        capabilities (or (:capabilities body) [])
+        allow-direct? (boolean (:allow_direct body))]
     (when parent-id
       (ensure-string! :parent_id parent-id))
     (when system-prompt
       (ensure-string! :system_prompt system-prompt))
+    (ensure-string-vec! :capabilities capabilities)
     (write-json! exchange 201
                  (agent->response
                   (orchestrator/spawn-agent! (:orchestrator system)
                                              {:name name
                                               :role role
                                               :parent-id parent-id
-                                              :system-prompt system-prompt})))))
+                                              :system-prompt system-prompt
+                                              :capabilities capabilities
+                                              :allow-direct? allow-direct?})))))
 
 (defn- handle-list-agents [system exchange]
   (write-json! exchange 200 {:data (mapv agent->response
@@ -660,6 +680,56 @@
       (if (= :agent-not-found (:type (ex-data e)))
         (throw (api-error 404 "agent_not_found" "Agent not found"))
         (throw e)))))
+
+(defn- handle-agent-interop [system exchange agent-id]
+  (try
+    (write-json! exchange 200 {:data (orchestrator/describe-agent-interop (:orchestrator system) agent-id)})
+    (catch Exception e
+      (if (= :agent-not-found (:type (ex-data e)))
+        (throw (api-error 404 "agent_not_found" "Agent not found"))
+        (throw e)))))
+
+(defn- handle-agent-interop-capabilities [system exchange agent-id]
+  (let [body (read-json-body exchange)
+        capabilities (or (:capabilities body) [])
+        allow-direct? (boolean (:allow_direct body))]
+    (ensure-string-vec! :capabilities capabilities)
+    (try
+      (write-json! exchange 200
+                   {:data (orchestrator/register-agent-capabilities! (:orchestrator system)
+                                                                     agent-id
+                                                                     {:capabilities capabilities
+                                                                      :allow-direct? allow-direct?})})
+      (catch Exception e
+        (if (= :agent-not-found (:type (ex-data e)))
+          (throw (api-error 404 "agent_not_found" "Agent not found"))
+          (throw e))))))
+
+(defn- handle-agent-interop-message [system exchange agent-id]
+  (let [body (read-json-body exchange)
+        from-agent-id (:from_agent_id body)
+        content (:content body)
+        message-type (or (:message_type body) "request")
+        route (:route body)
+        request-id (:request_id body)]
+    (ensure-string! :from_agent_id from-agent-id)
+    (ensure-string! :content content)
+    (try
+      (write-json! exchange 201
+                   {:data (interop->response
+                           (orchestrator/send-interop-message! (:orchestrator system)
+                                                               from-agent-id
+                                                               agent-id
+                                                               {:message-type message-type
+                                                                :route route
+                                                                :request-id request-id
+                                                                :content content}))})
+      (catch Exception e
+        (case (:type (ex-data e))
+          :agent-not-found (throw (api-error 404 "agent_not_found" "Agent not found"))
+          :permission-denied (throw (api-error 403 "permission_denied" "Direct interop denied"))
+          :validation-failed (throw (api-error 400 "validation_failed" (.getMessage e)))
+          (throw e))))))
 
 (defn- handle-create-channel [system exchange]
   (let [body (read-json-body exchange)
@@ -1479,6 +1549,23 @@
                  (= "inbox" (nth path 3))
                  (= "consume" (nth path 4)))
             (handle-consume-agent-inbox system exchange (nth path 2))
+
+            (and (= method "GET") (= 4 (count path))
+                 (= ["v1" "agents"] (subvec path 0 2))
+                 (= "interop" (nth path 3)))
+            (handle-agent-interop system exchange (nth path 2))
+
+            (and (= method "POST") (= 5 (count path))
+                 (= ["v1" "agents"] (subvec path 0 2))
+                 (= "interop" (nth path 3))
+                 (= "capabilities" (nth path 4)))
+            (handle-agent-interop-capabilities system exchange (nth path 2))
+
+            (and (= method "POST") (= 5 (count path))
+                 (= ["v1" "agents"] (subvec path 0 2))
+                 (= "interop" (nth path 3))
+                 (= "messages" (nth path 4)))
+            (handle-agent-interop-message system exchange (nth path 2))
 
             (and (= method "GET") (= path ["v1" "channels"]))
             (handle-list-channels system exchange)

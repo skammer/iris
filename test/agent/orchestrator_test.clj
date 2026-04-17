@@ -20,15 +20,32 @@
 (deftest orchestrator-agent-and-channel-flow-test
   (let [runtime (orchestrator/create-orchestrator)
         llm (->TestProvider)
-        parent (orchestrator/spawn-agent! runtime {:name "Parent" :role "orchestrator"})
-        child (orchestrator/spawn-agent! runtime {:name "Child" :role "worker" :parent-id (:id parent)})
+        parent (orchestrator/spawn-agent! runtime {:name "Parent" :role "orchestrator"
+                                                   :capabilities ["delegate" "route"]
+                                                   :allow-direct? true})
+        child (orchestrator/spawn-agent! runtime {:name "Child" :role "worker"
+                                                  :parent-id (:id parent)
+                                                  :capabilities ["execute"]})
         direct (orchestrator/send-agent-message! runtime llm (:id child) {:content "hello"})
+        interop-before (orchestrator/describe-agent-interop runtime (:id child))
+        _ (orchestrator/register-agent-capabilities! runtime (:id child)
+                                                     {:capabilities ["execute" "report"]
+                                                      :allow-direct? true})
+        interop-message (orchestrator/send-interop-message! runtime
+                                                            (:logical-address parent)
+                                                            (:id child)
+                                                            {:message-type "delegate.request"
+                                                             :route :auto
+                                                             :content "collect facts"})
         channel (orchestrator/create-channel! runtime {:name "coord" :participants [(:id parent) (:id child)]})
         _ (orchestrator/post-channel-message! runtime (:id channel) {:sender-id (:id parent) :content "do task"})
         consumed (orchestrator/consume-agent-inbox! runtime llm (:id child))
         channel-messages (orchestrator/list-channel-messages runtime (:id channel))]
     (is (= 2 (count (orchestrator/list-agents runtime))))
+    (is (= (str "agent://" (:id child)) (:logical-address interop-before)))
+    (is (= ["execute"] (:capabilities interop-before)))
+    (is (= "direct" (:route interop-message)))
     (is (= "test-response" (get-in direct [:response :content])))
     (is (= 1 (count channel-messages)))
-    (is (= 1 (:consumed consumed)))
+    (is (= 2 (:consumed consumed)))
     (is (= "test-response" (get-in consumed [:response :content])))))
