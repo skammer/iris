@@ -20,6 +20,7 @@
   (apply str (map render nodes)))
 
 (declare dashboard-fragment
+         operator-board-fragment
          sessions-fragment
          session-detail-fragment
          session-messages-fragment
@@ -137,7 +138,7 @@
              (render-many
               [:section.workspace-grid.two-up
                (h/raw (dashboard-fragment system))
-               (h/raw (events-fragment system))])))])))
+               (h/raw (operator-board-fragment system))])))])))
 
 (defn dashboard-fragment [system]
   (let [storage (sqlite/health-check (:store system))
@@ -200,6 +201,61 @@
                      (str " | " last-error)))])]
           [:div.meta "none"])]
        ]])))
+
+(defn operator-board-fragment [system]
+  (let [runs (runtime/list-runs (:runtime-service system) {:limit 100})
+        active-runs (filter #(contains? #{"requested" "running"} (:status %)) runs)
+        failed-runs (filter #(contains? #{"failed" "cancelled"} (:status %)) runs)
+        approvals (tool-approvals/list-requests (:store system) {:status "pending" :limit 8})
+        events (sqlite/list-events (:store system) {:limit 8})]
+    (render
+     [:section#operator-board.panel
+      {"data-on-interval__duration.5s.leading" "@get('/ui/operator-board')"}
+      [:h2 "Operator Board"]
+      [:div.stack
+       [:div.result
+        [:strong "Active runs"]
+        (if (seq active-runs)
+          [:div.stack
+           (for [{:keys [id substrate status created-at]} (take 6 active-runs)]
+             [:button.session-link
+              {:type "button"
+               "data-on:click" (str "@get('/ui/run-detail?run_id=" id "')")}
+              [:strong id]
+              [:div.session-meta (str substrate " | " status)]
+              [:div.session-meta created-at]])]
+          [:div.meta "none"])]
+       [:div.result
+        [:strong "Approval queue"]
+        (if (seq approvals)
+          [:div.stack
+           (for [{:keys [id tool-name reason created-at]} approvals]
+             [:div.meta
+              (str id " | " tool-name
+                   (when (seq reason)
+                     (str " | " reason))
+                   " | " created-at)])]
+          [:div.meta "none"])]
+       [:div.result.diagnostic-result
+        [:strong "Failure queue"]
+        (if (seq failed-runs)
+          [:div.stack
+           (for [{:keys [id status last-error finished-at]} (take 6 failed-runs)]
+             [:button.session-link
+              {:type "button"
+               "data-on:click" (str "@get('/ui/run-detail?run_id=" id "')")}
+              [:strong id]
+              [:div.session-meta (str status " | " (or finished-at "-"))]
+              (when (seq last-error)
+                [:div.session-meta last-error])])]
+          [:div.meta "none"])]
+       [:div.result
+        [:strong "Recent events"]
+        (if (seq events)
+          [:div.stack
+           (for [{:keys [event-type entity-id created-at]} events]
+             [:div.meta (str event-type " | " (or entity-id "-") " | " created-at)])]
+          [:div.meta "none"])]]])))
 
 (defn sessions-fragment [system]
   (let [sessions (sqlite/list-sessions (:store system))]

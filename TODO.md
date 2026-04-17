@@ -57,8 +57,8 @@ Reference:
 
 15. [ ] Add live subagent event stream:
    Realtime logs/progress/status when connection healthy.
-   Baseline run-scoped SSE endpoint exists at `/v1/runs/:id/stream`; run output events now included; run-detail UI now follows stream with polling fallback; live run output tail added; overview dashboard now shows pending approvals, recent runs, status counts, attention list.
-   Remaining: richer aggregated operator views.
+   Baseline run-scoped SSE endpoint exists at `/v1/runs/:id/stream`; run output events now included; run-detail UI now follows stream with polling fallback; live run output tail added; overview now has status counts, attention list, operator board, active runs, approval queue, failure queue.
+   Remaining: deeper drilldown views if needed.
 16. [x] Add polling/checkup fallback:
    Parent can fetch latest run state, heartbeat, checkpoint, pending commands.
    Added run catch-up APIs for heartbeats/checkpoints/commands/events and UI catch-up view.
