@@ -72,6 +72,7 @@ Reference:
 
 19. [ ] Define network identity model:
    Stable logical ID plus optional overlay address.
+   Baseline done: local `agent://<id>` + federated `federation://<peer>/<agent>` addressing with peer registry.
 20. [ ] Add Headscale/Tailscale integration plan:
    Node identity, private addressing, ACL/grants, per-agent reachability.
 21. [ ] Define policy mapping between runtime identity and network identity.
@@ -98,7 +99,7 @@ Reference:
    Baseline done: agent capabilities + direct-connect flags exposed and mutable via API.
 30. [ ] Define peer trust + permission model:
    Which agents may message/call/request work from which other agents.
-   Baseline done: recipient trust allowlist required for interop delivery.
+   Baseline done: recipient trust allowlist + per-peer trust policies for message types, routes, required capabilities.
 31. [ ] Define agent-to-agent request/reply protocol:
    `discover`, `describe-capabilities`, `send-message`, `request-task`, `stream-events`, `checkpoint`, `cancel`, `ack`.
    Baseline done: interop message envelope + `request_id`, `message_type`, `route`, inbound listing, explicit `ack`, explicit sender retry.
@@ -131,7 +132,7 @@ Reference:
    pause, resume, cancel, retry, inspect checkpoint, resend command.
 43. [ ] Add agent interop visibility:
    peer links, active conversations, permissions, rate-limit hits.
-   Baseline done: per-agent interop message listing with status/delivery counts.
+   Baseline done: per-agent interop message listing with status/delivery counts + operator board interop/policy/federation visibility.
 
 ## Active Next Steps
 
@@ -160,8 +161,8 @@ Reference:
 7. [ ] Live subagent event stream:
    Add realtime run logs/progress/status before full broker work.
 8. [ ] Agent-to-agent interop:
-   Baseline done: logical addressing, capability exchange, routed/direct messaging, audit events, retries/acks/message status.
-   Remaining: richer trust policy depth, networked peer federation.
+   Baseline done: logical addressing, capability exchange, routed/direct messaging, audit events, retries/acks/message status, richer trust policy baseline, networked peer federation baseline.
+   Remaining: real remote transport/federated delivery, stronger policy/grant model.
 9. [ ] Channel adapter implementation:
    Start Telegram first.
    Map inbound messages onto current session/agent/channel model.

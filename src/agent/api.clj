@@ -200,6 +200,15 @@
    :acknowledged_by (:acknowledged-by interop)
    :ack_type (:ack-type interop)})
 
+(defn- federated-peer->response [peer]
+  {:id (:id peer)
+   :name (:name peer)
+   :base_url (:base-url peer)
+   :logical_address_prefix (:logical-address-prefix peer)
+   :capabilities (:capabilities peer)
+   :status (:status peer)
+   :created_at (:created-at peer)})
+
 (defn- channel->response [channel]
   {:id (:id channel)
    :name (:name channel)
@@ -326,6 +335,25 @@
   (when-not (and (vector? value) (every? string? value))
     (throw (api-error 400 "bad_request"
                       (str (name field) " must be a vector of strings")))))
+
+(defn- normalize-trust-policies-body [policies]
+  (reduce-kv (fn [acc peer-ref policy]
+               (let [message-types (vec (or (:message_types policy)
+                                            (:message-types policy)
+                                            []))
+                     routes (vec (or (:routes policy) []))
+                     required-capabilities (vec (or (:required_capabilities policy)
+                                                    (:required-capabilities policy)
+                                                    []))]
+                 (ensure-string-vec! :message_types message-types)
+                 (ensure-string-vec! :routes routes)
+                 (ensure-string-vec! :required_capabilities required-capabilities)
+                 (assoc acc (if (keyword? peer-ref) (name peer-ref) (str peer-ref))
+                        {:message-types message-types
+                         :routes routes
+                         :required-capabilities required-capabilities})))
+             {}
+             (or policies {})))
 
 (defn- tool-error->api-error [error]
   (case (:type (ex-data error))
@@ -627,6 +655,7 @@
         capabilities (or (:capabilities body) [])
         allow-direct? (boolean (:allow_direct body))
         trusted-peers (or (:trusted_peers body) [])
+        trust-policies (normalize-trust-policies-body (:trust_policies body))
         rate-limit-per-minute (:rate_limit_per_minute body)]
     (when parent-id
       (ensure-string! :parent_id parent-id))
@@ -634,17 +663,18 @@
       (ensure-string! :system_prompt system-prompt))
     (ensure-string-vec! :capabilities capabilities)
     (ensure-string-vec! :trusted_peers trusted-peers)
-    (write-json! exchange 201
-                 (agent->response
-                  (orchestrator/spawn-agent! (:orchestrator system)
-                                             {:name name
-                                              :role role
-                                              :parent-id parent-id
-                                              :system-prompt system-prompt
-                                              :capabilities capabilities
-                                              :allow-direct? allow-direct?
-                                              :trusted-peers trusted-peers
-                                              :interop-rate-limit-per-minute rate-limit-per-minute})))))
+      (write-json! exchange 201
+                   (agent->response
+                    (orchestrator/spawn-agent! (:orchestrator system)
+                                               {:name name
+                                                :role role
+                                                :parent-id parent-id
+                                                :system-prompt system-prompt
+                                                :capabilities capabilities
+                                                :allow-direct? allow-direct?
+                                                :trusted-peers trusted-peers
+                                                :trust-policies trust-policies
+                                                :interop-rate-limit-per-minute rate-limit-per-minute})))))
 
 (defn- handle-list-agents [system exchange]
   (write-json! exchange 200 {:data (mapv agent->response
@@ -706,6 +736,7 @@
         capabilities (or (:capabilities body) [])
         allow-direct? (boolean (:allow_direct body))
         trusted-peers (or (:trusted_peers body) [])
+        trust-policies (normalize-trust-policies-body (:trust_policies body))
         rate-limit-per-minute (:rate_limit_per_minute body)]
     (ensure-string-vec! :capabilities capabilities)
     (ensure-string-vec! :trusted_peers trusted-peers)
@@ -716,28 +747,63 @@
                                                                      {:capabilities capabilities
                                                                       :allow-direct? allow-direct?
                                                                       :trusted-peers trusted-peers
+                                                                      :trust-policies trust-policies
                                                                       :interop-rate-limit-per-minute rate-limit-per-minute})})
       (catch Exception e
         (if (= :agent-not-found (:type (ex-data e)))
           (throw (api-error 404 "agent_not_found" "Agent not found"))
           (throw e))))))
 
+(defn- handle-list-federated-peers [system exchange]
+  (write-json! exchange 200
+               {:data (mapv federated-peer->response
+                            (orchestrator/list-federated-peers (:orchestrator system)))}))
+
+(defn- handle-create-federated-peer [system exchange]
+  (let [body (read-json-body exchange)
+        id (:id body)
+        name (:name body)
+        base-url (:base_url body)
+        logical-address-prefix (:logical_address_prefix body)
+        capabilities (or (:capabilities body) [])
+        status (or (:status body) "online")]
+    (when id
+      (ensure-string! :id id))
+    (when name
+      (ensure-string! :name name))
+    (when base-url
+      (ensure-string! :base_url base-url))
+    (when logical-address-prefix
+      (ensure-string! :logical_address_prefix logical-address-prefix))
+    (ensure-string-vec! :capabilities capabilities)
+    (write-json! exchange 201
+                 {:data (federated-peer->response
+                         (orchestrator/register-federated-peer! (:orchestrator system)
+                                                                {:id id
+                                                                 :name name
+                                                                 :base-url base-url
+                                                                 :logical-address-prefix logical-address-prefix
+                                                                 :capabilities capabilities
+                                                                 :status status}))})))
+
 (defn- handle-agent-interop-message [system exchange agent-id]
   (let [body (read-json-body exchange)
         from-agent-id (:from_agent_id body)
+        to-agent-ref (or (:to_agent_ref body) agent-id)
         content (:content body)
         message-type (or (:message_type body) "request")
         route (:route body)
         delivery-mode (or (:delivery_mode body) "at-most-once")
         request-id (:request_id body)]
     (ensure-string! :from_agent_id from-agent-id)
+    (ensure-string! :to_agent_ref to-agent-ref)
     (ensure-string! :content content)
     (try
       (write-json! exchange 201
                    {:data (interop->response
                            (orchestrator/send-interop-message! (:orchestrator system)
                                                                from-agent-id
-                                                               agent-id
+                                                               to-agent-ref
                                                                {:message-type message-type
                                                                 :route route
                                                                 :delivery-mode delivery-mode
@@ -1604,6 +1670,12 @@
 
             (and (= method "POST") (= path ["v1" "agents"]))
             (handle-create-agent system exchange)
+
+            (and (= method "GET") (= path ["v1" "federation" "peers"]))
+            (handle-list-federated-peers system exchange)
+
+            (and (= method "POST") (= path ["v1" "federation" "peers"]))
+            (handle-create-federated-peer system exchange)
 
             (and (= method "GET") (= 4 (count path))
                  (= ["v1" "agents"] (subvec path 0 2))

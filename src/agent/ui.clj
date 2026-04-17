@@ -169,6 +169,7 @@
         memory-health (memory/health-check (:memory-service system))
         adapter-health (channel-adapters/registry-health (:channel-adapter-registry system))
         agent-health (orchestrator/health-check (:orchestrator system))
+        federated-peers (orchestrator/list-federated-peers (:orchestrator system))
         detailed-runs (map #(runtime/get-run (:runtime-service system) (:id %))
                            (runtime/list-runs (:runtime-service system) {:limit 100}))
         recent-runs (take 6 detailed-runs)
@@ -196,6 +197,7 @@
        (str "memory graph enabled: "
             (if (true? (get-in memory-health [:graph :details :enabled])) "yes" "no")
             " | channel adapters: " (:count adapter-health)
+            " | federated peers: " (count federated-peers)
             " | sqlite schema: " (get-in storage [:details :schema-version] "?")
             " | approvals: " (get-in storage [:details :tool-approval-count] 0))]
       [:div.run-grid
@@ -237,11 +239,21 @@
 (defn operator-board-fragment [system]
   (let [runs (map #(runtime/get-run (:runtime-service system) (:id %))
                   (runtime/list-runs (:runtime-service system) {:limit 100}))
+        agents (orchestrator/list-agents (:orchestrator system))
         active-runs (filter #(contains? #{"requested" "running"} (:status %)) runs)
         stale-runs (filter stale-run? runs)
         failed-runs (filter #(contains? #{"failed" "cancelled"} (:status %)) runs)
         approvals (tool-approvals/list-requests (:store system) {:status "pending" :limit 8})
-        events (sqlite/list-events (:store system) {:limit 8})]
+        events (sqlite/list-events (:store system) {:limit 8})
+        interop-events (filter #(str/starts-with? (str (:event-type %)) "agent.interop")
+                               (sqlite/list-events (:store system) {:limit 20}))
+        federated-peers (orchestrator/list-federated-peers (:orchestrator system))
+        interop-policies (->> agents
+                              (map (fn [agent]
+                                     (orchestrator/describe-agent-interop (:orchestrator system) (:id agent))))
+                              (filter #(or (seq (:trusted-peers %))
+                                           (seq (:trust-policies %))))
+                              (take 6))]
     (render
      [:section#operator-board.panel
       {"data-on-interval__duration.5s.leading" "@get('/ui/operator-board')"}
@@ -300,6 +312,31 @@
         (if (seq events)
           [:div.stack
            (for [{:keys [event-type entity-id created-at]} events]
+             [:div.meta (str event-type " | " (or entity-id "-") " | " created-at)])]
+          [:div.meta "none"])]
+       [:div.result
+        [:strong "Federated peers"]
+        (if (seq federated-peers)
+          [:div.stack
+           (for [{:keys [id status base-url logical-address-prefix]} federated-peers]
+             [:div.meta (str id " | " status " | "
+                             (or base-url logical-address-prefix))])]
+          [:div.meta "none"])]
+       [:div.result
+        [:strong "Interop policy"]
+        (if (seq interop-policies)
+          [:div.stack
+           (for [{:keys [logical-address trusted-peers trust-policies]} interop-policies]
+             [:div.meta
+              (str logical-address
+                   " | peers " (count trusted-peers)
+                   " | policies " (count trust-policies))])]
+          [:div.meta "none"])]
+       [:div.result
+        [:strong "Interop activity"]
+        (if (seq interop-events)
+          [:div.stack
+           (for [{:keys [event-type entity-id created-at]} (take 8 interop-events)]
              [:div.meta (str event-type " | " (or entity-id "-") " | " created-at)])]
           [:div.meta "none"])]]])))
 

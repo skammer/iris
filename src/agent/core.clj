@@ -543,6 +543,14 @@
   [system agent-ref spec]
   (orchestrator/register-agent-capabilities! (:orchestrator system) agent-ref spec))
 
+(defn register-federated-peer!
+  [system spec]
+  (orchestrator/register-federated-peer! (:orchestrator system) spec))
+
+(defn list-federated-peers
+  [system]
+  (orchestrator/list-federated-peers (:orchestrator system)))
+
 (defn send-interop-message!
   [system from-agent-ref to-agent-ref message]
   (orchestrator/send-interop-message! (:orchestrator system) from-agent-ref to-agent-ref message))

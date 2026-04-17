@@ -258,6 +258,13 @@
                                      :allow_direct true})
             created-peer-body (json/parse-string (:body created-peer) true)
             peer-id (:id created-peer-body)
+            created-federated-peer (http-post (str base-url "/v1/federation/peers")
+                                              {:id "mesh-1"
+                                               :base_url "https://mesh-1.internal"
+                                               :capabilities ["interop"]})
+            created-federated-peer-body (json/parse-string (:body created-federated-peer) true)
+            federation-peers (http-get (str base-url "/v1/federation/peers"))
+            federation-peers-body (json/parse-string (:body federation-peers) true)
             agents (http-get (str base-url "/v1/agents"))
             agents-body (json/parse-string (:body agents) true)
             agent-interop (http-get (str base-url "/v1/agents/" agent-id "/interop"))
@@ -266,6 +273,9 @@
                                             {:capabilities ["execute" "report"]
                                              :allow_direct true
                                              :trusted_peers [peer-id]
+                                             :trust_policies {peer-id {:message_types ["delegate.request"]
+                                                                       :routes ["direct"]
+                                                                       :required_capabilities ["route"]}}
                                              :rate_limit_per_minute 2})
             interop-capabilities-body (json/parse-string (:body interop-capabilities) true)
             interop-message (http-post (str base-url "/v1/agents/" agent-id "/interop/messages")
@@ -294,6 +304,13 @@
                                          (get-in interop-message-body [:data :id]) "/ack")
                                    {:ack_type "completed"})
             interop-ack-body (json/parse-string (:body interop-ack) true)
+            federated-interop-message (http-post (str base-url "/v1/agents/" peer-id "/interop/messages")
+                                                 {:from_agent_id peer-id
+                                                  :message_type "delegate.request"
+                                                  :route "federated"
+                                                  :request_id "req-fed-1"
+                                                  :content "collect remote"
+                                                  :to_agent_ref "federation://mesh-1/remote-agent"})
             agent-msg (http-post (str base-url "/v1/agents/" agent-id "/messages")
                                  {:content "do work"})
             agent-msg-body (json/parse-string (:body agent-msg) true)
@@ -377,6 +394,9 @@
         (is (str/includes? (:body ui-operator-board) "Active runs"))
         (is (str/includes? (:body ui-operator-board) "Stale runs"))
         (is (str/includes? (:body ui-operator-board) "Approval queue"))
+        (is (str/includes? (:body ui-operator-board) "Federated peers"))
+        (is (str/includes? (:body ui-operator-board) "Interop policy"))
+        (is (str/includes? (:body ui-operator-board) "Interop activity"))
         (is (= 200 (:status health)))
         (is (= 3 (get-in health-body [:tools :count])))
         (is (= true (get-in health-body [:memory :healthy])))
@@ -409,6 +429,10 @@
         (is (= ["discord" "slack" "telegram"] (mapv :name (:data channel-adapters-body))))
         (is (= 201 (:status created-agent)))
         (is (= 201 (:status created-peer)))
+        (is (= 201 (:status created-federated-peer)))
+        (is (= "mesh-1" (get-in created-federated-peer-body [:data :id])))
+        (is (= 200 (:status federation-peers)))
+        (is (= ["mesh-1"] (mapv :id (:data federation-peers-body))))
         (is (= 200 (:status agents)))
         (is (= #{agent-id peer-id} (set (map :id (:data agents-body)))))
         (is (= 200 (:status agent-interop)))
@@ -416,6 +440,8 @@
         (is (= 200 (:status interop-capabilities)))
         (is (= ["execute" "report"] (get-in interop-capabilities-body [:data :capabilities])))
         (is (= [peer-id] (get-in interop-capabilities-body [:data :trusted-peers])))
+        (is (= ["delegate.request"] (get-in interop-capabilities-body [:data :trust-policies (keyword peer-id) :message-types])))
+        (is (= ["direct"] (get-in interop-capabilities-body [:data :trust-policies (keyword peer-id) :routes])))
         (is (= 2 (get-in interop-capabilities-body [:data :interop-rate-limit-per-minute])))
         (is (= 201 (:status interop-message)))
         (is (= "direct" (get-in interop-message-body [:data :route])))
@@ -430,6 +456,8 @@
         (is (= 200 (:status interop-ack)))
         (is (= "acked" (get-in interop-ack-body [:data :status])))
         (is (= "completed" (get-in interop-ack-body [:data :ack_type])))
+        (is (= 201 (:status federated-interop-message)))
+        (is (= "federated" (get-in (json/parse-string (:body federated-interop-message) true) [:data :route])))
         (is (= 200 (:status agent-msg)))
         (is (= "test-response" (get-in agent-msg-body [:response :content])))
         (is (= 201 (:status channel)))
