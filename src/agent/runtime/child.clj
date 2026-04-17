@@ -56,12 +56,23 @@
 (defn- complete-command! [runtime-service run-id command-id status error]
   (runtime/complete-command! runtime-service run-id command-id status error))
 
+(defn- log-out! [& parts]
+  (binding [*out* *out*]
+    (apply println parts)
+    (flush)))
+
+(defn- log-err! [& parts]
+  (binding [*out* *err*]
+    (apply println parts)
+    (flush)))
+
 (defn- handle-command!
   [runtime-service state bootstrap-spec command]
   (let [run-id (:run-id bootstrap-spec)
         command-id (:id command)
         command-type (keyword (:command-type command))
         payload (:payload command)]
+    (log-out! "command" (name command-type) "begin" run-id command-id)
     (runtime/acknowledge-command! runtime-service run-id command-id)
     (try
       (case command-type
@@ -83,6 +94,7 @@
                        :task
                        {:phase "started"
                         :payload payload})
+          (log-out! "task" "started" run-id (pr-str payload))
           (when-let [sleep-ms (:sleep-ms payload)]
             (Thread/sleep (long sleep-ms)))
           (heartbeat! runtime-service state bootstrap-spec {:task true})
@@ -90,10 +102,12 @@
                        :task
                        {:phase "completed"
                         :payload payload})
+          (log-out! "task" "completed" run-id (pr-str payload))
           (complete-command! runtime-service run-id command-id :completed nil))
 
         :cancel
         (do
+          (log-err! "command" "cancel" run-id command-id)
           (checkpoint! runtime-service state bootstrap-spec
                        :shutdown
                        {:reason "cancelled"})
@@ -103,7 +117,9 @@
 
         (complete-command! runtime-service run-id command-id :failed
                            (str "unsupported_command:" (name command-type))))
+      (log-out! "command" (name command-type) "completed" run-id command-id)
       (catch Exception ex
+        (log-err! "command" (name command-type) "failed" run-id (.getMessage ex))
         (complete-command! runtime-service run-id command-id :failed (.getMessage ex))
         (throw ex)))))
 
@@ -125,6 +141,7 @@
                                                                     "/" run-id)})
                             :runner-metadata {:pid (process-pid)
                                               :mode "child-runtime"}})
+    (log-out! "child-runtime" "boot" run-id (:agent-id bootstrap-spec))
     (checkpoint! runtime-service state bootstrap-spec :startup {:phase "boot"})
     (heartbeat! runtime-service state bootstrap-spec {:phase "boot"})
     (let [heartbeat-loop
@@ -144,6 +161,7 @@
           (when (:running? @state)
             (Thread/sleep command-poll-interval-ms)))
         (catch Exception ex
+          (log-err! "child-runtime" "failed" run-id (.getMessage ex))
           (runtime/transition-run! runtime-service run-id :failed {:last-error (.getMessage ex)})
           (throw ex))
         (finally
@@ -151,7 +169,8 @@
           (future-cancel heartbeat-loop)
           (let [status (:status (runtime/get-run runtime-service run-id))]
             (when-not (#{"cancelled" "completed" "failed"} status)
-              (runtime/transition-run! runtime-service run-id :completed))))))))
+              (runtime/transition-run! runtime-service run-id :completed)))
+          (log-out! "child-runtime" "exit" run-id))))))
 
 (defn -main
   [& _args]

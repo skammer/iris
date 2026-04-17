@@ -77,6 +77,10 @@ agent-chat-panel {
   display: block;
 }
 
+agent-run-panel {
+  display: block;
+}
+
 .panel,
 .shell-nav,
 .status-bar {
@@ -243,6 +247,12 @@ agent-chat-panel {
   color: var(--accent);
 }
 
+.stat:first-child .provider-value {
+  font-size: 24px;
+  line-height: 1.15;
+  word-break: break-word;
+}
+
 .value {
   font-family: "IoskeleyMono", "Space Mono", "JetBrains Mono", "SF Mono", monospace;
   font-size: 26px;
@@ -253,6 +263,27 @@ agent-chat-panel {
 .stack {
   display: grid;
   gap: 10px;
+}
+
+.run-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.run-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.run-live-state.live {
+  color: var(--success);
+}
+
+.run-live-state.poll {
+  color: var(--warning);
 }
 
 .session-link,

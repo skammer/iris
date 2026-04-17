@@ -1093,6 +1093,10 @@
   (write-html! exchange 200
                (ui/run-detail-fragment system (:run_id (query-params exchange)))))
 
+(defn- handle-ui-run-detail-body [system exchange]
+  (write-html! exchange 200
+               (ui/run-detail-body system (:run_id (query-params exchange)))))
+
 (defn- handle-ui-create-run [system exchange]
   (let [body (read-form-body exchange)
         run (system-request-run! system
@@ -1283,6 +1287,9 @@
 
             (and (= method "GET") (= path ["ui" "run-detail"]))
             (handle-ui-run-detail system exchange)
+
+            (and (= method "GET") (= path ["ui" "run-detail-body"]))
+            (handle-ui-run-detail-body system exchange)
 
             (and (= method "POST") (= 4 (count path))
                  (= ["ui" "runs"] (subvec path 0 2))
