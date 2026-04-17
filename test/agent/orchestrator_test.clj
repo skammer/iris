@@ -32,6 +32,10 @@
                                                      {:capabilities ["execute" "report"]
                                                       :allow-direct? true
                                                       :trusted-peers [(:id parent)]
+                                                      :trust-policies {(:id parent)
+                                                                       {:message-types ["delegate.request"]
+                                                                        :routes ["direct"]
+                                                                        :required-capabilities ["delegate"]}}
                                                       :interop-rate-limit-per-minute 2})
         interop-message (orchestrator/send-interop-message! runtime
                                                             (:logical-address parent)
@@ -53,10 +57,29 @@
                                                              (:id parent)
                                                              (:id interop-message))
         acked-message (orchestrator/acknowledge-interop-message! runtime
-                                                                 (:id child)
+                                                                (:id child)
                                                                  (:id interop-message)
                                                                  {:ack-type "completed"})
         inbound-messages (orchestrator/list-interop-messages runtime (:id child) {:direction :inbound})
+        federated-peer (orchestrator/register-federated-peer! runtime
+                                                              {:id "mesh-1"
+                                                               :base-url "https://mesh-1.example.invalid"
+                                                               :capabilities ["interop"]})
+        federated-message (orchestrator/send-interop-message! runtime
+                                                              (:id parent)
+                                                              "federation://mesh-1/remote-agent"
+                                                              {:message-type "delegate.request"
+                                                               :request-id "req-fed-1"
+                                                               :content "ship result"})
+        denied-message (try
+                         (orchestrator/send-interop-message! runtime
+                                                             (:id parent)
+                                                             (:id child)
+                                                             {:message-type "status.push"
+                                                              :content "denied"})
+                         nil
+                         (catch Exception e
+                           (:type (ex-data e))))
         channel (orchestrator/create-channel! runtime {:name "coord" :participants [(:id parent) (:id child)]})
         _ (orchestrator/post-channel-message! runtime (:id channel) {:sender-id (:id parent) :content "do task"})
         consumed (orchestrator/consume-agent-inbox! runtime llm (:id child))
@@ -71,6 +94,10 @@
     (is (= "completed" (:ack-type acked-message)))
     (is (= 1 (count inbound-messages)))
     (is (= "acked" (:status (first inbound-messages))))
+    (is (= "mesh-1" (:id federated-peer)))
+    (is (= "federated" (:route federated-message)))
+    (is (= "forward_requested" (:status federated-message)))
+    (is (= :permission-denied denied-message))
     (is (= "test-response" (get-in direct [:response :content])))
     (is (= 1 (count channel-messages)))
     (is (= 3 (:consumed consumed)))
