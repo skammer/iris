@@ -1,6 +1,7 @@
 (ns agent.test-runner
   (:require
    [agent.api-test]
+   [agent.broker.local-test]
    [agent.channels.core-test]
    [clojure.test :as t]
    [agent.config-test]
@@ -24,6 +25,7 @@
 
 (def rewritten-test-namespaces
   '[agent.api-test
+    agent.broker.local-test
     agent.channels.core-test
     agent.config-test
     agent.core-test

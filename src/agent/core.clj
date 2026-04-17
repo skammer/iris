@@ -2,6 +2,8 @@
   "Canonical composition root for the rewrite."
   (:gen-class)
   (:require
+   [agent.broker.core :as broker]
+   [agent.broker.local :as local-broker]
    [agent.channels.core :as channel-adapters]
    [agent.api :as api]
    [agent.config :as config]
@@ -24,7 +26,6 @@
    [agent.tools.common.shell :as shell-tool]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
-   [clojure.core.async :as async]
    [clojure.java.io :as io]
    [clojure.string :as str]))
 
@@ -62,30 +63,30 @@
   [cfg]
   (sqlite/create-store (get cfg :sqlite)))
 
+(defn create-broker
+  []
+  (local-broker/create-broker))
+
 (defn create-event-bus
   []
-  (let [source (async/chan (async/sliding-buffer 256))
-        mult (async/mult source)]
-    {:source source
-     :mult mult}))
+  (create-broker))
 
 (defn create-event-sink
-  [store bus]
+  [store broker-instance]
   (fn [event]
     (let [recorded (sqlite/log-event! store event)]
-      (async/put! (:source bus) recorded)
+      (doseq [message (broker/event->messages recorded)]
+        (broker/publish! broker-instance message))
       recorded)))
 
 (defn subscribe-events
-  [system]
-  (let [ch (async/chan 64)]
-    (async/tap (get-in system [:event-bus :mult]) ch)
-    ch))
+  ([system] (subscribe-events system (broker/all-events-subject)))
+  ([system pattern]
+   (broker/subscribe! (:broker system) pattern)))
 
 (defn unsubscribe-events
-  [system ch]
-  (async/untap (get-in system [:event-bus :mult]) ch)
-  (async/close! ch))
+  [system subscription]
+  (broker/unsubscribe! (:broker system) subscription))
 
 (defn create-tool-registry
   [cfg event-sink store]
@@ -203,13 +204,13 @@
    (let [cfg (config/load-config config-path)
          llm-cfg (config/llm-config cfg)
          store (create-store (:storage cfg))
-         event-bus (create-event-bus)
-         event-sink (create-event-sink store event-bus)
+         broker-instance (create-broker)
+         event-sink (create-event-sink store broker-instance)
          runtime-service (create-runtime-service store event-sink)]
      {:config cfg
       :llm-provider (create-llm-provider llm-cfg)
       :store store
-      :event-bus event-bus
+      :broker broker-instance
       :event-sink event-sink
       :tool-registry (create-tool-registry (:tools cfg) event-sink store)
       :skills-registry (create-skills-registry (:skills cfg))
@@ -239,6 +240,7 @@
   [system]
   {:llm (llm-core/health-check (:llm-provider system))
    :storage (sqlite/health-check (:store system))
+   :broker (broker/health-check (:broker system))
    :tools (tools/registry-health (:tool-registry system))
    :skills (skills/registry-health (:skills-registry system))
    :memory (memory/health-check (:memory-service system))

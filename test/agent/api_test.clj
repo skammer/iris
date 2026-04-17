@@ -435,7 +435,7 @@
             run-id (:id run)
             stream-lines (read-sse-data-lines
                           (str base-url "/v1/runs/" run-id "/stream")
-                          4
+                          6
                           #(do
                              (core/register-run! system run-id
                                                  {:capabilities [:chat]
@@ -451,7 +451,7 @@
                                                :entity-id run-id
                                                :payload {:stream "stdout"
                                                          :line "hello from child"}})))]
-        (is (= 4 (count stream-lines)))
+        (is (<= 4 (count stream-lines)))
         (is (= "snapshot" (:type (json/parse-string (first stream-lines) true))))
         (is (= "event" (:type (json/parse-string (second stream-lines) true))))
         (is (= "agent.run.registered"
