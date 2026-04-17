@@ -185,13 +185,20 @@
   {:id (:id interop)
    :request_id (:request-id interop)
    :message_type (:message-type interop)
+   :delivery_mode (:delivery-mode interop)
    :from_agent_id (:from-agent-id interop)
    :to_agent_id (:to-agent-id interop)
    :from_address (:from-address interop)
    :to_address (:to-address interop)
    :route (:route interop)
    :content (:content interop)
-   :created_at (:created-at interop)})
+   :status (:status interop)
+   :delivery_count (:delivery-count interop)
+   :created_at (:created-at interop)
+   :last_delivered_at (:last-delivered-at interop)
+   :acked_at (:acked-at interop)
+   :acknowledged_by (:acknowledged-by interop)
+   :ack_type (:ack-type interop)})
 
 (defn- channel->response [channel]
   {:id (:id channel)
@@ -618,12 +625,15 @@
         parent-id (:parent_id body)
         system-prompt (:system_prompt body)
         capabilities (or (:capabilities body) [])
-        allow-direct? (boolean (:allow_direct body))]
+        allow-direct? (boolean (:allow_direct body))
+        trusted-peers (or (:trusted_peers body) [])
+        rate-limit-per-minute (:rate_limit_per_minute body)]
     (when parent-id
       (ensure-string! :parent_id parent-id))
     (when system-prompt
       (ensure-string! :system_prompt system-prompt))
     (ensure-string-vec! :capabilities capabilities)
+    (ensure-string-vec! :trusted_peers trusted-peers)
     (write-json! exchange 201
                  (agent->response
                   (orchestrator/spawn-agent! (:orchestrator system)
@@ -632,7 +642,9 @@
                                               :parent-id parent-id
                                               :system-prompt system-prompt
                                               :capabilities capabilities
-                                              :allow-direct? allow-direct?})))))
+                                              :allow-direct? allow-direct?
+                                              :trusted-peers trusted-peers
+                                              :interop-rate-limit-per-minute rate-limit-per-minute})))))
 
 (defn- handle-list-agents [system exchange]
   (write-json! exchange 200 {:data (mapv agent->response
@@ -692,14 +704,19 @@
 (defn- handle-agent-interop-capabilities [system exchange agent-id]
   (let [body (read-json-body exchange)
         capabilities (or (:capabilities body) [])
-        allow-direct? (boolean (:allow_direct body))]
+        allow-direct? (boolean (:allow_direct body))
+        trusted-peers (or (:trusted_peers body) [])
+        rate-limit-per-minute (:rate_limit_per_minute body)]
     (ensure-string-vec! :capabilities capabilities)
+    (ensure-string-vec! :trusted_peers trusted-peers)
     (try
       (write-json! exchange 200
                    {:data (orchestrator/register-agent-capabilities! (:orchestrator system)
                                                                      agent-id
                                                                      {:capabilities capabilities
-                                                                      :allow-direct? allow-direct?})})
+                                                                      :allow-direct? allow-direct?
+                                                                      :trusted-peers trusted-peers
+                                                                      :interop-rate-limit-per-minute rate-limit-per-minute})})
       (catch Exception e
         (if (= :agent-not-found (:type (ex-data e)))
           (throw (api-error 404 "agent_not_found" "Agent not found"))
@@ -711,6 +728,7 @@
         content (:content body)
         message-type (or (:message_type body) "request")
         route (:route body)
+        delivery-mode (or (:delivery_mode body) "at-most-once")
         request-id (:request_id body)]
     (ensure-string! :from_agent_id from-agent-id)
     (ensure-string! :content content)
@@ -722,14 +740,67 @@
                                                                agent-id
                                                                {:message-type message-type
                                                                 :route route
+                                                                :delivery-mode delivery-mode
                                                                 :request-id request-id
                                                                 :content content}))})
       (catch Exception e
         (case (:type (ex-data e))
           :agent-not-found (throw (api-error 404 "agent_not_found" "Agent not found"))
           :permission-denied (throw (api-error 403 "permission_denied" "Direct interop denied"))
+          :rate-limited (throw (api-error 429 "rate_limited" "Interop rate limit exceeded"))
           :validation-failed (throw (api-error 400 "validation_failed" (.getMessage e)))
           (throw e))))))
+
+(defn- handle-agent-interop-messages [system exchange agent-id]
+  (let [params (query-params exchange)
+        direction (some-> (:direction params) str/lower-case keyword)
+        status (:status params)]
+    (try
+      (write-json! exchange 200
+                   {:data (mapv interop->response
+                                (orchestrator/list-interop-messages (:orchestrator system)
+                                                                    agent-id
+                                                                    (cond-> {}
+                                                                      direction (assoc :direction direction)
+                                                                      status (assoc :status status))))})
+      (catch Exception e
+        (if (= :agent-not-found (:type (ex-data e)))
+          (throw (api-error 404 "agent_not_found" "Agent not found"))
+          (throw e))))))
+
+(defn- handle-agent-interop-ack [system exchange agent-id message-id]
+  (let [body (read-json-body exchange)
+        ack-type (or (:ack_type body) "ack")]
+    (try
+      (write-json! exchange 200
+                   {:data (interop->response
+                           (orchestrator/acknowledge-interop-message! (:orchestrator system)
+                                                                      agent-id
+                                                                      message-id
+                                                                      {:ack-type ack-type}))})
+      (catch Exception e
+        (case (:type (ex-data e))
+          :agent-not-found (throw (api-error 404 "agent_not_found" "Agent not found"))
+          :interop-message-not-found (throw (api-error 404 "interop_message_not_found" "Interop message not found"))
+          :permission-denied (throw (api-error 403 "permission_denied" "Interop ack denied"))
+          :validation-failed (throw (api-error 400 "validation_failed" (.getMessage e)))
+          (throw e))))))
+
+(defn- handle-agent-interop-retry [system exchange agent-id message-id]
+  (try
+    (write-json! exchange 200
+                 {:data (interop->response
+                         (orchestrator/retry-interop-message! (:orchestrator system)
+                                                              agent-id
+                                                              message-id))})
+    (catch Exception e
+      (case (:type (ex-data e))
+        :agent-not-found (throw (api-error 404 "agent_not_found" "Agent not found"))
+        :interop-message-not-found (throw (api-error 404 "interop_message_not_found" "Interop message not found"))
+        :permission-denied (throw (api-error 403 "permission_denied" "Interop retry denied"))
+        :validation-failed (throw (api-error 400 "validation_failed" (.getMessage e)))
+        :rate-limited (throw (api-error 429 "rate_limited" "Interop rate limit exceeded"))
+        (throw e)))))
 
 (defn- handle-create-channel [system exchange]
   (let [body (read-json-body exchange)
@@ -1566,6 +1637,26 @@
                  (= "interop" (nth path 3))
                  (= "messages" (nth path 4)))
             (handle-agent-interop-message system exchange (nth path 2))
+
+            (and (= method "GET") (= 5 (count path))
+                 (= ["v1" "agents"] (subvec path 0 2))
+                 (= "interop" (nth path 3))
+                 (= "messages" (nth path 4)))
+            (handle-agent-interop-messages system exchange (nth path 2))
+
+            (and (= method "POST") (= 7 (count path))
+                 (= ["v1" "agents"] (subvec path 0 2))
+                 (= "interop" (nth path 3))
+                 (= "messages" (nth path 4))
+                 (= "ack" (nth path 6)))
+            (handle-agent-interop-ack system exchange (nth path 2) (nth path 5))
+
+            (and (= method "POST") (= 7 (count path))
+                 (= ["v1" "agents"] (subvec path 0 2))
+                 (= "interop" (nth path 3))
+                 (= "messages" (nth path 4))
+                 (= "retry" (nth path 6)))
+            (handle-agent-interop-retry system exchange (nth path 2) (nth path 5))
 
             (and (= method "GET") (= path ["v1" "channels"]))
             (handle-list-channels system exchange)

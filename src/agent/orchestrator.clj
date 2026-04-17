@@ -59,7 +59,10 @@
   ([] (create-orchestrator {}))
   ([{:keys [event-sink]}]
    {:agents (atom {})
-   :channels (atom {})
+    :channels (atom {})
+    :interop-windows (atom {})
+    :interop-deliveries (atom {})
+    :interop-messages (atom {})
     :event-sink event-sink}))
 
 (defn- logical-address [agent-id]
@@ -79,10 +82,13 @@
   [orchestrator]
   {:healthy true
    :agent-count (count @(:agents orchestrator))
-   :channel-count (count @(:channels orchestrator))})
+   :channel-count (count @(:channels orchestrator))
+   :interop-delivery-count (count @(:interop-deliveries orchestrator))
+   :interop-message-count (count @(:interop-messages orchestrator))})
 
 (defn spawn-agent!
-  [orchestrator {:keys [name role parent-id system-prompt capabilities allow-direct? logical-address]
+  [orchestrator {:keys [name role parent-id system-prompt capabilities allow-direct? logical-address
+                        trusted-peers interop-rate-limit-per-minute]
                  :or {name "Subagent"
                       role "worker"
                       capabilities []}}]
@@ -95,6 +101,8 @@
                :logical-address logical-address
                :capabilities (set capabilities)
                :allow-direct? (true? allow-direct?)
+               :trusted-peers (set trusted-peers)
+               :interop-rate-limit-per-minute (long (or interop-rate-limit-per-minute 60))
                :status "idle"
                :created-at created-at
                :messages []
@@ -111,7 +119,9 @@
                               :parent-id (:parent-id agent*)
                               :logical-address (:logical-address agent*)
                               :capabilities (vec (:capabilities agent*))
-                              :allow-direct? (:allow-direct? agent*)}})
+                              :allow-direct? (:allow-direct? agent*)
+                              :trusted-peers (vec (:trusted-peers agent*))
+                              :interop-rate-limit-per-minute (:interop-rate-limit-per-minute agent*)}})
       (agent-view agent*))))
 
 (defn list-agents
@@ -131,22 +141,69 @@
     {:id (:id agent)
      :logical-address (:logical-address agent)
      :capabilities (vec (sort (:capabilities agent)))
+     :trusted-peers (vec (sort (:trusted-peers agent)))
+     :interop-rate-limit-per-minute (:interop-rate-limit-per-minute agent)
      :allow-direct? (true? (:allow-direct? agent))
      :status (:status agent)}))
 
+(defn- ensure-interop-message!
+  [orchestrator message-id]
+  (or (get @(:interop-messages orchestrator) message-id)
+      (throw (ex-info "Interop message not found"
+                      {:type :interop-message-not-found
+                       :message-id message-id}))))
+
+(defn- store-interop-message!
+  [orchestrator envelope]
+  (swap! (:interop-messages orchestrator) assoc (:id envelope) envelope)
+  (swap! (:interop-deliveries orchestrator)
+         (fn [state]
+           (reduce-kv (fn [acc k v]
+                        (assoc acc k (if (= (:id v) (:id envelope))
+                                       envelope
+                                       v)))
+                      {}
+                      state)))
+  envelope)
+
+(defn list-interop-messages
+  ([orchestrator agent-ref] (list-interop-messages orchestrator agent-ref {}))
+  ([orchestrator agent-ref {:keys [direction status]}]
+   (let [agent (ensure-agent-by-ref! orchestrator agent-ref)]
+     (->> @(:interop-messages orchestrator)
+          vals
+          (filter (fn [message]
+                    (case direction
+                      :inbound (= (:to-agent-id message) (:id agent))
+                      :outbound (= (:from-agent-id message) (:id agent))
+                      (or (= (:to-agent-id message) (:id agent))
+                          (= (:from-agent-id message) (:id agent))))))
+          (filter (fn [message]
+                    (if status
+                      (= (:status message) status)
+                      true)))
+          (sort-by :created-at)
+          vec))))
+
 (defn register-agent-capabilities!
-  [orchestrator agent-ref {:keys [capabilities allow-direct?]}]
+  [orchestrator agent-ref {:keys [capabilities allow-direct? trusted-peers interop-rate-limit-per-minute]}]
   (let [agent (ensure-agent-by-ref! orchestrator agent-ref)
         updated (-> agent
                     (assoc :capabilities (set capabilities))
-                    (assoc :allow-direct? (true? allow-direct?)))]
+                    (assoc :allow-direct? (true? allow-direct?))
+                    (assoc :trusted-peers (set trusted-peers))
+                    (assoc :interop-rate-limit-per-minute (long (or interop-rate-limit-per-minute
+                                                                   (:interop-rate-limit-per-minute agent)
+                                                                   60))))]
     (swap! (:agents orchestrator) assoc (:id agent) updated)
     (emit-event! orchestrator
                  {:event-type :agent.interop.capabilities.updated
                   :entity-type :agent
                   :entity-id (:id agent)
                   :payload {:capabilities (vec (:capabilities updated))
-                            :allow-direct? (:allow-direct? updated)}})
+                            :allow-direct? (:allow-direct? updated)
+                            :trusted-peers (vec (:trusted-peers updated))
+                            :interop-rate-limit-per-minute (:interop-rate-limit-per-minute updated)}})
     (describe-agent-interop orchestrator (:id agent))))
 
 (defn list-agent-messages
@@ -195,44 +252,167 @@
       :routed :routed
       (if direct-allowed? :direct :routed))))
 
+(defn- trusted-peer?
+  [to-agent from-agent]
+  (let [trusted (:trusted-peers to-agent)]
+    (or (contains? trusted (:id from-agent))
+        (contains? trusted (:logical-address from-agent)))))
+
+(defn- enforce-interop-trust! [from-agent to-agent]
+  (when-not (trusted-peer? to-agent from-agent)
+    (throw (ex-info "Interop denied"
+                    {:type :permission-denied
+                     :reason :peer-not-trusted}))))
+
+(defn- prune-window [timestamps now-ms]
+  (filterv #(<= (- now-ms %) 60000) timestamps))
+
+(defn- enforce-interop-rate-limit!
+  [orchestrator from-agent]
+  (let [now-ms (.toEpochMilli (Instant/now))
+        agent-id (:id from-agent)
+        limit (long (or (:interop-rate-limit-per-minute from-agent) 60))
+        accepted? (atom false)]
+    (swap! (:interop-windows orchestrator)
+           (fn [state]
+             (let [current (prune-window (get state agent-id []) now-ms)]
+               (if (>= (count current) limit)
+                 state
+                 (do
+                   (reset! accepted? true)
+                   (assoc state agent-id (conj current now-ms)))))))
+    (when-not @accepted?
+      (throw (ex-info "Interop rate limit exceeded"
+                      {:type :rate-limited
+                       :agent-id agent-id
+                       :limit limit})))))
+
 (defn send-interop-message!
-  [orchestrator from-agent-ref to-agent-ref {:keys [message-type content route request-id]
-                                             :or {message-type "request"}}]
+  [orchestrator from-agent-ref to-agent-ref {:keys [message-type content route request-id delivery-mode]
+                                             :or {message-type "request"
+                                                  delivery-mode "at-most-once"}}]
   (when-not (and (string? content) (not (str/blank? content)))
     (throw (ex-info "content must be a non-blank string"
                     {:type :validation-failed
                      :field :content})))
   (let [from-agent (ensure-agent-by-ref! orchestrator from-agent-ref)
         to-agent (ensure-agent-by-ref! orchestrator to-agent-ref)
+        _ (enforce-interop-trust! from-agent to-agent)
+        _ (enforce-interop-rate-limit! orchestrator from-agent)
         route* (choose-interop-route from-agent to-agent
                                      (when route (keyword (str/lower-case (name route)))))
-        envelope {:id (random-id "interop")
-                  :request-id request-id
-                  :message-type message-type
-                  :from-agent-id (:id from-agent)
-                  :to-agent-id (:id to-agent)
-                  :from-address (:logical-address from-agent)
-                  :to-address (:logical-address to-agent)
-                  :route (name route*)
-                  :content content
-                  :created-at (now)}]
-    (async/>!! (:inbox to-agent)
-               {:role "user"
-                :content (str "[interop:" message-type "] "
-                              (:logical-address from-agent) ": " content)
-                :created-at (:created-at envelope)
-                :interop envelope})
-    (emit-event! orchestrator
-                 {:event-type :agent.interop.message.sent
-                  :entity-type :agent
-                  :entity-id (:id from-agent)
-                  :payload envelope})
-    (emit-event! orchestrator
-                 {:event-type :agent.interop.message.delivered
-                  :entity-type :agent
-                  :entity-id (:id to-agent)
-                  :payload envelope})
-    envelope))
+        dedupe-key (when request-id [(:id from-agent) (:id to-agent) request-id])]
+    (if (and dedupe-key
+             (= "at-most-once" delivery-mode)
+             (contains? @(:interop-deliveries orchestrator) dedupe-key))
+      (get @(:interop-deliveries orchestrator) dedupe-key)
+      (let [envelope {:id (random-id "interop")
+                      :request-id request-id
+                      :message-type message-type
+                      :delivery-mode delivery-mode
+                      :from-agent-id (:id from-agent)
+                      :to-agent-id (:id to-agent)
+                      :from-address (:logical-address from-agent)
+                      :to-address (:logical-address to-agent)
+                      :route (name route*)
+                      :content content
+                      :status "delivered"
+                      :delivery-count 1
+                      :created-at (now)
+                      :last-delivered-at (now)
+                      :acked-at nil
+                      :acknowledged-by nil
+                      :ack-type nil}]
+        (async/>!! (:inbox to-agent)
+                   {:role "user"
+                    :content (str "[interop:" message-type "] "
+                                  (:logical-address from-agent) ": " content)
+                    :created-at (:created-at envelope)
+                    :interop envelope})
+        (store-interop-message! orchestrator envelope)
+        (when dedupe-key
+          (swap! (:interop-deliveries orchestrator) assoc dedupe-key envelope))
+        (emit-event! orchestrator
+                     {:event-type :agent.interop.message.sent
+                      :entity-type :agent
+                      :entity-id (:id from-agent)
+                      :payload envelope})
+        (emit-event! orchestrator
+                     {:event-type :agent.interop.message.delivered
+                      :entity-type :agent
+                      :entity-id (:id to-agent)
+                      :payload envelope})
+        envelope))))
+
+(defn acknowledge-interop-message!
+  [orchestrator agent-ref message-id {:keys [ack-type]
+                                      :or {ack-type "ack"}}]
+  (let [agent (ensure-agent-by-ref! orchestrator agent-ref)
+        envelope (ensure-interop-message! orchestrator message-id)]
+    (when-not (= (:to-agent-id envelope) (:id agent))
+      (throw (ex-info "Interop ack denied"
+                      {:type :permission-denied
+                       :reason :not-recipient
+                       :agent-id (:id agent)
+                       :message-id message-id})))
+    (let [updated (if (:acked-at envelope)
+                    envelope
+                    (-> envelope
+                        (assoc :status "acked")
+                        (assoc :acked-at (now))
+                        (assoc :acknowledged-by (:id agent))
+                        (assoc :ack-type ack-type)))]
+      (store-interop-message! orchestrator updated)
+      (emit-event! orchestrator
+                   {:event-type :agent.interop.message.acked
+                    :entity-type :agent
+                    :entity-id (:id agent)
+                    :payload {:message-id (:id updated)
+                              :from-agent-id (:from-agent-id updated)
+                              :ack-type (:ack-type updated)
+                              :acked-at (:acked-at updated)}})
+      updated)))
+
+(defn retry-interop-message!
+  [orchestrator agent-ref message-id]
+  (let [agent (ensure-agent-by-ref! orchestrator agent-ref)
+        envelope (ensure-interop-message! orchestrator message-id)]
+    (when-not (= (:from-agent-id envelope) (:id agent))
+      (throw (ex-info "Interop retry denied"
+                      {:type :permission-denied
+                       :reason :not-sender
+                       :agent-id (:id agent)
+                       :message-id message-id})))
+    (when (:acked-at envelope)
+      (throw (ex-info "Acked interop message cannot be retried"
+                      {:type :validation-failed
+                       :field :message-id
+                       :message-id message-id})))
+    (let [to-agent (ensure-agent! orchestrator (:to-agent-id envelope))
+          updated (-> envelope
+                      (assoc :status "delivered")
+                      (assoc :last-delivered-at (now))
+                      (update :delivery-count (fnil inc 1)))]
+      (async/>!! (:inbox to-agent)
+                 {:role "user"
+                  :content (str "[interop:" (:message-type updated) "] "
+                                (:from-address updated) ": " (:content updated))
+                  :created-at (:last-delivered-at updated)
+                  :interop updated})
+      (store-interop-message! orchestrator updated)
+      (emit-event! orchestrator
+                   {:event-type :agent.interop.message.retried
+                    :entity-type :agent
+                    :entity-id (:id agent)
+                    :payload {:message-id (:id updated)
+                              :to-agent-id (:to-agent-id updated)
+                              :delivery-count (:delivery-count updated)}})
+      (emit-event! orchestrator
+                   {:event-type :agent.interop.message.delivered
+                    :entity-type :agent
+                    :entity-id (:to-agent-id updated)
+                    :payload updated})
+      updated)))
 
 (defn create-channel!
   [orchestrator {:keys [name participants]
