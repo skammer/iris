@@ -90,20 +90,26 @@ Reference:
 ### Phase G: Agent-To-Agent Interop
 
 27. [ ] Define interop model separate from parent-child orchestration.
+   Baseline done in orchestrator/API with separate interop handlers.
 28. [ ] Define logical addressing:
    Route by logical agent ID first, direct network address second.
+   Baseline done: `agent://<id>` logical addresses supported.
 29. [ ] Define capability advertisement/discovery contract.
+   Baseline done: agent capabilities + direct-connect flags exposed and mutable via API.
 30. [ ] Define peer trust + permission model:
    Which agents may message/call/request work from which other agents.
 31. [ ] Define agent-to-agent request/reply protocol:
    `discover`, `describe-capabilities`, `send-message`, `request-task`, `stream-events`, `checkpoint`, `cancel`, `ack`.
+   Baseline done: interop message envelope + `request_id`, `message_type`, `route`.
 32. [ ] Define direct vs routed communication rules:
    Direct when policy/network allow, routed via broker/control plane otherwise.
+   Baseline done: `auto` picks direct only when both peers allow it, otherwise routed.
 33. [ ] Add peer quotas/rate limits.
 34. [ ] Add delivery guarantees:
    At-most-once vs at-least-once choice per message/task class.
 35. [ ] Add agent-to-agent audit trail:
    Who contacted whom, when, under what permission/capability grant.
+   Baseline done via `agent.interop.*` events.
 
 ### Phase H: Security/Policy
 
@@ -150,7 +156,8 @@ Reference:
 7. [ ] Live subagent event stream:
    Add realtime run logs/progress/status before full broker work.
 8. [ ] Agent-to-agent interop:
-   Add logical addressing, capability exchange, routed/direct messaging, peer policy.
+   Baseline done: logical addressing, capability exchange, routed/direct messaging, audit events.
+   Remaining: trust policy depth, quotas, delivery guarantees.
 9. [ ] Channel adapter implementation:
    Start Telegram first.
    Map inbound messages onto current session/agent/channel model.

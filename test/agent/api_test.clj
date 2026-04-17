@@ -246,11 +246,32 @@
             channel-adapters-body (json/parse-string (:body channel-adapters) true)
             created-agent (http-post (str base-url "/v1/agents")
                                      {:name "Worker"
-                                      :role "worker"})
+                                      :role "worker"
+                                      :capabilities ["execute"]
+                                      :allow_direct true})
             created-agent-body (json/parse-string (:body created-agent) true)
             agent-id (:id created-agent-body)
+            created-peer (http-post (str base-url "/v1/agents")
+                                    {:name "Peer"
+                                     :role "router"
+                                     :capabilities ["route"]
+                                     :allow_direct true})
+            created-peer-body (json/parse-string (:body created-peer) true)
+            peer-id (:id created-peer-body)
             agents (http-get (str base-url "/v1/agents"))
             agents-body (json/parse-string (:body agents) true)
+            agent-interop (http-get (str base-url "/v1/agents/" agent-id "/interop"))
+            agent-interop-body (json/parse-string (:body agent-interop) true)
+            interop-capabilities (http-post (str base-url "/v1/agents/" agent-id "/interop/capabilities")
+                                            {:capabilities ["execute" "report"]
+                                             :allow_direct true})
+            interop-capabilities-body (json/parse-string (:body interop-capabilities) true)
+            interop-message (http-post (str base-url "/v1/agents/" agent-id "/interop/messages")
+                                       {:from_agent_id peer-id
+                                        :message_type "delegate.request"
+                                        :route "direct"
+                                        :content "collect data"})
+            interop-message-body (json/parse-string (:body interop-message) true)
             agent-msg (http-post (str base-url "/v1/agents/" agent-id "/messages")
                                  {:content "do work"})
             agent-msg-body (json/parse-string (:body agent-msg) true)
@@ -365,8 +386,15 @@
         (is (= 200 (:status channel-adapters)))
         (is (= ["discord" "slack" "telegram"] (mapv :name (:data channel-adapters-body))))
         (is (= 201 (:status created-agent)))
+        (is (= 201 (:status created-peer)))
         (is (= 200 (:status agents)))
-        (is (= [agent-id] (mapv :id (:data agents-body))))
+        (is (= #{agent-id peer-id} (set (map :id (:data agents-body)))))
+        (is (= 200 (:status agent-interop)))
+        (is (= (str "agent://" agent-id) (get-in agent-interop-body [:data :logical-address])))
+        (is (= 200 (:status interop-capabilities)))
+        (is (= ["execute" "report"] (get-in interop-capabilities-body [:data :capabilities])))
+        (is (= 201 (:status interop-message)))
+        (is (= "direct" (get-in interop-message-body [:data :route])))
         (is (= 200 (:status agent-msg)))
         (is (= "test-response" (get-in agent-msg-body [:response :content])))
         (is (= 201 (:status channel)))

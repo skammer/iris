@@ -535,6 +535,18 @@
   [system agent-id message]
   (orchestrator/send-agent-message! (:orchestrator system) (:llm-provider system) agent-id message))
 
+(defn describe-agent-interop
+  [system agent-ref]
+  (orchestrator/describe-agent-interop (:orchestrator system) agent-ref))
+
+(defn register-agent-capabilities!
+  [system agent-ref spec]
+  (orchestrator/register-agent-capabilities! (:orchestrator system) agent-ref spec))
+
+(defn send-interop-message!
+  [system from-agent-ref to-agent-ref message]
+  (orchestrator/send-interop-message! (:orchestrator system) from-agent-ref to-agent-ref message))
+
 (defn create-channel!
   [system spec]
   (orchestrator/create-channel! (:orchestrator system) spec))
