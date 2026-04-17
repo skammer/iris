@@ -264,14 +264,36 @@
             agent-interop-body (json/parse-string (:body agent-interop) true)
             interop-capabilities (http-post (str base-url "/v1/agents/" agent-id "/interop/capabilities")
                                             {:capabilities ["execute" "report"]
-                                             :allow_direct true})
+                                             :allow_direct true
+                                             :trusted_peers [peer-id]
+                                             :rate_limit_per_minute 2})
             interop-capabilities-body (json/parse-string (:body interop-capabilities) true)
             interop-message (http-post (str base-url "/v1/agents/" agent-id "/interop/messages")
                                        {:from_agent_id peer-id
                                         :message_type "delegate.request"
                                         :route "direct"
+                                        :delivery_mode "at-most-once"
+                                        :request_id "req-1"
                                         :content "collect data"})
             interop-message-body (json/parse-string (:body interop-message) true)
+            interop-message-duplicate (http-post (str base-url "/v1/agents/" agent-id "/interop/messages")
+                                                 {:from_agent_id peer-id
+                                                  :message_type "delegate.request"
+                                                  :route "direct"
+                                                  :delivery_mode "at-most-once"
+                                                  :request_id "req-1"
+                                                  :content "collect data"})
+            interop-message-duplicate-body (json/parse-string (:body interop-message-duplicate) true)
+            interop-retry (http-post (str base-url "/v1/agents/" peer-id "/interop/messages/"
+                                          (get-in interop-message-body [:data :id]) "/retry")
+                                     {})
+            interop-retry-body (json/parse-string (:body interop-retry) true)
+            interop-list (http-get (str base-url "/v1/agents/" agent-id "/interop/messages?direction=inbound"))
+            interop-list-body (json/parse-string (:body interop-list) true)
+            interop-ack (http-post (str base-url "/v1/agents/" agent-id "/interop/messages/"
+                                         (get-in interop-message-body [:data :id]) "/ack")
+                                   {:ack_type "completed"})
+            interop-ack-body (json/parse-string (:body interop-ack) true)
             agent-msg (http-post (str base-url "/v1/agents/" agent-id "/messages")
                                  {:content "do work"})
             agent-msg-body (json/parse-string (:body agent-msg) true)
@@ -393,8 +415,21 @@
         (is (= (str "agent://" agent-id) (get-in agent-interop-body [:data :logical-address])))
         (is (= 200 (:status interop-capabilities)))
         (is (= ["execute" "report"] (get-in interop-capabilities-body [:data :capabilities])))
+        (is (= [peer-id] (get-in interop-capabilities-body [:data :trusted-peers])))
+        (is (= 2 (get-in interop-capabilities-body [:data :interop-rate-limit-per-minute])))
         (is (= 201 (:status interop-message)))
         (is (= "direct" (get-in interop-message-body [:data :route])))
+        (is (= 201 (:status interop-message-duplicate)))
+        (is (= (get-in interop-message-body [:data :id])
+               (get-in interop-message-duplicate-body [:data :id])))
+        (is (= 200 (:status interop-retry)))
+        (is (= 2 (get-in interop-retry-body [:data :delivery_count])))
+        (is (= 200 (:status interop-list)))
+        (is (= 1 (count (:data interop-list-body))))
+        (is (= "delivered" (get-in interop-list-body [:data 0 :status])))
+        (is (= 200 (:status interop-ack)))
+        (is (= "acked" (get-in interop-ack-body [:data :status])))
+        (is (= "completed" (get-in interop-ack-body [:data :ack_type])))
         (is (= 200 (:status agent-msg)))
         (is (= "test-response" (get-in agent-msg-body [:response :content])))
         (is (= 201 (:status channel)))

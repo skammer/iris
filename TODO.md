@@ -98,15 +98,18 @@ Reference:
    Baseline done: agent capabilities + direct-connect flags exposed and mutable via API.
 30. [ ] Define peer trust + permission model:
    Which agents may message/call/request work from which other agents.
+   Baseline done: recipient trust allowlist required for interop delivery.
 31. [ ] Define agent-to-agent request/reply protocol:
    `discover`, `describe-capabilities`, `send-message`, `request-task`, `stream-events`, `checkpoint`, `cancel`, `ack`.
-   Baseline done: interop message envelope + `request_id`, `message_type`, `route`.
+   Baseline done: interop message envelope + `request_id`, `message_type`, `route`, inbound listing, explicit `ack`, explicit sender retry.
 32. [ ] Define direct vs routed communication rules:
    Direct when policy/network allow, routed via broker/control plane otherwise.
    Baseline done: `auto` picks direct only when both peers allow it, otherwise routed.
 33. [ ] Add peer quotas/rate limits.
+   Baseline done: per-agent interop rate limit per minute.
 34. [ ] Add delivery guarantees:
    At-most-once vs at-least-once choice per message/task class.
+   Baseline done: at-most-once dedupe by `(from,to,request_id)` + operator/sender retry + recipient ack state.
 35. [ ] Add agent-to-agent audit trail:
    Who contacted whom, when, under what permission/capability grant.
    Baseline done via `agent.interop.*` events.
@@ -128,6 +131,7 @@ Reference:
    pause, resume, cancel, retry, inspect checkpoint, resend command.
 43. [ ] Add agent interop visibility:
    peer links, active conversations, permissions, rate-limit hits.
+   Baseline done: per-agent interop message listing with status/delivery counts.
 
 ## Active Next Steps
 
@@ -156,8 +160,8 @@ Reference:
 7. [ ] Live subagent event stream:
    Add realtime run logs/progress/status before full broker work.
 8. [ ] Agent-to-agent interop:
-   Baseline done: logical addressing, capability exchange, routed/direct messaging, audit events.
-   Remaining: trust policy depth, quotas, delivery guarantees.
+   Baseline done: logical addressing, capability exchange, routed/direct messaging, audit events, retries/acks/message status.
+   Remaining: richer trust policy depth, networked peer federation.
 9. [ ] Channel adapter implementation:
    Start Telegram first.
    Map inbound messages onto current session/agent/channel model.

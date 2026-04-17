@@ -30,13 +30,33 @@
         interop-before (orchestrator/describe-agent-interop runtime (:id child))
         _ (orchestrator/register-agent-capabilities! runtime (:id child)
                                                      {:capabilities ["execute" "report"]
-                                                      :allow-direct? true})
+                                                      :allow-direct? true
+                                                      :trusted-peers [(:id parent)]
+                                                      :interop-rate-limit-per-minute 2})
         interop-message (orchestrator/send-interop-message! runtime
                                                             (:logical-address parent)
                                                             (:id child)
                                                             {:message-type "delegate.request"
+                                                             :request-id "req-1"
+                                                             :delivery-mode "at-most-once"
                                                              :route :auto
                                                              :content "collect facts"})
+        duplicate-message (orchestrator/send-interop-message! runtime
+                                                              (:logical-address parent)
+                                                              (:id child)
+                                                              {:message-type "delegate.request"
+                                                               :request-id "req-1"
+                                                               :delivery-mode "at-most-once"
+                                                               :route :auto
+                                                               :content "collect facts"})
+        retried-message (orchestrator/retry-interop-message! runtime
+                                                             (:id parent)
+                                                             (:id interop-message))
+        acked-message (orchestrator/acknowledge-interop-message! runtime
+                                                                 (:id child)
+                                                                 (:id interop-message)
+                                                                 {:ack-type "completed"})
+        inbound-messages (orchestrator/list-interop-messages runtime (:id child) {:direction :inbound})
         channel (orchestrator/create-channel! runtime {:name "coord" :participants [(:id parent) (:id child)]})
         _ (orchestrator/post-channel-message! runtime (:id channel) {:sender-id (:id parent) :content "do task"})
         consumed (orchestrator/consume-agent-inbox! runtime llm (:id child))
@@ -45,7 +65,13 @@
     (is (= (str "agent://" (:id child)) (:logical-address interop-before)))
     (is (= ["execute"] (:capabilities interop-before)))
     (is (= "direct" (:route interop-message)))
+    (is (= (:id interop-message) (:id duplicate-message)))
+    (is (= 2 (:delivery-count retried-message)))
+    (is (= "acked" (:status acked-message)))
+    (is (= "completed" (:ack-type acked-message)))
+    (is (= 1 (count inbound-messages)))
+    (is (= "acked" (:status (first inbound-messages))))
     (is (= "test-response" (get-in direct [:response :content])))
     (is (= 1 (count channel-messages)))
-    (is (= 2 (:consumed consumed)))
+    (is (= 3 (:consumed consumed)))
     (is (= "test-response" (get-in consumed [:response :content])))))

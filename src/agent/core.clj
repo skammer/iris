@@ -547,6 +547,20 @@
   [system from-agent-ref to-agent-ref message]
   (orchestrator/send-interop-message! (:orchestrator system) from-agent-ref to-agent-ref message))
 
+(defn list-interop-messages
+  ([system agent-ref]
+   (orchestrator/list-interop-messages (:orchestrator system) agent-ref))
+  ([system agent-ref opts]
+   (orchestrator/list-interop-messages (:orchestrator system) agent-ref opts)))
+
+(defn acknowledge-interop-message!
+  [system agent-ref message-id opts]
+  (orchestrator/acknowledge-interop-message! (:orchestrator system) agent-ref message-id opts))
+
+(defn retry-interop-message!
+  [system agent-ref message-id]
+  (orchestrator/retry-interop-message! (:orchestrator system) agent-ref message-id))
+
 (defn create-channel!
   [system spec]
   (orchestrator/create-channel! (:orchestrator system) spec))
