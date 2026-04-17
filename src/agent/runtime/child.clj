@@ -18,6 +18,13 @@
    "-m"
    "agent.runtime.child"])
 
+(defn current-container-child-command
+  []
+  ["clojure"
+   "-M"
+   "-m"
+   "agent.runtime.child"])
+
 (defn- parse-bootstrap-spec [value]
   (when-not value
     (throw (ex-info "AGENT_BOOTSTRAP_SPEC missing" {:type :missing-bootstrap-spec})))

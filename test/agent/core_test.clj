@@ -29,6 +29,8 @@
     (is (= ["Discord" "Slack" "Telegram"] (mapv :display-name adapters)))
     (is (contains? runner-keys :local-process))
     (is (contains? runner-keys :bubblewrap))
+    (is (contains? runner-keys :docker))
+    (is (contains? runner-keys :podman))
     (is (contains? runner-keys :seatbelt))
     (is (empty? (core/list-skills system)))
     (is (= 3 (count (core/memory-surfaces system))))
@@ -36,3 +38,21 @@
     (is (= 0 (get-in (core/health-check system) [:runtime :run-count])))
     (is (= 3 (get-in (core/health-check system) [:channel-adapters :count])))
     (is (= 0 (get-in (core/health-check system) [:orchestrator :agent-count])))))
+
+(deftest prepare-runner-options-adds-container-child-defaults
+  (let [system {:config {:storage {:sqlite {:path "data/agent.db"}}
+                         :runners {:docker {:image "clj-agent:test"
+                                            :container-working-dir "/workspace"
+                                            :container-data-dir "/agent-data"
+                                            :host-working-dir "."
+                                            :share-network? false}}}}
+        prepared (#'agent.core/prepare-runner-options
+                  system
+                  {:substrate "docker"
+                   :runner-options {}})]
+    (is (= "clj-agent:test" (:image prepared)))
+    (is (= ["clojure" "-M" "-m" "agent.runtime.child"] (:command prepared)))
+    (is (= "/workspace" (:container-working-dir prepared)))
+    (is (= "/agent-data/agent.db" (get (:env prepared) "AGENT_SQLITE_PATH")))
+    (is (= 2 (count (:mounts prepared))))
+    (is (= #{"/workspace" "/agent-data"} (set (map :target (:mounts prepared)))))))

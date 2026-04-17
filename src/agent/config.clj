@@ -45,6 +45,16 @@
    :channel-adapters {:telegram {:enabled false}
                       :discord {:enabled false}
                       :slack {:enabled false}}
+   :runners {:docker {:image nil
+                      :container-working-dir "/workspace"
+                      :container-data-dir "/agent-data"
+                      :host-working-dir "."
+                      :share-network? false}
+             :podman {:image nil
+                      :container-working-dir "/workspace"
+                      :container-data-dir "/agent-data"
+                      :host-working-dir "."
+                      :share-network? false}}
    :orchestrator {:enabled true}
    :api {:host "127.0.0.1"
          :port 8080}})

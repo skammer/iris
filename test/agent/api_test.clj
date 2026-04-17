@@ -122,6 +122,14 @@
       (let [bad-session (http-post (str base-url "/v1/sessions") {:title 42})
             bad-chat (http-post (str base-url "/v1/chat/completions")
                                 {:messages [{:role "bogus" :content "hello"}]})
+            created-docker-run (http-post (str base-url "/v1/runs")
+                                          {:agent_id "docker-agent"
+                                           :name "docker-run"
+                                           :substrate "docker"
+                                           :runner_options {:image "clj-agent:test"
+                                                            :working-dir "."
+                                                            :share-network? true}})
+            created-docker-run-body (json/parse-string (:body created-docker-run) true)
             created-run (http-post (str base-url "/v1/runs")
                                    {:agent_id "runner-agent"
                                     :name "runner"
@@ -249,6 +257,10 @@
             messages-body (json/parse-string (:body messages) true)]
         (is (= 400 (:status bad-session)))
         (is (= 400 (:status bad-chat)))
+        (is (= 201 (:status created-docker-run)))
+        (is (= "docker" (get-in created-docker-run-body [:data :substrate])))
+        (is (= "clj-agent:test" (get-in created-docker-run-body [:data :runner_options :image])))
+        (is (= true (get-in created-docker-run-body [:data :runner_options :share-network?])))
         (is (= 201 (:status created-run)))
         (is (= "launched" (get-in created-run-body [:data :status])))
         (is (= "local-process" (get-in created-run-body [:data :substrate])))
@@ -267,7 +279,8 @@
         (is (some #{"agent.run.heartbeat"} (map :event_type (:data run-events-body))))
         (is (= 200 (:status signaled-run)))
         (is (= 200 (:status list-runs)))
-        (is (= [run-id] (mapv :id (:data list-runs-body))))
+        (is (= #{run-id (get-in created-docker-run-body [:data :id])}
+               (set (map :id (:data list-runs-body)))))
         (is (= 200 (:status ui-runs)))
         (is (str/includes? (:body ui-runs) "Create Run"))
         (is (str/includes? (:body ui-runs) "seatbelt"))

@@ -1053,6 +1053,14 @@
       (throw (api-error 400 "bad_request" "command contains unsupported shell metacharacters")))
     (vec (remove str/blank? (str/split trimmed #"\s+")))))
 
+(defn- split-command-optional [command]
+  (let [trimmed (str/trim (or command ""))]
+    (when-not (str/blank? trimmed)
+      (split-command-plain trimmed))))
+
+(defn- form-bool [value]
+  (contains? #{"1" "true" "yes" "on"} (str/lower-case (str value))))
+
 (defn- handle-ui-runs [system exchange]
   (write-html! exchange 200 (ui/runs-fragment system)))
 
@@ -1066,8 +1074,13 @@
                                  {:agent-id (not-empty (:agent_id body))
                                   :name (not-empty (:name body))
                                   :substrate (keyword (or (:substrate body) "local-process"))
-                                  :runner-options {:command (split-command-plain (:command body))
-                                                   :working-dir (or (:working_dir body) ".")}
+                                  :runner-options (cond-> {:working-dir (or (:working_dir body) ".")}
+                                                    (split-command-optional (:command body))
+                                                    (assoc :command (split-command-optional (:command body)))
+                                                    (not-empty (:image body))
+                                                    (assoc :image (:image body))
+                                                    (form-bool (:share_network body))
+                                                    (assoc :share-network? true))
                                   :requested-by "ui"})
         _ (system-launch-run! system (:id run))]
     (write-html! exchange 201
