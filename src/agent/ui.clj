@@ -11,13 +11,36 @@
    [agent.tools.core :as tools]
    [cheshire.core :as json]
    [clojure.string :as str]
-   [hiccup2.core :as h]))
+   [hiccup2.core :as h])
+  (:import
+   (java.time Instant)))
 
 (defn- render [node]
   (str (h/html node)))
 
 (defn- render-many [& nodes]
   (apply str (map render nodes)))
+
+(defn- now-ms []
+  (.toEpochMilli (Instant/now)))
+
+(defn- instant-ms [value]
+  (when (seq (str value))
+    (try
+      (.toEpochMilli (Instant/parse (str value)))
+      (catch Exception _ nil))))
+
+(defn- run-last-seen-ms [run]
+  (or (some-> run :heartbeat :observed-at instant-ms)
+      (some-> run :started-at instant-ms)
+      (some-> run :created-at instant-ms)))
+
+(def stale-run-threshold-ms 30000)
+
+(defn- stale-run? [run]
+  (and (contains? #{"requested" "running"} (:status run))
+       (when-let [seen-ms (run-last-seen-ms run)]
+         (> (- (now-ms) seen-ms) stale-run-threshold-ms))))
 
 (declare dashboard-fragment
          operator-board-fragment
@@ -146,14 +169,18 @@
         memory-health (memory/health-check (:memory-service system))
         adapter-health (channel-adapters/registry-health (:channel-adapter-registry system))
         agent-health (orchestrator/health-check (:orchestrator system))
-        recent-runs (runtime/list-runs (:runtime-service system) {:limit 6})
+        detailed-runs (map #(runtime/get-run (:runtime-service system) (:id %))
+                           (runtime/list-runs (:runtime-service system) {:limit 100}))
+        recent-runs (take 6 detailed-runs)
         pending-approvals (count (tool-approvals/list-requests (:store system) {:status "pending" :limit 100}))
         status-counts (reduce (fn [acc run]
                                 (update acc (:status run) (fnil inc 0)))
                               {}
-                              (runtime/list-runs (:runtime-service system) {:limit 200}))
+                              detailed-runs)
+        stale-runs (filter stale-run? detailed-runs)
         attention-runs (->> recent-runs
-                            (filter #(contains? #{"failed" "cancelled"} (:status %)))
+                            (filter #(or (contains? #{"failed" "cancelled"} (:status %))
+                                         (stale-run? %)))
                             (take 4))]
     (render
      [:section#dashboard-summary.panel
@@ -194,17 +221,24 @@
         [:strong "Attention"]
         (if (seq attention-runs)
           [:div.stack
-           (for [{:keys [id status last-error]} attention-runs]
+           (for [{:keys [id status last-error] :as run} attention-runs]
              [:div.meta
               (str id " | " status
+                   (when (stale-run? run)
+                     " | stale")
                    (when (seq last-error)
                      (str " | " last-error)))])]
           [:div.meta "none"])]
+       [:div.result
+        [:strong "Stale runs"]
+        [:div.value (str (count stale-runs))]]
        ]])))
 
 (defn operator-board-fragment [system]
-  (let [runs (runtime/list-runs (:runtime-service system) {:limit 100})
+  (let [runs (map #(runtime/get-run (:runtime-service system) (:id %))
+                  (runtime/list-runs (:runtime-service system) {:limit 100}))
         active-runs (filter #(contains? #{"requested" "running"} (:status %)) runs)
+        stale-runs (filter stale-run? runs)
         failed-runs (filter #(contains? #{"failed" "cancelled"} (:status %)) runs)
         approvals (tool-approvals/list-requests (:store system) {:status "pending" :limit 8})
         events (sqlite/list-events (:store system) {:limit 8})]
@@ -224,6 +258,18 @@
               [:strong id]
               [:div.session-meta (str substrate " | " status)]
               [:div.session-meta created-at]])]
+          [:div.meta "none"])]
+       [:div.result.diagnostic-result
+        [:strong "Stale runs"]
+        (if (seq stale-runs)
+          [:div.stack
+           (for [{:keys [id status heartbeat created-at]} (take 6 stale-runs)]
+             [:button.session-link
+              {:type "button"
+               "data-on:click" (str "@get('/ui/run-detail?run_id=" id "')")}
+              [:strong id]
+              [:div.session-meta (str status " | stale")]
+              [:div.session-meta (str "last seen | " (or (:observed-at heartbeat) created-at))]])]
           [:div.meta "none"])]
        [:div.result
         [:strong "Approval queue"]
