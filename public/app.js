@@ -409,6 +409,21 @@ class AgentRunPanel extends HTMLElement {
     node.className = `run-live-state ${this.liveState}`;
   }
 
+  get outputPanel() {
+    const node = this.querySelector("[data-run-output-tail]");
+    return node instanceof HTMLElement ? node : null;
+  }
+
+  appendOutputLine(stream, line) {
+    const panel = this.outputPanel;
+    if (!panel) return;
+    const current = panel.textContent === "[waiting for output]" ? "" : panel.textContent;
+    const lines = current ? current.split("\n") : [];
+    lines.push(`[${stream}] ${line}`);
+    panel.textContent = lines.slice(-80).join("\n");
+    panel.scrollTop = panel.scrollHeight;
+  }
+
   startPolling() {
     this.stopPolling();
     this.#pollTimer = window.setInterval(() => {
@@ -445,8 +460,8 @@ class AgentRunPanel extends HTMLElement {
         this.setLiveState("live");
         this.stopPolling();
       };
-      eventSource.onmessage = () => {
-        this.scheduleRefresh(120);
+      eventSource.onmessage = (event) => {
+        this.handleStreamEvent(event);
       };
       eventSource.onerror = () => {
         this.stopLive();
@@ -459,6 +474,36 @@ class AgentRunPanel extends HTMLElement {
       this.startPolling();
       this.scheduleReconnect();
     }
+  }
+
+  handleStreamEvent(event) {
+    let payload;
+    try {
+      payload = JSON.parse(event.data);
+    } catch (_error) {
+      this.scheduleRefresh(120);
+      return;
+    }
+
+    if (payload.type === "snapshot") {
+      this.scheduleRefresh(0);
+      return;
+    }
+
+    const data = payload.data;
+    if (!data) {
+      this.scheduleRefresh(120);
+      return;
+    }
+
+    if (data.event_type === "agent.run.output") {
+      const stream = data.payload?.stream || "stdout";
+      const line = data.payload?.line || "";
+      this.appendOutputLine(stream, line);
+      return;
+    }
+
+    this.scheduleRefresh(120);
   }
 
   scheduleRefresh(delay = 0) {

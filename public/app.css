@@ -278,6 +278,16 @@ agent-run-panel {
   gap: 10px;
 }
 
+#run-output-panel {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.diagnostic-result strong {
+  color: var(--warning);
+}
+
 .run-live-state.live {
   color: var(--success);
 }
