@@ -10,6 +10,7 @@
 
 (def latest-schema-version 6)
 (def default-busy-timeout-ms 5000)
+(defonce ^:private store-locks (atom {}))
 
 (defn- ensure-parent-dir! [path]
   (let [file (io/file path)
@@ -291,10 +292,17 @@
   [config]
   (init-store! config))
 
+(defn- store-lock [store]
+  (let [path (:path store)]
+    (or (get @store-locks path)
+        (let [lock (Object.)]
+          (get (swap! store-locks #(if (contains? % path) % (assoc % path lock))) path)))))
+
 (defn- with-connection [store f]
-  (with-open [conn (DriverManager/getConnection (jdbc-url (:path store)))]
-    (execute-ddl! conn (str "PRAGMA busy_timeout=" default-busy-timeout-ms ";"))
-    (f conn)))
+  (locking (store-lock store)
+    (with-open [conn (DriverManager/getConnection (jdbc-url (:path store)))]
+      (execute-ddl! conn (str "PRAGMA busy_timeout=" default-busy-timeout-ms ";"))
+      (f conn))))
 
 (defn schema-version
   [store]

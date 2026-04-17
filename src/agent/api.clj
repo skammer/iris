@@ -1,6 +1,7 @@
 (ns agent.api
   "Minimal HTTP API for rewritten runtime."
   (:require
+   [agent.broker.core :as broker]
    [agent.channels.core :as channel-adapters]
    [agent.llm.core :as llm-core]
    [agent.memory.core :as memory]
@@ -520,15 +521,16 @@
 
 (defn- handle-events-stream [system exchange]
   (let [stream-id (str "events-" (System/currentTimeMillis))
-        ch (async/chan 64)]
-    (async/tap (get-in system [:event-bus :mult]) ch)
+        broker-instance (or (:event-bus system) (:broker system))
+        subscription (broker/subscribe! broker-instance (broker/all-events-subject))
+        ch (:channel subscription)]
     (try
       (.add (.getResponseHeaders exchange) "Content-Type" "text/event-stream")
       (.add (.getResponseHeaders exchange) "Cache-Control" "no-cache")
       (.sendResponseHeaders exchange 200 0)
       (with-open [stream (.getResponseBody exchange)]
         (loop []
-          (when-let [event (async/<!! ch)]
+          (when-let [event (some-> (async/<!! ch) :payload)]
             (write-sse-chunk! stream {:id stream-id
                                       :object "event.chunk"
                                       :event (event->response event)})
@@ -536,8 +538,7 @@
       (catch Exception e
         (throw e))
       (finally
-        (async/untap (get-in system [:event-bus :mult]) ch)
-        (async/close! ch)))))
+        (broker/unsubscribe! broker-instance subscription)))))
 
 (defn- handle-memory-surfaces [system exchange]
   (write-json! exchange 200 {:data (mapv memory-surface->response
@@ -886,8 +887,9 @@
        (= run-id (:entity-id event))))
 
 (defn- handle-run-events-stream [system exchange run-id]
-  (let [ch (async/chan 64)]
-    (async/tap (get-in system [:event-bus :mult]) ch)
+  (let [broker-instance (or (:event-bus system) (:broker system))
+        subscription (broker/subscribe! broker-instance (broker/all-runs-subject))
+        ch (:channel subscription)]
     (try
       (.add (.getResponseHeaders exchange) "Content-Type" "text/event-stream")
       (.add (.getResponseHeaders exchange) "Cache-Control" "no-cache")
@@ -898,13 +900,12 @@
                                     :run (run->response run)}))
         (loop []
           (when-let [event (async/<!! ch)]
-            (when (relevant-run-event? event run-id)
+            (when (relevant-run-event? (:payload event) run-id)
               (write-sse-chunk! stream {:type "event"
-                                        :data (event->response event)}))
+                                        :data (event->response (:payload event))}))
             (recur))))
       (finally
-        (async/untap (get-in system [:event-bus :mult]) ch)
-        (async/close! ch)))))
+        (broker/unsubscribe! broker-instance subscription)))))
 
 (defn- handle-chat-completions [system exchange]
   (let [{:keys [messages session-id stream?]}
@@ -1010,10 +1011,11 @@
 
 (defn- handle-ui-session-live [system exchange]
   (let [session-id (:session_id (query-params exchange))
-        ch (async/chan 64)]
+        broker-instance (or (:event-bus system) (:broker system))
+        subscription (broker/subscribe! broker-instance (broker/all-events-subject))
+        ch (:channel subscription)]
     (ensure-string! :session_id session-id)
     (ensure-session-exists! system session-id)
-    (async/tap (get-in system [:event-bus :mult]) ch)
     (try
       (.add (.getResponseHeaders exchange) "Content-Type" "text/event-stream")
       (.add (.getResponseHeaders exchange) "Cache-Control" "no-cache")
@@ -1021,13 +1023,12 @@
       (with-open [stream (.getResponseBody exchange)]
         (write-datastar-patch! stream (ui/session-detail-fragment system session-id))
         (loop []
-          (when-let [event (async/<!! ch)]
+          (when-let [event (some-> (async/<!! ch) :payload)]
             (when (relevant-session-event? event session-id)
               (write-datastar-patch! stream (ui/session-detail-fragment system session-id)))
             (recur))))
       (finally
-        (async/untap (get-in system [:event-bus :mult]) ch)
-        (async/close! ch)))))
+        (broker/unsubscribe! broker-instance subscription)))))
 
 (defn- handle-ui-chat [system exchange]
   (let [body (read-form-body exchange)
@@ -1046,8 +1047,9 @@
   (write-html! exchange 200 (ui/events-fragment system)))
 
 (defn- handle-ui-events-live [system exchange]
-  (let [ch (async/chan 64)]
-    (async/tap (get-in system [:event-bus :mult]) ch)
+  (let [broker-instance (or (:event-bus system) (:broker system))
+        subscription (broker/subscribe! broker-instance (broker/all-events-subject))
+        ch (:channel subscription)]
     (try
       (.add (.getResponseHeaders exchange) "Content-Type" "text/event-stream")
       (.add (.getResponseHeaders exchange) "Cache-Control" "no-cache")
@@ -1059,8 +1061,7 @@
             (write-datastar-patch! stream (ui/events-fragment system))
             (recur))))
       (finally
-        (async/untap (get-in system [:event-bus :mult]) ch)
-        (async/close! ch)))))
+        (broker/unsubscribe! broker-instance subscription)))))
 
 (defn- handle-ui-memory-prompt [system exchange]
   (write-html! exchange 200 (ui/memory-prompt-fragment system)))

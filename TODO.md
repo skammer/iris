@@ -47,7 +47,7 @@ Reference:
 12. [x] Implement `seatbelt` runner for macOS.
    Added in `src/agent/runners/seatbelt.clj` and wired into active system/UI/API.
 13. [ ] Implement `docker/podman` runner.
-   Progress: host-side parity done; child-shim image/bootstrap contract done; real Docker E2E done; Podman E2E skip-capable test added.
+   Progress: host-side parity done; child-shim image/bootstrap contract done; real Docker E2E done; Docker E2E revalidated on host 2026-04-17; Podman E2E skip-capable test added.
    Remaining: image distribution story, operator-facing failure diagnostics.
 14. [ ] Define later runner interfaces:
    VM, k8s job, SSH remote.
@@ -145,7 +145,8 @@ Reference:
    Added `src/agent/runtime/child.clj` with bootstrap/register/heartbeat/checkpoint/command-poll loop.
    `local-process` now defaults to launching real child agent runtime when no explicit command is supplied.
 6. [ ] Event/broker abstraction:
-   SQLite/local first, NATS JetStream next.
+   SQLite/local baseline done with broker protocol + local backend + NATS-shaped subjects for runs/events/commands/heartbeats/checkpoints.
+   Remaining: optional real JetStream backend.
 7. [ ] Live subagent event stream:
    Add realtime run logs/progress/status before full broker work.
 8. [ ] Agent-to-agent interop:
