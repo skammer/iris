@@ -12,6 +12,7 @@
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
    [agent.runners.bubblewrap :as bubblewrap]
+   [agent.runners.docker-podman :as docker-podman]
    [agent.runners.core :as runners]
    [agent.runners.local-process :as local-process]
    [agent.runners.seatbelt :as seatbelt]
@@ -147,6 +148,12 @@
   {:local-process (create-exit-aware-local-runner runtime-service)
    :bubblewrap (bubblewrap/create-bubblewrap-runner
                 {:delegate (create-exit-aware-local-runner runtime-service)})
+   :docker (docker-podman/create-docker-podman-runner
+            {:delegate (create-exit-aware-local-runner runtime-service)
+             :engine-binary "docker"})
+   :podman (docker-podman/create-docker-podman-runner
+            {:delegate (create-exit-aware-local-runner runtime-service)
+             :engine-binary "podman"})
    :seatbelt (seatbelt/create-seatbelt-runner
               {:delegate (create-exit-aware-local-runner runtime-service)})})
 
@@ -253,6 +260,49 @@
   [system]
   {"AGENT_SQLITE_PATH" (-> system :config :storage :sqlite :path io/file .getAbsolutePath)})
 
+(defn- absolute-path [path]
+  (.getAbsolutePath (io/file path)))
+
+(defn- ensure-mount [mounts source target mode]
+  (if (some #(and (= source (:source %)) (= target (:target %))) mounts)
+    mounts
+    (conj (vec mounts) {:source source :target target :mode mode})))
+
+(defn- prepare-container-runner-options
+  [system substrate runner-options]
+  (let [runner-cfg (get-in system [:config :runners substrate] {})
+        host-working-dir (absolute-path (or (:host-working-dir runner-options)
+                                            (:working-dir runner-options)
+                                            (:host-working-dir runner-cfg)
+                                            "."))
+        container-working-dir (or (:container-working-dir runner-options)
+                                  (:container-working-dir runner-cfg)
+                                  "/workspace")
+        sqlite-host-path (-> system :config :storage :sqlite :path absolute-path)
+        sqlite-file (io/file sqlite-host-path)
+        sqlite-host-dir (.getAbsolutePath (.getParentFile sqlite-file))
+        container-data-dir (or (:container-data-dir runner-options)
+                               (:container-data-dir runner-cfg)
+                               "/agent-data")
+        container-sqlite-path (str container-data-dir "/" (.getName sqlite-file))
+        mounts* (-> (vec (or (:mounts runner-options) []))
+                    (ensure-mount host-working-dir container-working-dir :rw)
+                    (ensure-mount sqlite-host-dir container-data-dir :rw))
+        env* (merge {"AGENT_SQLITE_PATH" container-sqlite-path}
+                    (or (:env runner-options) {}))]
+    (cond-> (assoc runner-options
+                   :image (or (:image runner-options)
+                              (:image runner-cfg))
+                   :mounts mounts*
+                   :env env*
+                   :host-working-dir host-working-dir
+                   :container-working-dir container-working-dir
+                   :container-data-dir container-data-dir
+                   :share-network? (boolean (or (:share-network? runner-options)
+                                                (:share-network? runner-cfg))))
+      (not (seq (:command runner-options)))
+      (assoc :command (runtime-child/current-container-child-command)))))
+
 (defn- prepare-runner-options
   [system run]
   (let [runner-options (or (:runner-options run) {})]
@@ -263,7 +313,11 @@
            (cond-> (assoc opts :env env*)
              (not (seq (:command opts)))
              (assoc :command (runtime-child/current-child-command)
-                    :working-dir (or (:working-dir opts) ".")))))))))
+                    :working-dir (or (:working-dir opts) "."))))))
+
+      (#{"docker" "podman"} (:substrate run))
+      ((fn [opts]
+         (prepare-container-runner-options system (keyword (:substrate run)) opts))))))
 
 (defn create-session!
   ([system] (create-session! system nil))

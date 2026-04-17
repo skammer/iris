@@ -375,10 +375,16 @@
        [:input {:type "text" :name "agent_id" :placeholder "agent id"}]
        [:select {:name "substrate"}
         [:option {:value "local-process"} "local-process"]
-        [:option {:value "bubblewrap"} "bubblewrap"]
-        [:option {:value "seatbelt"} "seatbelt"]]
-       [:input {:type "text" :name "command" :placeholder "printf hello"}]
+       [:option {:value "bubblewrap"} "bubblewrap"]
+       [:option {:value "docker"} "docker"]
+       [:option {:value "podman"} "podman"]
+       [:option {:value "seatbelt"} "seatbelt"]]
+       [:input {:type "text" :name "image" :placeholder "container image for docker/podman"}]
+       [:input {:type "text" :name "command" :placeholder "printf hello or leave blank for child shim"}]
        [:input {:type "text" :name "working_dir" :value "." :placeholder "working dir"}]
+       [:label.meta
+        [:input {:type "checkbox" :name "share_network"}]
+        " share network"]
        [:div.actions
         [:button {:type "button"
                   "data-on:click" "@post('/ui/runs', {contentType: 'form', selector: '#create-run-form'})"}

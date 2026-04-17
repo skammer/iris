@@ -47,6 +47,7 @@ Reference:
 12. [x] Implement `seatbelt` runner for macOS.
    Added in `src/agent/runners/seatbelt.clj` and wired into active system/UI/API.
 13. [ ] Implement `docker/podman` runner.
+   Next: first wire host-side runner parity, then child-shim image/bootstrap path, then end-to-end real engine tests.
 14. [ ] Define later runner interfaces:
    VM, k8s job, SSH remote.
 15. [ ] Ensure same child runtime shim works in all substrates.
@@ -136,22 +137,28 @@ Reference:
    Added runner protocol, run registry, leases, heartbeats, commands, checkpoints, and runtime service baseline.
 5. [ ] Execution substrates:
    `local-process`, `bubblewrap`, and macOS `seatbelt` are done.
-   Next: docker/podman.
+   Next order: `docker/podman` runner parity → child shim image/bootstrap path → later VM/k8s/SSH interfaces.
 5.1 [x] Child runtime shim MVP:
    Added `src/agent/runtime/child.clj` with bootstrap/register/heartbeat/checkpoint/command-poll loop.
    `local-process` now defaults to launching real child agent runtime when no explicit command is supplied.
 6. [ ] Event/broker abstraction:
    SQLite/local first, NATS JetStream next.
-7. [ ] Agent-to-agent interop:
+7. [ ] Live subagent event stream:
+   Add realtime run logs/progress/status before full broker work.
+8. [ ] Agent-to-agent interop:
    Add logical addressing, capability exchange, routed/direct messaging, peer policy.
-8. [ ] Channel adapter implementation:
+9. [ ] Channel adapter implementation:
    Start Telegram first.
    Map inbound messages onto current session/agent/channel model.
-9. [ ] Personality/profile system:
+10. [ ] Personality/profile system:
    Profiles should bundle prompt, provider/model prefs, tool policy, and memory defaults.
-10. [ ] Deeper graph memory:
+11. [ ] Deeper graph memory:
    Move from raw Datahike prototype to richer entity/relation extraction + recall path.
-11. [ ] Examples/docs tranche:
+11.1 [ ] Explicit memory write path:
+   Add tool/API for agents to intentionally store memories/facts, not only infer from transcript.
+   Memory writes must support scopes: global, per-agent, and per-chat/session.
+   Define retrieval/visibility rules, audit trail, and conflict/update semantics for explicit memory entries.
+12. [ ] Examples/docs tranche:
    Add local UI walkthrough, approval flow demo, Telegram bot example, personality presets, graph memory demo.
 
 ## Next Iterations Planning

@@ -8,6 +8,7 @@
    [agent.memory.core-test]
    [agent.orchestrator-test]
    [agent.persistence.sqlite-test]
+   [agent.runners.docker-podman-test]
    [agent.runners.local-process-test]
    [agent.runners.seatbelt-test]
    [agent.runtime.child-test]
@@ -28,6 +29,7 @@
     agent.memory.core-test
     agent.orchestrator-test
     agent.persistence.sqlite-test
+    agent.runners.docker-podman-test
     agent.runners.local-process-test
     agent.runners.seatbelt-test
     agent.runtime.child-test
