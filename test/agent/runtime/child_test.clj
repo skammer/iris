@@ -43,18 +43,26 @@
       (is (wait-until #(when (= "running" (:status (core/get-run system run-id)))
                          (core/get-run system run-id))
                       15000))
-      (let [registered-run (core/get-run system run-id)
+        (let [registered-run (core/get-run system run-id)
             _ (core/enqueue-run-command! system run-id {:command-type :ping
                                                         :payload {}})
             _ (core/enqueue-run-command! system run-id {:command-type :run-task
                                                         :payload {:task "demo"
                                                                   :sleep-ms 25}})
-            _ (is (wait-until #(when (empty? (core/list-run-commands system run-id {:status "pending"}))
+            _ (is (wait-until #(when (and (some (fn [command]
+                                                  (= "completed" (:status command)))
+                                                (core/list-run-commands system run-id))
+                                        (some (fn [checkpoint]
+                                                (= "task" (:checkpoint-type checkpoint)))
+                                              (core/list-run-checkpoints system run-id {:limit 20})))
                                  true)
                               15000))
             commands (core/list-run-commands system run-id)
             checkpoints (core/list-run-checkpoints system run-id {:limit 20})
             heartbeats (core/list-run-heartbeats system run-id {:limit 20})
+            output-events (sqlite/list-events store {:entity-type :agent_run
+                                                     :entity-id run-id
+                                                     :limit 50})
             _ (core/enqueue-run-command! system run-id {:command-type :cancel
                                                         :payload {:reason "test"}})
             cancelled-run (wait-until #(when (= "cancelled" (:status (core/get-run system run-id)))
@@ -66,6 +74,7 @@
         (is (some #(= "completed" (:status %)) commands))
         (is (some #(= "task" (:checkpoint-type %)) checkpoints))
         (is (>= (count heartbeats) 2))
+        (is (some #(= "agent.run.output" (:event-type %)) output-events))
         (is cancelled-run)
         (is (empty? (:pending-commands cancelled-run))))
       (finally

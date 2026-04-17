@@ -178,6 +178,12 @@
             command-entry (core/enqueue-run-command! system run-id
                                                      {:command-type :pause
                                                       :payload {:reason "test"}})
+            _ (core/log-event! system
+                               {:event-type :agent.run.output
+                                :entity-type :agent_run
+                                :entity-id run-id
+                                :payload {:stream "stdout"
+                                          :line "boot ok"}})
             fetched-run (http-get (str base-url "/v1/runs/" run-id))
             fetched-run-body (json/parse-string (:body fetched-run) true)
             run-heartbeats (http-get (str base-url "/v1/runs/" run-id "/heartbeats?since_sequence=1"))
@@ -309,10 +315,15 @@
         (is (str/includes? (:body ui-runs) "seatbelt"))
         (is (= 200 (:status ui-run-detail)))
         (is (str/includes? (:body ui-run-detail) "Latest checkpoint"))
+        (is (str/includes? (:body ui-run-detail) "Recent output"))
+        (is (str/includes? (:body ui-run-detail) "boot ok"))
+        (is (str/includes? (:body ui-run-detail) "agent-run-panel"))
         (is (= 200 (:status ui-index)))
         (is (str/includes? (:body ui-index) "datastar.js"))
         (is (= 200 (:status ui-dashboard)))
         (is (str/includes? (:body ui-dashboard) "Runtime Snapshot"))
+        (is (str/includes? (:body ui-dashboard) "Recent runs"))
+        (is (str/includes? (:body ui-dashboard) "Pending approvals"))
         (is (= 200 (:status health)))
         (is (= 3 (get-in health-body [:tools :count])))
         (is (= true (get-in health-body [:memory :healthy])))

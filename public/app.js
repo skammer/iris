@@ -363,6 +363,130 @@ if (!customElements.get("agent-chat-panel")) {
   customElements.define("agent-chat-panel", AgentChatPanel);
 }
 
+class AgentRunPanel extends HTMLElement {
+  #eventSource = null;
+  #pollTimer = null;
+  #refreshTimer = null;
+  #refreshInFlight = false;
+  #reconnectTimer = null;
+
+  connectedCallback() {
+    this.startLive();
+    this.startPolling();
+    this.applyLiveState();
+  }
+
+  disconnectedCallback() {
+    this.stopLive();
+    this.stopPolling();
+    if (this.#refreshTimer) {
+      clearTimeout(this.#refreshTimer);
+      this.#refreshTimer = null;
+    }
+    if (this.#reconnectTimer) {
+      clearTimeout(this.#reconnectTimer);
+      this.#reconnectTimer = null;
+    }
+  }
+
+  get runId() {
+    return this.dataset.runId || "";
+  }
+
+  get liveState() {
+    return this.dataset.liveState || "poll";
+  }
+
+  setLiveState(state) {
+    this.dataset.liveState = state;
+    this.applyLiveState();
+  }
+
+  applyLiveState() {
+    const node = this.querySelector("[data-run-live-state]");
+    if (!(node instanceof HTMLElement)) return;
+    node.textContent = this.liveState;
+    node.className = `run-live-state ${this.liveState}`;
+  }
+
+  startPolling() {
+    this.stopPolling();
+    this.#pollTimer = window.setInterval(() => {
+      void this.refreshBody();
+    }, 5000);
+  }
+
+  stopPolling() {
+    if (!this.#pollTimer) return;
+    clearInterval(this.#pollTimer);
+    this.#pollTimer = null;
+  }
+
+  stopLive() {
+    if (!this.#eventSource) return;
+    this.#eventSource.close();
+    this.#eventSource = null;
+  }
+
+  scheduleReconnect() {
+    if (this.#reconnectTimer || !this.runId) return;
+    this.#reconnectTimer = window.setTimeout(() => {
+      this.#reconnectTimer = null;
+      this.startLive();
+    }, 5000);
+  }
+
+  startLive() {
+    if (!this.runId || this.#eventSource) return;
+    try {
+      const eventSource = new EventSource(`/v1/runs/${encodeURIComponent(this.runId)}/stream`);
+      this.#eventSource = eventSource;
+      eventSource.onopen = () => {
+        this.setLiveState("live");
+        this.stopPolling();
+      };
+      eventSource.onmessage = () => {
+        this.scheduleRefresh(120);
+      };
+      eventSource.onerror = () => {
+        this.stopLive();
+        this.setLiveState("poll");
+        this.startPolling();
+        this.scheduleReconnect();
+      };
+    } catch (_error) {
+      this.setLiveState("poll");
+      this.startPolling();
+      this.scheduleReconnect();
+    }
+  }
+
+  scheduleRefresh(delay = 0) {
+    if (this.#refreshTimer) clearTimeout(this.#refreshTimer);
+    this.#refreshTimer = window.setTimeout(() => {
+      this.#refreshTimer = null;
+      void this.refreshBody();
+    }, delay);
+  }
+
+  async refreshBody() {
+    if (this.#refreshInFlight || !this.runId) return;
+    this.#refreshInFlight = true;
+    try {
+      const response = await fetch(`/ui/run-detail-body?run_id=${encodeURIComponent(this.runId)}`);
+      if (!response.ok) return;
+      this.innerHTML = await response.text();
+      this.applyLiveState();
+    } finally {
+      this.#refreshInFlight = false;
+    }
+  }
+}
+
+if (!customElements.get("agent-run-panel")) {
+  customElements.define("agent-run-panel", AgentRunPanel);
+}
+
 action({
   name: "chatSubmit",
   apply({ el }, evt) {

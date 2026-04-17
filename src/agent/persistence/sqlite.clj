@@ -9,6 +9,7 @@
    (java.util UUID)))
 
 (def latest-schema-version 6)
+(def default-busy-timeout-ms 5000)
 
 (defn- ensure-parent-dir! [path]
   (let [file (io/file path)
@@ -271,6 +272,7 @@
 
 (defn- migrate! [conn]
   (execute-ddl! conn "PRAGMA journal_mode=WAL;")
+  (execute-ddl! conn (str "PRAGMA busy_timeout=" default-busy-timeout-ms ";"))
   (bootstrap-legacy-version! conn)
   (let [current-version (get-user-version conn)]
     (doseq [migration migrations
@@ -291,6 +293,7 @@
 
 (defn- with-connection [store f]
   (with-open [conn (DriverManager/getConnection (jdbc-url (:path store)))]
+    (execute-ddl! conn (str "PRAGMA busy_timeout=" default-busy-timeout-ms ";"))
     (f conn)))
 
 (defn schema-version

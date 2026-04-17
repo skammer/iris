@@ -47,8 +47,8 @@ Reference:
 12. [x] Implement `seatbelt` runner for macOS.
    Added in `src/agent/runners/seatbelt.clj` and wired into active system/UI/API.
 13. [ ] Implement `docker/podman` runner.
-   Progress: host-side parity done; child-shim image/bootstrap contract done; real Docker E2E done.
-   Remaining: Podman E2E, image distribution story, operator-facing failure diagnostics.
+   Progress: host-side parity done; child-shim image/bootstrap contract done; real Docker E2E done; Podman E2E skip-capable test added.
+   Remaining: image distribution story, operator-facing failure diagnostics.
 14. [ ] Define later runner interfaces:
    VM, k8s job, SSH remote.
 15. [ ] Ensure same child runtime shim works in all substrates.
@@ -57,7 +57,8 @@ Reference:
 
 15. [ ] Add live subagent event stream:
    Realtime logs/progress/status when connection healthy.
-   Baseline run-scoped SSE endpoint exists at `/v1/runs/:id/stream`; run output events now included. Still missing richer operator UI.
+   Baseline run-scoped SSE endpoint exists at `/v1/runs/:id/stream`; run output events now included; run-detail UI now follows stream with polling fallback; overview dashboard now shows pending approvals + recent runs.
+   Remaining: dedicated stdout/stderr tail view for container substrates, richer aggregated operator views.
 16. [x] Add polling/checkup fallback:
    Parent can fetch latest run state, heartbeat, checkpoint, pending commands.
    Added run catch-up APIs for heartbeats/checkpoints/commands/events and UI catch-up view.
