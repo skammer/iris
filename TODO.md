@@ -161,8 +161,8 @@ Reference:
 7. [ ] Live subagent event stream:
    Add realtime run logs/progress/status before full broker work.
 8. [ ] Agent-to-agent interop:
-   Baseline done: logical addressing, capability exchange, routed/direct messaging, audit events, retries/acks/message status, richer trust policy baseline, networked peer federation baseline.
-   Remaining: real remote transport/federated delivery, stronger policy/grant model.
+   Baseline done: logical addressing, capability exchange, routed/direct messaging, audit events, retries/acks/message status, richer trust policy baseline, networked peer federation baseline, real HTTP federated forward/inbox delivery.
+   Remaining: stronger policy/grant model, non-HTTP/broker-backed federation.
 9. [ ] Channel adapter implementation:
    Start Telegram first.
    Map inbound messages onto current session/agent/channel model.

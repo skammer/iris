@@ -183,11 +183,15 @@
 
 (defn- interop->response [interop]
   {:id (:id interop)
+   :origin_message_id (:origin-message-id interop)
    :request_id (:request-id interop)
    :message_type (:message-type interop)
    :delivery_mode (:delivery-mode interop)
    :from_agent_id (:from-agent-id interop)
+    :from_peer_id (:from-peer-id interop)
    :to_agent_id (:to-agent-id interop)
+   :to_peer_id (:to-peer-id interop)
+   :remote_agent_id (:remote-agent-id interop)
    :from_address (:from-address interop)
    :to_address (:to-address interop)
    :route (:route interop)
@@ -196,9 +200,11 @@
    :delivery_count (:delivery-count interop)
    :created_at (:created-at interop)
    :last_delivered_at (:last-delivered-at interop)
+   :forwarded_at (:forwarded-at interop)
    :acked_at (:acked-at interop)
    :acknowledged_by (:acknowledged-by interop)
-   :ack_type (:ack-type interop)})
+   :ack_type (:ack-type interop)
+   :last_error (:last-error interop)})
 
 (defn- federated-peer->response [peer]
   {:id (:id peer)
@@ -785,6 +791,28 @@
                                                                  :logical-address-prefix logical-address-prefix
                                                                  :capabilities capabilities
                                                                  :status status}))})))
+
+(defn- handle-federation-inbox [system exchange]
+  (let [body (read-json-body exchange)
+        peer-id (:peer_id body)
+        to-agent-ref (:to_agent_ref body)
+        envelope (:envelope body)]
+    (ensure-string! :peer_id peer-id)
+    (ensure-string! :to_agent_ref to-agent-ref)
+    (when-not (map? envelope)
+      (throw (api-error 400 "bad_request" "envelope must be an object")))
+    (try
+      (write-json! exchange 202
+                   {:data (interop->response
+                           (orchestrator/receive-federated-message! (:orchestrator system)
+                                                                    peer-id
+                                                                    to-agent-ref
+                                                                    envelope))})
+      (catch Exception e
+        (case (:type (ex-data e))
+          :peer-not-found (throw (api-error 404 "peer_not_found" "Federated peer not found"))
+          :agent-not-found (throw (api-error 404 "agent_not_found" "Agent not found"))
+          (throw e))))))
 
 (defn- handle-agent-interop-message [system exchange agent-id]
   (let [body (read-json-body exchange)
@@ -1676,6 +1704,9 @@
 
             (and (= method "POST") (= path ["v1" "federation" "peers"]))
             (handle-create-federated-peer system exchange)
+
+            (and (= method "POST") (= path ["v1" "federation" "inbox"]))
+            (handle-federation-inbox system exchange)
 
             (and (= method "GET") (= 4 (count path))
                  (= ["v1" "agents"] (subvec path 0 2))
