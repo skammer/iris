@@ -260,7 +260,7 @@
             peer-id (:id created-peer-body)
             created-federated-peer (http-post (str base-url "/v1/federation/peers")
                                               {:id "mesh-1"
-                                               :base_url "https://mesh-1.internal"
+                                               :base_url base-url
                                                :capabilities ["interop"]})
             created-federated-peer-body (json/parse-string (:body created-federated-peer) true)
             federation-peers (http-get (str base-url "/v1/federation/peers"))
@@ -310,7 +310,10 @@
                                                   :route "federated"
                                                   :request_id "req-fed-1"
                                                   :content "collect remote"
-                                                  :to_agent_ref "federation://mesh-1/remote-agent"})
+                                                  :to_agent_ref (str "federation://mesh-1/" agent-id)})
+            federated-interop-message-body (json/parse-string (:body federated-interop-message) true)
+            interop-list-after-federation (http-get (str base-url "/v1/agents/" agent-id "/interop/messages?direction=inbound"))
+            interop-list-after-federation-body (json/parse-string (:body interop-list-after-federation) true)
             agent-msg (http-post (str base-url "/v1/agents/" agent-id "/messages")
                                  {:content "do work"})
             agent-msg-body (json/parse-string (:body agent-msg) true)
@@ -457,7 +460,11 @@
         (is (= "acked" (get-in interop-ack-body [:data :status])))
         (is (= "completed" (get-in interop-ack-body [:data :ack_type])))
         (is (= 201 (:status federated-interop-message)))
-        (is (= "federated" (get-in (json/parse-string (:body federated-interop-message) true) [:data :route])))
+        (is (= "federated" (get-in federated-interop-message-body [:data :route])))
+        (is (= "forwarded" (get-in federated-interop-message-body [:data :status])))
+        (is (= 200 (:status interop-list-after-federation)))
+        (is (= 2 (count (:data interop-list-after-federation-body))))
+        (is (= 1 (count (filter #(= "federated" (:route %)) (:data interop-list-after-federation-body)))))
         (is (= 200 (:status agent-msg)))
         (is (= "test-response" (get-in agent-msg-body [:response :content])))
         (is (= 201 (:status channel)))

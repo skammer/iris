@@ -7,6 +7,7 @@
    [agent.channels.core :as channel-adapters]
    [agent.api :as api]
    [agent.config :as config]
+   [agent.federation.http :as federation-http]
    [agent.llm.core :as llm-core]
    [agent.llm.providers.ollama :as ollama]
    [agent.llm.providers.openai-compatible :as openai-compatible]
@@ -109,7 +110,8 @@
 
 (defn create-orchestrator
   [_cfg event-sink]
-  (orchestrator/create-orchestrator {:event-sink event-sink}))
+  (orchestrator/create-orchestrator {:event-sink event-sink
+                                     :federation-deliver (federation-http/create-forwarder)}))
 
 (defn create-skills-registry
   [cfg]

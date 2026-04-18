@@ -57,13 +57,14 @@
 
 (defn create-orchestrator
   ([] (create-orchestrator {}))
-  ([{:keys [event-sink]}]
+  ([{:keys [event-sink federation-deliver]}]
    {:agents (atom {})
     :channels (atom {})
     :federated-peers (atom {})
     :interop-windows (atom {})
     :interop-deliveries (atom {})
     :interop-messages (atom {})
+    :federation-deliver federation-deliver
     :event-sink event-sink}))
 
 (defn- logical-address [agent-id]
@@ -390,6 +391,42 @@
                        :agent-id agent-id
                        :limit limit})))))
 
+(defn- deliver-federated!
+  [orchestrator peer-id peer remote-agent-id envelope]
+  (if-let [deliver (:federation-deliver orchestrator)]
+    (let [result (deliver {:peer-id peer-id
+                           :peer peer
+                           :remote-agent-id remote-agent-id
+                           :envelope envelope})]
+      (if (:ok? result)
+        (let [updated (assoc envelope
+                             :status "forwarded"
+                             :forwarded-at (now))]
+          (store-interop-message! orchestrator updated)
+          (emit-event! orchestrator
+                       {:event-type :agent.interop.message.forwarded
+                        :entity-type :peer
+                        :entity-id peer-id
+                        :payload {:message-id (:id updated)
+                                  :remote-agent-id remote-agent-id
+                                  :status (:status result)}})
+          updated)
+        (let [updated (assoc envelope
+                             :status "forward_failed"
+                             :last-error (or (some-> result :body :message)
+                                             (str "peer returned " (:status result))))]
+          (store-interop-message! orchestrator updated)
+          (emit-event! orchestrator
+                       {:event-type :agent.interop.message.forward.failed
+                        :entity-type :peer
+                        :entity-id peer-id
+                        :payload {:message-id (:id updated)
+                                  :remote-agent-id remote-agent-id
+                                  :status (:status result)
+                                  :last-error (:last-error updated)}})
+          updated)))
+    envelope))
+
 (defn send-interop-message!
   [orchestrator from-agent-ref to-agent-ref {:keys [message-type content route request-id delivery-mode]
                                              :or {message-type "request"
@@ -427,7 +464,7 @@
              (contains? @(:interop-deliveries orchestrator) dedupe-key))
       (get @(:interop-deliveries orchestrator) dedupe-key)
       (let [timestamp (now)
-            envelope {:id (random-id "interop")
+            envelope0 {:id (random-id "interop")
                       :request-id request-id
                       :message-type message-type
                       :delivery-mode delivery-mode
@@ -444,9 +481,18 @@
                       :delivery-count 1
                       :created-at timestamp
                       :last-delivered-at timestamp
+                      :forwarded-at nil
                       :acked-at nil
                       :acknowledged-by nil
-                      :ack-type nil}]
+                      :ack-type nil
+                      :last-error nil}
+            envelope (if to-agent
+                       envelope0
+                       (deliver-federated! orchestrator
+                                           (:peer-id federated-target)
+                                           (:peer federated-target)
+                                           (:remote-agent-id federated-target)
+                                           envelope0))]
         (when to-agent
           (async/>!! (:inbox to-agent)
                      {:role "user"
@@ -462,14 +508,16 @@
                       :entity-type :agent
                       :entity-id (:id from-agent)
                       :payload envelope})
-        (emit-event! orchestrator
-                     {:event-type (if to-agent
-                                    :agent.interop.message.delivered
-                                    :agent.interop.message.forward.requested)
-                      :entity-type (if to-agent :agent :peer)
-                      :entity-id (or (some-> to-agent :id)
-                                     (some-> federated-target :peer-id))
-                      :payload envelope})
+        (when (or to-agent
+                  (= "forward_requested" (:status envelope)))
+          (emit-event! orchestrator
+                       {:event-type (if to-agent
+                                      :agent.interop.message.delivered
+                                      :agent.interop.message.forward.requested)
+                        :entity-type (if to-agent :agent :peer)
+                        :entity-id (or (some-> to-agent :id)
+                                       (some-> federated-target :peer-id))
+                        :payload envelope}))
         envelope))))
 
 (defn acknowledge-interop-message!
@@ -516,12 +564,21 @@
                       {:type :validation-failed
                        :field :message-id
                        :message-id message-id})))
-    (let [to-agent (when-let [to-agent-id (:to-agent-id envelope)]
-                     (ensure-agent! orchestrator to-agent-id))
-          updated (-> envelope
+      (let [to-agent (when-let [to-agent-id (:to-agent-id envelope)]
+                       (ensure-agent! orchestrator to-agent-id))
+            updated0 (-> envelope
                       (assoc :status (if to-agent "delivered" "forward_requested"))
                       (assoc :last-delivered-at (now))
-                      (update :delivery-count (fnil inc 1)))]
+                      (assoc :forwarded-at nil)
+                      (assoc :last-error nil)
+                      (update :delivery-count (fnil inc 1)))
+            updated (if to-agent
+                      updated0
+                      (deliver-federated! orchestrator
+                                          (:to-peer-id updated0)
+                                          (get @(:federated-peers orchestrator) (:to-peer-id updated0))
+                                          (:remote-agent-id updated0)
+                                          updated0))]
       (when to-agent
         (async/>!! (:inbox to-agent)
                    {:role "user"
@@ -538,15 +595,62 @@
                               :to-agent-id (:to-agent-id updated)
                               :to-peer-id (:to-peer-id updated)
                               :delivery-count (:delivery-count updated)}})
-      (emit-event! orchestrator
-                   {:event-type (if to-agent
-                                  :agent.interop.message.delivered
-                                  :agent.interop.message.forward.requested)
-                    :entity-type (if to-agent :agent :peer)
-                    :entity-id (or (:to-agent-id updated)
-                                   (:to-peer-id updated))
-                    :payload updated})
+      (when (or to-agent
+                (= "forward_requested" (:status updated)))
+        (emit-event! orchestrator
+                     {:event-type (if to-agent
+                                    :agent.interop.message.delivered
+                                    :agent.interop.message.forward.requested)
+                      :entity-type (if to-agent :agent :peer)
+                      :entity-id (or (:to-agent-id updated)
+                                     (:to-peer-id updated))
+                      :payload updated}))
       updated)))
+
+(defn receive-federated-message!
+  [orchestrator peer-id to-agent-ref envelope]
+  (when-not (get @(:federated-peers orchestrator) peer-id)
+    (throw (ex-info "Federated peer not found"
+                    {:type :peer-not-found
+                     :peer-id peer-id})))
+  (let [to-agent (ensure-agent-by-ref! orchestrator to-agent-ref)
+        local-envelope {:id (random-id "interop")
+                        :origin-message-id (:id envelope)
+                        :request-id (:request-id envelope)
+                        :message-type (:message-type envelope)
+                        :delivery-mode (:delivery-mode envelope)
+                        :from-agent-id (:from-agent-id envelope)
+                        :from-peer-id peer-id
+                        :to-agent-id (:id to-agent)
+                        :from-address (:from-address envelope)
+                        :to-address (:logical-address to-agent)
+                        :route "federated"
+                        :content (:content envelope)
+                        :status "delivered"
+                        :delivery-count 1
+                        :created-at (now)
+                        :last-delivered-at (now)
+                        :forwarded-at nil
+                        :acked-at nil
+                        :acknowledged-by nil
+                        :ack-type nil
+                        :last-error nil}]
+    (async/>!! (:inbox to-agent)
+               {:role "user"
+                :content (str "[interop:" (:message-type local-envelope) "] "
+                              (:from-address local-envelope) ": " (:content local-envelope))
+                :created-at (:created-at local-envelope)
+                :interop local-envelope})
+    (store-interop-message! orchestrator local-envelope)
+    (emit-event! orchestrator
+                 {:event-type :agent.interop.message.received
+                  :entity-type :agent
+                  :entity-id (:id to-agent)
+                  :payload {:message-id (:id local-envelope)
+                            :origin-message-id (:origin-message-id local-envelope)
+                            :from-peer-id peer-id
+                            :from-address (:from-address local-envelope)}})
+    local-envelope))
 
 (defn create-channel!
   [orchestrator {:keys [name participants]
