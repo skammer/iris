@@ -31,6 +31,8 @@
    [clojure.java.io :as io]
    [clojure.string :as str]))
 
+(declare spawn-task-worker!)
+
 (defn create-llm-provider
   [cfg]
   (let [{:keys [provider model site-url app-name openrouter ollama openai-compatible]} cfg]
@@ -410,6 +412,61 @@
   ([system tool-name input context]
    (tools/execute-tool (:tool-registry system) tool-name input context)))
 
+(defn get-agent
+  [system agent-id]
+  (orchestrator/get-agent (:orchestrator system) agent-id))
+
+(defn execute-agent-tool!
+  ([system agent-id tool-name input]
+   (execute-agent-tool! system agent-id tool-name input {}))
+  ([system agent-id tool-name input context]
+   (let [agent (or (get-agent system agent-id)
+                   (throw (ex-info "Agent not found"
+                                   {:type :agent-not-found
+                                    :agent-id agent-id})))]
+     (execute-tool system tool-name input
+                   (merge context
+                          {:user (or (:user context) agent-id)
+                           :allowed-tools (set (:tool-access agent))})))))
+
+(defn execute-directive!
+  [system parent-agent-id directive]
+  (case (:type directive)
+    :spawn-worker
+    (let [{:keys [task name role capability-bundle memory-scopes budgets system-prompt]} (:payload directive)
+          worker (spawn-task-worker! system {:task task
+                                            :name name
+                                            :role role
+                                            :capability-bundle capability-bundle
+                                            :memory-scopes memory-scopes
+                                            :budgets budgets
+                                            :system-prompt system-prompt
+                                            :parent-id parent-agent-id})]
+      {:directive (:type directive)
+       :status :ok
+       :worker-id (:id worker)})
+
+    :await
+    {:directive (:type directive)
+     :status :deferred}
+
+    (throw (ex-info "Unsupported directive"
+                    {:type :validation-failed
+                     :directive (:type directive)}))))
+
+(defn execute-step!
+  [system parent-agent-id step]
+  (let [receipts (mapv #(execute-directive! system parent-agent-id %)
+                       (:directives step))]
+    (log-event! system
+                {:event-type :agent.kernel.step.executed
+                 :entity-type :agent
+                 :entity-id parent-agent-id
+                 :payload {:directive-count (count (:directives step))
+                           :receipt-count (count receipts)
+                           :receipts receipts}})
+    (assoc step :receipts receipts)))
+
 (defn request-run!
   [system request]
   (runtime/request-run! (:runtime-service system) request))
@@ -551,6 +608,27 @@
                           :memory-scopes (vec memory-scopes)
                           :budgets budgets
                           :task task})))
+
+(defn orchestrator-spawn-worker!
+  [system orchestrator-agent-id worker-spec]
+  (let [agent (or (get-agent system orchestrator-agent-id)
+                  (throw (ex-info "Agent not found"
+                                  {:type :agent-not-found
+                                   :agent-id orchestrator-agent-id})))]
+    (when-not (= "orchestrator" (:kind agent))
+      (throw (ex-info "Agent is not an orchestrator"
+                      {:type :validation-failed
+                       :agent-id orchestrator-agent-id})))
+    (let [step (kernel/orchestrator-spawn-worker-step
+                {:task (:task worker-spec)
+                 :worker-name (or (:name worker-spec) "Task Worker")
+                 :worker-role (or (:role worker-spec) "worker")
+                 :capability-bundle {:capabilities (or (:capabilities worker-spec) [])
+                                     :tool-access (or (:tool-access worker-spec) [])}
+                 :memory-scopes (or (:memory-scopes worker-spec) [])
+                 :budgets (or (:budgets worker-spec) {})
+                 :system-prompt (:system-prompt worker-spec)})]
+      (execute-step! system orchestrator-agent-id step))))
 
 (defn list-agents
   [system]
