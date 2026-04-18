@@ -2,10 +2,12 @@
   "Child runtime shim for launched subagents."
   (:gen-class)
   (:require
+   [agent.logging :as logging]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.core :as runtime]
    [clojure.edn :as edn]
-   [clojure.java.io :as io])
+   [clojure.java.io :as io]
+   [clojure.string :as str])
   (:import
    (java.lang ProcessHandle Thread)))
 
@@ -57,11 +59,15 @@
   (runtime/complete-command! runtime-service run-id command-id status error))
 
 (defn- log-out! [& parts]
+  (logging/log! :agent.child/stdout
+                {:message (str/join " " (map str parts))})
   (binding [*out* *out*]
     (apply println parts)
     (flush)))
 
 (defn- log-err! [& parts]
+  (logging/log! :agent.child/stderr
+                {:message (str/join " " (map str parts))})
   (binding [*out* *err*]
     (apply println parts)
     (flush)))
@@ -125,10 +131,17 @@
 
 (defn run-child!
   [{:keys [sqlite-path run-id bootstrap-spec]}]
+  (logging/start! {:enabled true
+                   :file {:path (or (System/getenv "AGENT_LOG_FILE")
+                                    "logs/clj-agent.log")}
+                   :context {:service-name "clj-agent-child"
+                             :run-id run-id}})
   (let [store (sqlite/create-store {:path sqlite-path})
         runtime-service (runtime/create-runtime-service
                          {:store store
-                          :event-sink #(sqlite/log-event! store %)})
+                          :event-sink #(do
+                                         (logging/log-system-event! %)
+                                         (sqlite/log-event! store %))})
         state (atom {:running? true
                      :heartbeat-seq 0
                      :checkpoint-seq (long (:checkpoint-seq bootstrap-spec 0))})

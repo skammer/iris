@@ -35,6 +35,7 @@
     (is (contains? runner-keys :seatbelt))
     (is (empty? (core/list-skills system)))
     (is (= 3 (count (core/memory-surfaces system))))
+    (is (true? (get-in (core/health-check system) [:logging :enabled])))
     (is (= :local (get-in (core/health-check system) [:broker :backend])))
     (is (= 3 (get-in (core/health-check system) [:tools :count])))
     (is (= 0 (get-in (core/health-check system) [:runtime :run-count])))

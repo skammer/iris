@@ -13,6 +13,7 @@
    [agent.llm.core :as llm-core]
    [agent.llm.providers.ollama :as ollama]
    [agent.llm.providers.openai-compatible :as openai-compatible]
+   [agent.logging :as logging]
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
@@ -80,6 +81,7 @@
   [store broker-instance]
   (fn [event]
     (let [recorded (sqlite/log-event! store event)]
+      (logging/log-system-event! recorded)
       (doseq [message (broker/event->messages recorded)]
         (broker/publish! broker-instance message))
       recorded)))
@@ -208,11 +210,17 @@
   ([] (create-system nil))
   ([config-path]
    (let [cfg (config/load-config config-path)
+         _ (logging/start! (:logging cfg))
          llm-cfg (config/llm-config cfg)
          store (create-store (:storage cfg))
          broker-instance (create-broker)
          event-sink (create-event-sink store broker-instance)
          runtime-service (create-runtime-service store event-sink)]
+     (logging/log! :agent.system/created
+                   {:config-path config-path
+                    :provider (name (get-in cfg [:llm :provider]))
+                    :sqlite-path (get-in cfg [:storage :sqlite :path])
+                    :log-path (get-in cfg [:logging :file :path])})
      {:config cfg
       :llm-provider (create-llm-provider llm-cfg)
       :store store
@@ -246,6 +254,7 @@
   [system]
   {:llm (llm-core/health-check (:llm-provider system))
    :storage (sqlite/health-check (:store system))
+   :logging (logging/health-check)
    :broker (broker/health-check (:broker system))
    :tools (tools/registry-health (:tool-registry system))
    :skills (skills/registry-health (:skills-registry system))
@@ -272,7 +281,11 @@
 
 (defn- default-child-env
   [system]
-  {"AGENT_SQLITE_PATH" (-> system :config :storage :sqlite :path io/file .getAbsolutePath)})
+  {"AGENT_SQLITE_PATH" (-> system :config :storage :sqlite :path io/file .getAbsolutePath)
+   "AGENT_LOG_FILE" (-> (or (get-in system [:config :logging :file :path])
+                            "logs/clj-agent.log")
+                        io/file
+                        .getAbsolutePath)})
 
 (defn- absolute-path [path]
   (.getAbsolutePath (io/file path)))
@@ -300,19 +313,27 @@
         sqlite-host-path (-> system :config :storage :sqlite :path absolute-path)
         sqlite-file (io/file sqlite-host-path)
         sqlite-host-dir (.getAbsolutePath (.getParentFile sqlite-file))
+        log-host-path (absolute-path (or (get-in system [:config :logging :file :path])
+                                         "logs/clj-agent.log"))
+        log-file (io/file log-host-path)
+        log-host-dir (.getAbsolutePath (.getParentFile log-file))
         container-data-dir (or (:container-data-dir runner-options)
                                (:container-data-dir runner-cfg)
                                "/agent-data")
+        container-log-dir "/agent-logs"
         container-home-dir (or (:container-home-dir runner-options)
                                (:container-home-dir runner-cfg)
                                "/root")
         host-m2-dir (absolute-path (str (System/getProperty "user.home") "/.m2"))
         container-sqlite-path (str container-data-dir "/" (.getName sqlite-file))
+        container-log-path (str container-log-dir "/" (.getName log-file))
         mounts* (-> (vec (or (:mounts runner-options) []))
                     (ensure-mount host-working-dir container-working-dir :rw)
                     (ensure-mount sqlite-host-dir container-data-dir :rw)
+                    (ensure-mount log-host-dir container-log-dir :rw)
                     (ensure-mount-if-exists host-m2-dir (str container-home-dir "/.m2") :rw))
         env* (merge {"AGENT_SQLITE_PATH" container-sqlite-path
+                     "AGENT_LOG_FILE" container-log-path
                      "HOME" container-home-dir}
                     (or (:env runner-options) {}))]
     (cond-> (assoc runner-options
@@ -700,12 +721,17 @@
 
 (defn start-api!
   [system]
-  (let [server (api/start-server! system (:api (:config system)))]
+  (let [{:keys [host port]} (:api (:config system))
+        server (api/start-server! system (:api (:config system)))]
+    (logging/log! :agent.api/started
+                  {:host host
+                   :port port})
     (assoc system :api-server server)))
 
 (defn stop-api!
   [system]
   (when-let [server (:api-server system)]
+    (logging/log! :agent.api/stopping {})
     (api/stop-server! server))
   (dissoc system :api-server))
 
@@ -728,6 +754,9 @@
       (= "serve" command)
       (let [system (start-api! (create-system config-path))
             {:keys [host port]} (:api (:config system))]
+        (logging/log! :agent.cli/serve
+                      {:host host
+                       :port port})
         (println (str "API listening on http://" host ":" port))
         @(promise))
 
@@ -740,4 +769,6 @@
       :else
       (let [system (create-system config-path)
             response (complete system prompt)]
+        (logging/log! :agent.cli/prompt
+                      {:prompt-length (count prompt)})
         (println response)))))
