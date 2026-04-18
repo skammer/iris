@@ -193,9 +193,15 @@ Reference:
    - move autonomous worker loops to directive-native planning/execution
    - make orchestrator spawn-only rule universal across all internal paths
    - persist directive/receipt lineage more explicitly than generic event payloads
+   - persist or explicitly route channel/interop inbox overflow when sliding buffers are insufficient
    Considerations:
    - avoid duplicating orchestration logic between API/runtime/child shim
    - likely extract dedicated agent FSM/executor in later pass
+8.1.1 [x] Orchestrator state/refactor baseline:
+   Consolidated six orchestrator atoms into one state atom.
+   Split interop send path into validation, target resolution, envelope build, route/deliver, record, and event emission helpers.
+   Reworked interop rate limit to a pure state transition with CAS, made inbox/channel backpressure explicit via sliding buffers, and removed self-qualified helper call.
+   ADR/log: `log/orchestrator-state-refactor-2026-04-19.md`.
 8.2 [ ] API/server refactor follow-up:
    `http-kit` + `reitit` baseline is in place with route table, middleware layer, and Ring server startup.
    Remaining:

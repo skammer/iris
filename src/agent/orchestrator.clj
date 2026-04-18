@@ -44,13 +44,51 @@
    :created-at (:created-at channel)
    :message-count (count (:messages channel))})
 
+(defn- initial-state []
+  {:agents {}
+   :channels {}
+   :federated-peers {}
+   :interop {:windows {}
+             :deliveries {}
+             :messages {}}})
+
+(defn- snapshot [orchestrator]
+  @(:state orchestrator))
+
+(defn- agents-map [orchestrator]
+  (:agents (snapshot orchestrator)))
+
+(defn- channels-map [orchestrator]
+  (:channels (snapshot orchestrator)))
+
+(defn- federated-peers-map [orchestrator]
+  (:federated-peers (snapshot orchestrator)))
+
+(defn- interop-messages-map [orchestrator]
+  (get-in (snapshot orchestrator) [:interop :messages]))
+
+(defn- interop-deliveries-map [orchestrator]
+  (get-in (snapshot orchestrator) [:interop :deliveries]))
+
+(defn- swap-state! [orchestrator f & args]
+  (apply swap! (:state orchestrator) f args))
+
+(defn- update-state-result! [orchestrator f]
+  (let [state* (:state orchestrator)]
+    (loop []
+      (let [old @state*
+            [new result] (f old)]
+        (if (compare-and-set! state* old new)
+          result
+          (recur))))))
+
 (defn- ensure-agent! [orchestrator agent-id]
-  (or (get @(:agents orchestrator) agent-id)
+  (or (get (agents-map orchestrator) agent-id)
       (throw (ex-info "Agent not found" {:type :agent-not-found
                                         :agent-id agent-id}))))
 
 (defn- ensure-channel! [orchestrator channel-id]
-  (or (get @(:channels orchestrator) channel-id)
+  (or (get (channels-map orchestrator) channel-id)
       (throw (ex-info "Channel not found" {:type :channel-not-found
                                           :channel-id channel-id}))))
 
@@ -78,36 +116,32 @@
 (defn create-orchestrator
   ([] (create-orchestrator {}))
   ([{:keys [event-sink federation-deliver]}]
-   {:agents (atom {})
-    :channels (atom {})
-    :federated-peers (atom {})
-    :interop-windows (atom {})
-    :interop-deliveries (atom {})
-    :interop-messages (atom {})
+   {:state (atom (initial-state))
     :federation-deliver federation-deliver
     :event-sink event-sink}))
 
-(defn- logical-address [agent-id]
+(defn- make-logical-address [agent-id]
   (str "agent://" agent-id))
 
 (defn- ensure-agent-by-ref!
   [orchestrator value]
-  (or (get @(:agents orchestrator) value)
+  (or (get (agents-map orchestrator) value)
       (some (fn [[_ agent]]
               (when (= value (:logical-address agent))
                 agent))
-            @(:agents orchestrator))
+            (agents-map orchestrator))
       (throw (ex-info "Agent not found" {:type :agent-not-found
                                         :agent-ref value}))))
 
 (defn health-check
   [orchestrator]
-  {:healthy true
-   :agent-count (count @(:agents orchestrator))
-   :channel-count (count @(:channels orchestrator))
-   :federated-peer-count (count @(:federated-peers orchestrator))
-   :interop-delivery-count (count @(:interop-deliveries orchestrator))
-   :interop-message-count (count @(:interop-messages orchestrator))})
+  (let [{:keys [agents channels federated-peers interop]} (snapshot orchestrator)]
+    {:healthy true
+     :agent-count (count agents)
+     :channel-count (count channels)
+     :federated-peer-count (count federated-peers)
+     :interop-delivery-count (count (:deliveries interop))
+     :interop-message-count (count (:messages interop))}))
 
 (defn- normalize-trust-policies [policies]
   (reduce-kv (fn [acc peer-ref policy]
@@ -181,10 +215,10 @@
                :status "idle"
                :created-at created-at
                :messages []
-               :inbox (async/chan 64)}]
-    (let [resolved-address (or logical-address (agent.orchestrator/logical-address (:id agent)))
+               :inbox (async/chan (async/sliding-buffer 64))}]
+    (let [resolved-address (or logical-address (make-logical-address (:id agent)))
           agent* (assoc agent :logical-address resolved-address)]
-      (swap! (:agents orchestrator) assoc (:id agent*) agent*)
+      (swap-state! orchestrator assoc-in [:agents (:id agent*)] agent*)
       (emit-event! orchestrator
                    {:event-type :agent.created
                     :entity-type :agent
@@ -208,7 +242,7 @@
 
 (defn list-agents
   [orchestrator]
-  (->> @(:agents orchestrator)
+  (->> (agents-map orchestrator)
        vals
        (sort-by :created-at)
        (mapv agent-view)))
@@ -237,29 +271,32 @@
 
 (defn- ensure-interop-message!
   [orchestrator message-id]
-  (or (get @(:interop-messages orchestrator) message-id)
+  (or (get (interop-messages-map orchestrator) message-id)
       (throw (ex-info "Interop message not found"
                       {:type :interop-message-not-found
                        :message-id message-id}))))
 
 (defn- store-interop-message!
   [orchestrator envelope]
-  (swap! (:interop-messages orchestrator) assoc (:id envelope) envelope)
-  (swap! (:interop-deliveries orchestrator)
-         (fn [state]
-           (reduce-kv (fn [acc k v]
-                        (assoc acc k (if (= (:id v) (:id envelope))
-                                       envelope
-                                       v)))
-                      {}
-                      state)))
+  (swap-state! orchestrator
+               (fn [state]
+                 (-> state
+                     (assoc-in [:interop :messages (:id envelope)] envelope)
+                     (update-in [:interop :deliveries]
+                                (fn [deliveries]
+                                  (reduce-kv (fn [acc k v]
+                                               (assoc acc k (if (= (:id v) (:id envelope))
+                                                              envelope
+                                                              v)))
+                                             {}
+                                             deliveries))))))
   envelope)
 
 (defn list-interop-messages
   ([orchestrator agent-ref] (list-interop-messages orchestrator agent-ref {}))
   ([orchestrator agent-ref {:keys [direction status]}]
    (let [agent (ensure-agent-by-ref! orchestrator agent-ref)]
-     (->> @(:interop-messages orchestrator)
+     (->> (interop-messages-map orchestrator)
           vals
           (filter (fn [message]
                     (case direction
@@ -289,7 +326,7 @@
                     (assoc :interop-rate-limit-per-minute (long (or interop-rate-limit-per-minute
                                                                    (:interop-rate-limit-per-minute agent)
                                                                    60))))]
-    (swap! (:agents orchestrator) assoc (:id agent) updated)
+    (swap-state! orchestrator assoc-in [:agents (:id agent)] updated)
     (emit-event! orchestrator
                  {:event-type :agent.interop.capabilities.updated
                   :entity-type :agent
@@ -308,7 +345,7 @@
   [orchestrator agent-ref patch]
   (let [agent (ensure-agent-by-ref! orchestrator agent-ref)
         updated (update agent :state merge patch)]
-    (swap! (:agents orchestrator) assoc (:id agent) updated)
+    (swap-state! orchestrator assoc-in [:agents (:id agent)] updated)
     (emit-event! orchestrator
                  {:event-type :agent.state.patched
                   :entity-type :agent
@@ -321,7 +358,7 @@
   [orchestrator agent-ref status]
   (let [agent (ensure-agent-by-ref! orchestrator agent-ref)
         updated (assoc agent :status status)]
-    (swap! (:agents orchestrator) assoc (:id agent) updated)
+    (swap-state! orchestrator assoc-in [:agents (:id agent)] updated)
     (emit-event! orchestrator
                  {:event-type :agent.status.updated
                   :entity-type :agent
@@ -341,7 +378,7 @@
               :capabilities (set capabilities)
               :status status
               :created-at (now)}]
-    (swap! (:federated-peers orchestrator) assoc peer-id peer)
+    (swap-state! orchestrator assoc-in [:federated-peers peer-id] peer)
     (emit-event! orchestrator
                  {:event-type :agent.federation.peer.registered
                   :entity-type :peer
@@ -351,7 +388,7 @@
 
 (defn list-federated-peers
   [orchestrator]
-  (->> @(:federated-peers orchestrator)
+  (->> (federated-peers-map orchestrator)
        vals
        (sort-by :created-at)
        (mapv federated-peer-view)))
@@ -376,18 +413,18 @@
         assistant-message {:role "assistant"
                            :content completion
                            :created-at (now)}]
-    (swap! (:agents orchestrator)
-           assoc agent-id
-           (-> agent-after-input
-               (assoc :status "idle")
-               (update :messages conj assistant-message)))
+    (swap-state! orchestrator
+                 assoc-in [:agents agent-id]
+                 (-> agent-after-input
+                     (assoc :status "idle")
+                     (update :messages conj assistant-message)))
     (emit-event! orchestrator
                  {:event-type :agent.message.processed
                   :entity-type :agent
                   :entity-id agent-id
                   :payload {:input-role role
                             :response-role "assistant"}})
-    {:agent (agent-view (get @(:agents orchestrator) agent-id))
+    {:agent (agent-view (get (agents-map orchestrator) agent-id))
      :input input-message
      :response assistant-message}))
 
@@ -443,21 +480,22 @@
 (defn- prune-window [timestamps now-ms]
   (filterv #(<= (- now-ms %) 60000) timestamps))
 
+(defn- rate-limit-step [state agent-id limit now-ms]
+  (let [path [:interop :windows agent-id]
+        current (prune-window (get-in state path []) now-ms)]
+    (if (>= (count current) limit)
+      [state false]
+      [(assoc-in state path (conj current now-ms)) true])))
+
 (defn- enforce-interop-rate-limit!
   [orchestrator from-agent]
   (let [now-ms (.toEpochMilli (Instant/now))
         agent-id (:id from-agent)
         limit (long (or (:interop-rate-limit-per-minute from-agent) 60))
-        accepted? (atom false)]
-    (swap! (:interop-windows orchestrator)
-           (fn [state]
-             (let [current (prune-window (get state agent-id []) now-ms)]
-               (if (>= (count current) limit)
-                 state
-                 (do
-                   (reset! accepted? true)
-                   (assoc state agent-id (conj current now-ms)))))))
-    (when-not @accepted?
+        accepted? (update-state-result!
+                   orchestrator
+                   #(rate-limit-step % agent-id limit now-ms))]
+    (when-not accepted?
       (throw (ex-info "Interop rate limit exceeded"
                       {:type :rate-limited
                        :agent-id agent-id
@@ -499,97 +537,138 @@
           updated)))
     envelope))
 
+(defn- validate-interop-content! [content]
+  (when-not (and (string? content) (not (str/blank? content)))
+    (throw (ex-info "content must be a non-blank string"
+                    {:type :validation-failed
+                     :field :content}))))
+
+(defn- resolve-interop-target [orchestrator to-agent-ref]
+  (if-let [to-agent (try
+                      (ensure-agent-by-ref! orchestrator to-agent-ref)
+                      (catch Exception e
+                        (when-not (= :agent-not-found (:type (ex-data e)))
+                          (throw e))
+                        nil))]
+    {:to-agent to-agent}
+    (let [federated-target (when-let [parsed (parse-federated-address to-agent-ref)]
+                             (assoc parsed :peer (get (federated-peers-map orchestrator)
+                                                      (:peer-id parsed))))]
+      (when-not (:peer federated-target)
+        (throw (ex-info "Agent not found"
+                        {:type :agent-not-found
+                         :agent-ref to-agent-ref})))
+      {:federated-target federated-target})))
+
+(defn- normalize-route [route]
+  (when route
+    (keyword (str/lower-case (name route)))))
+
+(defn- dedupe-key-for [from-agent to-agent federated-target request-id]
+  (when request-id
+    [(:id from-agent)
+     (or (some-> to-agent :id)
+         (:logical-address federated-target))
+     request-id]))
+
+(defn- build-interop-envelope
+  [{:keys [from-agent to-agent federated-target route message-type content request-id delivery-mode]}]
+  (let [timestamp (now)]
+    {:id (random-id "interop")
+     :request-id request-id
+     :message-type message-type
+     :delivery-mode delivery-mode
+     :from-agent-id (:id from-agent)
+     :to-agent-id (some-> to-agent :id)
+     :to-peer-id (some-> federated-target :peer-id)
+     :remote-agent-id (some-> federated-target :remote-agent-id)
+     :from-address (:logical-address from-agent)
+     :to-address (or (some-> to-agent :logical-address)
+                     (:logical-address federated-target))
+     :route (name route)
+     :content content
+     :status (if to-agent "delivered" "forward_requested")
+     :delivery-count 1
+     :created-at timestamp
+     :last-delivered-at timestamp
+     :forwarded-at nil
+     :acked-at nil
+     :acknowledged-by nil
+     :ack-type nil
+     :last-error nil}))
+
+(defn- deliver-local-interop! [to-agent envelope]
+  (async/>!! (:inbox to-agent)
+             {:role "user"
+              :content (str "[interop:" (:message-type envelope) "] "
+                            (:from-address envelope) ": " (:content envelope))
+              :created-at (:created-at envelope)
+              :interop envelope}))
+
+(defn- record-interop-delivery! [orchestrator dedupe-key envelope]
+  (store-interop-message! orchestrator envelope)
+  (when dedupe-key
+    (swap-state! orchestrator assoc-in [:interop :deliveries dedupe-key] envelope))
+  envelope)
+
+(defn- emit-interop-send-events! [orchestrator from-agent to-agent federated-target envelope]
+  (emit-event! orchestrator
+               {:event-type :agent.interop.message.sent
+                :entity-type :agent
+                :entity-id (:id from-agent)
+                :payload envelope})
+  (when (or to-agent
+            (= "forward_requested" (:status envelope)))
+    (emit-event! orchestrator
+                 {:event-type (if to-agent
+                                :agent.interop.message.delivered
+                                :agent.interop.message.forward.requested)
+                  :entity-type (if to-agent :agent :peer)
+                  :entity-id (or (some-> to-agent :id)
+                                 (some-> federated-target :peer-id))
+                  :payload envelope})))
+
+(defn- route-interop-envelope! [orchestrator to-agent federated-target envelope]
+  (if to-agent
+    (do
+      (deliver-local-interop! to-agent envelope)
+      envelope)
+    (deliver-federated! orchestrator
+                        (:peer-id federated-target)
+                        (:peer federated-target)
+                        (:remote-agent-id federated-target)
+                        envelope)))
+
 (defn send-interop-message!
   [orchestrator from-agent-ref to-agent-ref {:keys [message-type content route request-id delivery-mode]
                                              :or {message-type "request"
                                                   delivery-mode "at-most-once"}}]
-  (when-not (and (string? content) (not (str/blank? content)))
-    (throw (ex-info "content must be a non-blank string"
-                    {:type :validation-failed
-                     :field :content})))
+  (validate-interop-content! content)
   (let [from-agent (ensure-agent-by-ref! orchestrator from-agent-ref)
-        to-agent (try
-                   (ensure-agent-by-ref! orchestrator to-agent-ref)
-                   (catch Exception e
-                     (when-not (= :agent-not-found (:type (ex-data e)))
-                       (throw e))
-                     nil))
-        federated-target (when-not to-agent
-                           (when-let [parsed (parse-federated-address to-agent-ref)]
-                             (assoc parsed :peer (get @(:federated-peers orchestrator) (:peer-id parsed)))))
-        _ (when-not (or to-agent (get federated-target :peer))
-            (throw (ex-info "Agent not found"
-                            {:type :agent-not-found
-                             :agent-ref to-agent-ref})))
+        {:keys [to-agent federated-target]} (resolve-interop-target orchestrator to-agent-ref)
         _ (enforce-interop-rate-limit! orchestrator from-agent)
         route* (if to-agent
                  (choose-interop-route from-agent to-agent
-                                      (when route (keyword (str/lower-case (name route)))))
+                                       (normalize-route route))
                  :federated)
         _ (when to-agent
             (enforce-interop-trust! from-agent to-agent route* message-type))
-        dedupe-target (or (some-> to-agent :id)
-                          (:logical-address federated-target))
-        dedupe-key (when request-id [(:id from-agent) dedupe-target request-id])]
+        dedupe-key (dedupe-key-for from-agent to-agent federated-target request-id)]
     (if (and dedupe-key
              (= "at-most-once" delivery-mode)
-             (contains? @(:interop-deliveries orchestrator) dedupe-key))
-      (get @(:interop-deliveries orchestrator) dedupe-key)
-      (let [timestamp (now)
-            envelope0 {:id (random-id "interop")
-                      :request-id request-id
-                      :message-type message-type
-                      :delivery-mode delivery-mode
-                      :from-agent-id (:id from-agent)
-                      :to-agent-id (some-> to-agent :id)
-                      :to-peer-id (some-> federated-target :peer-id)
-                      :remote-agent-id (some-> federated-target :remote-agent-id)
-                      :from-address (:logical-address from-agent)
-                      :to-address (or (some-> to-agent :logical-address)
-                                      (:logical-address federated-target))
-                      :route (name route*)
-                      :content content
-                      :status (if to-agent "delivered" "forward_requested")
-                      :delivery-count 1
-                      :created-at timestamp
-                      :last-delivered-at timestamp
-                      :forwarded-at nil
-                      :acked-at nil
-                      :acknowledged-by nil
-                      :ack-type nil
-                      :last-error nil}
-            envelope (if to-agent
-                       envelope0
-                       (deliver-federated! orchestrator
-                                           (:peer-id federated-target)
-                                           (:peer federated-target)
-                                           (:remote-agent-id federated-target)
-                                           envelope0))]
-        (when to-agent
-          (async/>!! (:inbox to-agent)
-                     {:role "user"
-                      :content (str "[interop:" message-type "] "
-                                    (:logical-address from-agent) ": " content)
-                      :created-at (:created-at envelope)
-                      :interop envelope}))
-        (store-interop-message! orchestrator envelope)
-        (when dedupe-key
-          (swap! (:interop-deliveries orchestrator) assoc dedupe-key envelope))
-        (emit-event! orchestrator
-                     {:event-type :agent.interop.message.sent
-                      :entity-type :agent
-                      :entity-id (:id from-agent)
-                      :payload envelope})
-        (when (or to-agent
-                  (= "forward_requested" (:status envelope)))
-          (emit-event! orchestrator
-                       {:event-type (if to-agent
-                                      :agent.interop.message.delivered
-                                      :agent.interop.message.forward.requested)
-                        :entity-type (if to-agent :agent :peer)
-                        :entity-id (or (some-> to-agent :id)
-                                       (some-> federated-target :peer-id))
-                        :payload envelope}))
+             (contains? (interop-deliveries-map orchestrator) dedupe-key))
+      (get (interop-deliveries-map orchestrator) dedupe-key)
+      (let [envelope0 (build-interop-envelope {:from-agent from-agent
+                                               :to-agent to-agent
+                                               :federated-target federated-target
+                                               :route route*
+                                               :message-type message-type
+                                               :content content
+                                               :request-id request-id
+                                               :delivery-mode delivery-mode})
+            envelope (route-interop-envelope! orchestrator to-agent federated-target envelope0)]
+        (record-interop-delivery! orchestrator dedupe-key envelope)
+        (emit-interop-send-events! orchestrator from-agent to-agent federated-target envelope)
         envelope))))
 
 (defn acknowledge-interop-message!
@@ -637,7 +716,7 @@
                        :field :message-id
                        :message-id message-id})))
       (let [to-agent (when-let [to-agent-id (:to-agent-id envelope)]
-                       (ensure-agent! orchestrator to-agent-id))
+                      (ensure-agent! orchestrator to-agent-id))
             updated0 (-> envelope
                       (assoc :status (if to-agent "delivered" "forward_requested"))
                       (assoc :last-delivered-at (now))
@@ -648,16 +727,11 @@
                       updated0
                       (deliver-federated! orchestrator
                                           (:to-peer-id updated0)
-                                          (get @(:federated-peers orchestrator) (:to-peer-id updated0))
+                                          (get (federated-peers-map orchestrator) (:to-peer-id updated0))
                                           (:remote-agent-id updated0)
                                           updated0))]
       (when to-agent
-        (async/>!! (:inbox to-agent)
-                   {:role "user"
-                    :content (str "[interop:" (:message-type updated) "] "
-                                  (:from-address updated) ": " (:content updated))
-                    :created-at (:last-delivered-at updated)
-                    :interop updated}))
+        (deliver-local-interop! to-agent (assoc updated :created-at (:last-delivered-at updated))))
       (store-interop-message! orchestrator updated)
       (emit-event! orchestrator
                    {:event-type :agent.interop.message.retried
@@ -681,7 +755,7 @@
 
 (defn receive-federated-message!
   [orchestrator peer-id to-agent-ref envelope]
-  (when-not (get @(:federated-peers orchestrator) peer-id)
+  (when-not (get (federated-peers-map orchestrator) peer-id)
     (throw (ex-info "Federated peer not found"
                     {:type :peer-not-found
                      :peer-id peer-id})))
@@ -707,12 +781,7 @@
                         :acknowledged-by nil
                         :ack-type nil
                         :last-error nil}]
-    (async/>!! (:inbox to-agent)
-               {:role "user"
-                :content (str "[interop:" (:message-type local-envelope) "] "
-                              (:from-address local-envelope) ": " (:content local-envelope))
-                :created-at (:created-at local-envelope)
-                :interop local-envelope})
+    (deliver-local-interop! to-agent local-envelope)
     (store-interop-message! orchestrator local-envelope)
     (emit-event! orchestrator
                  {:event-type :agent.interop.message.received
@@ -736,8 +805,8 @@
                    :participants participant-set
                    :created-at (now)
                    :messages []
-                   :bus (async/chan 128)}]
-      (swap! (:channels orchestrator) assoc (:id channel) channel)
+                   :bus (async/chan (async/sliding-buffer 128))}]
+      (swap-state! orchestrator assoc-in [:channels (:id channel)] channel)
       (emit-event! orchestrator
                    {:event-type :channel.created
                     :entity-type :channel
@@ -748,7 +817,7 @@
 
 (defn list-channels
   [orchestrator]
-  (->> @(:channels orchestrator)
+  (->> (channels-map orchestrator)
        vals
        (sort-by :created-at)
        (mapv channel-view)))
@@ -777,8 +846,8 @@
                    :content content
                    :created-at (now)
                    :channel-id channel-id}]
-      (swap! (:channels orchestrator) update-in [channel-id :messages] conj message)
-      (async/>!! (:bus (get @(:channels orchestrator) channel-id)) message)
+      (swap-state! orchestrator update-in [:channels channel-id :messages] conj message)
+      (async/>!! (:bus (get (channels-map orchestrator) channel-id)) message)
       (doseq [participant-id participants
               :when (not= participant-id sender-id)]
         (let [delivered {:role "user"
@@ -813,16 +882,16 @@
             assistant-message {:role "assistant"
                                :content completion
                                :created-at (now)}]
-        (swap! (:agents orchestrator)
-               assoc agent-id
-               (-> agent-after-input
-                   (assoc :status "idle")
-                   (update :messages conj assistant-message)))
+        (swap-state! orchestrator
+                     assoc-in [:agents agent-id]
+                     (-> agent-after-input
+                         (assoc :status "idle")
+                         (update :messages conj assistant-message)))
         (emit-event! orchestrator
                      {:event-type :agent.inbox.consumed
                       :entity-type :agent
                       :entity-id agent-id
                       :payload {:consumed (count drained)}})
-        {:agent (agent-view (get @(:agents orchestrator) agent-id))
+        {:agent (agent-view (get (agents-map orchestrator) agent-id))
          :consumed (count drained)
          :response assistant-message}))))
