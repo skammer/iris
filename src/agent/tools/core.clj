@@ -61,7 +61,13 @@
   ([context]
    (-> context
        (update :permissions #(set (or % #{})))
-       (update :allowed-tools #(set (or % #{})))
+       (#(if (contains? % :allowed-tools)
+           (update % :allowed-tools
+                   (fn [tools]
+                     (set (map (fn [tool]
+                                 (if (string? tool) (keyword tool) tool))
+                               tools))))
+           %))
        (update :user #(or % "system"))
        (update :request-id #(or % (str (java.util.UUID/randomUUID)))))))
 
@@ -110,7 +116,7 @@
            required (:required-permissions tool-description)
            actual (:permissions context*)
            allowed-tools (:allowed-tools context*)]
-       (when (and (seq allowed-tools)
+       (when (and (contains? context* :allowed-tools)
                   (not (or (contains? allowed-tools tool-name)
                            (contains? allowed-tools :*)
                            (contains? allowed-tools (keyword (name tool-name))))))

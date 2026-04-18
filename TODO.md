@@ -142,6 +142,10 @@ Reference:
    Added tool allowlist enforcement hook in `src/agent/tools/core.clj`.
    Added `spawn-task-worker!` baseline in `src/agent/core.clj`.
    ADR/log: `log/agent-kernel-isolation-adr-2026-04-18.md`.
+0.1 [x] Kernel/runtime execution baseline:
+   Added `execute-directive!` / `execute-step!` with receipts in `src/agent/core.clj`.
+   Added orchestrator spawn-only surface at `POST /v1/agents/:id/spawn-worker`.
+   Added agent-scoped tool execution at `POST /v1/agents/:id/tools/:tool/execute`.
 1. [x] Live transcript streaming:
    Added session-scoped SSE for transcript/completions.
    Transcript panel now patches from Datastar session-live stream instead of interval polling.
@@ -170,8 +174,8 @@ Reference:
    Baseline done: logical addressing, capability exchange, routed/direct messaging, audit events, retries/acks/message status, richer trust policy baseline, networked peer federation baseline, real HTTP federated forward/inbox delivery.
    Remaining: stronger policy/grant model, non-HTTP/broker-backed federation.
 8.1 [ ] Kernel/runtime split follow-up:
-   Make real worker execution consume typed directives/receipts instead of only storing capability-bundle metadata.
-   Add orchestrator default spawn-only action surface.
+   Make real worker execution consume typed directives/receipts beyond spawn/await baseline.
+   Extend orchestrator spawn-only default from API baseline into all orchestration paths.
 9. [ ] Channel adapter implementation:
    Start Telegram first.
    Map inbound messages onto current session/agent/channel model.

@@ -43,6 +43,20 @@ Adopt `cnos`-inspired separation between pure agent/orchestrator decision logic 
 - `src/agent/api.clj`
   - agent create/update now accept and expose capability-bundle metadata
 
+## Implemented follow-up
+
+- `src/agent/core.clj`
+  - `execute-directive!`
+  - `execute-step!`
+  - receipt emission baseline
+- `src/agent/api.clj`
+  - orchestrator spawn-only API surface:
+    - `POST /v1/agents/:id/spawn-worker`
+  - agent-scoped tool execution:
+    - `POST /v1/agents/:id/tools/:tool/execute`
+- `src/agent/tools/core.clj`
+  - empty tool bundle now correctly means zero tool access
+
 ## Why
 
 - better isolation

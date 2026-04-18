@@ -263,6 +263,12 @@
                                      :allow_direct true})
             created-peer-body (json/parse-string (:body created-peer) true)
             peer-id (:id created-peer-body)
+            created-orchestrator (http-post (str base-url "/v1/agents")
+                                            {:name "Planner"
+                                             :kind "orchestrator"
+                                             :role "orchestrator"})
+            created-orchestrator-body (json/parse-string (:body created-orchestrator) true)
+            orchestrator-id (:id created-orchestrator-body)
             created-federated-peer (http-post (str base-url "/v1/federation/peers")
                                               {:id "mesh-1"
                                                :base_url base-url
@@ -322,6 +328,20 @@
             federated-interop-message-body (json/parse-string (:body federated-interop-message) true)
             interop-list-after-federation (http-get (str base-url "/v1/agents/" agent-id "/interop/messages?direction=inbound"))
             interop-list-after-federation-body (json/parse-string (:body interop-list-after-federation) true)
+            agent-tool-exec (http-post (str base-url "/v1/agents/" agent-id "/tools/http/execute")
+                                       {:input {:url (str base-url "/health")}
+                                        :permissions ["http-request"]})
+            agent-tool-exec-blocked (http-post (str base-url "/v1/agents/" agent-id "/tools/fs/execute")
+                                               {:input {:action "list" :path "."}
+                                                :permissions ["filesystem-read"]})
+            orchestrator-spawn-worker (http-post (str base-url "/v1/agents/" orchestrator-id "/spawn-worker")
+                                                 {:name "Delegated Worker"
+                                                  :task {:id "task-3" :prompt "do thing"}
+                                                  :capabilities ["execute"]
+                                                  :tool_access ["http"]
+                                                  :memory_scopes ["session"]
+                                                  :budgets {:max_tokens 100}})
+            orchestrator-spawn-worker-body (json/parse-string (:body orchestrator-spawn-worker) true)
             agent-msg (http-post (str base-url "/v1/agents/" agent-id "/messages")
                                  {:content "do work"})
             agent-msg-body (json/parse-string (:body agent-msg) true)
@@ -443,12 +463,14 @@
         (is (= ["fs" "http"] (:tool_access created-agent-body)))
         (is (= ["session"] (:memory_scopes created-agent-body)))
         (is (= 201 (:status created-peer)))
+        (is (= 201 (:status created-orchestrator)))
+        (is (= "orchestrator" (:kind created-orchestrator-body)))
         (is (= 201 (:status created-federated-peer)))
         (is (= "mesh-1" (get-in created-federated-peer-body [:data :id])))
         (is (= 200 (:status federation-peers)))
         (is (= ["mesh-1"] (mapv :id (:data federation-peers-body))))
         (is (= 200 (:status agents)))
-        (is (= #{agent-id peer-id} (set (map :id (:data agents-body)))))
+        (is (= #{agent-id peer-id orchestrator-id} (set (map :id (:data agents-body)))))
         (is (= 200 (:status agent-interop)))
         (is (= (str "agent://" agent-id) (get-in agent-interop-body [:data :logical-address])))
         (is (= 200 (:status interop-capabilities)))
@@ -479,6 +501,11 @@
         (is (= 200 (:status interop-list-after-federation)))
         (is (= 2 (count (:data interop-list-after-federation-body))))
         (is (= 1 (count (filter #(= "federated" (:route %)) (:data interop-list-after-federation-body)))))
+        (is (= 200 (:status agent-tool-exec)))
+        (is (= 403 (:status agent-tool-exec-blocked)))
+        (is (= 201 (:status orchestrator-spawn-worker)))
+        (is (= :ok (keyword (get-in orchestrator-spawn-worker-body [:data :receipts 0 :status]))))
+        (is (= ["http"] (get-in orchestrator-spawn-worker-body [:data :worker :tool_access])))
         (is (= 200 (:status agent-msg)))
         (is (= "test-response" (get-in agent-msg-body [:response :content])))
         (is (= 201 (:status channel)))

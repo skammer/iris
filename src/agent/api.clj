@@ -3,6 +3,7 @@
   (:require
    [agent.broker.core :as broker]
    [agent.channels.core :as channel-adapters]
+   [agent.kernel :as kernel]
    [agent.llm.core :as llm-core]
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
@@ -25,6 +26,8 @@
    (java.util.concurrent ExecutorService Executors ThreadFactory)))
 
 (def ^:private server-executors (atom {}))
+
+(declare normalize-permissions execution-context)
 
 (defn- daemon-thread-factory []
   (reify ThreadFactory
@@ -735,6 +738,100 @@
       (catch Exception e
         (if (= :agent-not-found (:type (ex-data e)))
           (throw (api-error 404 "agent_not_found" "Agent not found"))
+          (throw e))))))
+
+(defn- handle-agent-tool-execute [system exchange agent-id tool-name]
+  (let [body (read-json-body exchange)
+        input (:input body)
+        permissions (normalize-permissions (:permissions body))
+        approval-id (:approval_id body)
+        tool-key (keyword tool-name)]
+    (try
+      (write-json! exchange 200
+                   {:data (let [agent (orchestrator/get-agent (:orchestrator system) agent-id)]
+                            (when-not agent
+                              (throw (ex-info "Agent not found" {:type :agent-not-found
+                                                                 :agent-id agent-id})))
+                            (tools/execute-tool (:tool-registry system)
+                                                tool-key
+                                                input
+                                                (merge (execution-context tool-key input
+                                                                          {:permissions permissions
+                                                                           :approval-id approval-id
+                                                                           :user (str "agent:" agent-id)
+                                                                           :request-id (:request_id body)})
+                                                       {:allowed-tools (set (:tool-access agent))})))})
+      (catch Exception e
+        (let [data (ex-data e)]
+          (case (:type data)
+            :agent-not-found (throw (api-error 404 "agent_not_found" "Agent not found"))
+            :tool-blocked (throw (api-error 403 "tool_blocked" (.getMessage e) (dissoc data :type)))
+            (throw (tool-error->api-error e))))))))
+
+(defn- handle-orchestrator-spawn-worker [system exchange agent-id]
+  (let [body (read-json-body exchange)
+        name (:name body)
+        role (:role body)
+        task (:task body)
+        capabilities (or (:capabilities body) [])
+        tool-access (or (:tool_access body) [])
+        memory-scopes (or (:memory_scopes body) [])
+        budgets (or (:budgets body) {})
+        system-prompt (:system_prompt body)]
+    (when name
+      (ensure-string! :name name))
+    (when role
+      (ensure-string! :role role))
+    (when-not (map? task)
+      (throw (api-error 400 "bad_request" "task must be an object")))
+    (ensure-string-vec! :capabilities capabilities)
+    (ensure-string-vec! :tool_access tool-access)
+    (ensure-string-vec! :memory_scopes memory-scopes)
+    (try
+      (let [agent (orchestrator/get-agent (:orchestrator system) agent-id)]
+        (when-not agent
+          (throw (ex-info "Agent not found" {:type :agent-not-found
+                                             :agent-id agent-id})))
+        (when-not (= "orchestrator" (:kind agent))
+          (throw (ex-info "Agent is not an orchestrator" {:type :validation-failed
+                                                          :agent-id agent-id})))
+        (let [step (kernel/orchestrator-spawn-worker-step
+                    {:task task
+                     :worker-name (or name "Task Worker")
+                     :worker-role (or role "worker")
+                     :capability-bundle {:capabilities capabilities
+                                         :tool-access tool-access}
+                     :memory-scopes memory-scopes
+                     :budgets budgets
+                     :system-prompt system-prompt})
+              spawn (-> step :directives first :payload)
+              worker (orchestrator/spawn-agent! (:orchestrator system)
+                                                {:name (:name spawn)
+                                                 :kind "worker"
+                                                 :role (:role spawn)
+                                                 :parent-id agent-id
+                                                 :system-prompt (:system-prompt spawn)
+                                                 :capabilities capabilities
+                                                 :tool-access tool-access
+                                                 :memory-scopes memory-scopes
+                                                 :budgets budgets
+                                                 :task task})
+              receipt {:directive :spawn-worker
+                       :status :ok
+                       :worker-id (:id worker)}]
+          ((:event-sink system)
+           {:event-type :agent.kernel.step.executed
+            :entity-type :agent
+            :entity-id agent-id
+            :payload {:directive-count 2
+                      :receipt-count 1
+                      :receipts [receipt]}})
+          (write-json! exchange 201 {:data {:worker (agent->response worker)
+                                            :receipts [receipt]}})))
+      (catch Exception e
+        (case (:type (ex-data e))
+          :agent-not-found (throw (api-error 404 "agent_not_found" "Agent not found"))
+          :validation-failed (throw (api-error 409 "invalid_orchestrator" (.getMessage e)))
           (throw e))))))
 
 (defn- handle-consume-agent-inbox [system exchange agent-id]
@@ -1747,6 +1844,17 @@
                  (= ["v1" "agents"] (subvec path 0 2))
                  (= "messages" (nth path 3)))
             (handle-agent-message system exchange (nth path 2))
+
+            (and (= method "POST") (= 6 (count path))
+                 (= ["v1" "agents"] (subvec path 0 2))
+                 (= "tools" (nth path 3))
+                 (= "execute" (nth path 5)))
+            (handle-agent-tool-execute system exchange (nth path 2) (nth path 4))
+
+            (and (= method "POST") (= 4 (count path))
+                 (= ["v1" "agents"] (subvec path 0 2))
+                 (= "spawn-worker" (nth path 3)))
+            (handle-orchestrator-spawn-worker system exchange (nth path 2))
 
             (and (= method "POST") (= 5 (count path))
                  (= ["v1" "agents"] (subvec path 0 2))

@@ -2,6 +2,7 @@
   (:require
    [agent.core :as core]
    [agent.config :as config]
+   [agent.kernel]
    [agent.llm.providers.ollama :as ollama]
    [agent.llm.providers.openai-compatible :as openai-compatible]
    [clojure.test :refer :all]))
@@ -77,3 +78,16 @@
     (is (= ["fs" "http"] (sort (:tool-access worker))))
     (is (= ["session"] (:memory-scopes worker)))
     (is (= {:max_tokens 1000} (:budgets worker)))))
+
+(deftest execute-step-produces-receipts
+  (let [system (core/create-system)
+        orchestrator (core/spawn-agent! system {:name "Planner" :kind "orchestrator" :role "orchestrator"})
+        step (agent.kernel/orchestrator-spawn-worker-step
+              {:task {:id "task-2"}
+               :worker-name "Exec Worker"
+               :capability-bundle {:capabilities ["execute"]
+                                   :tool-access ["http"]}})
+        executed (core/execute-step! system (:id orchestrator) step)]
+    (is (= 2 (count (:receipts executed))))
+    (is (= :ok (get-in executed [:receipts 0 :status])))
+    (is (= :deferred (get-in executed [:receipts 1 :status])))))
