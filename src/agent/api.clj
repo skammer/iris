@@ -172,10 +172,15 @@
 (defn- agent->response [agent]
   {:id (:id agent)
    :name (:name agent)
+   :kind (:kind agent)
    :role (:role agent)
    :parent_id (:parent-id agent)
    :logical_address (:logical-address agent)
    :capabilities (vec (:capabilities agent))
+   :tool_access (vec (:tool-access agent))
+   :memory_scopes (vec (:memory-scopes agent))
+   :budgets (:budgets agent)
+   :task (:task agent)
    :allow_direct (:allow-direct? agent)
    :status (:status agent)
    :created_at (:created-at agent)
@@ -655,28 +660,45 @@
 (defn- handle-create-agent [system exchange]
   (let [body (read-json-body exchange)
         name (or (:name body) "Subagent")
+        kind (:kind body)
         role (or (:role body) "worker")
         parent-id (:parent_id body)
         system-prompt (:system_prompt body)
         capabilities (or (:capabilities body) [])
+        tool-access (or (:tool_access body) [])
+        memory-scopes (or (:memory_scopes body) [])
+        budgets (or (:budgets body) {})
+        task (:task body)
         allow-direct? (boolean (:allow_direct body))
         trusted-peers (or (:trusted_peers body) [])
         trust-policies (normalize-trust-policies-body (:trust_policies body))
         rate-limit-per-minute (:rate_limit_per_minute body)]
+    (when kind
+      (ensure-string! :kind kind))
     (when parent-id
       (ensure-string! :parent_id parent-id))
     (when system-prompt
       (ensure-string! :system_prompt system-prompt))
+    (when task
+      (when-not (map? task)
+        (throw (api-error 400 "bad_request" "task must be an object"))))
     (ensure-string-vec! :capabilities capabilities)
+    (ensure-string-vec! :tool_access tool-access)
+    (ensure-string-vec! :memory_scopes memory-scopes)
     (ensure-string-vec! :trusted_peers trusted-peers)
       (write-json! exchange 201
                    (agent->response
                     (orchestrator/spawn-agent! (:orchestrator system)
                                                {:name name
+                                                :kind kind
                                                 :role role
                                                 :parent-id parent-id
                                                 :system-prompt system-prompt
                                                 :capabilities capabilities
+                                                :tool-access tool-access
+                                                :memory-scopes memory-scopes
+                                                :budgets budgets
+                                                :task task
                                                 :allow-direct? allow-direct?
                                                 :trusted-peers trusted-peers
                                                 :trust-policies trust-policies
@@ -740,17 +762,25 @@
 (defn- handle-agent-interop-capabilities [system exchange agent-id]
   (let [body (read-json-body exchange)
         capabilities (or (:capabilities body) [])
+        tool-access (or (:tool_access body) [])
+        memory-scopes (or (:memory_scopes body) [])
+        budgets (or (:budgets body) {})
         allow-direct? (boolean (:allow_direct body))
         trusted-peers (or (:trusted_peers body) [])
         trust-policies (normalize-trust-policies-body (:trust_policies body))
         rate-limit-per-minute (:rate_limit_per_minute body)]
     (ensure-string-vec! :capabilities capabilities)
+    (ensure-string-vec! :tool_access tool-access)
+    (ensure-string-vec! :memory_scopes memory-scopes)
     (ensure-string-vec! :trusted_peers trusted-peers)
     (try
       (write-json! exchange 200
                    {:data (orchestrator/register-agent-capabilities! (:orchestrator system)
                                                                      agent-id
                                                                      {:capabilities capabilities
+                                                                      :tool-access tool-access
+                                                                      :memory-scopes memory-scopes
+                                                                      :budgets budgets
                                                                       :allow-direct? allow-direct?
                                                                       :trusted-peers trusted-peers
                                                                       :trust-policies trust-policies
