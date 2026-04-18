@@ -4,7 +4,9 @@
    [agent.persistence.sqlite :as sqlite]
    [clojure.java.io :as io]
    [clojure.java.shell :as sh]
-   [clojure.test :refer :all]))
+   [clojure.test :refer :all])
+  (:import
+   (java.net ServerSocket)))
 
 (defn temp-db-path []
   (let [dir (io/file "tmp")]
@@ -13,7 +15,8 @@
      (java.io.File/createTempFile "clj-agent-docker-e2e-" ".db" dir))))
 
 (defn wait-until
-  [f timeout-ms]
+  ([f timeout-ms] (wait-until f timeout-ms 1000))
+  ([f timeout-ms interval-ms]
   (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
     (loop []
       (let [value (f)]
@@ -21,8 +24,8 @@
           value value
           (< deadline (System/currentTimeMillis)) nil
           :else (do
-                  (Thread/sleep 250)
-                  (recur)))))))
+                  (Thread/sleep interval-ms)
+                  (recur))))))))
 
 (defn docker-available? []
   (try
@@ -34,24 +37,34 @@
     (zero? (:exit (sh/sh "podman" "info" "--format" "{{.Version.Version}}")))
     (catch Exception _ false)))
 
+(defn free-port []
+  (with-open [socket (ServerSocket. 0)]
+    (.getLocalPort socket)))
+
 (defn run-engine-e2e-test [engine]
   (let [path (temp-db-path)
-        store (sqlite/create-store {:path path})
+        port (free-port)
+        store (sqlite/create-store {:path path
+                                    :journal-mode "DELETE"})
         event-bus (core/create-event-bus)
         event-sink (core/create-event-sink store event-bus)
         runtime-service (core/create-runtime-service store event-sink)
-        system {:config {:storage {:sqlite {:path path}}
-                         :runners {(keyword engine) {:image "clojure:temurin-21-alpine"
-                                                     :container-working-dir "/workspace"
-                                                     :container-data-dir "/agent-data"
-                                                     :container-home-dir "/root"
-                                                     :host-working-dir "."
-                                                     :share-network? false}}}
-                :store store
-                :event-bus event-bus
-                :event-sink event-sink
-                :runtime-service runtime-service
-                :runner-registry (core/create-runner-registry runtime-service)}
+        base-system {:config {:api {:host "0.0.0.0"
+                                    :port port}
+                              :storage {:sqlite {:path path
+                                                 :journal-mode "DELETE"}}
+                              :runners {(keyword engine) {:image "clojure:temurin-21-alpine"
+                                                          :container-working-dir "/workspace"
+                                                          :container-data-dir "/tmp/clj-agent"
+                                                          :container-home-dir "/root"
+                                                          :host-working-dir "."
+                                                          :share-network? true}}}
+                     :store store
+                     :event-bus event-bus
+                     :event-sink event-sink
+                     :runtime-service runtime-service
+                     :runner-registry (core/create-runner-registry runtime-service)}
+        system (core/start-api! base-system)
         run (core/request-run! system {:agent-id (str engine "-child-agent")
                                        :name (str engine "-child-runtime")
                                        :substrate (keyword engine)
@@ -59,6 +72,9 @@
         run-id (:id run)]
     (try
       (core/launch-run! system run-id)
+      ;; Docker Desktop bind-mounted SQLite can throw transient VFS write errors
+      ;; if the parent polls while the child is still opening the database.
+      (Thread/sleep 6000)
       (is (wait-until #(when (= "running" (:status (core/get-run system run-id)))
                          (core/get-run system run-id))
                       60000))
@@ -94,6 +110,7 @@
       (finally
         (when (get-in (core/runner-status system run-id) [:alive])
           (core/signal-run! system run-id {:command-type :kill}))
+        (core/stop-api! system)
         (io/delete-file path true)))))
 
 (deftest docker-child-runtime-e2e-test

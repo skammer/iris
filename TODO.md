@@ -174,6 +174,11 @@ Reference:
 5.1 [x] Child runtime shim MVP:
    Added `src/agent/runtime/child.clj` with bootstrap/register/heartbeat/checkpoint/command-poll loop.
    `local-process` now defaults to launching real child agent runtime when no explicit command is supplied.
+5.2 [x] Parent-owned SQLite / isolated child control:
+   Container children no longer mount or write the parent SQLite DB.
+   Parent owns durable run state; Docker/Podman children use HTTP control endpoints authenticated by bootstrap token.
+   Children get private local SQLite path for child-owned state.
+   Remaining: move HTTP polling transport behind broker/JetStream-backed control plane when remote federation matures.
 6. [ ] Event/broker abstraction:
    SQLite/local baseline done with broker protocol + local backend + NATS-shaped subjects for runs/events/commands/heartbeats/checkpoints + durable replay + request/reply control flow.
    Remaining: optional real JetStream backend.
@@ -199,6 +204,12 @@ Reference:
    - add API-token middleware backed by persisted bootstrap tokens
    - add token/IP rate limiting
    - if long-lived SSE becomes critical again, replace current bounded reconnecting SSE bodies with fully persistent async channel streaming
+8.3 [x] SQLite persistence refactor follow-up:
+   Split facade/domain DAO namespaces, added HikariCP datasource, transaction-scoped locking, Ragtime-backed migrations, migration checksum/irreversible metadata, and HugSQL resources.
+   Considerations:
+   - keep WAL + busy-timeout semantics
+   - avoid mixing DTO shaping with DAO/query code
+   - container children must not share parent SQLite; parent-owned DB is now enforced for Docker/Podman
 9. [ ] Channel adapter implementation:
    Start Telegram first.
    Map inbound messages onto current session/agent/channel model.

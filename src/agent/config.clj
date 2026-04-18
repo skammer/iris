@@ -21,7 +21,8 @@
                   :embedding-model "nomic-embed-text"}
          :openai-compatible {:base-url "https://api.openai.com/v1"
                              :api-key nil}}
-   :storage {:sqlite {:path "data/agent.db"}}
+   :storage {:sqlite {:path "data/agent.db"
+                      :journal-mode "WAL"}}
    :tools {:http {:enabled true
                   :timeout-ms 30000
                   :default-headers {"User-Agent" "clj-agent/0.1"}}
@@ -49,18 +50,18 @@
                       :image-mode :mounted-dev
                       :pull-policy :missing
                       :container-working-dir "/workspace"
-                      :container-data-dir "/agent-data"
+                      :container-data-dir "/tmp/clj-agent"
                       :container-home-dir "/root"
                       :host-working-dir "."
-                      :share-network? false}
+                      :share-network? true}
              :podman {:image "clojure:temurin-21-alpine"
                       :image-mode :mounted-dev
                       :pull-policy :missing
                       :container-working-dir "/workspace"
-                      :container-data-dir "/agent-data"
+                      :container-data-dir "/tmp/clj-agent"
                       :container-home-dir "/root"
                       :host-working-dir "."
-                      :share-network? false}}
+                      :share-network? true}}
    :orchestrator {:enabled true}
    :logging {:enabled true
              :file {:path "logs/clj-agent.log"}}

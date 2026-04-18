@@ -108,6 +108,6 @@
    :pull-policy (normalize-name (or (:pull-policy runner-options) :missing))
    :image (:image runner-options)
    :container-working-dir (or (:container-working-dir runner-options) "/workspace")
-   :required-mounts ["/workspace" "/agent-data" "/agent-logs"]
-   :required-env ["AGENT_RUN_ID" "AGENT_AGENT_ID" "AGENT_BOOTSTRAP_TOKEN" "AGENT_BOOTSTRAP_SPEC" "AGENT_SQLITE_PATH" "AGENT_LOG_FILE"]
+   :required-mounts ["/workspace"]
+   :required-env ["AGENT_RUN_ID" "AGENT_AGENT_ID" "AGENT_BOOTSTRAP_TOKEN" "AGENT_BOOTSTRAP_SPEC" "AGENT_CONTROL_URL" "AGENT_CHILD_SQLITE_PATH" "AGENT_LOG_FILE"]
    :default-command ["clojure" "-M" "-m" "agent.runtime.child"]})

@@ -342,6 +342,8 @@
 (defn- default-child-env
   [system]
   {"AGENT_SQLITE_PATH" (-> system :config :storage :sqlite :path io/file .getAbsolutePath)
+   "AGENT_SQLITE_JOURNAL_MODE" (or (get-in system [:config :storage :sqlite :journal-mode])
+                                   "WAL")
    "AGENT_LOG_FILE" (-> (or (get-in system [:config :logging :file :path])
                             "logs/clj-agent.log")
                         io/file
@@ -360,6 +362,17 @@
     (ensure-mount mounts source target mode)
     mounts))
 
+(defn- container-control-url
+  [system substrate runner-cfg runner-options]
+  (or (:control-url runner-options)
+      (:control-url runner-cfg)
+      (get-in system [:config :api :control-url])
+      (let [port (get-in system [:config :api :port])
+            host (case substrate
+                   :podman "host.containers.internal"
+                   "host.docker.internal")]
+        (str "http://" host ":" port))))
+
 (defn- prepare-container-runner-options
   [system substrate runner-options]
   (let [runner-cfg (get-in system [:config :runners substrate] {})
@@ -370,30 +383,22 @@
         container-working-dir (or (:container-working-dir runner-options)
                                   (:container-working-dir runner-cfg)
                                   "/workspace")
-        sqlite-host-path (-> system :config :storage :sqlite :path absolute-path)
-        sqlite-file (io/file sqlite-host-path)
-        sqlite-host-dir (.getAbsolutePath (.getParentFile sqlite-file))
-        log-host-path (absolute-path (or (get-in system [:config :logging :file :path])
-                                         "logs/clj-agent.log"))
-        log-file (io/file log-host-path)
-        log-host-dir (.getAbsolutePath (.getParentFile log-file))
         container-data-dir (or (:container-data-dir runner-options)
                                (:container-data-dir runner-cfg)
-                               "/agent-data")
-        container-log-dir "/agent-logs"
+                               "/tmp/clj-agent")
         container-home-dir (or (:container-home-dir runner-options)
                                (:container-home-dir runner-cfg)
                                "/root")
         host-m2-dir (absolute-path (str (System/getProperty "user.home") "/.m2"))
-        container-sqlite-path (str container-data-dir "/" (.getName sqlite-file))
-        container-log-path (str container-log-dir "/" (.getName log-file))
+        control-url (container-control-url system substrate runner-cfg runner-options)
+        child-sqlite-path (str container-data-dir "/child.db")
+        child-log-path (str container-data-dir "/child.log")
         mounts* (-> (vec (or (:mounts runner-options) []))
                     (ensure-mount host-working-dir container-working-dir :rw)
-                    (ensure-mount sqlite-host-dir container-data-dir :rw)
-                    (ensure-mount log-host-dir container-log-dir :rw)
                     (ensure-mount-if-exists host-m2-dir (str container-home-dir "/.m2") :rw))
-        env* (merge {"AGENT_SQLITE_PATH" container-sqlite-path
-                     "AGENT_LOG_FILE" container-log-path
+        env* (merge {"AGENT_CONTROL_URL" control-url
+                     "AGENT_CHILD_SQLITE_PATH" child-sqlite-path
+                     "AGENT_LOG_FILE" child-log-path
                      "HOME" container-home-dir}
                     (or (:env runner-options) {}))]
     (cond-> (assoc runner-options
@@ -405,8 +410,11 @@
                    :container-working-dir container-working-dir
                    :container-home-dir container-home-dir
                    :container-data-dir container-data-dir
-                   :share-network? (boolean (or (:share-network? runner-options)
-                                                (:share-network? runner-cfg))))
+                   :control-url control-url
+                   :share-network? (cond
+                                     (contains? runner-options :share-network?) (true? (:share-network? runner-options))
+                                     (contains? runner-cfg :share-network?) (true? (:share-network? runner-cfg))
+                                     :else true))
       (not (seq (:command runner-options)))
       (assoc :command (runtime-child/current-container-child-command)))))
 

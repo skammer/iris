@@ -1521,6 +1521,95 @@
                                                        request-id (assoc :request-id request-id)
                                                        status (assoc :status status))))})))
 
+(defn- exchange-header [^HttpExchange exchange name]
+  (.getFirst (.getRequestHeaders exchange) name))
+
+(defn- bearer-token [value]
+  (when value
+    (second (re-matches #"(?i)^Bearer\s+(.+)$" value))))
+
+(defn- control-token [exchange]
+  (or (bearer-token (exchange-header exchange "Authorization"))
+      (exchange-header exchange "X-Agent-Bootstrap-Token")))
+
+(defn- ensure-run-control! [system exchange run-id]
+  (let [run (or (system-get-run system run-id)
+                (throw (api-error 404 "run_not_found" "Run not found")))
+        token (control-token exchange)]
+    (when-not (and token (= token (:bootstrap-token run)))
+      (throw (api-error 401 "unauthorized" "Invalid run control token")))
+    run))
+
+(defn- body-value [body & ks]
+  (some #(get body %) ks))
+
+(defn- handle-run-control-register [system exchange run-id]
+  (ensure-run-control! system exchange run-id)
+  (let [body (read-json-body exchange)
+        run (runtime/register-run! (:runtime-service system)
+                                   run-id
+                                   {:capabilities (or (:capabilities body) [])
+                                    :network-identity (body-value body :network-identity :network_identity)
+                                    :runner-metadata (body-value body :runner-metadata :runner_metadata)})]
+    (write-json! exchange 200 {:data (run->response run)})))
+
+(defn- handle-run-control-heartbeat [system exchange run-id]
+  (ensure-run-control! system exchange run-id)
+  (let [body (read-json-body exchange)
+        heartbeat (runtime/heartbeat! (:runtime-service system)
+                                      run-id
+                                      {:sequence-no (body-value body :sequence-no :sequence_no)
+                                       :status (keyword (or (:status body) "running"))
+                                       :metrics (:metrics body)
+                                       :lease-id (body-value body :lease-id :lease_id)})]
+    (write-json! exchange 200 {:data (heartbeat->response heartbeat)})))
+
+(defn- handle-run-control-checkpoint [system exchange run-id]
+  (ensure-run-control! system exchange run-id)
+  (let [body (read-json-body exchange)
+        checkpoint (runtime/checkpoint! (:runtime-service system)
+                                        run-id
+                                        {:sequence-no (body-value body :sequence-no :sequence_no)
+                                         :checkpoint-type (keyword (or (body-value body :checkpoint-type :checkpoint_type)
+                                                                       "state"))
+                                         :state (:state body)})]
+    (write-json! exchange 200 {:data (checkpoint->response checkpoint)})))
+
+(defn- handle-run-control-commands [system exchange run-id]
+  (ensure-run-control! system exchange run-id)
+  (write-json! exchange 200
+               {:data (mapv run-command->response
+                            (runtime/pending-commands (:runtime-service system) run-id))}))
+
+(defn- handle-run-control-command-ack [system exchange run-id command-id]
+  (ensure-run-control! system exchange run-id)
+  (runtime/acknowledge-command! (:runtime-service system) run-id command-id)
+  (write-json! exchange 200 {:data {:id command-id
+                                    :status "acknowledged"}}))
+
+(defn- handle-run-control-command-complete [system exchange run-id command-id]
+  (ensure-run-control! system exchange run-id)
+  (let [body (read-json-body exchange)
+        status (keyword (or (:status body) "completed"))
+        command (runtime/complete-command! (:runtime-service system)
+                                           run-id
+                                           command-id
+                                           status
+                                           (:error body)
+                                           (:response body))]
+    (write-json! exchange 200 {:data (run-command->response command)})))
+
+(defn- handle-run-control-transition [system exchange run-id]
+  (ensure-run-control! system exchange run-id)
+  (let [body (read-json-body exchange)
+        status (keyword (or (:status body) "running"))
+        run (runtime/transition-run! (:runtime-service system)
+                                     run-id
+                                     status
+                                     {:last-error (body-value body :last-error :last_error)
+                                      :runner-metadata (body-value body :runner-metadata :runner_metadata)})]
+    (write-json! exchange 200 {:data (run->response run)})))
+
 (defn- handle-run-events [system exchange run-id]
   (let [params (query-params exchange)
         limit (parse-int-param (:limit params) "limit")
@@ -2000,6 +2089,13 @@
    :run-heartbeats (fn [request] (exchange-handler request #(handle-run-heartbeats system % (get-in request [:path-params :run-id]))))
    :run-checkpoints (fn [request] (exchange-handler request #(handle-run-checkpoints system % (get-in request [:path-params :run-id]))))
    :run-commands (fn [request] (exchange-handler request #(handle-run-commands system % (get-in request [:path-params :run-id]))))
+   :run-control-register (fn [request] (exchange-handler request #(handle-run-control-register system % (get-in request [:path-params :run-id]))))
+   :run-control-heartbeat (fn [request] (exchange-handler request #(handle-run-control-heartbeat system % (get-in request [:path-params :run-id]))))
+   :run-control-checkpoint (fn [request] (exchange-handler request #(handle-run-control-checkpoint system % (get-in request [:path-params :run-id]))))
+   :run-control-commands (fn [request] (exchange-handler request #(handle-run-control-commands system % (get-in request [:path-params :run-id]))))
+   :run-control-command-ack (fn [request] (exchange-handler request #(handle-run-control-command-ack system % (get-in request [:path-params :run-id]) (get-in request [:path-params :command-id]))))
+   :run-control-command-complete (fn [request] (exchange-handler request #(handle-run-control-command-complete system % (get-in request [:path-params :run-id]) (get-in request [:path-params :command-id]))))
+   :run-control-transition (fn [request] (exchange-handler request #(handle-run-control-transition system % (get-in request [:path-params :run-id]))))
    :run-events (fn [request] (exchange-handler request #(handle-run-events system % (get-in request [:path-params :run-id]))))
    :run-wait (fn [request] (exchange-handler request #(handle-run-wait system % (get-in request [:path-params :run-id]))))
    :run-recover (fn [request] (exchange-handler request #(handle-run-recover system % (get-in request [:path-params :run-id]))))

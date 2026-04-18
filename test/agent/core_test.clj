@@ -44,12 +44,13 @@
 
 (deftest prepare-runner-options-adds-container-child-defaults
   (let [system {:config {:storage {:sqlite {:path "data/agent.db"}}
+                         :api {:port 8689}
                          :runners {:docker {:image "clojure:temurin-21-alpine"
                                             :container-working-dir "/workspace"
                                             :container-data-dir "/agent-data"
                                             :container-home-dir "/root"
                                             :host-working-dir "."
-                                            :share-network? false}}}}
+                                            :share-network? true}}}}
         prepared (#'agent.core/prepare-runner-options
                   system
                   {:substrate "docker"
@@ -58,12 +59,13 @@
     (is (= ["clojure" "-M" "-m" "agent.runtime.child"] (:command prepared)))
     (is (= "/workspace" (:container-working-dir prepared)))
     (is (= "/root" (:container-home-dir prepared)))
-    (is (= "/agent-data/agent.db" (get (:env prepared) "AGENT_SQLITE_PATH")))
+    (is (= "http://host.docker.internal:8689" (get (:env prepared) "AGENT_CONTROL_URL")))
+    (is (= "/agent-data/child.db" (get (:env prepared) "AGENT_CHILD_SQLITE_PATH")))
     (is (= "/root" (get (:env prepared) "HOME")))
-    (is (<= 2 (count (:mounts prepared))))
+    (is (<= 1 (count (:mounts prepared))))
     (is (every? #{:rw :ro} (map :mode (:mounts prepared))))
     (is (contains? (set (map :target (:mounts prepared))) "/workspace"))
-    (is (contains? (set (map :target (:mounts prepared))) "/agent-data"))))
+    (is (not (contains? (set (map :target (:mounts prepared))) "/agent-data")))))
 
 (deftest spawn-task-worker-produces-scoped-worker
   (let [system (core/create-system)
