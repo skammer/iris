@@ -146,6 +146,10 @@ Reference:
    Added `execute-directive!` / `execute-step!` with receipts in `src/agent/core.clj`.
    Added orchestrator spawn-only surface at `POST /v1/agents/:id/spawn-worker`.
    Added agent-scoped tool execution at `POST /v1/agents/:id/tools/:tool/execute`.
+0.2 [x] Richer directive + visibility baseline:
+   Added directive execution for `tool-call`, `send-message`, `state-patch`, `complete`.
+   Added capability-aware worker LLM preamble using task/tool/memory/budget metadata.
+   Added kernel receipt visibility to operator board.
 1. [x] Live transcript streaming:
    Added session-scoped SSE for transcript/completions.
    Transcript panel now patches from Datastar session-live stream instead of interval polling.
@@ -174,13 +178,20 @@ Reference:
    Baseline done: logical addressing, capability exchange, routed/direct messaging, audit events, retries/acks/message status, richer trust policy baseline, networked peer federation baseline, real HTTP federated forward/inbox delivery.
    Remaining: stronger policy/grant model, non-HTTP/broker-backed federation.
 8.1 [ ] Kernel/runtime split follow-up:
-   Make real worker execution consume typed directives/receipts beyond spawn/await baseline.
-   Extend orchestrator spawn-only default from API baseline into all orchestration paths.
+   Baseline now covers spawn/await/tool-call/send-message/state-patch/complete.
+   Remaining:
+   - move autonomous worker loops to directive-native planning/execution
+   - make orchestrator spawn-only rule universal across all internal paths
+   - persist directive/receipt lineage more explicitly than generic event payloads
+   Considerations:
+   - avoid duplicating orchestration logic between API/runtime/child shim
+   - likely extract dedicated agent FSM/executor in later pass
 9. [ ] Channel adapter implementation:
    Start Telegram first.
    Map inbound messages onto current session/agent/channel model.
 10. [ ] Personality/profile system:
    Profiles should bundle prompt, provider/model prefs, tool policy, memory defaults, and worker capability bundles.
+   Consider folding orchestrator/worker default bundles into profiles once agent FSM/directive executor stabilizes.
 11. [ ] Deeper graph memory:
    Move from raw Datahike prototype to richer entity/relation extraction + recall path.
 11.1 [ ] Explicit memory write path:

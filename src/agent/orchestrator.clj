@@ -31,6 +31,7 @@
    :memory-scopes (vec (:memory-scopes agent))
    :task (:task agent)
    :budgets (:budgets agent)
+   :state (:state agent)
    :allow-direct? (true? (:allow-direct? agent))
    :status (:status agent)
    :created-at (:created-at agent)
@@ -54,11 +55,25 @@
                                           :channel-id channel-id}))))
 
 (defn- build-llm-messages [agent]
-  (vec
-   (concat
-    (when-let [system-prompt (:system-prompt agent)]
-      [{:role "system" :content system-prompt}])
-    (map #(select-keys % [:role :content]) (:messages agent)))))
+  (let [agent-context (str/join
+                       "\n"
+                       (remove str/blank?
+                               [(when-let [task (:task agent)]
+                                  (str "task: " (pr-str task)))
+                                (when-let [caps (seq (:capabilities agent))]
+                                  (str "capabilities: " (str/join ", " (sort caps))))
+                                (when-let [tools (seq (:tool-access agent))]
+                                  (str "tool-access: " (str/join ", " (sort tools))))
+                                (when-let [scopes (seq (:memory-scopes agent))]
+                                  (str "memory-scopes: " (str/join ", " scopes)))
+                                (when-let [budgets (seq (:budgets agent))]
+                                  (str "budgets: " (pr-str budgets)))]))
+        system-prompt (str/join "\n\n" (remove str/blank? [(:system-prompt agent) agent-context]))]
+    (vec
+     (concat
+      (when-not (str/blank? system-prompt)
+        [{:role "system" :content system-prompt}])
+      (map #(select-keys % [:role :content]) (:messages agent))))))
 
 (defn create-orchestrator
   ([] (create-orchestrator {}))
@@ -158,6 +173,7 @@
                :memory-scopes (vec (or memory-scopes []))
                :budgets (or budgets {})
                :task task
+               :state {}
                :allow-direct? (true? allow-direct?)
                :trusted-peers (set trusted-peers)
                :trusted-peer-policies (normalize-trust-policies trust-policies)
@@ -183,6 +199,7 @@
                               :memory-scopes (:memory-scopes agent*)
                               :budgets (:budgets agent*)
                               :task (:task agent*)
+                              :state (:state agent*)
                               :allow-direct? (:allow-direct? agent*)
                               :trusted-peers (vec (:trusted-peers agent*))
                               :trusted-peer-policies (trust-policies-view (:trusted-peer-policies agent*))
@@ -211,6 +228,7 @@
      :memory-scopes (vec (:memory-scopes agent))
      :budgets (:budgets agent)
      :task (:task agent)
+     :state (:state agent)
      :trusted-peers (vec (sort (:trusted-peers agent)))
      :trust-policies (trust-policies-view (:trusted-peer-policies agent))
      :interop-rate-limit-per-minute (:interop-rate-limit-per-minute agent)
@@ -285,6 +303,31 @@
                             :trusted-peer-policies (trust-policies-view (:trusted-peer-policies updated))
                             :interop-rate-limit-per-minute (:interop-rate-limit-per-minute updated)}})
     (describe-agent-interop orchestrator (:id agent))))
+
+(defn patch-agent-state!
+  [orchestrator agent-ref patch]
+  (let [agent (ensure-agent-by-ref! orchestrator agent-ref)
+        updated (update agent :state merge patch)]
+    (swap! (:agents orchestrator) assoc (:id agent) updated)
+    (emit-event! orchestrator
+                 {:event-type :agent.state.patched
+                  :entity-type :agent
+                  :entity-id (:id agent)
+                  :payload {:patch patch
+                            :state (:state updated)}})
+    (:state updated)))
+
+(defn set-agent-status!
+  [orchestrator agent-ref status]
+  (let [agent (ensure-agent-by-ref! orchestrator agent-ref)
+        updated (assoc agent :status status)]
+    (swap! (:agents orchestrator) assoc (:id agent) updated)
+    (emit-event! orchestrator
+                 {:event-type :agent.status.updated
+                  :entity-type :agent
+                  :entity-id (:id agent)
+                  :payload {:status status}})
+    (agent-view updated)))
 
 (defn register-federated-peer!
   [orchestrator {:keys [id name base-url logical-address-prefix capabilities status]

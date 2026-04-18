@@ -342,6 +342,12 @@
                                                   :memory_scopes ["session"]
                                                   :budgets {:max_tokens 100}})
             orchestrator-spawn-worker-body (json/parse-string (:body orchestrator-spawn-worker) true)
+            step-execute (http-post (str base-url "/v1/agents/" agent-id "/steps")
+                                    {:directives [{:type "state-patch"
+                                                   :payload {:patch {:phase "working"}}}
+                                                  {:type "complete"
+                                                   :payload {:result "done"}}]})
+            step-execute-body (json/parse-string (:body step-execute) true)
             agent-msg (http-post (str base-url "/v1/agents/" agent-id "/messages")
                                  {:content "do work"})
             agent-msg-body (json/parse-string (:body agent-msg) true)
@@ -428,6 +434,7 @@
         (is (str/includes? (:body ui-operator-board) "Federated peers"))
         (is (str/includes? (:body ui-operator-board) "Interop policy"))
         (is (str/includes? (:body ui-operator-board) "Interop activity"))
+        (is (str/includes? (:body ui-operator-board) "Kernel receipts"))
         (is (= 200 (:status health)))
         (is (= 3 (get-in health-body [:tools :count])))
         (is (= true (get-in health-body [:memory :healthy])))
@@ -462,6 +469,7 @@
         (is (= "worker" (:kind created-agent-body)))
         (is (= ["fs" "http"] (:tool_access created-agent-body)))
         (is (= ["session"] (:memory_scopes created-agent-body)))
+        (is (= {} (:state created-agent-body)))
         (is (= 201 (:status created-peer)))
         (is (= 201 (:status created-orchestrator)))
         (is (= "orchestrator" (:kind created-orchestrator-body)))
@@ -506,6 +514,9 @@
         (is (= 201 (:status orchestrator-spawn-worker)))
         (is (= :ok (keyword (get-in orchestrator-spawn-worker-body [:data :receipts 0 :status]))))
         (is (= ["http"] (get-in orchestrator-spawn-worker-body [:data :worker :tool_access])))
+        (is (= 200 (:status step-execute)))
+        (is (= 2 (count (get-in step-execute-body [:data :receipts]))))
+        (is (= :completed (keyword (get-in step-execute-body [:data :receipts 1 :status]))))
         (is (= 200 (:status agent-msg)))
         (is (= "test-response" (get-in agent-msg-body [:response :content])))
         (is (= 201 (:status channel)))

@@ -49,13 +49,28 @@ Adopt `cnos`-inspired separation between pure agent/orchestrator decision logic 
   - `execute-directive!`
   - `execute-step!`
   - receipt emission baseline
+- `src/agent/kernel/runtime.clj`
+  - shared directive executor for core/API
+  - directive support:
+    - `spawn-worker`
+    - `await`
+    - `tool-call`
+    - `send-message`
+    - `state-patch`
+    - `complete`
 - `src/agent/api.clj`
   - orchestrator spawn-only API surface:
     - `POST /v1/agents/:id/spawn-worker`
   - agent-scoped tool execution:
     - `POST /v1/agents/:id/tools/:tool/execute`
+  - generic step execution:
+    - `POST /v1/agents/:id/steps`
 - `src/agent/tools/core.clj`
   - empty tool bundle now correctly means zero tool access
+- `src/agent/orchestrator.clj`
+  - worker LLM context now includes task/capability/tool/memory/budget preamble
+- `src/agent/ui.clj`
+  - operator board shows kernel receipt activity
 
 ## Why
 
@@ -72,6 +87,8 @@ Do not use Git as main storage/runtime substrate now.
 ## Next follow-ups
 
 1. Route real worker tool execution through capability bundles, not only metadata/tests.
-2. Add orchestrator-specific spawn API/tool that is the only default orchestrator effect.
-3. Add receipts/directive execution records for kernel output.
+   Baseline now present via agent-scoped tool execution route and shared directive executor.
+2. Make orchestrator spawn-only rule universal, not just preferred API shape.
+3. Persist directive/receipt lineage with stronger first-class schema than generic event payloads.
 4. Add profile system on top of capability bundles.
+5. Move autonomous worker loops to directive-native planning/execution rather than ad hoc command handling.

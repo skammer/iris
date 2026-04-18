@@ -247,6 +247,8 @@
         events (sqlite/list-events (:store system) {:limit 8})
         interop-events (filter #(str/starts-with? (str (:event-type %)) "agent.interop")
                                (sqlite/list-events (:store system) {:limit 20}))
+        kernel-events (filter #(= "agent.kernel.step.executed" (:event-type %))
+                              (sqlite/list-events (:store system) {:limit 20}))
         federated-peers (orchestrator/list-federated-peers (:orchestrator system))
         interop-policies (->> agents
                               (map (fn [agent]
@@ -338,6 +340,17 @@
           [:div.stack
            (for [{:keys [event-type entity-id created-at]} (take 8 interop-events)]
              [:div.meta (str event-type " | " (or entity-id "-") " | " created-at)])]
+          [:div.meta "none"])]
+       [:div.result
+        [:strong "Kernel receipts"]
+        (if (seq kernel-events)
+          [:div.stack
+           (for [{:keys [entity-id created-at payload]} (take 8 kernel-events)]
+             [:div.meta
+              (str (or entity-id "-")
+                   " | directives " (get payload :directive-count 0)
+                   " | receipts " (get payload :receipt-count 0)
+                   " | " created-at)])]
           [:div.meta "none"])]]])))
 
 (defn sessions-fragment [system]

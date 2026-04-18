@@ -1,0 +1,71 @@
+(ns agent.kernel.runtime
+  (:require
+   [agent.kernel :as kernel]))
+
+(defn execute-directive!
+  [ops parent-agent-id directive]
+  (case (:type directive)
+    :spawn-worker
+    (let [{:keys [task name role capability-bundle memory-scopes budgets system-prompt]} (:payload directive)
+          worker ((:spawn-task-worker! ops) {:task task
+                                             :name name
+                                             :role role
+                                             :capability-bundle capability-bundle
+                                             :memory-scopes memory-scopes
+                                             :budgets budgets
+                                             :system-prompt system-prompt
+                                             :parent-id parent-agent-id})]
+      {:directive (:type directive)
+       :status :ok
+       :worker-id (:id worker)})
+
+    :await
+    {:directive (:type directive)
+     :status :deferred}
+
+    :tool-call
+    (let [{:keys [tool-name input context]} (:payload directive)
+          result ((:execute-agent-tool! ops) parent-agent-id (keyword tool-name) input (or context {}))]
+      {:directive (:type directive)
+       :status :ok
+       :tool-name tool-name
+       :result result})
+
+    :send-message
+    (let [{:keys [agent-id message]} (:payload directive)
+          result ((:send-agent-message! ops) (or agent-id parent-agent-id) message)]
+      {:directive (:type directive)
+       :status :ok
+       :agent-id (or agent-id parent-agent-id)
+       :response (:response result)})
+
+    :state-patch
+    (let [{:keys [patch]} (:payload directive)
+          state ((:patch-agent-state! ops) parent-agent-id patch)]
+      {:directive (:type directive)
+       :status :ok
+       :state state})
+
+    :complete
+    (let [{:keys [result]} (:payload directive)]
+      ((:set-agent-status! ops) parent-agent-id "completed")
+      {:directive (:type directive)
+       :status :completed
+       :result result})
+
+    (throw (ex-info "Unsupported directive"
+                    {:type :validation-failed
+                     :directive (:type directive)}))))
+
+(defn execute-step!
+  [ops parent-agent-id step]
+  (let [receipts (mapv #(execute-directive! ops parent-agent-id %)
+                       (:directives step))]
+    ((:event-sink ops)
+     {:event-type :agent.kernel.step.executed
+      :entity-type :agent
+      :entity-id parent-agent-id
+      :payload {:directive-count (count (:directives step))
+                :receipt-count (count receipts)
+                :receipts receipts}})
+    (assoc step :receipts receipts)))
