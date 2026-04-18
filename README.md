@@ -61,8 +61,19 @@ Notes:
   - `AGENT_API_PORT`
 - SQLite env var:
   - `AGENT_SQLITE_PATH`
+- Isolated child runtime env vars:
+  - `AGENT_CONTROL_URL`: parent API URL used by container children.
+  - `AGENT_BOOTSTRAP_TOKEN`: per-run token; injected by runner.
+  - `AGENT_CHILD_SQLITE_PATH`: child-owned SQLite path; not the parent DB.
 - SSE chat streaming is available on rewritten `/v1/chat/completions` with `{\"stream\": true}`.
 - `API.md`, `USAGE.md`, `PROJECT_SUMMARY.md` describe archived legacy system unless rewritten later.
+
+Runtime isolation note:
+
+- Parent owns durable SQLite run/session state.
+- Docker/Podman children do not mount the parent DB.
+- Container children communicate with parent through `/v1/runs/:run-id/control/*` using the bootstrap token.
+- Local-process children may still use direct SQLite for dev/local compatibility.
 
 Java warning note:
 

@@ -7,3 +7,5 @@ config/*.local.edn
 tmp
 *.log
 misc
+restate-data
+data
