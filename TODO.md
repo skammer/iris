@@ -191,6 +191,14 @@ Reference:
    Considerations:
    - avoid duplicating orchestration logic between API/runtime/child shim
    - likely extract dedicated agent FSM/executor in later pass
+8.2 [ ] API/server refactor follow-up:
+   `http-kit` + `reitit` baseline is in place with route table, middleware layer, and Ring server startup.
+   Remaining:
+   - split large handler set into domain namespaces (`chat`, `sessions`, `runs`, `tools`, `agents`, `ui`)
+   - move validation/normalization helpers out of `src/agent/api.clj`
+   - add API-token middleware backed by persisted bootstrap tokens
+   - add token/IP rate limiting
+   - if long-lived SSE becomes critical again, replace current bounded reconnecting SSE bodies with fully persistent async channel streaming
 9. [ ] Channel adapter implementation:
    Start Telegram first.
    Map inbound messages onto current session/agent/channel model.
