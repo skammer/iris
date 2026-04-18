@@ -4,6 +4,7 @@
    [agent.broker.core :as broker]
    [agent.channels.core :as channel-adapters]
    [agent.kernel :as kernel]
+   [agent.kernel.runtime :as kernel-runtime]
    [agent.llm.core :as llm-core]
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
@@ -184,6 +185,7 @@
    :memory_scopes (vec (:memory-scopes agent))
    :budgets (:budgets agent)
    :task (:task agent)
+   :state (:state agent)
    :allow_direct (:allow-direct? agent)
    :status (:status agent)
    :created_at (:created-at agent)
@@ -833,6 +835,57 @@
           :agent-not-found (throw (api-error 404 "agent_not_found" "Agent not found"))
           :validation-failed (throw (api-error 409 "invalid_orchestrator" (.getMessage e)))
           (throw e))))))
+
+(defn- normalize-step-body [body]
+  (let [directives (or (:directives body) [])]
+    (when-not (vector? directives)
+      (throw (api-error 400 "bad_request" "directives must be a vector")))
+    {:state (or (:state body) {})
+     :directives (mapv (fn [directive]
+                         (when-not (map? directive)
+                           (throw (api-error 400 "bad_request" "directive must be an object")))
+                         (kernel/directive (keyword (:type directive))
+                                           (or (:payload directive) {})))
+                       directives)
+     :receipts (vec (or (:receipts body) []))}))
+
+(defn- handle-agent-step-execute [system exchange agent-id]
+  (let [agent (orchestrator/get-agent (:orchestrator system) agent-id)
+        step (normalize-step-body (read-json-body exchange))]
+    (when-not agent
+      (throw (api-error 404 "agent_not_found" "Agent not found")))
+    (let [ops {:spawn-task-worker! (fn [{:keys [task name role capability-bundle memory-scopes budgets system-prompt parent-id]}]
+                                     (orchestrator/spawn-agent! (:orchestrator system)
+                                                                {:name name
+                                                                 :kind "worker"
+                                                                 :role role
+                                                                 :parent-id parent-id
+                                                                 :system-prompt system-prompt
+                                                                 :capabilities (vec (or (:capabilities capability-bundle) []))
+                                                                 :tool-access (vec (or (:tool-access capability-bundle) []))
+                                                                 :memory-scopes (vec memory-scopes)
+                                                                 :budgets budgets
+                                                                 :task task}))
+               :execute-agent-tool! (fn [target-agent-id tool-name input context]
+                                      (let [target-agent (orchestrator/get-agent (:orchestrator system) target-agent-id)]
+                                        (when-not target-agent
+                                          (throw (ex-info "Agent not found" {:type :agent-not-found
+                                                                             :agent-id target-agent-id})))
+                                        (tools/execute-tool (:tool-registry system)
+                                                            tool-name
+                                                            input
+                                                            (merge context
+                                                                   {:allowed-tools (set (:tool-access target-agent))
+                                                                    :user (or (:user context) (str "agent:" target-agent-id))}))))
+               :send-agent-message! #(orchestrator/send-agent-message! (:orchestrator system)
+                                                                       (:llm-provider system)
+                                                                       %1
+                                                                       %2)
+               :patch-agent-state! #(orchestrator/patch-agent-state! (:orchestrator system) %1 %2)
+               :set-agent-status! #(orchestrator/set-agent-status! (:orchestrator system) %1 %2)
+               :event-sink (:event-sink system)}]
+      (write-json! exchange 200
+                   {:data (kernel-runtime/execute-step! ops agent-id step)}))))
 
 (defn- handle-consume-agent-inbox [system exchange agent-id]
   (try
@@ -1855,6 +1908,11 @@
                  (= ["v1" "agents"] (subvec path 0 2))
                  (= "spawn-worker" (nth path 3)))
             (handle-orchestrator-spawn-worker system exchange (nth path 2))
+
+            (and (= method "POST") (= 4 (count path))
+                 (= ["v1" "agents"] (subvec path 0 2))
+                 (= "steps" (nth path 3)))
+            (handle-agent-step-execute system exchange (nth path 2))
 
             (and (= method "POST") (= 5 (count path))
                  (= ["v1" "agents"] (subvec path 0 2))

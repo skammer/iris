@@ -9,6 +9,7 @@
    [agent.config :as config]
    [agent.federation.http :as federation-http]
    [agent.kernel :as kernel]
+   [agent.kernel.runtime :as kernel-runtime]
    [agent.llm.core :as llm-core]
    [agent.llm.providers.ollama :as ollama]
    [agent.llm.providers.openai-compatible :as openai-compatible]
@@ -31,7 +32,7 @@
    [clojure.java.io :as io]
    [clojure.string :as str]))
 
-(declare spawn-task-worker!)
+(declare spawn-task-worker! send-agent-message! execute-agent-tool!)
 
 (defn create-llm-provider
   [cfg]
@@ -429,43 +430,21 @@
                           {:user (or (:user context) agent-id)
                            :allowed-tools (set (:tool-access agent))})))))
 
+(defn- kernel-ops [system]
+  {:spawn-task-worker! #(spawn-task-worker! system %)
+   :execute-agent-tool! #(execute-agent-tool! system %1 %2 %3 %4)
+   :send-agent-message! #(send-agent-message! system %1 %2)
+   :patch-agent-state! #(orchestrator/patch-agent-state! (:orchestrator system) %1 %2)
+   :set-agent-status! #(orchestrator/set-agent-status! (:orchestrator system) %1 %2)
+   :event-sink (:event-sink system)})
+
 (defn execute-directive!
   [system parent-agent-id directive]
-  (case (:type directive)
-    :spawn-worker
-    (let [{:keys [task name role capability-bundle memory-scopes budgets system-prompt]} (:payload directive)
-          worker (spawn-task-worker! system {:task task
-                                            :name name
-                                            :role role
-                                            :capability-bundle capability-bundle
-                                            :memory-scopes memory-scopes
-                                            :budgets budgets
-                                            :system-prompt system-prompt
-                                            :parent-id parent-agent-id})]
-      {:directive (:type directive)
-       :status :ok
-       :worker-id (:id worker)})
-
-    :await
-    {:directive (:type directive)
-     :status :deferred}
-
-    (throw (ex-info "Unsupported directive"
-                    {:type :validation-failed
-                     :directive (:type directive)}))))
+  (kernel-runtime/execute-directive! (kernel-ops system) parent-agent-id directive))
 
 (defn execute-step!
   [system parent-agent-id step]
-  (let [receipts (mapv #(execute-directive! system parent-agent-id %)
-                       (:directives step))]
-    (log-event! system
-                {:event-type :agent.kernel.step.executed
-                 :entity-type :agent
-                 :entity-id parent-agent-id
-                 :payload {:directive-count (count (:directives step))
-                           :receipt-count (count receipts)
-                           :receipts receipts}})
-    (assoc step :receipts receipts)))
+  (kernel-runtime/execute-step! (kernel-ops system) parent-agent-id step))
 
 (defn request-run!
   [system request]
