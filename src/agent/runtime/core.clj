@@ -1,6 +1,7 @@
 (ns agent.runtime.core
   "Durable distributed run registry and control-plane primitives."
   (:require
+   [agent.broker.core :as broker]
    [agent.persistence.sqlite :as sqlite]
    [agent.runners.core :as runners])
   (:import
@@ -9,6 +10,7 @@
    (java.util UUID)))
 
 (def default-lease-duration-seconds 60)
+(def default-stale-grace-seconds 30)
 
 (defn- now [] (str (Instant/now)))
 
@@ -20,9 +22,10 @@
     (sink event)))
 
 (defn create-runtime-service
-  [{:keys [store event-sink]
+  [{:keys [store event-sink broker]
     :or {event-sink (fn [_] nil)}}]
   {:store store
+   :broker broker
    :event-sink event-sink})
 
 (defn create-run-request
@@ -49,7 +52,8 @@
                          :parent-run-id (:parent-run-id request)
                          :lease-id lease-id
                          :capabilities (:capabilities request)
-                         :network-identity (:network-identity request)})
+                         :network-identity (:network-identity request)
+                         :checkpoint-seq (or (get-in request [:recovery :checkpoint-seq]) 0)})
         run (sqlite/create-agent-run! (:store runtime)
                                       {:id run-id
                                        :agent-id (:agent-id request)
@@ -144,17 +148,21 @@
     checkpoint))
 
 (defn enqueue-command!
-  [runtime run-id {:keys [command-type payload]}]
+  [runtime run-id {:keys [command-type payload request-id]}]
   (let [command (sqlite/enqueue-agent-run-command! (:store runtime)
                                                    {:run-id run-id
                                                     :command-type command-type
-                                                    :payload payload})]
+                                                    :payload payload
+                                                    :request-id (or request-id
+                                                                    (:request-id payload)
+                                                                    (str (UUID/randomUUID)))})]
     (emit-event! runtime
                  {:event-type :agent.run.command.enqueued
                   :entity-type :agent_run
                   :entity-id run-id
                   :payload {:command-id (:id command)
-                            :command-type (:command-type command)}})
+                            :command-type (:command-type command)
+                            :request-id (:request-id command)}})
     command))
 
 (defn pending-commands
@@ -187,17 +195,22 @@
   command-id)
 
 (defn complete-command!
-  [runtime run-id command-id status error]
-  (sqlite/update-agent-run-command! (:store runtime) command-id {:status status
-                                                                 :error error})
-  (emit-event! runtime
-               {:event-type :agent.run.command.completed
-                :entity-type :agent_run
-                :entity-id run-id
-                :payload {:command-id command-id
-                          :status (name status)
-                          :error error}})
-  command-id)
+  ([runtime run-id command-id status error]
+   (complete-command! runtime run-id command-id status error nil))
+  ([runtime run-id command-id status error response]
+   (let [command (sqlite/update-agent-run-command! (:store runtime) command-id {:status status
+                                                                                :error error
+                                                                                :response response})]
+     (emit-event! runtime
+                  {:event-type :agent.run.command.completed
+                   :entity-type :agent_run
+                   :entity-id run-id
+                   :payload {:command-id command-id
+                             :request-id (:request-id command)
+                             :status (name status)
+                             :error error
+                             :response response}})
+     command)))
 
 (defn transition-run!
   [runtime run-id status & [{:keys [last-error runner-metadata]}]]
@@ -226,9 +239,159 @@
                           :line line
                           :captured-at captured-at}}))
 
+(defn- parse-instant [value]
+  (when value
+    (Instant/parse value)))
+
+(defn- now-instant []
+  (Instant/now))
+
+(defn stale-run?
+  ([runtime run] (stale-run? runtime run {}))
+  ([runtime run {:keys [grace-seconds]
+                 :or {grace-seconds default-stale-grace-seconds}}]
+   (let [lease (or (:lease run)
+                   (sqlite/latest-agent-run-lease (:store runtime) (:id run)))
+         heartbeat (or (:heartbeat run)
+                       (sqlite/latest-agent-run-heartbeat (:store runtime) (:id run)))
+         now* (now-instant)
+         lease-expired? (when-let [expires-at (some-> lease :expires-at parse-instant)]
+                          (.isAfter now* expires-at))
+         heartbeat-expired? (when-let [observed-at (some-> heartbeat :observed-at parse-instant)]
+                              (.isAfter now* (.plusSeconds observed-at (long grace-seconds))))
+         active? (contains? #{"requested" "launched" "running"} (:status run))]
+     (boolean (and active?
+                   (or lease-expired? heartbeat-expired?))))))
+
+(defn recovery-plan
+  [runtime run-id]
+  (when-let [run (get-run runtime run-id)]
+    (let [checkpoint (:checkpoint run)
+          heartbeat (:heartbeat run)
+          pending (pending-commands runtime run-id)]
+      {:run-id run-id
+       :status (:status run)
+       :stale? (stale-run? runtime run)
+       :checkpoint-seq (or (:sequence-no checkpoint) 0)
+       :checkpoint-type (:checkpoint-type checkpoint)
+       :checkpoint-state (:state checkpoint)
+       :last-heartbeat-at (:observed-at heartbeat)
+       :last-heartbeat-status (:status heartbeat)
+       :pending-command-count (count pending)
+       :pending-command-ids (mapv :id pending)
+       :runner-options (:runner-options run)
+       :recoverable? (contains? #{"requested" "launched" "running" "expired" "failed" "cancelled"} (:status run))})))
+
+(defn wait-for-run!
+  ([runtime run-id] (wait-for-run! runtime run-id {}))
+  ([runtime run-id {:keys [timeout-ms interval-ms]
+                    :or {timeout-ms 15000 interval-ms 250}}]
+   (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
+     (loop []
+       (let [run (get-run runtime run-id)]
+         (cond
+           (nil? run) nil
+           (contains? #{"completed" "failed" "cancelled" "expired"} (:status run)) run
+           (>= (System/currentTimeMillis) deadline) run
+           :else (do
+                   (Thread/sleep (long interval-ms))
+                   (recur))))))))
+
+(defn retry-run!
+  [runtime run-id]
+  (let [run (or (get-run runtime run-id)
+                (throw (ex-info "Run not found" {:type :run-not-found
+                                                 :run-id run-id})))
+        checkpoint (:checkpoint run)
+        attempt (inc (long (or (get-in run [:runner-options :recovery :attempt]) 0)))
+        next-run (request-run! runtime
+                               (create-run-request
+                                {:agent-id (:agent-id run)
+                                 :parent-run-id (or (:parent-run-id run) run-id)
+                                 :name (:name run)
+                                 :substrate (keyword (:substrate run))
+                                 :capabilities (:capabilities run)
+                                 :network-identity (:network-identity run)
+                                 :requested-by "recovery"
+                                 :runner-options (assoc (:runner-options run)
+                                                        :recovery {:attempt attempt
+                                                                   :retry-on-stale? (true? (get-in run [:runner-options :recovery :retry-on-stale?]))
+                                                                   :max-attempts (or (get-in run [:runner-options :recovery :max-attempts]) 1)})
+                                 :recovery {:checkpoint-seq (or (:sequence-no checkpoint) 0)
+                                            :checkpoint (:state checkpoint)
+                                            :previous-run-id run-id}}))]
+    (emit-event! runtime
+                 {:event-type :agent.run.retry.requested
+                  :entity-type :agent_run
+                  :entity-id run-id
+                  :payload {:replacement-run-id (:id next-run)
+                            :attempt attempt}})
+    next-run))
+
+(defn reclaim-run!
+  [runtime run-id]
+  (let [run (or (get-run runtime run-id)
+                (throw (ex-info "Run not found" {:type :run-not-found
+                                                 :run-id run-id})))
+        reclaimed (transition-run! runtime run-id :expired {:last-error "stale_worker_reclaimed"})]
+    (emit-event! runtime
+                 {:event-type :agent.run.reclaimed
+                  :entity-type :agent_run
+                  :entity-id run-id
+                  :payload {:previous-status (:status run)}})
+    reclaimed))
+
+(defn reclaim-stale-runs!
+  [runtime]
+  (let [runs (list-runs runtime {:limit 1000})]
+    (reduce
+     (fn [acc run]
+       (if-not (stale-run? runtime run)
+         acc
+         (let [reclaimed (reclaim-run! runtime (:id run))
+               retry-on-stale? (true? (get-in run [:runner-options :recovery :retry-on-stale?]))
+               max-attempts (long (or (get-in run [:runner-options :recovery :max-attempts]) 1))
+               attempt (long (or (get-in run [:runner-options :recovery :attempt]) 0))
+               replacement (when (and retry-on-stale? (< attempt max-attempts))
+                             (retry-run! runtime (:id run)))]
+           (conj acc {:reclaimed reclaimed
+                      :replacement replacement}))))
+     []
+     runs)))
+
+(defn request-command!
+  ([runtime run-id command]
+   (request-command! runtime run-id command {}))
+  ([runtime run-id command {:keys [timeout-ms]
+                            :or {timeout-ms 10000}}]
+   (let [request-id (str (UUID/randomUUID))
+         broker-instance (:broker runtime)
+         response (when broker-instance
+                    (future
+                      (broker/request! broker-instance
+                                       (broker/run-commands-subject run-id)
+                                       {:run-id run-id
+                                        :request-id request-id
+                                        :command-type (:command-type command)
+                                        :payload (:payload command)}
+                                       {:timeout-ms timeout-ms
+                                        :wait? false})))
+         command* (enqueue-command! runtime run-id (assoc command :request-id request-id))
+         waited (wait-for-run! runtime run-id {:timeout-ms timeout-ms
+                                               :interval-ms 250})
+         command-state (first (sqlite/list-agent-run-commands (:store runtime) run-id {:request-id request-id
+                                                                                       :limit 1}))]
+     {:request-id request-id
+      :command command*
+      :run waited
+      :response-subject (broker/reply-subject request-id)
+      :completed-command command-state
+      :broker-request (some-> response deref)})))
+
 (defn runtime-health
   [runtime]
   (let [runs (sqlite/list-agent-runs (:store runtime) {:limit 1000})
+        stale (count (filter #(stale-run? runtime %) runs))
         pending (reduce
                  (fn [acc run]
                    (+ acc (count (sqlite/list-agent-run-commands (:store runtime) (:id run) {:status "pending"}))))
@@ -236,4 +399,5 @@
                  runs)]
     {:healthy true
      :run-count (count runs)
+     :stale-run-count stale
      :pending-command-count pending}))

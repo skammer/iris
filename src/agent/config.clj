@@ -46,12 +46,16 @@
                       :discord {:enabled false}
                       :slack {:enabled false}}
    :runners {:docker {:image "clojure:temurin-21-alpine"
+                      :image-mode :mounted-dev
+                      :pull-policy :missing
                       :container-working-dir "/workspace"
                       :container-data-dir "/agent-data"
                       :container-home-dir "/root"
                       :host-working-dir "."
                       :share-network? false}
              :podman {:image "clojure:temurin-21-alpine"
+                      :image-mode :mounted-dev
+                      :pull-policy :missing
                       :container-working-dir "/workspace"
                       :container-data-dir "/agent-data"
                       :container-home-dir "/root"

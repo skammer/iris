@@ -109,6 +109,7 @@
       (runners/launch delegate
                       (assoc run-spec
                              :runner-options {:command argv
+                                              :env (:env runner-options)
                                               :working-dir host-working-dir}))))
   (signal [_ run-id command]
     (runners/signal delegate run-id command))

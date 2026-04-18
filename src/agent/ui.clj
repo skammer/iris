@@ -6,6 +6,7 @@
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
    [agent.runners.core :as runners]
+   [agent.runners.docker-podman :as docker-podman]
    [agent.runtime.core :as runtime]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
@@ -598,6 +599,10 @@
         runner-status (when run
                         (when-let [runner (get (:runner-registry system) (keyword (:substrate run)))]
                           (runners/status runner (:id run))))
+        recovery (when run
+                   (runtime/recovery-plan (:runtime-service system) (:id run)))
+        container-contract (when (and run (#{"docker" "podman"} (:substrate run)))
+                             (docker-podman/image-contract (:runner-options run)))
         output-events (when run
                         (->> (sqlite/list-events (:store system)
                                                 {:entity-type :agent_run
@@ -641,6 +646,14 @@
           [:div.result.diagnostic-result
            [:strong "Failure diagnostics"]
            [:div.code (:last-error run)]])
+        (when recovery
+          [:div.result
+           [:strong "Recovery"]
+           [:div.code (json/generate-string recovery {:pretty true})]])
+        (when container-contract
+          [:div.result
+           [:strong "Container contract"]
+           [:div.code (json/generate-string container-contract {:pretty true})]])
         [:div.run-grid
          (json-result "Runner" runner-status)
          (when-let [heartbeat (:heartbeat run)]
@@ -680,6 +693,10 @@
           [:button {:type "button"
                     "data-on:click" (str "@post('/ui/runs/" (:id run) "/launch', {contentType: 'form', selector: '#run-launch-" (:id run) "'})")}
            "Launch"]]
+         [:form {:id (str "run-recover-" (:id run))}
+          [:button {:type "button"
+                    "data-on:click" (str "@post('/v1/runs/" (:id run) "/recover')")}
+           "Recover"]]
          [:form {:id (str "run-cancel-" (:id run))}
           [:button {:type "button"
                     "data-on:click" (str "@post('/ui/runs/" (:id run) "/signal', {contentType: 'form', selector: '#run-cancel-" (:id run) "'})")}

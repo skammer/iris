@@ -69,13 +69,70 @@
   [cfg]
   (sqlite/create-store (get cfg :sqlite)))
 
+(defn- replay-broker-messages
+  [store pattern {:keys [limit after-id since-sequence request-id]
+                  :or {limit 100}}]
+  (let [pattern* (str pattern)]
+    (cond
+      (nil? store) []
+
+      (= pattern* (broker/all-events-subject))
+      (mapv (fn [event] {:subject "events.all" :payload event})
+            (reverse (sqlite/list-events store {:limit limit
+                                               :after-id after-id})))
+
+      (= pattern* (broker/all-runs-subject))
+      (mapcat broker/event->messages
+              (reverse (sqlite/list-events store {:entity-type :agent_run
+                                                  :limit limit
+                                                  :after-id after-id})))
+
+      (re-matches #"runs\.([^\.]+)\.events" pattern*)
+      (let [[_ run-id] (re-matches #"runs\.([^\.]+)\.events" pattern*)]
+        (mapv (fn [event] {:subject (broker/run-events-subject run-id)
+                           :payload event})
+              (reverse (sqlite/list-events store {:entity-type :agent_run
+                                                  :entity-id run-id
+                                                  :limit limit
+                                                  :after-id after-id}))))
+
+      (re-matches #"runs\.([^\.]+)\.commands" pattern*)
+      (let [[_ run-id] (re-matches #"runs\.([^\.]+)\.commands" pattern*)]
+        (mapv broker/command->message
+              (sqlite/list-agent-run-commands store run-id {:limit limit
+                                                            :request-id request-id})))
+
+      (re-matches #"runs\.([^\.]+)\.heartbeats" pattern*)
+      (let [[_ run-id] (re-matches #"runs\.([^\.]+)\.heartbeats" pattern*)]
+        (mapv broker/heartbeat->message
+              (sqlite/list-agent-run-heartbeats store run-id {:limit limit
+                                                              :since-sequence since-sequence})))
+
+      (re-matches #"runs\.([^\.]+)\.checkpoints" pattern*)
+      (let [[_ run-id] (re-matches #"runs\.([^\.]+)\.checkpoints" pattern*)]
+        (mapv broker/checkpoint->message
+              (sqlite/list-agent-run-checkpoints store run-id {:limit limit
+                                                               :since-sequence since-sequence})))
+
+      (re-matches #"runs\.([^\.]+)\.output" pattern*)
+      (let [[_ run-id] (re-matches #"runs\.([^\.]+)\.output" pattern*)]
+        (mapv (fn [event] {:subject (broker/run-output-subject run-id)
+                           :payload event})
+              (reverse (sqlite/list-events store {:entity-type :agent_run
+                                                  :entity-id run-id
+                                                  :event-type "agent.run.output"
+                                                  :limit limit
+                                                  :after-id after-id}))))
+
+      :else [])))
+
 (defn create-broker
-  []
-  (local-broker/create-broker))
+  [store]
+  (local-broker/create-broker {:replay-fn #(replay-broker-messages store %1 %2)}))
 
 (defn create-event-bus
   []
-  (create-broker))
+  (create-broker nil))
 
 (defn create-event-sink
   [store broker-instance]
@@ -128,9 +185,12 @@
   (memory/create-memory-service cfg store))
 
 (defn create-runtime-service
-  [store event-sink]
-  (runtime/create-runtime-service {:store store
-                                   :event-sink event-sink}))
+  ([store event-sink]
+   (create-runtime-service store event-sink nil))
+  ([store event-sink broker-instance]
+   (runtime/create-runtime-service {:store store
+                                    :broker broker-instance
+                                    :event-sink event-sink})))
 
 (defn- runner-exit-status [run exit-code]
   (cond
@@ -213,9 +273,9 @@
          _ (logging/start! (:logging cfg))
          llm-cfg (config/llm-config cfg)
          store (create-store (:storage cfg))
-         broker-instance (create-broker)
+         broker-instance (create-broker store)
          event-sink (create-event-sink store broker-instance)
-         runtime-service (create-runtime-service store event-sink)]
+         runtime-service (create-runtime-service store event-sink broker-instance)]
      (logging/log! :agent.system/created
                    {:config-path config-path
                     :provider (name (get-in cfg [:llm :provider]))
@@ -354,7 +414,7 @@
   [system run]
   (let [runner-options (or (:runner-options run) {})]
     (cond-> runner-options
-      (= "local-process" (:substrate run))
+      (#{"local-process" "bubblewrap" "seatbelt"} (:substrate run))
       ((fn [opts]
          (let [env* (merge (default-child-env system) (or (:env opts) {}))]
            (cond-> (assoc opts :env env*)
@@ -515,6 +575,23 @@
   ([system run-id opts]
    (runtime/list-checkpoints (:runtime-service system) run-id opts)))
 
+(defn recovery-plan
+  [system run-id]
+  (runtime/recovery-plan (:runtime-service system) run-id))
+
+(defn wait-for-run!
+  ([system run-id] (wait-for-run! system run-id {}))
+  ([system run-id opts]
+   (runtime/wait-for-run! (:runtime-service system) run-id opts)))
+
+(defn reclaim-stale-runs!
+  [system]
+  (runtime/reclaim-stale-runs! (:runtime-service system)))
+
+(defn retry-run!
+  [system run-id]
+  (runtime/retry-run! (:runtime-service system) run-id))
+
 (defn acknowledge-run-command!
   [system run-id command-id]
   (runtime/acknowledge-command! (:runtime-service system) run-id command-id))
@@ -533,6 +610,12 @@
     (when-let [runner (get (:runner-registry system) (keyword (:substrate run)))]
       (runners/status runner run-id))))
 
+(defn container-image-contract
+  [system run-id]
+  (when-let [run (get-run system run-id)]
+    (when (#{"docker" "podman"} (:substrate run))
+      (docker-podman/image-contract (prepare-runner-options system run)))))
+
 (defn launch-run!
   [system run-id]
   (let [run (or (get-run system run-id)
@@ -542,6 +625,7 @@
                    (throw (ex-info "No runner for substrate"
                                    {:type :runner-not-found
                                     :substrate (:substrate run)})))
+        checkpoint-seq (or (get-in run [:checkpoint :sequence-no]) 0)
         launch-result (runners/launch runner
                                       (runners/create-run-spec
                                        {:run-id (:id run)
@@ -553,7 +637,8 @@
                                         :capabilities (:capabilities run)
                                         :network-identity (:network-identity run)
                                         :bootstrap-token (:bootstrap-token run)
-                                        :bootstrap-spec (:bootstrap-spec run)
+                                        :bootstrap-spec (assoc (:bootstrap-spec run)
+                                                              :checkpoint-seq checkpoint-seq)
                                         :requested-by (:requested-by run)
                                         :runner-options (prepare-runner-options system run)}))]
     (transition-run! system run-id :launched {:runner-metadata launch-result})
