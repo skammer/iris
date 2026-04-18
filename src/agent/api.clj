@@ -10,6 +10,7 @@
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
+   [agent.runners.docker-podman :as docker-podman]
    [agent.runners.core :as runners]
    [agent.skills :as skills]
    [agent.tools.approvals :as tool-approvals]
@@ -313,11 +314,20 @@
    :run_id (:run-id command)
    :command_type (:command-type command)
    :payload (:payload command)
+   :request_id (:request-id command)
+   :response (:response command)
    :status (:status command)
    :created_at (:created-at command)
    :acknowledged_at (:acknowledged-at command)
    :completed_at (:completed-at command)
    :error (:error command)})
+
+(defn- run-recovery [system run-id]
+  (runtime/recovery-plan (:runtime-service system) run-id))
+
+(defn- run-container-contract [run]
+  (when (#{"docker" "podman"} (:substrate run))
+    (docker-podman/image-contract (:runner-options run))))
 
 (defn- memory-surface->response [surface]
   {:name (name (:name surface))
@@ -1230,7 +1240,9 @@
   (if-let [run (system-get-run system run-id)]
     (write-json! exchange 200
                  {:data (assoc (run->response run)
-                               :runner_status (system-runner-status system run-id))})
+                               :runner_status (system-runner-status system run-id)
+                               :recovery (run-recovery system run-id)
+                               :container_contract (run-container-contract run))})
     (throw (api-error 404 "run_not_found" "Run not found"))))
 
 (defn- handle-create-run [system exchange]
@@ -1284,22 +1296,26 @@
 (defn- handle-run-commands [system exchange run-id]
   (let [params (query-params exchange)
         limit (parse-int-param (:limit params) "limit")
-        status (:status params)]
+        status (:status params)
+        request-id (:request_id params)]
     (write-json! exchange 200
                  {:data (mapv run-command->response
                               (runtime/list-commands (:runtime-service system) run-id
                                                      (cond-> {}
                                                        limit (assoc :limit limit)
+                                                       request-id (assoc :request-id request-id)
                                                        status (assoc :status status))))})))
 
 (defn- handle-run-events [system exchange run-id]
   (let [params (query-params exchange)
-        limit (parse-int-param (:limit params) "limit")]
+        limit (parse-int-param (:limit params) "limit")
+        after-id (parse-int-param (:after_id params) "after_id")]
     (write-json! exchange 200
                  {:data (mapv event->response
                               (sqlite/list-events (:store system)
                                                   (cond-> {:entity-type :agent_run
                                                            :entity-id run-id}
+                                                    after-id (assoc :after-id after-id)
                                                     limit (assoc :limit limit))))})))
 
 (defn- relevant-run-event? [event run-id]
@@ -1307,7 +1323,14 @@
        (= run-id (:entity-id event))))
 
 (defn- handle-run-events-stream [system exchange run-id]
-  (let [broker-instance (or (:event-bus system) (:broker system))
+  (let [params (query-params exchange)
+        broker-instance (or (:event-bus system) (:broker system))
+        after-id (parse-int-param (:after_id params) "after_id")
+        replay-limit (or (parse-int-param (:replay_limit params) "replay_limit") 100)
+        replay-messages (broker/replay! broker-instance
+                                        (broker/run-events-subject run-id)
+                                        {:after-id after-id
+                                         :limit replay-limit})
         subscription (broker/subscribe! broker-instance (broker/all-runs-subject))
         ch (:channel subscription)]
     (try
@@ -1318,6 +1341,10 @@
         (when-let [run (system-get-run system run-id)]
           (write-sse-chunk! stream {:type "snapshot"
                                     :run (run->response run)}))
+        (doseq [message replay-messages]
+          (when (relevant-run-event? (:payload message) run-id)
+            (write-sse-chunk! stream {:type "event"
+                                      :data (event->response (:payload message))})))
         (loop []
           (when-let [event (async/<!! ch)]
             (when (relevant-run-event? (:payload event) run-id)
@@ -1326,6 +1353,32 @@
             (recur))))
       (finally
         (broker/unsubscribe! broker-instance subscription)))))
+
+(defn- handle-run-wait [system exchange run-id]
+  (let [params (query-params exchange)
+        timeout-ms (or (parse-int-param (:timeout_ms params) "timeout_ms") 15000)
+        interval-ms (or (parse-int-param (:interval_ms params) "interval_ms") 250)]
+    (if-let [run (runtime/wait-for-run! (:runtime-service system) run-id {:timeout-ms timeout-ms
+                                                                          :interval-ms interval-ms})]
+      (write-json! exchange 200
+                   {:data (assoc (run->response run)
+                                 :recovery (run-recovery system run-id)
+                                 :container_contract (run-container-contract run))})
+      (throw (api-error 404 "run_not_found" "Run not found")))))
+
+(defn- handle-run-recover [system exchange run-id]
+  (if-let [_ (system-get-run system run-id)]
+    (write-json! exchange 202
+                 {:data {:recovery (run-recovery system run-id)
+                         :replacement_run (run->response (runtime/retry-run! (:runtime-service system) run-id))}})
+    (throw (api-error 404 "run_not_found" "Run not found"))))
+
+(defn- handle-reclaim-stale-runs [system exchange]
+  (write-json! exchange 200
+               {:data (mapv (fn [{:keys [reclaimed replacement]}]
+                              {:reclaimed (run->response reclaimed)
+                               :replacement (some-> replacement run->response)})
+                            (runtime/reclaim-stale-runs! (:runtime-service system)))}))
 
 (defn- handle-chat-completions [system exchange]
   (let [{:keys [messages session-id stream?]}
@@ -1820,6 +1873,19 @@
                  (= ["v1" "runs"] (subvec path 0 2))
                  (= "stream" (nth path 3)))
             (handle-run-events-stream system exchange (nth path 2))
+
+            (and (= method "GET") (= 4 (count path))
+                 (= ["v1" "runs"] (subvec path 0 2))
+                 (= "wait" (nth path 3)))
+            (handle-run-wait system exchange (nth path 2))
+
+            (and (= method "POST") (= 4 (count path))
+                 (= ["v1" "runs"] (subvec path 0 2))
+                 (= "recover" (nth path 3)))
+            (handle-run-recover system exchange (nth path 2))
+
+            (and (= method "POST") (= path ["v1" "runs" "reclaim-stale"]))
+            (handle-reclaim-stale-runs system exchange)
 
             (and (= method "POST") (= 4 (count path))
                  (= ["v1" "runs"] (subvec path 0 2))

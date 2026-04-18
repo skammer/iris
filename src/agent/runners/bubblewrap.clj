@@ -6,11 +6,12 @@
    [clojure.string :as str]))
 
 (defn build-bwrap-argv
-  [{:keys [bwrap-binary binds share-network? working-dir command]
+  [{:keys [bwrap-binary binds share-network? working-dir command env]
     :or {bwrap-binary "bwrap"
          binds []
          share-network? false
-         working-dir "/"}}]
+         working-dir "/"
+         env {}}}]
   (when-not (and (vector? command) (seq command) (every? string? command))
     (throw (ex-info "bubblewrap command must be a non-empty vector of strings"
                     {:type :validation-failed
@@ -19,6 +20,7 @@
    (concat
     [bwrap-binary "--die-with-parent" "--new-session" "--proc" "/proc" "--dev" "/dev"]
     (when-not share-network? ["--unshare-net"])
+    (mapcat (fn [[k v]] ["--setenv" (name k) (str v)]) env)
     ["--chdir" working-dir]
     (mapcat (fn [{:keys [source target mode]}]
               (case mode
@@ -37,9 +39,11 @@
                                   :binds (:binds runner-options)
                                   :share-network? (true? (:share-network? runner-options))
                                   :working-dir (or (:working-dir runner-options) "/")
+                                  :env (:env runner-options)
                                   :command (:command runner-options)})]
       (runners/launch delegate
                       (assoc run-spec :runner-options {:command argv
+                                                       :env (:env runner-options)
                                                        :working-dir (or (:host-working-dir runner-options) ".")}))))
   (signal [_ run-id command]
     (runners/signal delegate run-id command))

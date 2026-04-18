@@ -5,8 +5,10 @@
 
 (defprotocol IBroker
   (publish! [this message])
-  (subscribe! [this pattern])
+  (subscribe! [this pattern] [this pattern opts])
   (unsubscribe! [this subscription])
+  (replay! [this pattern] [this pattern opts])
+  (request! [this subject payload] [this subject payload opts])
   (health-check [this]))
 
 (defn wildcard-pattern? [pattern]
@@ -30,6 +32,7 @@
 (defn run-heartbeats-subject [run-id] (str "runs." run-id ".heartbeats"))
 (defn run-checkpoints-subject [run-id] (str "runs." run-id ".checkpoints"))
 (defn run-output-subject [run-id] (str "runs." run-id ".output"))
+(defn reply-subject [request-id] (str "reply." request-id))
 
 (defn event->subjects
   [{:keys [event-type entity-type entity-id]}]
@@ -54,3 +57,15 @@
 (defn event->messages [event]
   (mapv (fn [subject] {:subject subject :payload event})
         (event->subjects event)))
+
+(defn command->message [command]
+  {:subject (run-commands-subject (:run-id command))
+   :payload command})
+
+(defn heartbeat->message [heartbeat]
+  {:subject (run-heartbeats-subject (:run-id heartbeat))
+   :payload heartbeat})
+
+(defn checkpoint->message [checkpoint]
+  {:subject (run-checkpoints-subject (:run-id checkpoint))
+   :payload checkpoint})

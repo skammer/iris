@@ -8,7 +8,7 @@
    (java.time Instant)
    (java.util UUID)))
 
-(def latest-schema-version 6)
+(def latest-schema-version 7)
 (def default-busy-timeout-ms 5000)
 (defonce ^:private store-locks (atom {}))
 
@@ -238,6 +238,13 @@
   (when-not (column-exists? conn "agent_runs" "runner_options_json")
     (execute-ddl! conn "ALTER TABLE agent_runs ADD COLUMN runner_options_json TEXT;")))
 
+(defn- migration-7! [conn]
+  (ensure-schema-migrations-table! conn)
+  (when-not (column-exists? conn "agent_run_commands" "request_id")
+    (execute-ddl! conn "ALTER TABLE agent_run_commands ADD COLUMN request_id TEXT;"))
+  (when-not (column-exists? conn "agent_run_commands" "response_json")
+    (execute-ddl! conn "ALTER TABLE agent_run_commands ADD COLUMN response_json TEXT;")))
+
 (def ^:private migrations
   [{:version 1
     :name "initial-schema"
@@ -256,7 +263,10 @@
     :up migration-5!}
    {:version 6
     :name "agent-runner-options"
-    :up migration-6!}])
+    :up migration-6!}
+   {:version 7
+    :name "agent-run-command-request-response"
+    :up migration-7!}])
 
 (defn- bootstrap-legacy-version! [conn]
   (when (and (zero? (get-user-version conn))
@@ -477,7 +487,7 @@
 
 (defn list-events
   ([store] (list-events store {}))
-  ([store {:keys [entity-type entity-id request-id limit]
+  ([store {:keys [entity-type entity-id request-id event-type after-id limit]
            :or {limit 100}}]
    (let [entity-type* (normalize-name entity-type)]
      (with-connection
@@ -488,16 +498,26 @@
                                              FROM agent_events
                                              WHERE (? IS NULL OR entity_type = ?)
                                                AND (? IS NULL OR entity_id = ?)
+                                               AND (? IS NULL OR event_type = ?)
                                                AND (? IS NULL OR request_id = ?)
+                                               AND (? IS NULL OR id > ?)
                                              ORDER BY id DESC
                                              LIMIT ?")]
            (.setString stmt 1 entity-type*)
            (.setString stmt 2 entity-type*)
            (.setString stmt 3 entity-id)
            (.setString stmt 4 entity-id)
-           (.setString stmt 5 request-id)
-           (.setString stmt 6 request-id)
-           (.setInt stmt 7 (int limit))
+           (.setString stmt 5 (normalize-name event-type))
+           (.setString stmt 6 (normalize-name event-type))
+           (.setString stmt 7 request-id)
+           (.setString stmt 8 request-id)
+           (if (some? after-id)
+             (.setLong stmt 9 (long after-id))
+             (.setNull stmt 9 java.sql.Types/BIGINT))
+           (if (some? after-id)
+             (.setLong stmt 10 (long after-id))
+             (.setNull stmt 10 java.sql.Types/BIGINT))
+           (.setInt stmt 11 (int limit))
            (with-open [rs (.executeQuery stmt)]
              (loop [acc []]
                (if (.next rs)
@@ -986,7 +1006,7 @@
                acc))))))))
 
 (defn enqueue-agent-run-command!
-  [store {:keys [run-id command-type payload]
+  [store {:keys [run-id command-type payload request-id]
           :or {payload {}}}]
   (let [id (str (UUID/randomUUID))
         created-at (str (Instant/now))]
@@ -994,18 +1014,21 @@
       store
       (fn [conn]
         (with-open [stmt (.prepareStatement conn
-                                           "INSERT INTO agent_run_commands (id, run_id, command_type, payload_json, status, created_at, acknowledged_at, completed_at, error)
-                                            VALUES (?, ?, ?, ?, 'pending', ?, NULL, NULL, NULL)")]
+                                           "INSERT INTO agent_run_commands (id, run_id, command_type, payload_json, request_id, response_json, status, created_at, acknowledged_at, completed_at, error)
+                                            VALUES (?, ?, ?, ?, ?, NULL, 'pending', ?, NULL, NULL, NULL)")]
           (.setString stmt 1 id)
           (.setString stmt 2 run-id)
           (.setString stmt 3 (normalize-name command-type))
           (.setString stmt 4 (json-string payload))
-          (.setString stmt 5 created-at)
+          (.setString stmt 5 request-id)
+          (.setString stmt 6 created-at)
           (.executeUpdate stmt))))
     {:id id
      :run-id run-id
      :command-type (normalize-name command-type)
      :payload payload
+     :request-id request-id
+     :response nil
      :status "pending"
      :created-at created-at
      :acknowledged-at nil
@@ -1014,21 +1037,24 @@
 
 (defn list-agent-run-commands
   ([store run-id] (list-agent-run-commands store run-id {}))
-  ([store run-id {:keys [status limit] :or {limit 100}}]
+  ([store run-id {:keys [status request-id limit] :or {limit 100}}]
    (with-connection
      store
      (fn [conn]
        (with-open [stmt (.prepareStatement conn
-                                          "SELECT id, run_id, command_type, payload_json, status, created_at, acknowledged_at, completed_at, error
+                                          "SELECT id, run_id, command_type, payload_json, request_id, response_json, status, created_at, acknowledged_at, completed_at, error
                                            FROM agent_run_commands
                                            WHERE run_id = ?
                                              AND (? IS NULL OR status = ?)
+                                             AND (? IS NULL OR request_id = ?)
                                            ORDER BY created_at ASC
                                            LIMIT ?")]
          (.setString stmt 1 run-id)
          (.setString stmt 2 status)
          (.setString stmt 3 status)
-         (.setInt stmt 4 (int limit))
+         (.setString stmt 4 request-id)
+         (.setString stmt 5 request-id)
+         (.setInt stmt 6 (int limit))
          (with-open [rs (.executeQuery stmt)]
            (loop [acc []]
              (if (.next rs)
@@ -1036,6 +1062,8 @@
                                  :run-id (.getString rs "run_id")
                                  :command-type (.getString rs "command_type")
                                  :payload (parse-json-string (.getString rs "payload_json"))
+                                 :request-id (.getString rs "request_id")
+                                 :response (parse-json-string (.getString rs "response_json"))
                                  :status (.getString rs "status")
                                  :created-at (.getString rs "created_at")
                                  :acknowledged-at (.getString rs "acknowledged_at")
@@ -1043,12 +1071,38 @@
                                  :error (.getString rs "error")}))
                acc))))))))
 
+(defn get-agent-run-command
+  [store command-id]
+  (with-connection
+    store
+    (fn [conn]
+      (with-open [stmt (.prepareStatement conn
+                                         "SELECT id, run_id, command_type, payload_json, request_id, response_json, status, created_at, acknowledged_at, completed_at, error
+                                          FROM agent_run_commands
+                                          WHERE id = ?")]
+        (.setString stmt 1 command-id)
+        (with-open [rs (.executeQuery stmt)]
+          (when (.next rs)
+            {:id (.getString rs "id")
+             :run-id (.getString rs "run_id")
+             :command-type (.getString rs "command_type")
+             :payload (parse-json-string (.getString rs "payload_json"))
+             :request-id (.getString rs "request_id")
+             :response (parse-json-string (.getString rs "response_json"))
+             :status (.getString rs "status")
+             :created-at (.getString rs "created_at")
+             :acknowledged-at (.getString rs "acknowledged_at")
+             :completed-at (.getString rs "completed_at")
+             :error (.getString rs "error")}))))))
+
 (defn update-agent-run-command!
-  [store command-id {:keys [status error]}]
+  [store command-id {:keys [status error response]}]
   (let [status* (some-> status normalize-name)
         now* (str (Instant/now))
         acknowledged-at (when (= status* "acknowledged") now*)
-        completed-at (when (contains? #{"completed" "failed" "cancelled"} status*) now*)]
+        completed-at (when (contains? #{"completed" "failed" "cancelled"} status*) now*)
+        response-json (when (contains? #{"completed" "failed" "cancelled"} status*)
+                        (json-string response))]
     (with-connection
       store
       (fn [conn]
@@ -1057,18 +1111,20 @@
                                             SET status = COALESCE(?, status),
                                                 acknowledged_at = COALESCE(?, acknowledged_at),
                                                 completed_at = COALESCE(?, completed_at),
-                                                error = COALESCE(?, error)
+                                                error = COALESCE(?, error),
+                                                response_json = COALESCE(?, response_json)
                                             WHERE id = ?")]
           (.setString stmt 1 status*)
           (.setString stmt 2 acknowledged-at)
           (.setString stmt 3 completed-at)
           (.setString stmt 4 error)
-          (.setString stmt 5 command-id)
+          (.setString stmt 5 response-json)
+          (.setString stmt 6 command-id)
           (let [updated (.executeUpdate stmt)]
             (when (zero? updated)
               (throw (ex-info "Command not found" {:type :command-not-found
                                                    :command-id command-id})))))))
-    command-id))
+    (get-agent-run-command store command-id)))
 
 (defn create-agent-run-checkpoint!
   [store {:keys [run-id sequence-no checkpoint-type state]}]

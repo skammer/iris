@@ -19,6 +19,12 @@
                      :image image})))
   image)
 
+(defn- normalize-name [value]
+  (cond
+    (nil? value) nil
+    (keyword? value) (name value)
+    :else (str value)))
+
 (defn- mount-args [{:keys [source target mode]}]
   (let [suffix (if (= mode :ro) ":ro" "")]
     ["-v" (str source ":" target suffix)]))
@@ -44,7 +50,7 @@
            (str/replace #"[^a-z0-9_.-]+" "-"))))
 
 (defn build-container-argv
-  [{:keys [engine-binary run-id image working-dir command mounts env share-network?]
+  [{:keys [engine-binary run-id image working-dir command mounts env share-network? pull-policy]
     :or {working-dir "/workspace"
          mounts []
          env {}
@@ -54,6 +60,7 @@
     (vec
      (concat
       [engine-binary "run" "--rm" "--name" (container-name (keyword engine-binary) run-id)]
+      (when (some? pull-policy) ["--pull" (normalize-name pull-policy)])
       (when-not share-network? ["--network" "none"])
       ["-w" working-dir]
       (mapcat mount-args mounts)
@@ -72,6 +79,7 @@
                  :working-dir (or (:container-working-dir runner-options)
                                   (:working-dir runner-options)
                                   "/workspace")
+                 :pull-policy (:pull-policy runner-options)
                  :command (:command runner-options)
                  :mounts (:mounts runner-options)
                  :env (container-env run-spec runner-options)
@@ -93,3 +101,13 @@
      :or {engine-binary "docker"}}]
    (->DockerPodmanRunner (or delegate (local-process/create-local-process-runner))
                          engine-binary)))
+
+(defn image-contract
+  [runner-options]
+  {:image-mode (normalize-name (or (:image-mode runner-options) :mounted-dev))
+   :pull-policy (normalize-name (or (:pull-policy runner-options) :missing))
+   :image (:image runner-options)
+   :container-working-dir (or (:container-working-dir runner-options) "/workspace")
+   :required-mounts ["/workspace" "/agent-data" "/agent-logs"]
+   :required-env ["AGENT_RUN_ID" "AGENT_AGENT_ID" "AGENT_BOOTSTRAP_TOKEN" "AGENT_BOOTSTRAP_SPEC" "AGENT_SQLITE_PATH" "AGENT_LOG_FILE"]
+   :default-command ["clojure" "-M" "-m" "agent.runtime.child"]})
