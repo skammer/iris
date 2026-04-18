@@ -1,6 +1,10 @@
 (ns agent.api
   "Minimal HTTP API for rewritten runtime."
   (:require
+   [agent.api.exchange :as exchange-adapter]
+   [agent.api.middleware :as middleware]
+   [agent.api.responses :as responses]
+   [agent.api.routes :as routes]
    [agent.broker.core :as broker]
    [agent.channels.core :as channel-adapters]
    [agent.kernel :as kernel]
@@ -20,25 +24,27 @@
    [cheshire.core :as json]
    [clojure.core.async :as async]
    [clojure.java.io :as io]
-   [clojure.string :as str])
+   [clojure.string :as str]
+   [clojure.walk :as walk]
+   [org.httpkit.server :as http-kit]
+   [reitit.ring :as ring])
   (:import
-   (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
-   (java.net InetSocketAddress URLDecoder)
+   (com.sun.net.httpserver HttpExchange)
+   (java.net URLDecoder)
    (java.nio.charset StandardCharsets)
-   (java.nio.file Files)
-   (java.util.concurrent ExecutorService Executors ThreadFactory)))
+   (java.nio.file Files)))
 
-(def ^:private server-executors (atom {}))
-(def ^:private response-status-attr "agent.response-status")
-
-(declare normalize-permissions execution-context)
-
-(defn- daemon-thread-factory []
-  (reify ThreadFactory
-    (newThread [_ runnable]
-      (doto (Thread. runnable)
-        (.setDaemon true)
-        (.setName (str "clj-agent-http-" (System/nanoTime)))))))
+(declare normalize-permissions
+         execution-context
+         parse-urlencoded
+         parse-int-param
+         relevant-run-event?
+         relevant-session-event?
+         system-get-run
+         run->response
+         ensure-string!
+         ensure-session-exists!
+         event->response)
 
 (defn- read-json-body [^HttpExchange exchange]
   (let [body (slurp (.getRequestBody exchange))]
@@ -48,7 +54,7 @@
 
 (defn- write-json! [^HttpExchange exchange status payload]
   (let [bytes (.getBytes (json/generate-string payload) StandardCharsets/UTF_8)]
-    (.setAttribute exchange response-status-attr status)
+    (.setAttribute exchange exchange-adapter/response-status-attr status)
     (.add (.getResponseHeaders exchange) "Content-Type" "application/json")
     (.sendResponseHeaders exchange status (long (count bytes)))
     (with-open [os (.getResponseBody exchange)]
@@ -56,14 +62,14 @@
 
 (defn- write-html! [^HttpExchange exchange status html]
   (let [bytes (.getBytes html StandardCharsets/UTF_8)]
-    (.setAttribute exchange response-status-attr status)
+    (.setAttribute exchange exchange-adapter/response-status-attr status)
     (.add (.getResponseHeaders exchange) "Content-Type" "text/html; charset=utf-8")
     (.sendResponseHeaders exchange status (long (count bytes)))
     (with-open [os (.getResponseBody exchange)]
       (.write os bytes))))
 
 (defn- write-bytes! [^HttpExchange exchange status content-type bytes]
-  (.setAttribute exchange response-status-attr status)
+  (.setAttribute exchange exchange-adapter/response-status-attr status)
   (.add (.getResponseHeaders exchange) "Content-Type" content-type)
   (.sendResponseHeaders exchange status (long (count bytes)))
   (with-open [os (.getResponseBody exchange)]
@@ -110,6 +116,24 @@
     (if (and (.startsWith canonical root) (.isFile file))
       (write-bytes! exchange 200 (content-type-for-path canonical) (Files/readAllBytes (.toPath file)))
       (not-found! exchange))))
+
+(defn- public-file-response [request]
+  (let [path (:uri request)
+        relative (subs path (count "/public/"))
+        file (io/file "public" relative)
+        canonical (.getCanonicalPath file)
+        root (.getCanonicalPath (io/file "public"))]
+    (if (and (.startsWith canonical root) (.isFile file))
+      (responses/bytes-response 200
+                                (content-type-for-path canonical)
+                                (Files/readAllBytes (.toPath file)))
+      (responses/not-found-response))))
+
+(defn- request-query-params [request]
+  (parse-urlencoded (:query-string request)))
+
+(defn- invoke-exchange [request handler-fn]
+  (exchange-adapter/invoke-exchange-handler request handler-fn))
 
 (defn- split-path [^HttpExchange exchange]
   (let [path (.getPath (.getRequestURI exchange))]
@@ -530,6 +554,169 @@
                          "data: elements "
                          (compact-html html)
                          "\n\n")))
+
+(defn- sse-response
+  [request on-open on-close]
+  (http-kit/as-channel
+   request
+   {:on-open (fn [channel]
+               (http-kit/send! channel
+                               {:status 200
+                                :headers {"Content-Type" "text/event-stream"
+                                          "Cache-Control" "no-cache"}
+                                :body ""}
+                               false)
+               (on-open channel))
+    :on-close (fn [channel status]
+                (when on-close
+                  (on-close channel status)))}))
+
+(defn- buffered-sse-response
+  [writer-fn]
+  (let [buffer (java.io.ByteArrayOutputStream.)]
+    (writer-fn buffer)
+    (responses/bytes-response 200
+                              "text/event-stream"
+                              (.toByteArray buffer)
+                              {"Cache-Control" "no-cache"})))
+
+(defn- send-sse-text! [channel text]
+  (http-kit/send! channel text false))
+
+(defn- send-sse-chunk! [channel payload]
+  (send-sse-text! channel (str "data: " (json/generate-string payload) "\n\n")))
+
+(defn- send-sse-done! [channel]
+  (send-sse-text! channel "data: [DONE]\n\n"))
+
+(defn- send-datastar-patch! [channel html]
+  (send-sse-text! channel
+                  (str "event: datastar-patch-elements\n"
+                       "data: elements "
+                       (compact-html html)
+                       "\n\n")))
+
+(defn- chat-completions-stream-response
+  [system request messages session-id]
+  (let [stream-id (str "chatcmpl-" (System/currentTimeMillis))
+        provider (name (get-in system [:config :llm :provider]))
+        model (get-in system [:config :llm :model])
+        chunks (llm-core/stream (:llm-provider system) messages {})]
+    (persist-user-message! system messages session-id)
+    (buffered-sse-response
+     (fn [stream]
+       (loop [parts []]
+         (if-let [chunk (async/<!! chunks)]
+           (if (map? chunk)
+             (do
+               (write-sse-chunk! stream {:error "stream_error"
+                                         :message (or (:error chunk) "Provider stream failed")})
+               (write-sse-done! stream))
+             (do
+               (write-sse-chunk! stream {:id stream-id
+                                         :object "chat.completion.chunk"
+                                         :session_id session-id
+                                         :provider provider
+                                         :model model
+                                         :choices [{:index 0
+                                                    :delta {:content chunk}
+                                                    :finish_reason nil}]})
+               (recur (conj parts chunk))))
+           (let [content (apply str parts)]
+             (persist-completion! system messages content {:session-id session-id})
+             (write-sse-chunk! stream {:id stream-id
+                                       :object "chat.completion.chunk"
+                                       :session_id session-id
+                                       :provider provider
+                                       :model model
+                                       :choices [{:index 0
+                                                  :delta {}
+                                                  :finish_reason "stop"}]})
+             (write-sse-done! stream))))))))
+
+(defn- events-stream-response
+  [system request]
+  (let [stream-id (str "events-" (System/currentTimeMillis))
+        broker-instance (or (:event-bus system) (:broker system))
+        subscription (broker/subscribe! broker-instance (broker/all-events-subject))
+        ch (:channel subscription)
+        timeout-ch (async/timeout 5000)]
+    (buffered-sse-response
+     (fn [stream]
+       (try
+         (when-let [event (some-> (async/alt!! ch ([v] v) timeout-ch nil) :payload)]
+           (write-sse-chunk! stream {:id stream-id
+                                     :object "event.chunk"
+                                     :event (event->response event)}))
+         (finally
+           (broker/unsubscribe! broker-instance subscription)))))))
+
+(defn- run-events-stream-response
+  [system run-id request]
+  (let [params (request-query-params request)
+        broker-instance (or (:event-bus system) (:broker system))
+        after-id (parse-int-param (:after_id params) "after_id")
+        replay-limit (or (parse-int-param (:replay_limit params) "replay_limit") 100)
+        replay-messages (broker/replay! broker-instance
+                                        (broker/run-events-subject run-id)
+                                        {:after-id after-id
+                                         :limit replay-limit})
+        subscription (broker/subscribe! broker-instance (broker/all-runs-subject))
+        ch (:channel subscription)]
+    (buffered-sse-response
+     (fn [stream]
+       (try
+         (when-let [run (system-get-run system run-id)]
+           (write-sse-chunk! stream {:type "snapshot"
+                                     :run (run->response run)}))
+         (doseq [message replay-messages]
+           (when (relevant-run-event? (:payload message) run-id)
+             (write-sse-chunk! stream {:type "event"
+                                       :data (event->response (:payload message))})))
+         (loop [received 0]
+           (let [event (async/alt!!
+                        ch ([v] v)
+                        (async/timeout (if (pos? received) 250 5000)) nil)]
+             (when event
+               (when (relevant-run-event? (:payload event) run-id)
+                 (write-sse-chunk! stream {:type "event"
+                                           :data (event->response (:payload event))}))
+               (when (< received 16)
+                 (recur (inc received))))))
+         (finally
+           (broker/unsubscribe! broker-instance subscription)))))))
+
+(defn- ui-session-live-response
+  [system request]
+  (let [session-id (:session_id (request-query-params request))
+        broker-instance (or (:event-bus system) (:broker system))
+        subscription (broker/subscribe! broker-instance (broker/all-events-subject))
+        ch (:channel subscription)]
+    (ensure-string! :session_id session-id)
+    (ensure-session-exists! system session-id)
+    (buffered-sse-response
+     (fn [stream]
+       (try
+         (write-datastar-patch! stream (ui/session-detail-fragment system session-id))
+         (when-let [event (some-> (async/alt!! ch ([v] v) (async/timeout 5000) nil) :payload)]
+           (when (relevant-session-event? event session-id)
+             (write-datastar-patch! stream (ui/session-detail-fragment system session-id))))
+         (finally
+           (broker/unsubscribe! broker-instance subscription)))))))
+
+(defn- ui-events-live-response
+  [system request]
+  (let [broker-instance (or (:event-bus system) (:broker system))
+        subscription (broker/subscribe! broker-instance (broker/all-events-subject))
+        ch (:channel subscription)]
+    (buffered-sse-response
+     (fn [stream]
+       (try
+         (write-datastar-patch! stream (ui/events-fragment system))
+         (when (async/alt!! ch true (async/timeout 5000) nil)
+           (write-datastar-patch! stream (ui/events-fragment system)))
+         (finally
+           (broker/unsubscribe! broker-instance subscription)))))))
 
 (defn- handle-chat-completions-stream [system exchange messages session-id]
   (let [stream-id (str "chatcmpl-" (System/currentTimeMillis))
@@ -1390,6 +1577,24 @@
       (let [result (complete! system messages {:session-id session-id})]
         (write-json! exchange 200 (openai-style-completion system session-id (:content result)))))))
 
+(defn- chat-completions-response
+  [system request]
+  (let [{:keys [messages session-id stream?]}
+        (attach-session-context system
+                                (normalize-chat-request
+                                 (if-let [body (:body request)]
+                                   (let [raw (slurp body)]
+                                     (if (str/blank? raw)
+                                       {}
+                                       (json/parse-string raw true)))
+                                   {})))]
+    (ensure-session-exists! system session-id)
+    (if stream?
+      (chat-completions-stream-response system request messages session-id)
+      (let [result (complete! system messages {:session-id session-id})]
+        (responses/json-response 200
+                                 (openai-style-completion system session-id (:content result)))))))
+
 (defn- normalize-permissions [value]
   (cond
     (nil? value) #{}
@@ -1722,373 +1927,135 @@
                        (ui/tool-results-fragment
                         tool-name
                         (:status (ex-data api-e))
-                        {:error (:error (ex-data api-e))
+                       {:error (:error (ex-data api-e))
                          :message (.getMessage api-e)
                          :details (:details (ex-data api-e))})))))))
 
+(defn- exchange-handler
+  [request f]
+  (invoke-exchange request f))
+
+(defn- exchange-handler-map
+  [system]
+  {:health (fn [request] (exchange-handler request #(handle-health system %)))
+   :ui-shell (fn [request] (exchange-handler request #(handle-ui-shell system %)))
+   :ui-dashboard (fn [request] (exchange-handler request #(handle-ui-dashboard system %)))
+   :ui-operator-board (fn [request] (exchange-handler request #(handle-ui-operator-board system %)))
+   :ui-sessions (fn [request] (exchange-handler request #(handle-ui-sessions system %)))
+   :ui-create-session (fn [request] (exchange-handler request #(handle-ui-create-session system %)))
+   :ui-runs (fn [request] (exchange-handler request #(handle-ui-runs system %)))
+   :ui-create-run (fn [request] (exchange-handler request #(handle-ui-create-run system %)))
+   :ui-run-detail (fn [request] (exchange-handler request #(handle-ui-run-detail system %)))
+   :ui-run-detail-body (fn [request] (exchange-handler request #(handle-ui-run-detail-body system %)))
+   :ui-run-launch (fn [request] (exchange-handler request #(handle-ui-run-launch system % (get-in request [:path-params :run-id]))))
+   :ui-run-signal (fn [request] (exchange-handler request #(handle-ui-run-signal system % (get-in request [:path-params :run-id]))))
+   :ui-session-detail (fn [request] (exchange-handler request #(handle-ui-session-detail system %)))
+   :ui-session-messages (fn [request] (exchange-handler request #(handle-ui-session-messages system %)))
+   :ui-chat (fn [request] (exchange-handler request #(handle-ui-chat system %)))
+   :ui-events (fn [request] (exchange-handler request #(handle-ui-events system %)))
+   :ui-memory-prompt (fn [request] (exchange-handler request #(handle-ui-memory-prompt system %)))
+   :ui-memory-search (fn [request] (exchange-handler request #(handle-ui-memory-search system %)))
+   :ui-tools (fn [request] (exchange-handler request #(handle-ui-tools system %)))
+   :ui-tool-approvals (fn [request] (exchange-handler request #(handle-ui-tool-approvals system %)))
+   :ui-tool-approval-request (fn [request] (exchange-handler request #(handle-ui-tool-approval-request system %)))
+   :ui-tool-approval-approve (fn [request] (exchange-handler request #(handle-ui-tool-approval-decision system % (get-in request [:path-params :approval-id]) :approved)))
+   :ui-tool-approval-deny (fn [request] (exchange-handler request #(handle-ui-tool-approval-decision system % (get-in request [:path-params :approval-id]) :denied)))
+   :ui-tool-approval-run (fn [request] (exchange-handler request #(handle-ui-tool-approval-run system % (get-in request [:path-params :approval-id]))))
+   :list-sessions (fn [request] (exchange-handler request #(handle-list-sessions system %)))
+   :create-session (fn [request] (exchange-handler request #(handle-create-session system %)))
+   :list-session-messages (fn [request] (exchange-handler request #(handle-list-messages system % (get-in request [:path-params :session-id]))))
+   :list-runs (fn [request] (exchange-handler request #(handle-list-runs system %)))
+   :create-run (fn [request] (exchange-handler request #(handle-create-run system %)))
+   :get-run (fn [request] (exchange-handler request #(handle-get-run system % (get-in request [:path-params :run-id]))))
+   :launch-run (fn [request] (exchange-handler request #(handle-launch-run system % (get-in request [:path-params :run-id]))))
+   :signal-run (fn [request] (exchange-handler request #(handle-signal-run system % (get-in request [:path-params :run-id]))))
+   :run-heartbeats (fn [request] (exchange-handler request #(handle-run-heartbeats system % (get-in request [:path-params :run-id]))))
+   :run-checkpoints (fn [request] (exchange-handler request #(handle-run-checkpoints system % (get-in request [:path-params :run-id]))))
+   :run-commands (fn [request] (exchange-handler request #(handle-run-commands system % (get-in request [:path-params :run-id]))))
+   :run-events (fn [request] (exchange-handler request #(handle-run-events system % (get-in request [:path-params :run-id]))))
+   :run-wait (fn [request] (exchange-handler request #(handle-run-wait system % (get-in request [:path-params :run-id]))))
+   :run-recover (fn [request] (exchange-handler request #(handle-run-recover system % (get-in request [:path-params :run-id]))))
+   :reclaim-stale-runs (fn [request] (exchange-handler request #(handle-reclaim-stale-runs system %)))
+   :list-tools (fn [request] (exchange-handler request #(handle-list-tools system %)))
+   :execute-tool (fn [request] (exchange-handler request #(handle-execute-tool system % (get-in request [:path-params :tool-name]))))
+   :list-tool-approvals (fn [request] (exchange-handler request #(handle-list-tool-approvals system %)))
+   :create-tool-approval (fn [request] (exchange-handler request #(handle-create-tool-approval system %)))
+   :approve-tool-approval (fn [request] (exchange-handler request #(handle-decide-tool-approval system % (get-in request [:path-params :approval-id]) :approved)))
+   :deny-tool-approval (fn [request] (exchange-handler request #(handle-decide-tool-approval system % (get-in request [:path-params :approval-id]) :denied)))
+   :list-skills (fn [request] (exchange-handler request #(handle-list-skills system %)))
+   :list-channel-adapters (fn [request] (exchange-handler request #(handle-list-channel-adapters system %)))
+   :list-events (fn [request] (exchange-handler request #(handle-list-events system %)))
+   :memory-surfaces (fn [request] (exchange-handler request #(handle-memory-surfaces system %)))
+   :memory-prompt (fn [request] (exchange-handler request #(handle-memory-prompt system %)))
+   :memory-search (fn [request] (exchange-handler request #(handle-memory-search system %)))
+   :memory-graph-save (fn [request] (exchange-handler request #(handle-memory-graph-save system %)))
+   :memory-graph-query (fn [request] (exchange-handler request #(handle-memory-graph-query system %)))
+   :list-agents (fn [request] (exchange-handler request #(handle-list-agents system %)))
+   :create-agent (fn [request] (exchange-handler request #(handle-create-agent system %)))
+   :agent-messages (fn [request] (exchange-handler request #(handle-agent-messages system % (get-in request [:path-params :agent-id]))))
+   :agent-message (fn [request] (exchange-handler request #(handle-agent-message system % (get-in request [:path-params :agent-id]))))
+   :agent-tool-execute (fn [request] (exchange-handler request #(handle-agent-tool-execute system % (get-in request [:path-params :agent-id]) (get-in request [:path-params :tool-name]))))
+   :orchestrator-spawn-worker (fn [request] (exchange-handler request #(handle-orchestrator-spawn-worker system % (get-in request [:path-params :agent-id]))))
+   :agent-step-execute (fn [request] (exchange-handler request #(handle-agent-step-execute system % (get-in request [:path-params :agent-id]))))
+   :consume-agent-inbox (fn [request] (exchange-handler request #(handle-consume-agent-inbox system % (get-in request [:path-params :agent-id]))))
+   :agent-interop (fn [request] (exchange-handler request #(handle-agent-interop system % (get-in request [:path-params :agent-id]))))
+   :agent-interop-capabilities (fn [request] (exchange-handler request #(handle-agent-interop-capabilities system % (get-in request [:path-params :agent-id]))))
+   :agent-interop-message (fn [request] (exchange-handler request #(handle-agent-interop-message system % (get-in request [:path-params :agent-id]))))
+   :agent-interop-messages (fn [request] (exchange-handler request #(handle-agent-interop-messages system % (get-in request [:path-params :agent-id]))))
+   :agent-interop-ack (fn [request] (exchange-handler request #(handle-agent-interop-ack system % (get-in request [:path-params :agent-id]) (get-in request [:path-params :message-id]))))
+   :agent-interop-retry (fn [request] (exchange-handler request #(handle-agent-interop-retry system % (get-in request [:path-params :agent-id]) (get-in request [:path-params :message-id]))))
+   :list-federated-peers (fn [request] (exchange-handler request #(handle-list-federated-peers system %)))
+   :create-federated-peer (fn [request] (exchange-handler request #(handle-create-federated-peer system %)))
+   :federation-inbox (fn [request] (exchange-handler request #(handle-federation-inbox system %)))
+   :list-channels (fn [request] (exchange-handler request #(handle-list-channels system %)))
+   :create-channel (fn [request] (exchange-handler request #(handle-create-channel system %)))
+   :channel-messages (fn [request] (exchange-handler request #(handle-channel-messages system % (get-in request [:path-params :channel-id]))))
+   :channel-message (fn [request] (exchange-handler request #(handle-channel-message system % (get-in request [:path-params :channel-id]))))})
+
+(defn- route-handlers
+  [system]
+  (merge
+   (exchange-handler-map system)
+   {:ui-index (fn [_] (responses/html-response 200 (ui/index-page)))
+    :public-file public-file-response
+    :chat-completions (fn [request] (chat-completions-response system request))
+    :events-stream (fn [request] (events-stream-response system request))
+    :run-events-stream (fn [request] (run-events-stream-response system (get-in request [:path-params :run-id]) request))
+    :ui-session-live (fn [request] (ui-session-live-response system request))
+    :ui-events-live (fn [request] (ui-events-live-response system request))}))
+
+(defn- bind-route-handlers
+  [system]
+  (let [handlers (route-handlers system)]
+    (walk/postwalk
+     (fn [node]
+       (if (and (map? node) (contains? node :handler/id))
+         (-> node
+             (dissoc :handler/id)
+             (assoc :handler (get handlers (:handler/id node))))
+         node))
+     routes/routes)))
+
 (defn create-handler
   [system]
-  (reify HttpHandler
-    (handle [_ exchange]
-      (let [started-at (System/nanoTime)
-            method (.getRequestMethod exchange)
-            raw-path (.getPath (.getRequestURI exchange))]
-        (logging/log! :agent.http/request-started
-                      {:method method
-                       :path raw-path})
-        (try
-          (let [path (split-path exchange)]
-          (cond
-            (and (= method "GET") (str/starts-with? raw-path "/public/"))
-            (handle-public-file exchange raw-path)
-
-            (and (= method "GET") (empty? path))
-            (handle-ui-index exchange)
-
-            (and (= method "GET") (= path ["health"]))
-            (handle-health system exchange)
-
-            (and (= method "GET") (= path ["ui" "shell"]))
-            (handle-ui-shell system exchange)
-
-            (and (= method "GET") (= path ["ui" "dashboard"]))
-            (handle-ui-dashboard system exchange)
-
-            (and (= method "GET") (= path ["ui" "operator-board"]))
-            (handle-ui-operator-board system exchange)
-
-            (and (= method "GET") (= path ["ui" "sessions"]))
-            (handle-ui-sessions system exchange)
-
-            (and (= method "POST") (= path ["ui" "sessions"]))
-            (handle-ui-create-session system exchange)
-
-            (and (= method "GET") (= path ["ui" "runs"]))
-            (handle-ui-runs system exchange)
-
-            (and (= method "POST") (= path ["ui" "runs"]))
-            (handle-ui-create-run system exchange)
-
-            (and (= method "GET") (= path ["ui" "run-detail"]))
-            (handle-ui-run-detail system exchange)
-
-            (and (= method "GET") (= path ["ui" "run-detail-body"]))
-            (handle-ui-run-detail-body system exchange)
-
-            (and (= method "POST") (= 4 (count path))
-                 (= ["ui" "runs"] (subvec path 0 2))
-                 (= "launch" (nth path 3)))
-            (handle-ui-run-launch system exchange (nth path 2))
-
-            (and (= method "POST") (= 4 (count path))
-                 (= ["ui" "runs"] (subvec path 0 2))
-                 (= "signal" (nth path 3)))
-            (handle-ui-run-signal system exchange (nth path 2))
-
-            (and (= method "GET") (= path ["ui" "session-detail"]))
-            (handle-ui-session-detail system exchange)
-
-            (and (= method "GET") (= path ["ui" "session-messages"]))
-            (handle-ui-session-messages system exchange)
-
-            (and (= method "GET") (= path ["ui" "session" "live"]))
-            (handle-ui-session-live system exchange)
-
-            (and (= method "POST") (= path ["ui" "chat"]))
-            (handle-ui-chat system exchange)
-
-            (and (= method "GET") (= path ["ui" "events"]))
-            (handle-ui-events system exchange)
-
-            (and (= method "GET") (= path ["ui" "events" "live"]))
-            (handle-ui-events-live system exchange)
-
-            (and (= method "GET") (= path ["ui" "memory" "prompt"]))
-            (handle-ui-memory-prompt system exchange)
-
-            (and (= method "POST") (= path ["ui" "memory" "search"]))
-            (handle-ui-memory-search system exchange)
-
-            (and (= method "GET") (= path ["ui" "tools"]))
-            (handle-ui-tools system exchange)
-
-            (and (= method "GET") (= path ["ui" "tool-approvals"]))
-            (handle-ui-tool-approvals system exchange)
-
-            (and (= method "POST") (= path ["ui" "tool-approvals" "request"]))
-            (handle-ui-tool-approval-request system exchange)
-
-            (and (= method "POST") (= 4 (count path))
-                 (= ["ui" "tool-approvals"] (subvec path 0 2))
-                 (= "approve" (nth path 3)))
-            (handle-ui-tool-approval-decision system exchange (nth path 2) :approved)
-
-            (and (= method "POST") (= 4 (count path))
-                 (= ["ui" "tool-approvals"] (subvec path 0 2))
-                 (= "deny" (nth path 3)))
-            (handle-ui-tool-approval-decision system exchange (nth path 2) :denied)
-
-            (and (= method "POST") (= 4 (count path))
-                 (= ["ui" "tool-approvals"] (subvec path 0 2))
-                 (= "run" (nth path 3)))
-            (handle-ui-tool-approval-run system exchange (nth path 2))
-
-            (and (= method "GET") (= path ["v1" "sessions"]))
-            (handle-list-sessions system exchange)
-
-            (and (= method "POST") (= path ["v1" "sessions"]))
-            (handle-create-session system exchange)
-
-            (and (= method "GET") (= path ["v1" "runs"]))
-            (handle-list-runs system exchange)
-
-            (and (= method "POST") (= path ["v1" "runs"]))
-            (handle-create-run system exchange)
-
-            (and (= method "GET") (= 3 (count path))
-                 (= ["v1" "runs"] (subvec path 0 2)))
-            (handle-get-run system exchange (nth path 2))
-
-            (and (= method "GET") (= 4 (count path))
-                 (= ["v1" "runs"] (subvec path 0 2))
-                 (= "heartbeats" (nth path 3)))
-            (handle-run-heartbeats system exchange (nth path 2))
-
-            (and (= method "GET") (= 4 (count path))
-                 (= ["v1" "runs"] (subvec path 0 2))
-                 (= "checkpoints" (nth path 3)))
-            (handle-run-checkpoints system exchange (nth path 2))
-
-            (and (= method "GET") (= 4 (count path))
-                 (= ["v1" "runs"] (subvec path 0 2))
-                 (= "commands" (nth path 3)))
-            (handle-run-commands system exchange (nth path 2))
-
-            (and (= method "GET") (= 4 (count path))
-                 (= ["v1" "runs"] (subvec path 0 2))
-                 (= "events" (nth path 3)))
-            (handle-run-events system exchange (nth path 2))
-
-            (and (= method "GET") (= 4 (count path))
-                 (= ["v1" "runs"] (subvec path 0 2))
-                 (= "stream" (nth path 3)))
-            (handle-run-events-stream system exchange (nth path 2))
-
-            (and (= method "GET") (= 4 (count path))
-                 (= ["v1" "runs"] (subvec path 0 2))
-                 (= "wait" (nth path 3)))
-            (handle-run-wait system exchange (nth path 2))
-
-            (and (= method "POST") (= 4 (count path))
-                 (= ["v1" "runs"] (subvec path 0 2))
-                 (= "recover" (nth path 3)))
-            (handle-run-recover system exchange (nth path 2))
-
-            (and (= method "POST") (= path ["v1" "runs" "reclaim-stale"]))
-            (handle-reclaim-stale-runs system exchange)
-
-            (and (= method "POST") (= 4 (count path))
-                 (= ["v1" "runs"] (subvec path 0 2))
-                 (= "launch" (nth path 3)))
-            (handle-launch-run system exchange (nth path 2))
-
-            (and (= method "POST") (= 4 (count path))
-                 (= ["v1" "runs"] (subvec path 0 2))
-                 (= "signal" (nth path 3)))
-            (handle-signal-run system exchange (nth path 2))
-
-            (and (= method "GET") (= path ["v1" "tools"]))
-            (handle-list-tools system exchange)
-
-            (and (= method "POST") (= 4 (count path))
-                 (= ["v1" "tools"] (subvec path 0 2))
-                 (= "execute" (nth path 3)))
-            (handle-execute-tool system exchange (nth path 2))
-
-            (and (= method "GET") (= path ["v1" "tool-approvals"]))
-            (handle-list-tool-approvals system exchange)
-
-            (and (= method "POST") (= path ["v1" "tool-approvals"]))
-            (handle-create-tool-approval system exchange)
-
-            (and (= method "POST") (= 4 (count path))
-                 (= ["v1" "tool-approvals"] (subvec path 0 2))
-                 (= "approve" (nth path 3)))
-            (handle-decide-tool-approval system exchange (nth path 2) :approved)
-
-            (and (= method "POST") (= 4 (count path))
-                 (= ["v1" "tool-approvals"] (subvec path 0 2))
-                 (= "deny" (nth path 3)))
-            (handle-decide-tool-approval system exchange (nth path 2) :denied)
-
-            (and (= method "GET") (= path ["v1" "skills"]))
-            (handle-list-skills system exchange)
-
-            (and (= method "GET") (= path ["v1" "channel-adapters"]))
-            (handle-list-channel-adapters system exchange)
-
-            (and (= method "GET") (= path ["v1" "events"]))
-            (handle-list-events system exchange)
-
-            (and (= method "GET") (= path ["v1" "events" "stream"]))
-            (handle-events-stream system exchange)
-
-            (and (= method "GET") (= path ["v1" "memory" "surfaces"]))
-            (handle-memory-surfaces system exchange)
-
-            (and (= method "GET") (= path ["v1" "memory" "prompt"]))
-            (handle-memory-prompt system exchange)
-
-            (and (= method "POST") (= path ["v1" "memory" "search"]))
-            (handle-memory-search system exchange)
-
-            (and (= method "POST") (= path ["v1" "memory" "graph" "facts"]))
-            (handle-memory-graph-save system exchange)
-
-            (and (= method "POST") (= path ["v1" "memory" "graph" "query"]))
-            (handle-memory-graph-query system exchange)
-
-            (and (= method "GET") (= path ["v1" "agents"]))
-            (handle-list-agents system exchange)
-
-            (and (= method "POST") (= path ["v1" "agents"]))
-            (handle-create-agent system exchange)
-
-            (and (= method "GET") (= path ["v1" "federation" "peers"]))
-            (handle-list-federated-peers system exchange)
-
-            (and (= method "POST") (= path ["v1" "federation" "peers"]))
-            (handle-create-federated-peer system exchange)
-
-            (and (= method "POST") (= path ["v1" "federation" "inbox"]))
-            (handle-federation-inbox system exchange)
-
-            (and (= method "GET") (= 4 (count path))
-                 (= ["v1" "agents"] (subvec path 0 2))
-                 (= "messages" (nth path 3)))
-            (handle-agent-messages system exchange (nth path 2))
-
-            (and (= method "POST") (= 4 (count path))
-                 (= ["v1" "agents"] (subvec path 0 2))
-                 (= "messages" (nth path 3)))
-            (handle-agent-message system exchange (nth path 2))
-
-            (and (= method "POST") (= 6 (count path))
-                 (= ["v1" "agents"] (subvec path 0 2))
-                 (= "tools" (nth path 3))
-                 (= "execute" (nth path 5)))
-            (handle-agent-tool-execute system exchange (nth path 2) (nth path 4))
-
-            (and (= method "POST") (= 4 (count path))
-                 (= ["v1" "agents"] (subvec path 0 2))
-                 (= "spawn-worker" (nth path 3)))
-            (handle-orchestrator-spawn-worker system exchange (nth path 2))
-
-            (and (= method "POST") (= 4 (count path))
-                 (= ["v1" "agents"] (subvec path 0 2))
-                 (= "steps" (nth path 3)))
-            (handle-agent-step-execute system exchange (nth path 2))
-
-            (and (= method "POST") (= 5 (count path))
-                 (= ["v1" "agents"] (subvec path 0 2))
-                 (= "inbox" (nth path 3))
-                 (= "consume" (nth path 4)))
-            (handle-consume-agent-inbox system exchange (nth path 2))
-
-            (and (= method "GET") (= 4 (count path))
-                 (= ["v1" "agents"] (subvec path 0 2))
-                 (= "interop" (nth path 3)))
-            (handle-agent-interop system exchange (nth path 2))
-
-            (and (= method "POST") (= 5 (count path))
-                 (= ["v1" "agents"] (subvec path 0 2))
-                 (= "interop" (nth path 3))
-                 (= "capabilities" (nth path 4)))
-            (handle-agent-interop-capabilities system exchange (nth path 2))
-
-            (and (= method "POST") (= 5 (count path))
-                 (= ["v1" "agents"] (subvec path 0 2))
-                 (= "interop" (nth path 3))
-                 (= "messages" (nth path 4)))
-            (handle-agent-interop-message system exchange (nth path 2))
-
-            (and (= method "GET") (= 5 (count path))
-                 (= ["v1" "agents"] (subvec path 0 2))
-                 (= "interop" (nth path 3))
-                 (= "messages" (nth path 4)))
-            (handle-agent-interop-messages system exchange (nth path 2))
-
-            (and (= method "POST") (= 7 (count path))
-                 (= ["v1" "agents"] (subvec path 0 2))
-                 (= "interop" (nth path 3))
-                 (= "messages" (nth path 4))
-                 (= "ack" (nth path 6)))
-            (handle-agent-interop-ack system exchange (nth path 2) (nth path 5))
-
-            (and (= method "POST") (= 7 (count path))
-                 (= ["v1" "agents"] (subvec path 0 2))
-                 (= "interop" (nth path 3))
-                 (= "messages" (nth path 4))
-                 (= "retry" (nth path 6)))
-            (handle-agent-interop-retry system exchange (nth path 2) (nth path 5))
-
-            (and (= method "GET") (= path ["v1" "channels"]))
-            (handle-list-channels system exchange)
-
-            (and (= method "POST") (= path ["v1" "channels"]))
-            (handle-create-channel system exchange)
-
-            (and (= method "GET") (= 4 (count path))
-                 (= ["v1" "channels"] (subvec path 0 2))
-                 (= "messages" (nth path 3)))
-            (handle-channel-messages system exchange (nth path 2))
-
-            (and (= method "POST") (= 4 (count path))
-                 (= ["v1" "channels"] (subvec path 0 2))
-                 (= "messages" (nth path 3)))
-            (handle-channel-message system exchange (nth path 2))
-
-            (and (= method "GET") (= 4 (count path))
-                 (= ["v1" "sessions"] (subvec path 0 2))
-                 (= "messages" (nth path 3)))
-            (handle-list-messages system exchange (nth path 2))
-
-            (and (= method "POST") (= path ["v1" "chat" "completions"]))
-            (handle-chat-completions system exchange)
-
-            :else
-            (not-found! exchange)))
-          (catch Exception e
-            (logging/log-error! :agent.http/request-failed e
-                                {:method method
-                                 :path raw-path})
-            (write-error! exchange e))
-          (finally
-            (logging/log! :agent.http/request-completed
-                          {:method method
-                           :path raw-path
-                           :status (or (.getAttribute exchange response-status-attr) 200)
-                           :duration-ms (long (/ (- (System/nanoTime) started-at) 1000000))})))))))
+  (middleware/wrap-defaults
+   (ring/ring-handler
+    (ring/router (bind-route-handlers system)
+                 {:conflicts nil})
+    (fn [_] (responses/not-found-response)))))
 
 (defn start-server!
   [system {:keys [host port]}]
-  (let [server (HttpServer/create (InetSocketAddress. host (int port)) 0)
-        handler (create-handler system)
-        executor (Executors/newCachedThreadPool (daemon-thread-factory))]
-    (.createContext server "/" handler)
-    (.setExecutor server executor)
-    (.start server)
-    (swap! server-executors assoc server executor)
+  (let [server (http-kit/run-server (create-handler system)
+                                    {:ip host
+                                     :port (int port)})]
     (logging/log! :agent.http/server-started
                   {:host host
                    :port port})
     server))
 
 (defn stop-server!
-  [^HttpServer server]
+  [server]
   (when server
     (logging/log! :agent.http/server-stopping {})
-    (.stop server 0)
-    (when-let [^ExecutorService executor (get @server-executors server)]
-      (.shutdownNow executor)
-      (swap! server-executors dissoc server))))
+    (server :timeout 100)))

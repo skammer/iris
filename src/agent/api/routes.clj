@@ -1,0 +1,90 @@
+(ns agent.api.routes)
+
+(def routes
+  [["/" {:get {:handler/id :ui-index}}]
+   ["/health" {:get {:handler/id :health}}]
+   ["/public/*" {:get {:handler/id :public-file}}]
+
+   ["/ui/shell" {:get {:handler/id :ui-shell}}]
+   ["/ui/dashboard" {:get {:handler/id :ui-dashboard}}]
+   ["/ui/operator-board" {:get {:handler/id :ui-operator-board}}]
+   ["/ui/sessions" {:get {:handler/id :ui-sessions}
+                    :post {:handler/id :ui-create-session}}]
+   ["/ui/session-detail" {:get {:handler/id :ui-session-detail}}]
+   ["/ui/session-messages" {:get {:handler/id :ui-session-messages}}]
+   ["/ui/session/live" {:get {:handler/id :ui-session-live}}]
+   ["/ui/chat" {:post {:handler/id :ui-chat}}]
+   ["/ui/events" {:get {:handler/id :ui-events}}]
+   ["/ui/events/live" {:get {:handler/id :ui-events-live}}]
+   ["/ui/memory/prompt" {:get {:handler/id :ui-memory-prompt}}]
+   ["/ui/memory/search" {:post {:handler/id :ui-memory-search}}]
+   ["/ui/runs" {:get {:handler/id :ui-runs}
+                :post {:handler/id :ui-create-run}}]
+   ["/ui/run-detail" {:get {:handler/id :ui-run-detail}}]
+   ["/ui/run-detail-body" {:get {:handler/id :ui-run-detail-body}}]
+   ["/ui/runs/:run-id/launch" {:post {:handler/id :ui-run-launch}}]
+   ["/ui/runs/:run-id/signal" {:post {:handler/id :ui-run-signal}}]
+   ["/ui/tools" {:get {:handler/id :ui-tools}}]
+   ["/ui/tool-approvals" {:get {:handler/id :ui-tool-approvals}}]
+   ["/ui/tool-approvals/request" {:post {:handler/id :ui-tool-approval-request}}]
+   ["/ui/tool-approvals/:approval-id/approve" {:post {:handler/id :ui-tool-approval-approve}}]
+   ["/ui/tool-approvals/:approval-id/deny" {:post {:handler/id :ui-tool-approval-deny}}]
+   ["/ui/tool-approvals/:approval-id/run" {:post {:handler/id :ui-tool-approval-run}}]
+
+   ["/v1/sessions" {:get {:handler/id :list-sessions}
+                    :post {:handler/id :create-session}}]
+   ["/v1/sessions/:session-id/messages" {:get {:handler/id :list-session-messages}}]
+   ["/v1/chat/completions" {:post {:handler/id :chat-completions}}]
+   ["/v1/runs" {:get {:handler/id :list-runs}
+                :post {:handler/id :create-run}}]
+   ["/v1/runs/reclaim-stale" {:post {:handler/id :reclaim-stale-runs}}]
+   ["/v1/runs/:run-id" {:get {:handler/id :get-run}}]
+   ["/v1/runs/:run-id/launch" {:post {:handler/id :launch-run}}]
+   ["/v1/runs/:run-id/signal" {:post {:handler/id :signal-run}}]
+   ["/v1/runs/:run-id/heartbeats" {:get {:handler/id :run-heartbeats}}]
+   ["/v1/runs/:run-id/checkpoints" {:get {:handler/id :run-checkpoints}}]
+   ["/v1/runs/:run-id/commands" {:get {:handler/id :run-commands}}]
+   ["/v1/runs/:run-id/events" {:get {:handler/id :run-events}}]
+   ["/v1/runs/:run-id/stream" {:get {:handler/id :run-events-stream}}]
+   ["/v1/runs/:run-id/wait" {:get {:handler/id :run-wait}}]
+   ["/v1/runs/:run-id/recover" {:post {:handler/id :run-recover}}]
+
+   ["/v1/tools" {:get {:handler/id :list-tools}}]
+   ["/v1/tools/:tool-name/execute" {:post {:handler/id :execute-tool}}]
+   ["/v1/tool-approvals" {:get {:handler/id :list-tool-approvals}
+                          :post {:handler/id :create-tool-approval}}]
+   ["/v1/tool-approvals/:approval-id/approve" {:post {:handler/id :approve-tool-approval}}]
+   ["/v1/tool-approvals/:approval-id/deny" {:post {:handler/id :deny-tool-approval}}]
+   ["/v1/skills" {:get {:handler/id :list-skills}}]
+   ["/v1/channel-adapters" {:get {:handler/id :list-channel-adapters}}]
+   ["/v1/events" {:get {:handler/id :list-events}}]
+   ["/v1/events/stream" {:get {:handler/id :events-stream}}]
+   ["/v1/memory/surfaces" {:get {:handler/id :memory-surfaces}}]
+   ["/v1/memory/prompt" {:get {:handler/id :memory-prompt}}]
+   ["/v1/memory/search" {:post {:handler/id :memory-search}}]
+   ["/v1/memory/graph/facts" {:post {:handler/id :memory-graph-save}}]
+   ["/v1/memory/graph/query" {:post {:handler/id :memory-graph-query}}]
+
+   ["/v1/agents" {:get {:handler/id :list-agents}
+                  :post {:handler/id :create-agent}}]
+   ["/v1/agents/:agent-id/messages" {:get {:handler/id :agent-messages}
+                                     :post {:handler/id :agent-message}}]
+   ["/v1/agents/:agent-id/tools/:tool-name/execute" {:post {:handler/id :agent-tool-execute}}]
+   ["/v1/agents/:agent-id/spawn-worker" {:post {:handler/id :orchestrator-spawn-worker}}]
+   ["/v1/agents/:agent-id/steps" {:post {:handler/id :agent-step-execute}}]
+   ["/v1/agents/:agent-id/inbox/consume" {:post {:handler/id :consume-agent-inbox}}]
+   ["/v1/agents/:agent-id/interop" {:get {:handler/id :agent-interop}}]
+   ["/v1/agents/:agent-id/interop/capabilities" {:post {:handler/id :agent-interop-capabilities}}]
+   ["/v1/agents/:agent-id/interop/messages" {:get {:handler/id :agent-interop-messages}
+                                             :post {:handler/id :agent-interop-message}}]
+   ["/v1/agents/:agent-id/interop/messages/:message-id/ack" {:post {:handler/id :agent-interop-ack}}]
+   ["/v1/agents/:agent-id/interop/messages/:message-id/retry" {:post {:handler/id :agent-interop-retry}}]
+
+   ["/v1/federation/peers" {:get {:handler/id :list-federated-peers}
+                            :post {:handler/id :create-federated-peer}}]
+   ["/v1/federation/inbox" {:post {:handler/id :federation-inbox}}]
+
+   ["/v1/channels" {:get {:handler/id :list-channels}
+                    :post {:handler/id :create-channel}}]
+   ["/v1/channels/:channel-id/messages" {:get {:handler/id :channel-messages}
+                                         :post {:handler/id :channel-message}}]])
