@@ -556,7 +556,9 @@
                          "\n\n")))
 
 (defn- sse-response
-  [request on-open on-close]
+  ([request on-open on-close]
+   (sse-response request on-open on-close ":\n\n"))
+  ([request on-open on-close initial-body]
   (http-kit/as-channel
    request
    {:on-open (fn [channel]
@@ -564,21 +566,13 @@
                                {:status 200
                                 :headers {"Content-Type" "text/event-stream"
                                           "Cache-Control" "no-cache"}
-                                :body ""}
+                                :body initial-body}
                                false)
-               (on-open channel))
+               (when on-open
+                 (on-open channel)))
     :on-close (fn [channel status]
                 (when on-close
-                  (on-close channel status)))}))
-
-(defn- buffered-sse-response
-  [writer-fn]
-  (let [buffer (java.io.ByteArrayOutputStream.)]
-    (writer-fn buffer)
-    (responses/bytes-response 200
-                              "text/event-stream"
-                              (.toByteArray buffer)
-                              {"Cache-Control" "no-cache"})))
+                  (on-close channel status)))})))
 
 (defn- send-sse-text! [channel text]
   (http-kit/send! channel text false))
@@ -603,36 +597,41 @@
         model (get-in system [:config :llm :model])
         chunks (llm-core/stream (:llm-provider system) messages {})]
     (persist-user-message! system messages session-id)
-    (buffered-sse-response
-     (fn [stream]
-       (loop [parts []]
-         (if-let [chunk (async/<!! chunks)]
-           (if (map? chunk)
-             (do
-               (write-sse-chunk! stream {:error "stream_error"
-                                         :message (or (:error chunk) "Provider stream failed")})
-               (write-sse-done! stream))
-             (do
-               (write-sse-chunk! stream {:id stream-id
+    (sse-response
+     request
+     (fn [channel]
+       (future
+         (loop [parts []]
+           (if-let [chunk (async/<!! chunks)]
+             (if (map? chunk)
+               (do
+                 (send-sse-chunk! channel {:error "stream_error"
+                                           :message (or (:error chunk) "Provider stream failed")})
+                 (send-sse-done! channel)
+                 (http-kit/close channel))
+               (do
+                 (send-sse-chunk! channel {:id stream-id
+                                           :object "chat.completion.chunk"
+                                           :session_id session-id
+                                           :provider provider
+                                           :model model
+                                           :choices [{:index 0
+                                                      :delta {:content chunk}
+                                                      :finish_reason nil}]})
+                 (recur (conj parts chunk))))
+             (let [content (apply str parts)]
+               (persist-completion! system messages content {:session-id session-id})
+               (send-sse-chunk! channel {:id stream-id
                                          :object "chat.completion.chunk"
                                          :session_id session-id
                                          :provider provider
                                          :model model
                                          :choices [{:index 0
-                                                    :delta {:content chunk}
-                                                    :finish_reason nil}]})
-               (recur (conj parts chunk))))
-           (let [content (apply str parts)]
-             (persist-completion! system messages content {:session-id session-id})
-             (write-sse-chunk! stream {:id stream-id
-                                       :object "chat.completion.chunk"
-                                       :session_id session-id
-                                       :provider provider
-                                       :model model
-                                       :choices [{:index 0
-                                                  :delta {}
-                                                  :finish_reason "stop"}]})
-             (write-sse-done! stream))))))))
+                                                    :delta {}
+                                                    :finish_reason "stop"}]})
+               (send-sse-done! channel)
+               (http-kit/close channel))))))
+     nil)))
 
 (defn- events-stream-response
   [system request]
@@ -640,16 +639,24 @@
         broker-instance (or (:event-bus system) (:broker system))
         subscription (broker/subscribe! broker-instance (broker/all-events-subject))
         ch (:channel subscription)
-        timeout-ch (async/timeout 5000)]
-    (buffered-sse-response
-     (fn [stream]
-       (try
-         (when-let [event (some-> (async/alt!! ch ([v] v) timeout-ch nil) :payload)]
-           (write-sse-chunk! stream {:id stream-id
-                                     :object "event.chunk"
-                                     :event (event->response event)}))
-         (finally
-           (broker/unsubscribe! broker-instance subscription)))))))
+        open? (atom true)]
+    (sse-response
+     request
+     (fn [channel]
+       (future
+         (try
+           (loop []
+             (when @open?
+               (when-let [event (some-> (async/<!! ch) :payload)]
+                 (send-sse-chunk! channel {:id stream-id
+                                           :object "event.chunk"
+                                           :event (event->response event)})
+                 (recur))))
+           (finally
+             (broker/unsubscribe! broker-instance subscription)))))
+     (fn [_ _]
+       (reset! open? false)
+       (broker/unsubscribe! broker-instance subscription)))))
 
 (defn- run-events-stream-response
   [system run-id request]
@@ -662,61 +669,82 @@
                                         {:after-id after-id
                                          :limit replay-limit})
         subscription (broker/subscribe! broker-instance (broker/all-runs-subject))
-        ch (:channel subscription)]
-    (buffered-sse-response
-     (fn [stream]
-       (try
-         (when-let [run (system-get-run system run-id)]
-           (write-sse-chunk! stream {:type "snapshot"
-                                     :run (run->response run)}))
-         (doseq [message replay-messages]
-           (when (relevant-run-event? (:payload message) run-id)
-             (write-sse-chunk! stream {:type "event"
-                                       :data (event->response (:payload message))})))
-         (loop [received 0]
-           (let [event (async/alt!!
-                        ch ([v] v)
-                        (async/timeout (if (pos? received) 250 5000)) nil)]
-             (when event
-               (when (relevant-run-event? (:payload event) run-id)
-                 (write-sse-chunk! stream {:type "event"
-                                           :data (event->response (:payload event))}))
-               (when (< received 16)
-                 (recur (inc received))))))
-         (finally
-           (broker/unsubscribe! broker-instance subscription)))))))
+        ch (:channel subscription)
+        open? (atom true)]
+    (sse-response
+     request
+     (fn [channel]
+       (future
+         (try
+           (when-let [run (system-get-run system run-id)]
+             (send-sse-chunk! channel {:type "snapshot"
+                                       :run (run->response run)}))
+           (doseq [message replay-messages]
+             (when (relevant-run-event? (:payload message) run-id)
+               (send-sse-chunk! channel {:type "event"
+                                         :data (event->response (:payload message))})))
+           (loop []
+             (when @open?
+               (when-let [event (async/<!! ch)]
+                 (when (relevant-run-event? (:payload event) run-id)
+                   (send-sse-chunk! channel {:type "event"
+                                             :data (event->response (:payload event))}))
+                 (recur))))
+           (finally
+             (broker/unsubscribe! broker-instance subscription)))))
+     (fn [_ _]
+       (reset! open? false)
+       (broker/unsubscribe! broker-instance subscription)))))
 
 (defn- ui-session-live-response
   [system request]
   (let [session-id (:session_id (request-query-params request))
         broker-instance (or (:event-bus system) (:broker system))
         subscription (broker/subscribe! broker-instance (broker/all-events-subject))
-        ch (:channel subscription)]
+        ch (:channel subscription)
+        open? (atom true)]
     (ensure-string! :session_id session-id)
     (ensure-session-exists! system session-id)
-    (buffered-sse-response
-     (fn [stream]
-       (try
-         (write-datastar-patch! stream (ui/session-detail-fragment system session-id))
-         (when-let [event (some-> (async/alt!! ch ([v] v) (async/timeout 5000) nil) :payload)]
-           (when (relevant-session-event? event session-id)
-             (write-datastar-patch! stream (ui/session-detail-fragment system session-id))))
-         (finally
-           (broker/unsubscribe! broker-instance subscription)))))))
+    (sse-response
+     request
+     (fn [channel]
+       (future
+         (try
+           (send-datastar-patch! channel (ui/session-detail-fragment system session-id))
+           (loop []
+             (when @open?
+               (when-let [event (some-> (async/<!! ch) :payload)]
+                 (when (relevant-session-event? event session-id)
+                   (send-datastar-patch! channel (ui/session-detail-fragment system session-id)))
+                 (recur))))
+           (finally
+             (broker/unsubscribe! broker-instance subscription)))))
+     (fn [_ _]
+       (reset! open? false)
+       (broker/unsubscribe! broker-instance subscription)))))
 
 (defn- ui-events-live-response
   [system request]
   (let [broker-instance (or (:event-bus system) (:broker system))
         subscription (broker/subscribe! broker-instance (broker/all-events-subject))
-        ch (:channel subscription)]
-    (buffered-sse-response
-     (fn [stream]
-       (try
-         (write-datastar-patch! stream (ui/events-fragment system))
-         (when (async/alt!! ch true (async/timeout 5000) nil)
-           (write-datastar-patch! stream (ui/events-fragment system)))
-         (finally
-           (broker/unsubscribe! broker-instance subscription)))))))
+        ch (:channel subscription)
+        open? (atom true)]
+    (sse-response
+     request
+     (fn [channel]
+       (future
+         (try
+           (send-datastar-patch! channel (ui/events-fragment system))
+           (loop []
+             (when @open?
+               (when (async/<!! ch)
+                 (send-datastar-patch! channel (ui/events-fragment system))
+                 (recur))))
+           (finally
+             (broker/unsubscribe! broker-instance subscription)))))
+     (fn [_ _]
+       (reset! open? false)
+       (broker/unsubscribe! broker-instance subscription)))))
 
 (defn- handle-chat-completions-stream [system exchange messages session-id]
   (let [stream-id (str "chatcmpl-" (System/currentTimeMillis))
