@@ -30,6 +30,12 @@ Run rewritten API without SQLite native-access warning:
 clojure -J--enable-native-access=ALL-UNNAMED -M -m agent.core serve
 ```
 
+Run rewritten API with explicit config and without SQLite native-access warning:
+
+```bash
+clojure -J--enable-native-access=ALL-UNNAMED -M -m agent.core --config config/deepseek.local.edn serve
+```
+
 Run rewritten tests:
 
 ```bash
@@ -66,4 +72,10 @@ Java warning note:
 
 ```bash
 export JAVA_TOOL_OPTIONS=--enable-native-access=ALL-UNNAMED
+```
+
+Then launch normally, including `--config` if needed:
+
+```bash
+clojure -M -m agent.core --config config/deepseek.local.edn serve
 ```
