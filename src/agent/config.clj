@@ -58,6 +58,8 @@
                       :host-working-dir "."
                       :share-network? false}}
    :orchestrator {:enabled true}
+   :logging {:enabled true
+             :file {:path "logs/clj-agent.log"}}
    :api {:host "127.0.0.1"
          :port 8080}})
 
@@ -111,6 +113,8 @@
         embedding-model (System/getenv "OLLAMA_EMBEDDING_MODEL")
         openai-base-url (System/getenv "OPENAI_BASE_URL")
         sqlite-path (System/getenv "AGENT_SQLITE_PATH")
+        log-file (System/getenv "AGENT_LOG_FILE")
+        log-enabled (parse-bool (System/getenv "AGENT_LOG_ENABLED"))
         api-host (System/getenv "AGENT_API_HOST")
         api-port (parse-long* (System/getenv "AGENT_API_PORT"))]
     {:llm (cond-> {}
@@ -140,6 +144,9 @@
                      (assoc :api-key (System/getenv "OPENAI_API_KEY")))))
      :storage (cond-> {}
                 sqlite-path (assoc :sqlite {:path sqlite-path}))
+     :logging (cond-> {}
+                (some? log-enabled) (assoc :enabled log-enabled)
+                log-file (assoc :file {:path log-file}))
      :api (cond-> {}
             api-host (assoc :host api-host)
             (some? api-port) (assoc :port api-port))}))

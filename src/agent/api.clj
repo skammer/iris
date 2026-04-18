@@ -6,6 +6,7 @@
    [agent.kernel :as kernel]
    [agent.kernel.runtime :as kernel-runtime]
    [agent.llm.core :as llm-core]
+   [agent.logging :as logging]
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
@@ -27,6 +28,7 @@
    (java.util.concurrent ExecutorService Executors ThreadFactory)))
 
 (def ^:private server-executors (atom {}))
+(def ^:private response-status-attr "agent.response-status")
 
 (declare normalize-permissions execution-context)
 
@@ -45,6 +47,7 @@
 
 (defn- write-json! [^HttpExchange exchange status payload]
   (let [bytes (.getBytes (json/generate-string payload) StandardCharsets/UTF_8)]
+    (.setAttribute exchange response-status-attr status)
     (.add (.getResponseHeaders exchange) "Content-Type" "application/json")
     (.sendResponseHeaders exchange status (long (count bytes)))
     (with-open [os (.getResponseBody exchange)]
@@ -52,12 +55,14 @@
 
 (defn- write-html! [^HttpExchange exchange status html]
   (let [bytes (.getBytes html StandardCharsets/UTF_8)]
+    (.setAttribute exchange response-status-attr status)
     (.add (.getResponseHeaders exchange) "Content-Type" "text/html; charset=utf-8")
     (.sendResponseHeaders exchange status (long (count bytes)))
     (with-open [os (.getResponseBody exchange)]
       (.write os bytes))))
 
 (defn- write-bytes! [^HttpExchange exchange status content-type bytes]
+  (.setAttribute exchange response-status-attr status)
   (.add (.getResponseHeaders exchange) "Content-Type" content-type)
   (.sendResponseHeaders exchange status (long (count bytes)))
   (with-open [os (.getResponseBody exchange)]
@@ -1672,10 +1677,14 @@
   [system]
   (reify HttpHandler
     (handle [_ exchange]
-      (try
-        (let [method (.getRequestMethod exchange)
-              path (split-path exchange)
-              raw-path (.getPath (.getRequestURI exchange))]
+      (let [started-at (System/nanoTime)
+            method (.getRequestMethod exchange)
+            raw-path (.getPath (.getRequestURI exchange))]
+        (logging/log! :agent.http/request-started
+                      {:method method
+                       :path raw-path})
+        (try
+          (let [path (split-path exchange)]
           (cond
             (and (= method "GET") (str/starts-with? raw-path "/public/"))
             (handle-public-file exchange raw-path)
@@ -1983,8 +1992,17 @@
 
             :else
             (not-found! exchange)))
-        (catch Exception e
-          (write-error! exchange e))))))
+          (catch Exception e
+            (logging/log-error! :agent.http/request-failed e
+                                {:method method
+                                 :path raw-path})
+            (write-error! exchange e))
+          (finally
+            (logging/log! :agent.http/request-completed
+                          {:method method
+                           :path raw-path
+                           :status (or (.getAttribute exchange response-status-attr) 200)
+                           :duration-ms (long (/ (- (System/nanoTime) started-at) 1000000))})))))))
 
 (defn start-server!
   [system {:keys [host port]}]
@@ -1995,11 +2013,15 @@
     (.setExecutor server executor)
     (.start server)
     (swap! server-executors assoc server executor)
+    (logging/log! :agent.http/server-started
+                  {:host host
+                   :port port})
     server))
 
 (defn stop-server!
   [^HttpServer server]
   (when server
+    (logging/log! :agent.http/server-stopping {})
     (.stop server 0)
     (when-let [^ExecutorService executor (get @server-executors server)]
       (.shutdownNow executor)

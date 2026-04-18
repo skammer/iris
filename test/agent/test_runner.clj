@@ -7,6 +7,7 @@
    [agent.config-test]
    [agent.core-test]
    [agent.kernel-test]
+   [agent.logging-test]
    [agent.memory.core-test]
    [agent.orchestrator-test]
    [agent.persistence.sqlite-test]
@@ -31,6 +32,7 @@
     agent.config-test
     agent.core-test
     agent.kernel-test
+    agent.logging-test
     agent.memory.core-test
     agent.orchestrator-test
     agent.persistence.sqlite-test

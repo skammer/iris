@@ -34,6 +34,8 @@
  :channel-adapters {:telegram {:enabled false}
                     :discord {:enabled false}
                     :slack {:enabled false}}
+ :logging {:enabled true
+           :file {:path "logs/clj-agent.log"}}
  :runners {:docker {:image "clojure:temurin-21-alpine"
                     :container-working-dir "/workspace"
                     :container-data-dir "/agent-data"
