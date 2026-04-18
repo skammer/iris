@@ -51,3 +51,22 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"disabled"
                           (tools/execute-tool registry :echo {:message "hi"} {:permissions #{:echo}})))))
+
+(deftest registry-enforces-allowed-tools-test
+  (let [tool (tools/create-tool
+              {:description (tools/create-tool-description
+                             :echo
+                             "Echo tool"
+                             :required-permissions #{:echo})
+               :execute-fn (fn [input _context] input)})
+        registry (-> (tools/create-registry)
+                     (tools/register-tool tool))]
+    (is (= {:message "hi"}
+           (tools/execute-tool registry :echo {:message "hi"}
+                               {:permissions #{:echo}
+                                :allowed-tools #{:echo}})))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"Tool not allowed"
+                          (tools/execute-tool registry :echo {:message "hi"}
+                                              {:permissions #{:echo}
+                                               :allowed-tools #{:http}})))))

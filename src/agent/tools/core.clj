@@ -61,6 +61,7 @@
   ([context]
    (-> context
        (update :permissions #(set (or % #{})))
+       (update :allowed-tools #(set (or % #{})))
        (update :user #(or % "system"))
        (update :request-id #(or % (str (java.util.UUID/randomUUID)))))))
 
@@ -107,7 +108,16 @@
      (let [context* (create-execution-context context)
            tool-description (describe tool)
            required (:required-permissions tool-description)
-           actual (:permissions context*)]
+           actual (:permissions context*)
+           allowed-tools (:allowed-tools context*)]
+       (when (and (seq allowed-tools)
+                  (not (or (contains? allowed-tools tool-name)
+                           (contains? allowed-tools :*)
+                           (contains? allowed-tools (keyword (name tool-name))))))
+         (throw (tool-error :tool-blocked
+                            "Tool not allowed in this capability bundle"
+                            {:tool-name tool-name
+                             :allowed-tools (vec allowed-tools)})))
        (when-not (set/subset? required actual)
          (throw (permission-error required actual)))
        (let [validated-input ((or (:validate-fn tool) identity) input)]

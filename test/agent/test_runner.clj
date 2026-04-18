@@ -6,6 +6,7 @@
    [clojure.test :as t]
    [agent.config-test]
    [agent.core-test]
+   [agent.kernel-test]
    [agent.memory.core-test]
    [agent.orchestrator-test]
    [agent.persistence.sqlite-test]
@@ -29,6 +30,7 @@
     agent.channels.core-test
     agent.config-test
     agent.core-test
+    agent.kernel-test
     agent.memory.core-test
     agent.orchestrator-test
     agent.persistence.sqlite-test

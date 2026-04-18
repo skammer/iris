@@ -62,3 +62,18 @@
     (is (every? #{:rw :ro} (map :mode (:mounts prepared))))
     (is (contains? (set (map :target (:mounts prepared))) "/workspace"))
     (is (contains? (set (map :target (:mounts prepared))) "/agent-data"))))
+
+(deftest spawn-task-worker-produces-scoped-worker
+  (let [system (core/create-system)
+        worker (core/spawn-task-worker! system
+                                        {:task {:id "task-1" :prompt "collect facts"}
+                                         :name "Fact Worker"
+                                         :capability-bundle {:capabilities ["research"]
+                                                             :tool-access ["http" "fs"]}
+                                         :memory-scopes ["session"]
+                                         :budgets {:max_tokens 1000}})]
+    (is (= "worker" (:kind worker)))
+    (is (= ["research"] (:capabilities worker)))
+    (is (= ["fs" "http"] (sort (:tool-access worker))))
+    (is (= ["session"] (:memory-scopes worker)))
+    (is (= {:max_tokens 1000} (:budgets worker)))))

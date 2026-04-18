@@ -22,10 +22,15 @@
 (defn- agent-view [agent]
   {:id (:id agent)
    :name (:name agent)
+   :kind (:kind agent)
    :role (:role agent)
    :parent-id (:parent-id agent)
    :logical-address (:logical-address agent)
    :capabilities (vec (sort (:capabilities agent)))
+   :tool-access (vec (sort (:tool-access agent)))
+   :memory-scopes (vec (:memory-scopes agent))
+   :task (:task agent)
+   :budgets (:budgets agent)
    :allow-direct? (true? (:allow-direct? agent))
    :status (:status agent)
    :created-at (:created-at agent)
@@ -133,19 +138,26 @@
          :logical-address value}))))
 
 (defn spawn-agent!
-  [orchestrator {:keys [name role parent-id system-prompt capabilities allow-direct? logical-address
-                        trusted-peers trust-policies interop-rate-limit-per-minute]
+  [orchestrator {:keys [name kind role parent-id system-prompt capabilities allow-direct? logical-address
+                        trusted-peers trust-policies interop-rate-limit-per-minute
+                        tool-access memory-scopes budgets task]
                  :or {name "Subagent"
                       role "worker"
                       capabilities []}}]
-  (let [created-at (now)
+  (let [kind* (or kind (if (= "orchestrator" role) "orchestrator" "worker"))
+        created-at (now)
         agent {:id (random-id "agent")
                :name name
+               :kind kind*
                :role role
                :parent-id parent-id
                :system-prompt system-prompt
                :logical-address logical-address
                :capabilities (set capabilities)
+               :tool-access (set (or tool-access []))
+               :memory-scopes (vec (or memory-scopes []))
+               :budgets (or budgets {})
+               :task task
                :allow-direct? (true? allow-direct?)
                :trusted-peers (set trusted-peers)
                :trusted-peer-policies (normalize-trust-policies trust-policies)
@@ -162,10 +174,15 @@
                     :entity-type :agent
                     :entity-id (:id agent*)
                     :payload {:name (:name agent*)
+                              :kind (:kind agent*)
                               :role (:role agent*)
                               :parent-id (:parent-id agent*)
                               :logical-address (:logical-address agent*)
                               :capabilities (vec (:capabilities agent*))
+                              :tool-access (vec (:tool-access agent*))
+                              :memory-scopes (:memory-scopes agent*)
+                              :budgets (:budgets agent*)
+                              :task (:task agent*)
                               :allow-direct? (:allow-direct? agent*)
                               :trusted-peers (vec (:trusted-peers agent*))
                               :trusted-peer-policies (trust-policies-view (:trusted-peer-policies agent*))
@@ -187,8 +204,13 @@
   [orchestrator agent-ref]
   (let [agent (ensure-agent-by-ref! orchestrator agent-ref)]
     {:id (:id agent)
+     :kind (:kind agent)
      :logical-address (:logical-address agent)
      :capabilities (vec (sort (:capabilities agent)))
+     :tool-access (vec (sort (:tool-access agent)))
+     :memory-scopes (vec (:memory-scopes agent))
+     :budgets (:budgets agent)
+     :task (:task agent)
      :trusted-peers (vec (sort (:trusted-peers agent)))
      :trust-policies (trust-policies-view (:trusted-peer-policies agent))
      :interop-rate-limit-per-minute (:interop-rate-limit-per-minute agent)
@@ -235,10 +257,14 @@
           vec))))
 
 (defn register-agent-capabilities!
-  [orchestrator agent-ref {:keys [capabilities allow-direct? trusted-peers trust-policies interop-rate-limit-per-minute]}]
+  [orchestrator agent-ref {:keys [capabilities allow-direct? trusted-peers trust-policies interop-rate-limit-per-minute
+                                  tool-access memory-scopes budgets]}]
   (let [agent (ensure-agent-by-ref! orchestrator agent-ref)
         updated (-> agent
                     (assoc :capabilities (set capabilities))
+                    (assoc :tool-access (set (or tool-access (:tool-access agent))))
+                    (assoc :memory-scopes (vec (or memory-scopes (:memory-scopes agent))))
+                    (assoc :budgets (or budgets (:budgets agent)))
                     (assoc :allow-direct? (true? allow-direct?))
                     (assoc :trusted-peers (set trusted-peers))
                     (assoc :trusted-peer-policies (normalize-trust-policies trust-policies))
@@ -251,6 +277,9 @@
                   :entity-type :agent
                   :entity-id (:id agent)
                   :payload {:capabilities (vec (:capabilities updated))
+                            :tool-access (vec (:tool-access updated))
+                            :memory-scopes (:memory-scopes updated)
+                            :budgets (:budgets updated)
                             :allow-direct? (:allow-direct? updated)
                             :trusted-peers (vec (:trusted-peers updated))
                             :trusted-peer-policies (trust-policies-view (:trusted-peer-policies updated))

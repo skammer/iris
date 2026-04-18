@@ -136,6 +136,12 @@ Reference:
 
 ## Active Next Steps
 
+0. [x] Agent kernel isolation baseline:
+   Added pure directive contract in `src/agent/kernel.clj`.
+   Added toolless-orchestrator-friendly agent metadata: `kind`, `tool-access`, `memory-scopes`, `budgets`, `task`.
+   Added tool allowlist enforcement hook in `src/agent/tools/core.clj`.
+   Added `spawn-task-worker!` baseline in `src/agent/core.clj`.
+   ADR/log: `log/agent-kernel-isolation-adr-2026-04-18.md`.
 1. [x] Live transcript streaming:
    Added session-scoped SSE for transcript/completions.
    Transcript panel now patches from Datastar session-live stream instead of interval polling.
@@ -163,11 +169,14 @@ Reference:
 8. [ ] Agent-to-agent interop:
    Baseline done: logical addressing, capability exchange, routed/direct messaging, audit events, retries/acks/message status, richer trust policy baseline, networked peer federation baseline, real HTTP federated forward/inbox delivery.
    Remaining: stronger policy/grant model, non-HTTP/broker-backed federation.
+8.1 [ ] Kernel/runtime split follow-up:
+   Make real worker execution consume typed directives/receipts instead of only storing capability-bundle metadata.
+   Add orchestrator default spawn-only action surface.
 9. [ ] Channel adapter implementation:
    Start Telegram first.
    Map inbound messages onto current session/agent/channel model.
 10. [ ] Personality/profile system:
-   Profiles should bundle prompt, provider/model prefs, tool policy, and memory defaults.
+   Profiles should bundle prompt, provider/model prefs, tool policy, memory defaults, and worker capability bundles.
 11. [ ] Deeper graph memory:
    Move from raw Datahike prototype to richer entity/relation extraction + recall path.
 11.1 [ ] Explicit memory write path:

@@ -246,8 +246,13 @@
             channel-adapters-body (json/parse-string (:body channel-adapters) true)
             created-agent (http-post (str base-url "/v1/agents")
                                      {:name "Worker"
+                                      :kind "worker"
                                       :role "worker"
                                       :capabilities ["execute"]
+                                      :tool_access ["http" "fs"]
+                                      :memory_scopes ["session"]
+                                      :budgets {:max_tokens 1000}
+                                      :task {:id "task-1" :prompt "collect facts"}
                                       :allow_direct true})
             created-agent-body (json/parse-string (:body created-agent) true)
             agent-id (:id created-agent-body)
@@ -271,6 +276,9 @@
             agent-interop-body (json/parse-string (:body agent-interop) true)
             interop-capabilities (http-post (str base-url "/v1/agents/" agent-id "/interop/capabilities")
                                             {:capabilities ["execute" "report"]
+                                             :tool_access ["http"]
+                                             :memory_scopes ["session" "agent"]
+                                             :budgets {:max_tokens 500}
                                              :allow_direct true
                                              :trusted_peers [peer-id]
                                              :trust_policies {peer-id {:message_types ["delegate.request"]
@@ -431,6 +439,9 @@
         (is (= 200 (:status channel-adapters)))
         (is (= ["discord" "slack" "telegram"] (mapv :name (:data channel-adapters-body))))
         (is (= 201 (:status created-agent)))
+        (is (= "worker" (:kind created-agent-body)))
+        (is (= ["fs" "http"] (:tool_access created-agent-body)))
+        (is (= ["session"] (:memory_scopes created-agent-body)))
         (is (= 201 (:status created-peer)))
         (is (= 201 (:status created-federated-peer)))
         (is (= "mesh-1" (get-in created-federated-peer-body [:data :id])))
@@ -442,6 +453,9 @@
         (is (= (str "agent://" agent-id) (get-in agent-interop-body [:data :logical-address])))
         (is (= 200 (:status interop-capabilities)))
         (is (= ["execute" "report"] (get-in interop-capabilities-body [:data :capabilities])))
+        (is (= ["http"] (get-in interop-capabilities-body [:data :tool-access])))
+        (is (= ["session" "agent"] (get-in interop-capabilities-body [:data :memory-scopes])))
+        (is (= {:max_tokens 500} (get-in interop-capabilities-body [:data :budgets])))
         (is (= [peer-id] (get-in interop-capabilities-body [:data :trusted-peers])))
         (is (= ["delegate.request"] (get-in interop-capabilities-body [:data :trust-policies (keyword peer-id) :message-types])))
         (is (= ["direct"] (get-in interop-capabilities-body [:data :trust-policies (keyword peer-id) :routes])))

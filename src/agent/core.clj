@@ -8,6 +8,7 @@
    [agent.api :as api]
    [agent.config :as config]
    [agent.federation.http :as federation-http]
+   [agent.kernel :as kernel]
    [agent.llm.core :as llm-core]
    [agent.llm.providers.ollama :as ollama]
    [agent.llm.providers.openai-compatible :as openai-compatible]
@@ -524,6 +525,32 @@
 (defn spawn-agent!
   [system spec]
   (orchestrator/spawn-agent! (:orchestrator system) spec))
+
+(defn spawn-task-worker!
+  [system {:keys [task name role capability-bundle memory-scopes budgets system-prompt parent-id]
+           :or {name "Task Worker"
+                role "worker"
+                capability-bundle {}
+                memory-scopes []
+                budgets {}}}]
+  (let [step (kernel/orchestrator-spawn-worker-step {:task task
+                                                     :worker-name name
+                                                     :worker-role role
+                                                     :capability-bundle capability-bundle
+                                                     :memory-scopes memory-scopes
+                                                     :budgets budgets
+                                                     :system-prompt system-prompt})
+        spawn (-> step :directives first :payload)]
+    (spawn-agent! system {:name (:name spawn)
+                          :kind "worker"
+                          :role (:role spawn)
+                          :parent-id parent-id
+                          :system-prompt (:system-prompt spawn)
+                          :capabilities (vec (or (:capabilities capability-bundle) []))
+                          :tool-access (vec (or (:tool-access capability-bundle) []))
+                          :memory-scopes (vec memory-scopes)
+                          :budgets budgets
+                          :task task})))
 
 (defn list-agents
   [system]
