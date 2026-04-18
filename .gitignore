@@ -6,3 +6,4 @@ target
 config/*.local.edn
 tmp
 *.log
+misc

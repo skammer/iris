@@ -46,12 +46,13 @@ Reference:
    Added in `src/agent/runners/bubblewrap.clj` and wired into active system/UI/API.
 12. [x] Implement `seatbelt` runner for macOS.
    Added in `src/agent/runners/seatbelt.clj` and wired into active system/UI/API.
-13. [ ] Implement `docker/podman` runner.
-   Progress: host-side parity done; child-shim image/bootstrap contract done; real Docker E2E done; Docker E2E revalidated on host 2026-04-17; Podman E2E skip-capable test added.
-   Remaining: image distribution story, operator-facing failure diagnostics.
+13. [x] Implement `docker/podman` runner.
+   Added host-side parity, child-shim image/bootstrap contract, container contract diagnostics in API/UI, real Docker E2E, host revalidation on 2026-04-18, and Podman E2E skip-capable coverage.
+   Current image story is intentionally generic-image + mounted-dev mode; published runner image remains optional later packaging work, not blocker.
 14. [ ] Define later runner interfaces:
    VM, k8s job, SSH remote.
-15. [ ] Ensure same child runtime shim works in all substrates.
+15. [x] Ensure same child runtime shim works in all substrates.
+   Bootstrap env/spec contract now propagated through `local-process`, `bubblewrap`, `seatbelt`, and `docker/podman`.
 
 ### Phase D: Streaming + Fallback
 
@@ -65,8 +66,9 @@ Reference:
 17. [x] Add stream resume/catch-up model:
    Resume from sequence/checkpoint after disconnect.
    Added sequence-based heartbeats/checkpoints listing and run event catch-up endpoints.
-18. [ ] Add long-running task handling:
-   Slow/intermittent links, reconnect, eventual completion retrieval.
+18. [x] Add long-running task handling:
+   Added reconnect/recovery baseline: durable replay, `wait`/eventual completion API, stale-run detection, reclaim/retry policy, retry-from-checkpoint metadata, and operator recovery actions.
+   Remaining later work: smarter scheduler/supervisor policy, backoff tuning, and cross-host failover.
 
 ### Phase E: Network Identity Plane
 
@@ -81,12 +83,15 @@ Reference:
 
 ### Phase F: Broker/Event Plane
 
-23. [ ] Define event stream abstraction:
-   SQLite/local backend first, NATS JetStream backend next.
+23. [x] Define event stream abstraction:
+   SQLite/local backend now exposes broker protocol + replay + request/reply baseline.
+   Remaining later work: real JetStream backend.
 24. [ ] Design subjects/topics:
    `agent.events.<run-id>`, `agent.cmd.<run-id>`, `agent.hb.<run-id>`, `agent.checkpoint.<run-id>`.
-25. [ ] Add durable replay/catch-up semantics for events and commands.
-26. [ ] Add request/reply channel for control commands.
+25. [x] Add durable replay/catch-up semantics for events and commands.
+   Local broker now replays from SQLite for events, commands, heartbeats, checkpoints, and output streams.
+26. [x] Add request/reply channel for control commands.
+   Local broker now supports request/reply; runtime/API expose request-id based command flow and command responses.
 
 ### Phase G: Agent-To-Agent Interop
 
@@ -164,16 +169,16 @@ Reference:
 4. [x] Distributed subagent runtime phase A/B:
    Added runner protocol, run registry, leases, heartbeats, commands, checkpoints, and runtime service baseline.
 5. [ ] Execution substrates:
-   `local-process`, `bubblewrap`, and macOS `seatbelt` are done.
-   Next order: `docker/podman` runner parity → child shim image/bootstrap path → later VM/k8s/SSH interfaces.
+   `local-process`, `bubblewrap`, macOS `seatbelt`, and `docker/podman` are done.
+   Next order: later VM/k8s/SSH interfaces; optional published runner image packaging if generic-image flow becomes limiting.
 5.1 [x] Child runtime shim MVP:
    Added `src/agent/runtime/child.clj` with bootstrap/register/heartbeat/checkpoint/command-poll loop.
    `local-process` now defaults to launching real child agent runtime when no explicit command is supplied.
 6. [ ] Event/broker abstraction:
-   SQLite/local baseline done with broker protocol + local backend + NATS-shaped subjects for runs/events/commands/heartbeats/checkpoints.
+   SQLite/local baseline done with broker protocol + local backend + NATS-shaped subjects for runs/events/commands/heartbeats/checkpoints + durable replay + request/reply control flow.
    Remaining: optional real JetStream backend.
-7. [ ] Live subagent event stream:
-   Add realtime run logs/progress/status before full broker work.
+7. [x] Live subagent event stream:
+   Realtime run logs/progress/status now exposed with SSE + replay/catch-up + run-detail/operator views.
 8. [ ] Agent-to-agent interop:
    Baseline done: logical addressing, capability exchange, routed/direct messaging, audit events, retries/acks/message status, richer trust policy baseline, networked peer federation baseline, real HTTP federated forward/inbox delivery.
    Remaining: stronger policy/grant model, non-HTTP/broker-backed federation.
