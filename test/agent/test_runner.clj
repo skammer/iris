@@ -18,6 +18,7 @@
    [agent.runtime.child-test]
    [agent.runtime.core-test]
    [agent.skills-test]
+   [agent.ui-test]
    [agent.tools.common.fs-test]
    [agent.llm.providers.ollama-test]
    [agent.llm.core-test]
@@ -44,6 +45,7 @@
     agent.runtime.child-test
     agent.runtime.core-test
     agent.skills-test
+    agent.ui-test
     agent.tools.common.fs-test
     agent.llm.providers.ollama-test
     agent.llm.core-test
