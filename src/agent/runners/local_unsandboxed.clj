@@ -1,7 +1,8 @@
-(ns agent.runners.local-process
-  "Local subprocess runner."
+(ns agent.runners.local-unsandboxed
+  "Local unsandboxed subprocess runner."
   (:require
    [agent.runners.core :as runners]
+   [agent.runners.policy :as policy]
    [clojure.java.io :as io]
    [clojure.string :as str])
   (:import
@@ -45,10 +46,11 @@
                                :captured-at (now)}))
           (recur))))))
 
-(defrecord LocalProcessRunner [processes on-exit on-output]
+(defrecord LocalUnsandboxedRunner [processes on-exit on-output]
   runners/IRunner
   (launch [_ run-spec]
-    (let [runner-options (:runner-options run-spec)
+    (let [run-spec (policy/validate-launch-spec run-spec)
+          runner-options (:runner-options run-spec)
           command (normalize-command runner-options)
           working-dir (or (:working-dir runner-options) ".")
           env-extra (or (:env runner-options) {})
@@ -109,7 +111,7 @@
        :stopped false
        :error "unknown_run"})))
 
-(defn create-local-process-runner
-  ([] (create-local-process-runner {}))
+(defn create-local-unsandboxed-runner
+  ([] (create-local-unsandboxed-runner {}))
   ([{:keys [on-exit on-output]}]
-   (->LocalProcessRunner (atom {}) on-exit on-output)))
+   (->LocalUnsandboxedRunner (atom {}) on-exit on-output)))

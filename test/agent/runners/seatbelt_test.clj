@@ -1,5 +1,6 @@
 (ns agent.runners.seatbelt-test
   (:require
+   [agent.runners.core :as runners]
    [agent.runners.seatbelt :as seatbelt]
    [clojure.string :as str]
    [clojure.test :refer :all]))
@@ -28,3 +29,20 @@
     (is (= "-p" (second argv)))
     (is (= "(version 1)" (nth argv 2)))
     (is (= ["/usr/bin/printf" "hello"] (subvec argv 3)))))
+
+(deftest seatbelt-launch-rejects-raw-profile-test
+  (let [runner (seatbelt/create-seatbelt-runner
+                {:delegate (reify runners/IRunner
+                             (launch [_ _] {:ok true})
+                             (signal [_ _ _] nil)
+                             (status [_ _] nil)
+                             (stop [_ _] nil))})
+        run-spec (runners/create-run-spec
+                  {:run-id "run-seatbelt"
+                   :agent-id "agent-seatbelt"
+                   :substrate :seatbelt
+                   :runner-options {:profile-string "(allow default)"
+                                    :command ["/usr/bin/printf" "hello"]}})]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"generated immutable profile"
+                          (runners/launch runner run-spec)))))

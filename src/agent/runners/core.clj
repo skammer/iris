@@ -32,7 +32,7 @@
 (defn create-run-spec
   [{:keys [run-id agent-id parent-run-id lease-id name substrate capabilities
            network-identity bootstrap-token bootstrap-spec requested-by runner-options]
-    :or {substrate :local-process
+    :or {substrate :local-unsandboxed
          capabilities []}}]
   {:run-id run-id
    :agent-id agent-id

@@ -567,7 +567,7 @@
        [:input {:type "text" :name "name" :placeholder "optional name"}]
        [:input {:type "text" :name "agent_id" :placeholder "agent id"}]
        [:select {:name "substrate"}
-        [:option {:value "local-process"} "local-process"]
+        [:option {:value "local-unsandboxed"} "local-unsandboxed"]
        [:option {:value "bubblewrap"} "bubblewrap"]
        [:option {:value "docker"} "docker"]
        [:option {:value "podman"} "podman"]

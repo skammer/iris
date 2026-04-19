@@ -1,6 +1,6 @@
-(ns agent.core-test
+(ns agent.system-test
   (:require
-   [agent.core :as core]
+   [agent.system :as system]
    [agent.config :as config]
    [agent.kernel]
    [agent.llm.providers.ollama :as ollama]
@@ -8,11 +8,11 @@
    [clojure.test :refer :all]))
 
 (deftest create-llm-provider-selects-ollama
-  (let [provider (core/create-llm-provider (:llm (config/load-config)))]
+  (let [provider (system/create-llm-provider (:llm (config/load-config)))]
     (is (instance? agent.llm.providers.ollama.OllamaProvider provider))))
 
 (deftest create-llm-provider-selects-openrouter
-  (let [provider (core/create-llm-provider
+  (let [provider (system/create-llm-provider
                   {:provider :openrouter
                    :model "openai/gpt-4o-mini"
                    :site-url "https://example.com"
@@ -22,25 +22,25 @@
     (is (instance? agent.llm.providers.openai_compatible.OpenAICompatibleProvider provider))))
 
 (deftest create-system-registers-default-tools
-  (let [system (core/create-system)
-        tools (core/list-tools system)
-        adapters (core/list-channel-adapters system)
+  (let [system (system/create-system)
+        tools (system/list-tools system)
+        adapters (system/list-channel-adapters system)
         runner-keys (-> system :runner-registry keys set)]
     (is (= [:fs :http :shell] (mapv :name tools)))
     (is (= ["Discord" "Slack" "Telegram"] (mapv :display-name adapters)))
-    (is (contains? runner-keys :local-process))
+    (is (contains? runner-keys :local-unsandboxed))
     (is (contains? runner-keys :bubblewrap))
     (is (contains? runner-keys :docker))
     (is (contains? runner-keys :podman))
     (is (contains? runner-keys :seatbelt))
-    (is (empty? (core/list-skills system)))
-    (is (= 3 (count (core/memory-surfaces system))))
-    (is (true? (get-in (core/health-check system) [:logging :enabled])))
-    (is (= :local (get-in (core/health-check system) [:broker :backend])))
-    (is (= 3 (get-in (core/health-check system) [:tools :count])))
-    (is (= 0 (get-in (core/health-check system) [:runtime :run-count])))
-    (is (= 3 (get-in (core/health-check system) [:channel-adapters :count])))
-    (is (= 0 (get-in (core/health-check system) [:orchestrator :agent-count])))))
+    (is (empty? (system/list-skills system)))
+    (is (= 3 (count (system/memory-surfaces system))))
+    (is (true? (get-in (system/health-check system) [:logging :enabled])))
+    (is (= :local (get-in (system/health-check system) [:broker :backend])))
+    (is (= 3 (get-in (system/health-check system) [:tools :count])))
+    (is (= 0 (get-in (system/health-check system) [:runtime :run-count])))
+    (is (= 3 (get-in (system/health-check system) [:channel-adapters :count])))
+    (is (= 0 (get-in (system/health-check system) [:orchestrator :agent-count])))))
 
 (deftest prepare-runner-options-adds-container-child-defaults
   (let [system {:config {:storage {:sqlite {:path "data/agent.db"}}
@@ -51,7 +51,7 @@
                                             :container-home-dir "/root"
                                             :host-working-dir "."
                                             :share-network? true}}}}
-        prepared (#'agent.core/prepare-runner-options
+        prepared (#'agent.system/prepare-runner-options
                   system
                   {:substrate "docker"
                    :runner-options {}})]
@@ -68,8 +68,8 @@
     (is (not (contains? (set (map :target (:mounts prepared))) "/agent-data")))))
 
 (deftest spawn-task-worker-produces-scoped-worker
-  (let [system (core/create-system)
-        worker (core/spawn-task-worker! system
+  (let [system (system/create-system)
+        worker (system/spawn-task-worker! system
                                         {:task {:id "task-1" :prompt "collect facts"}
                                          :name "Fact Worker"
                                          :capability-bundle {:capabilities ["research"]
@@ -83,14 +83,14 @@
     (is (= {:max_tokens 1000} (:budgets worker)))))
 
 (deftest execute-step-produces-receipts
-  (let [system (core/create-system)
-        orchestrator (core/spawn-agent! system {:name "Planner" :kind "orchestrator" :role "orchestrator"})
+  (let [system (system/create-system)
+        orchestrator (system/spawn-agent! system {:name "Planner" :kind "orchestrator" :role "orchestrator"})
         step (agent.kernel/orchestrator-spawn-worker-step
               {:task {:id "task-2"}
                :worker-name "Exec Worker"
                :capability-bundle {:capabilities ["execute"]
                                    :tool-access ["http"]}})
-        executed (core/execute-step! system (:id orchestrator) step)]
+        executed (system/execute-step! system (:id orchestrator) step)]
     (is (= 2 (count (:receipts executed))))
     (is (= :ok (get-in executed [:receipts 0 :status])))
     (is (= :deferred (get-in executed [:receipts 1 :status])))))

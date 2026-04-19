@@ -1,5 +1,7 @@
 (ns agent.runtime.core-test
   (:require
+   [agent.broker.core :as broker]
+   [agent.broker.local :as local-broker]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.core :as runtime]
    [clojure.java.io :as io]
@@ -18,7 +20,7 @@
                                   (runtime/create-run-request
                                    {:agent-id "agent-alpha"
                                     :name "alpha"
-                                    :substrate :local-process
+                                    :substrate :local-unsandboxed
                                     :capabilities [:chat :tools]
                                     :requested-by "tester"}))
         run-id (:id run)
@@ -78,4 +80,24 @@
         health (runtime/runtime-health service)]
     (is (= 1 (:run-count health)))
     (is (= 1 (:pending-command-count health)))
+    (io/delete-file path true)))
+
+(deftest wait-for-run-uses-broker-events-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        broker-instance (local-broker/create-broker)
+        service (runtime/create-runtime-service
+                 {:store store
+                  :broker broker-instance
+                  :event-sink (fn [event]
+                                (doseq [message (broker/event->messages event)]
+                                  (broker/publish! broker-instance message)))})
+        run (runtime/request-run! service
+                                  (runtime/create-run-request
+                                   {:agent-id "agent-gamma"
+                                    :substrate :local-unsandboxed}))
+        waiter (future (runtime/wait-for-run! service (:id run) {:timeout-ms 5000}))]
+    (Thread/sleep 50)
+    (runtime/transition-run! service (:id run) :completed)
+    (is (= "completed" (:status (deref waiter 1000 nil))))
     (io/delete-file path true)))
