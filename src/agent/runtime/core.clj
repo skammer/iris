@@ -3,7 +3,8 @@
   (:require
    [agent.broker.core :as broker]
    [agent.persistence.sqlite :as sqlite]
-   [agent.runners.core :as runners])
+   [agent.runners.core :as runners]
+   [clojure.core.async :as async])
   (:import
    (java.time Instant)
    (java.time.temporal ChronoUnit)
@@ -30,7 +31,7 @@
 
 (defn create-run-request
   [{:keys [agent-id parent-run-id name substrate capabilities network-identity runner-options requested-by]
-    :or {substrate :local-process
+    :or {substrate :local-unsandboxed
          capabilities []}}]
   {:agent-id (or agent-id (str "agent-" (UUID/randomUUID)))
    :parent-run-id parent-run-id
@@ -282,20 +283,43 @@
        :runner-options (:runner-options run)
        :recoverable? (contains? #{"requested" "launched" "running" "expired" "failed" "cancelled"} (:status run))})))
 
+(def terminal-statuses #{"completed" "failed" "cancelled" "expired"})
+
+(defn- terminal-run? [run]
+  (contains? terminal-statuses (:status run)))
+
+(defn- terminal-run-event? [message run-id]
+  (let [event (:payload message)]
+    (and (= run-id (:entity-id event))
+         (contains? terminal-statuses (get-in event [:payload :status])))))
+
+(defn- wait-for-run-event!
+  [runtime run-id timeout-ms]
+  (let [broker-instance (:broker runtime)
+        subscription (broker/subscribe! broker-instance (broker/run-events-subject run-id))
+        timeout-ch (async/timeout timeout-ms)]
+    (try
+      (if-let [run (get-run runtime run-id)]
+        (if (terminal-run? run)
+          run
+          (loop []
+            (let [[message port] (async/alts!! [(:channel subscription) timeout-ch])]
+              (cond
+                (= port timeout-ch) (get-run runtime run-id)
+                (nil? message) (get-run runtime run-id)
+                (terminal-run-event? message run-id) (get-run runtime run-id)
+                :else (recur)))))
+        nil)
+      (finally
+        (broker/unsubscribe! broker-instance subscription)))))
+
 (defn wait-for-run!
   ([runtime run-id] (wait-for-run! runtime run-id {}))
-  ([runtime run-id {:keys [timeout-ms interval-ms]
-                    :or {timeout-ms 15000 interval-ms 250}}]
-   (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
-     (loop []
-       (let [run (get-run runtime run-id)]
-         (cond
-           (nil? run) nil
-           (contains? #{"completed" "failed" "cancelled" "expired"} (:status run)) run
-           (>= (System/currentTimeMillis) deadline) run
-           :else (do
-                   (Thread/sleep (long interval-ms))
-                   (recur))))))))
+  ([runtime run-id {:keys [timeout-ms]
+                    :or {timeout-ms 15000}}]
+   (if (:broker runtime)
+     (wait-for-run-event! runtime run-id timeout-ms)
+     (get-run runtime run-id))))
 
 (defn retry-run!
   [runtime run-id]

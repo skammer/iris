@@ -1,18 +1,18 @@
-(ns agent.runners.local-process-test
+(ns agent.runners.local-unsandboxed-test
   (:require
    [agent.runners.core :as runners]
-   [agent.runners.local-process :as local-process]
+   [agent.runners.local-unsandboxed :as local-unsandboxed]
    [clojure.test :refer :all]))
 
-(deftest local-process-runner-launch-status-stop-test
+(deftest local-unsandboxed-runner-launch-status-stop-test
   (let [exits (promise)
-        runner (local-process/create-local-process-runner
+        runner (local-unsandboxed/create-local-unsandboxed-runner
                 {:on-exit (fn [_run-id result]
                             (deliver exits result))})
         run-spec (runners/create-run-spec
                   {:run-id "run-local-test"
                    :agent-id "agent-local"
-                   :substrate :local-process
+                   :substrate :local-unsandboxed
                    :bootstrap-token "token"
                    :bootstrap-spec {:run-id "run-local-test"}
                    :runner-options {:command ["sh" "-lc" "sleep 30"]
@@ -28,10 +28,10 @@
     (is (some? exit-result))
     (is (false? (:alive status-after)))))
 
-(deftest local-process-runner-captures-stdout-and-stderr-test
+(deftest local-unsandboxed-runner-captures-stdout-and-stderr-test
   (let [events* (atom [])
         exits (promise)
-        runner (local-process/create-local-process-runner
+        runner (local-unsandboxed/create-local-unsandboxed-runner
                 {:on-exit (fn [_run-id result]
                             (deliver exits result))
                  :on-output (fn [_run-id output]
@@ -39,7 +39,7 @@
         run-spec (runners/create-run-spec
                   {:run-id "run-local-output"
                    :agent-id "agent-local"
-                   :substrate :local-process
+                   :substrate :local-unsandboxed
                    :bootstrap-token "token"
                    :bootstrap-spec {:run-id "run-local-output"}
                    :runner-options {:command ["sh" "-lc" "printf out-line; printf err-line >&2"]

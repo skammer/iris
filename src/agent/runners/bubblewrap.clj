@@ -2,7 +2,8 @@
   "Bubblewrap-backed runner."
   (:require
    [agent.runners.core :as runners]
-   [agent.runners.local-process :as local-process]
+   [agent.runners.local-unsandboxed :as local-unsandboxed]
+   [agent.runners.policy :as policy]
    [clojure.string :as str]))
 
 (defn build-bwrap-argv
@@ -34,7 +35,8 @@
 (defrecord BubblewrapRunner [delegate bwrap-binary]
   runners/IRunner
   (launch [_ run-spec]
-    (let [runner-options (:runner-options run-spec)
+    (let [run-spec (policy/validate-launch-spec run-spec)
+          runner-options (:runner-options run-spec)
           argv (build-bwrap-argv {:bwrap-binary bwrap-binary
                                   :binds (:binds runner-options)
                                   :share-network? (true? (:share-network? runner-options))
@@ -56,5 +58,5 @@
   ([] (create-bubblewrap-runner {}))
   ([{:keys [delegate bwrap-binary]
      :or {bwrap-binary "bwrap"}}]
-   (->BubblewrapRunner (or delegate (local-process/create-local-process-runner))
+   (->BubblewrapRunner (or delegate (local-unsandboxed/create-local-unsandboxed-runner))
                        bwrap-binary)))

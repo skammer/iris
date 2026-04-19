@@ -5,7 +5,7 @@
    [agent.channels.core-test]
    [clojure.test :as t]
    [agent.config-test]
-   [agent.core-test]
+   [agent.system-test]
    [agent.kernel-test]
    [agent.logging-test]
    [agent.memory.core-test]
@@ -13,7 +13,7 @@
    [agent.persistence.sqlite-test]
    [agent.runners.docker-podman-e2e-test]
    [agent.runners.docker-podman-test]
-   [agent.runners.local-process-test]
+   [agent.runners.local-unsandboxed-test]
    [agent.runners.seatbelt-test]
    [agent.runtime.child-test]
    [agent.runtime.core-test]
@@ -30,7 +30,7 @@
     agent.broker.local-test
     agent.channels.core-test
     agent.config-test
-    agent.core-test
+    agent.system-test
     agent.kernel-test
     agent.logging-test
     agent.memory.core-test
@@ -38,7 +38,7 @@
     agent.persistence.sqlite-test
     agent.runners.docker-podman-e2e-test
     agent.runners.docker-podman-test
-    agent.runners.local-process-test
+    agent.runners.local-unsandboxed-test
     agent.runners.seatbelt-test
     agent.runtime.child-test
     agent.runtime.core-test
@@ -53,3 +53,8 @@
 (defn run-all-tests
   []
   (apply t/run-tests rewritten-test-namespaces))
+
+(defn -main
+  [& _args]
+  (let [{:keys [fail error]} (run-all-tests)]
+    (System/exit (if (zero? (+ fail error)) 0 1))))

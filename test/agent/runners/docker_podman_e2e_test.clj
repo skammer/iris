@@ -1,6 +1,6 @@
 (ns agent.runners.docker-podman-e2e-test
   (:require
-   [agent.core :as core]
+   [agent.system :as system]
    [agent.persistence.sqlite :as sqlite]
    [clojure.java.io :as io]
    [clojure.java.shell :as sh]
@@ -46,9 +46,9 @@
         port (free-port)
         store (sqlite/create-store {:path path
                                     :journal-mode "DELETE"})
-        event-bus (core/create-event-bus)
-        event-sink (core/create-event-sink store event-bus)
-        runtime-service (core/create-runtime-service store event-sink)
+        event-bus (system/create-event-bus)
+        event-sink (system/create-event-sink store event-bus)
+        runtime-service (system/create-runtime-service store event-sink)
         base-system {:config {:api {:host "0.0.0.0"
                                     :port port}
                               :storage {:sqlite {:path path
@@ -63,43 +63,43 @@
                      :event-bus event-bus
                      :event-sink event-sink
                      :runtime-service runtime-service
-                     :runner-registry (core/create-runner-registry runtime-service)}
-        system (core/start-api! base-system)
-        run (core/request-run! system {:agent-id (str engine "-child-agent")
+                     :runner-registry (system/create-runner-registry runtime-service)}
+        system (system/start-api! base-system)
+        run (system/request-run! system {:agent-id (str engine "-child-agent")
                                        :name (str engine "-child-runtime")
                                        :substrate (keyword engine)
                                        :requested-by "tester"})
         run-id (:id run)]
     (try
-      (core/launch-run! system run-id)
+      (system/launch-run! system run-id)
       ;; Docker Desktop bind-mounted SQLite can throw transient VFS write errors
       ;; if the parent polls while the child is still opening the database.
       (Thread/sleep 6000)
-      (is (wait-until #(when (= "running" (:status (core/get-run system run-id)))
-                         (core/get-run system run-id))
+      (is (wait-until #(when (= "running" (:status (system/get-run system run-id)))
+                         (system/get-run system run-id))
                       60000))
-        (let [_ (core/enqueue-run-command! system run-id {:command-type :ping
+        (let [_ (system/enqueue-run-command! system run-id {:command-type :ping
                                                           :payload {}})
-              _ (core/enqueue-run-command! system run-id {:command-type :run-task
+              _ (system/enqueue-run-command! system run-id {:command-type :run-task
                                                           :payload {:task engine
                                                                     :sleep-ms 25}})
               _ (is (wait-until #(when (and (some (fn [command]
                                                     (= "completed" (:status command)))
-                                                  (core/list-run-commands system run-id))
+                                                  (system/list-run-commands system run-id))
                                           (some (fn [checkpoint]
                                                   (= "task" (:checkpoint-type checkpoint)))
-                                                (core/list-run-checkpoints system run-id {:limit 20})))
+                                                (system/list-run-checkpoints system run-id {:limit 20})))
                                    true)
                                 60000))
-            commands (core/list-run-commands system run-id)
-            checkpoints (core/list-run-checkpoints system run-id {:limit 20})
+            commands (system/list-run-commands system run-id)
+            checkpoints (system/list-run-checkpoints system run-id {:limit 20})
             output-events (sqlite/list-events store {:entity-type :agent_run
                                                      :entity-id run-id
                                                      :limit 100})
-            _ (core/enqueue-run-command! system run-id {:command-type :cancel
+            _ (system/enqueue-run-command! system run-id {:command-type :cancel
                                                         :payload {:reason "test"}})
-            cancelled-run (wait-until #(when (= "cancelled" (:status (core/get-run system run-id)))
-                                         (core/get-run system run-id))
+            cancelled-run (wait-until #(when (= "cancelled" (:status (system/get-run system run-id)))
+                                         (system/get-run system run-id))
                                       30000)]
         (is (some #(= "completed" (:status %)) commands))
         (is (some #(= "task" (:checkpoint-type %)) checkpoints))
@@ -108,9 +108,9 @@
                   output-events))
         (is cancelled-run))
       (finally
-        (when (get-in (core/runner-status system run-id) [:alive])
-          (core/signal-run! system run-id {:command-type :kill}))
-        (core/stop-api! system)
+        (when (get-in (system/runner-status system run-id) [:alive])
+          (system/signal-run! system run-id {:command-type :kill}))
+        (system/stop-api! system)
         (io/delete-file path true)))))
 
 (deftest docker-child-runtime-e2e-test

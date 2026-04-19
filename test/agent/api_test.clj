@@ -1,7 +1,7 @@
 (ns agent.api-test
   (:require
    [agent.api :as api]
-   [agent.core :as core]
+   [agent.system :as system]
    [agent.llm.core :as llm-core]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
@@ -121,22 +121,22 @@
   (let [path (temp-db-path)
         port (free-port)
         base-url (str "http://127.0.0.1:" port)
-        base-system (core/create-system)
+        base-system (system/create-system)
         messages* (atom nil)
         store (sqlite/create-store {:path path})
-        event-bus (core/create-event-bus)
-        event-sink (core/create-event-sink store event-bus)
-        runtime-service (core/create-runtime-service store event-sink)
+        event-bus (system/create-event-bus)
+        event-sink (system/create-event-sink store event-bus)
+        runtime-service (system/create-runtime-service store event-sink)
         system (assoc base-system
                       :llm-provider (->TestProvider messages*)
                       :store store
                       :event-bus event-bus
                       :event-sink event-sink
-                      :tool-registry (core/create-tool-registry (:tools (:config base-system)) event-sink store)
+                      :tool-registry (system/create-tool-registry (:tools (:config base-system)) event-sink store)
                       :memory-service (memory/create-memory-service (:memory (:config base-system)) store)
                       :runtime-service runtime-service
-                      :runner-registry (core/create-runner-registry runtime-service)
-                      :orchestrator (core/create-orchestrator (:orchestrator (:config base-system)) event-sink)
+                      :runner-registry (system/create-runner-registry runtime-service)
+                      :orchestrator (system/create-orchestrator (:orchestrator (:config base-system)) event-sink)
                       :config (assoc (:config base-system)
                                      :api {:host "127.0.0.1" :port port}
                                      :storage {:sqlite {:path path}}))
@@ -157,29 +157,29 @@
             created-run (http-post (str base-url "/v1/runs")
                                    {:agent_id "runner-agent"
                                     :name "runner"
-                                    :substrate "local-process"
+                                    :substrate "local-unsandboxed"
                                     :runner_options {:command ["sh" "-lc" "sleep 30"]
                                                      :working-dir "."}
                                     :auto_launch true})
             created-run-body (json/parse-string (:body created-run) true)
             run-id (get-in created-run-body [:data :id])
-            _ (core/register-run! system run-id
+            _ (system/register-run! system run-id
                                   {:capabilities [:chat]
                                    :network-identity {:logical-id "agent://runner"}
                                    :runner-metadata {:pid 100}})
-            _ (core/heartbeat-run! system run-id
+            _ (system/heartbeat-run! system run-id
                                    {:sequence-no 1
                                     :status :running
                                     :metrics {:cpu 0.1}
-                                    :lease-id (get-in (core/get-run system run-id) [:lease :id])})
-            _ (core/checkpoint-run! system run-id
+                                    :lease-id (get-in (system/get-run system run-id) [:lease :id])})
+            _ (system/checkpoint-run! system run-id
                                     {:sequence-no 1
                                      :checkpoint-type :state
                                      :state {:step "exec"}})
-            command-entry (core/enqueue-run-command! system run-id
+            command-entry (system/enqueue-run-command! system run-id
                                                      {:command-type :pause
                                                       :payload {:reason "test"}})
-            _ (core/log-event! system
+            _ (system/log-event! system
                                {:event-type :agent.run.output
                                 :entity-type :agent_run
                                 :entity-id run-id
@@ -401,7 +401,7 @@
         (is (= "mounted-dev" (get-in fetched-docker-run-body [:data :container_contract :image-mode])))
         (is (= 201 (:status created-run)))
         (is (= "launched" (get-in created-run-body [:data :status])))
-        (is (= "local-process" (get-in created-run-body [:data :substrate])))
+        (is (= "local-unsandboxed" (get-in created-run-body [:data :substrate])))
         (is (= 200 (:status fetched-run)))
         (is (= true (get-in fetched-run-body [:data :runner_status :alive])))
         (is (number? (get-in fetched-run-body [:data :runner_status :pid])))
@@ -582,41 +582,41 @@
   (let [path (temp-db-path)
         port (free-port)
         base-url (str "http://127.0.0.1:" port)
-        base-system (core/create-system)
+        base-system (system/create-system)
         store (sqlite/create-store {:path path})
-        event-bus (core/create-event-bus)
-        event-sink (core/create-event-sink store event-bus)
-        runtime-service (core/create-runtime-service store event-sink)
+        event-bus (system/create-event-bus)
+        event-sink (system/create-event-sink store event-bus)
+        runtime-service (system/create-runtime-service store event-sink)
         system (assoc base-system
                       :llm-provider (->TestProvider (atom nil))
                       :store store
                       :event-bus event-bus
                       :event-sink event-sink
                       :runtime-service runtime-service
-                      :runner-registry (core/create-runner-registry runtime-service)
+                      :runner-registry (system/create-runner-registry runtime-service)
                       :config (assoc (:config base-system)
                                      :api {:host "127.0.0.1" :port port}
                                      :storage {:sqlite {:path path}}))
         server (api/start-server! system {:host "127.0.0.1" :port port})]
     (try
-      (let [run (core/request-run! system {:agent-id "stream-agent"
+      (let [run (system/request-run! system {:agent-id "stream-agent"
                                            :name "stream-run"
-                                           :substrate :local-process
+                                           :substrate :local-unsandboxed
                                            :requested-by "tester"})
             run-id (:id run)
             stream-lines (read-sse-data-lines
                           (str base-url "/v1/runs/" run-id "/stream")
                           6
                           #(do
-                             (core/register-run! system run-id
+                             (system/register-run! system run-id
                                                  {:capabilities [:chat]
                                                   :network-identity {:logical-id "agent://stream"}})
-                             (core/heartbeat-run! system run-id
+                             (system/heartbeat-run! system run-id
                                                   {:sequence-no 1
                                                    :status :running
                                                    :metrics {:phase "boot"}
-                                                   :lease-id (get-in (core/get-run system run-id) [:lease :id])})
-                             (core/log-event! system
+                                                   :lease-id (get-in (system/get-run system run-id) [:lease :id])})
+                             (system/log-event! system
                                               {:event-type :agent.run.output
                                                :entity-type :agent_run
                                                :entity-id run-id

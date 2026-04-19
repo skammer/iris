@@ -8,6 +8,7 @@
    [agent.broker.core :as broker]
    [agent.channels.core :as channel-adapters]
    [agent.kernel :as kernel]
+   [agent.kernel.ops :as kernel-ops]
    [agent.kernel.runtime :as kernel-runtime]
    [agent.llm.core :as llm-core]
    [agent.logging :as logging]
@@ -1079,41 +1080,49 @@
                        directives)
      :receipts (vec (or (:receipts body) []))}))
 
+(defrecord ApiKernelOps [system]
+  kernel-ops/KernelOps
+  (spawn-task-worker! [_ {:keys [task name role capability-bundle memory-scopes budgets system-prompt parent-id]}]
+    (orchestrator/spawn-agent! (:orchestrator system)
+                               {:name name
+                                :kind "worker"
+                                :role role
+                                :parent-id parent-id
+                                :system-prompt system-prompt
+                                :capabilities (vec (or (:capabilities capability-bundle) []))
+                                :tool-access (vec (or (:tool-access capability-bundle) []))
+                                :memory-scopes (vec memory-scopes)
+                                :budgets budgets
+                                :task task}))
+  (execute-agent-tool! [_ target-agent-id tool-name input context]
+    (let [target-agent (orchestrator/get-agent (:orchestrator system) target-agent-id)]
+      (when-not target-agent
+        (throw (ex-info "Agent not found" {:type :agent-not-found
+                                           :agent-id target-agent-id})))
+      (tools/execute-tool (:tool-registry system)
+                          tool-name
+                          input
+                          (merge context
+                                 {:allowed-tools (set (:tool-access target-agent))
+                                  :user (or (:user context) (str "agent:" target-agent-id))}))))
+  (send-agent-message! [_ agent-id message]
+    (orchestrator/send-agent-message! (:orchestrator system)
+                                      (:llm-provider system)
+                                      agent-id
+                                      message))
+  (patch-agent-state! [_ agent-id patch]
+    (orchestrator/patch-agent-state! (:orchestrator system) agent-id patch))
+  (set-agent-status! [_ agent-id status]
+    (orchestrator/set-agent-status! (:orchestrator system) agent-id status))
+  (emit-kernel-event! [_ event]
+    ((:event-sink system) event)))
+
 (defn- handle-agent-step-execute [system exchange agent-id]
   (let [agent (orchestrator/get-agent (:orchestrator system) agent-id)
         step (normalize-step-body (read-json-body exchange))]
     (when-not agent
       (throw (api-error 404 "agent_not_found" "Agent not found")))
-    (let [ops {:spawn-task-worker! (fn [{:keys [task name role capability-bundle memory-scopes budgets system-prompt parent-id]}]
-                                     (orchestrator/spawn-agent! (:orchestrator system)
-                                                                {:name name
-                                                                 :kind "worker"
-                                                                 :role role
-                                                                 :parent-id parent-id
-                                                                 :system-prompt system-prompt
-                                                                 :capabilities (vec (or (:capabilities capability-bundle) []))
-                                                                 :tool-access (vec (or (:tool-access capability-bundle) []))
-                                                                 :memory-scopes (vec memory-scopes)
-                                                                 :budgets budgets
-                                                                 :task task}))
-               :execute-agent-tool! (fn [target-agent-id tool-name input context]
-                                      (let [target-agent (orchestrator/get-agent (:orchestrator system) target-agent-id)]
-                                        (when-not target-agent
-                                          (throw (ex-info "Agent not found" {:type :agent-not-found
-                                                                             :agent-id target-agent-id})))
-                                        (tools/execute-tool (:tool-registry system)
-                                                            tool-name
-                                                            input
-                                                            (merge context
-                                                                   {:allowed-tools (set (:tool-access target-agent))
-                                                                    :user (or (:user context) (str "agent:" target-agent-id))}))))
-               :send-agent-message! #(orchestrator/send-agent-message! (:orchestrator system)
-                                                                       (:llm-provider system)
-                                                                       %1
-                                                                       %2)
-               :patch-agent-state! #(orchestrator/patch-agent-state! (:orchestrator system) %1 %2)
-               :set-agent-status! #(orchestrator/set-agent-status! (:orchestrator system) %1 %2)
-               :event-sink (:event-sink system)}]
+    (let [ops (->ApiKernelOps system)]
       (write-json! exchange 200
                    {:data (kernel-runtime/execute-step! ops agent-id step)}))))
 
@@ -1441,7 +1450,7 @@
     {:agent-id (:agent_id body)
      :parent-run-id (:parent_run_id body)
      :name (:name body)
-     :substrate (or (some-> (:substrate body) keyword) :local-process)
+     :substrate (or (some-> (:substrate body) keyword) :local-unsandboxed)
      :capabilities (or capabilities [])
      :network-identity network-identity
      :runner-options runner-options
@@ -1901,7 +1910,7 @@
         run (system-request-run! system
                                  {:agent-id (not-empty (:agent_id body))
                                   :name (not-empty (:name body))
-                                  :substrate (keyword (or (:substrate body) "local-process"))
+                                  :substrate (keyword (or (:substrate body) "local-unsandboxed"))
                                   :runner-options (cond-> {:working-dir (or (:working_dir body) ".")}
                                                     (split-command-optional (:command body))
                                                     (assoc :command (split-command-optional (:command body)))

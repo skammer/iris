@@ -2,7 +2,8 @@
   "macOS Seatbelt-backed runner via sandbox-exec."
   (:require
    [agent.runners.core :as runners]
-   [agent.runners.local-process :as local-process]
+   [agent.runners.local-unsandboxed :as local-unsandboxed]
+   [agent.runners.policy :as policy]
    [clojure.java.io :as io]
    [clojure.string :as str]))
 
@@ -89,16 +90,16 @@
 (defrecord SeatbeltRunner [delegate sandbox-exec-binary]
   runners/IRunner
   (launch [_ run-spec]
-    (let [runner-options (:runner-options run-spec)
+    (let [run-spec (policy/validate-launch-spec run-spec)
+          runner-options (:runner-options run-spec)
           host-working-dir (absolute-path (or (:host-working-dir runner-options)
                                               (:working-dir runner-options)
                                               "."))
-          profile-string (or (:profile-string runner-options)
-                             (build-seatbelt-profile
-                              {:working-dir host-working-dir
-                               :read-only-paths (:read-only-paths runner-options)
-                               :read-write-paths (:read-write-paths runner-options)
-                               :allow-network? (true? (:allow-network? runner-options))}))
+          profile-string (build-seatbelt-profile
+                          {:working-dir host-working-dir
+                           :read-only-paths (:read-only-paths runner-options)
+                           :read-write-paths (:read-write-paths runner-options)
+                           :allow-network? (true? (:allow-network? runner-options))})
           argv (build-seatbelt-argv
                 {:sandbox-exec-binary (or (:sandbox-exec-binary runner-options)
                                           sandbox-exec-binary)
@@ -122,5 +123,5 @@
   ([] (create-seatbelt-runner {}))
   ([{:keys [delegate sandbox-exec-binary]
      :or {sandbox-exec-binary "/usr/bin/sandbox-exec"}}]
-   (->SeatbeltRunner (or delegate (local-process/create-local-process-runner))
+   (->SeatbeltRunner (or delegate (local-unsandboxed/create-local-unsandboxed-runner))
                      sandbox-exec-binary)))

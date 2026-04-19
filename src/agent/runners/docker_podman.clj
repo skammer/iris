@@ -2,7 +2,8 @@
   "Docker/Podman-backed runner."
   (:require
    [agent.runners.core :as runners]
-   [agent.runners.local-process :as local-process]
+   [agent.runners.local-unsandboxed :as local-unsandboxed]
+   [agent.runners.policy :as policy]
    [clojure.string :as str]))
 
 (defn- normalize-command [command]
@@ -50,7 +51,7 @@
            (str/replace #"[^a-z0-9_.-]+" "-"))))
 
 (defn build-container-argv
-  [{:keys [engine-binary run-id image working-dir command mounts env share-network? pull-policy]
+  [{:keys [engine-binary run-id image working-dir command mounts env share-network? pull-policy user]
     :or {working-dir "/workspace"
          mounts []
          env {}
@@ -62,6 +63,7 @@
       [engine-binary "run" "--rm" "--name" (container-name (keyword engine-binary) run-id)]
       (when (some? pull-policy) ["--pull" (normalize-name pull-policy)])
       (when-not share-network? ["--network" "none"])
+      (when (some? user) ["--user" user])
       ["-w" working-dir]
       (mapcat mount-args mounts)
       (env-args env)
@@ -71,7 +73,8 @@
 (defrecord DockerPodmanRunner [delegate engine-binary]
   runners/IRunner
   (launch [_ run-spec]
-    (let [runner-options (:runner-options run-spec)
+    (let [run-spec (policy/validate-launch-spec run-spec)
+          runner-options (:runner-options run-spec)
           argv (build-container-argv
                 {:engine-binary engine-binary
                  :run-id (:run-id run-spec)
@@ -80,6 +83,7 @@
                                   (:working-dir runner-options)
                                   "/workspace")
                  :pull-policy (:pull-policy runner-options)
+                 :user (:user runner-options)
                  :command (:command runner-options)
                  :mounts (:mounts runner-options)
                  :env (container-env run-spec runner-options)
@@ -99,7 +103,7 @@
   ([] (create-docker-podman-runner {}))
   ([{:keys [delegate engine-binary]
      :or {engine-binary "docker"}}]
-   (->DockerPodmanRunner (or delegate (local-process/create-local-process-runner))
+   (->DockerPodmanRunner (or delegate (local-unsandboxed/create-local-unsandboxed-runner))
                          engine-binary)))
 
 (defn image-contract

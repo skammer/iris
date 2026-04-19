@@ -14,11 +14,14 @@
                :mounts [{:source "/tmp/work" :target "/workspace" :mode :rw}
                         {:source "/tmp/cache" :target "/cache" :mode :ro}]
                :env {"A" "1" "B" "two"}
+               :user "1000:1000"
                :command ["clojure" "-M" "-m" "agent.runtime.child"]})]
     (is (= "docker" (first argv)))
     (is (some #{"--rm"} argv))
     (is (some #{"--network"} argv))
     (is (some #{"none"} argv))
+    (is (some #{"--user"} argv))
+    (is (some #{"1000:1000"} argv))
     (is (some #{"clj-agent:test"} argv))
     (is (some #{"-v"} argv))
     (is (some #{"A=1"} argv))

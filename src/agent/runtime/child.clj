@@ -10,7 +10,8 @@
    [clojure.java.io :as io]
    [clojure.string :as str])
   (:import
-   (java.lang ProcessHandle Thread)))
+   (java.lang ProcessHandle Thread)
+   (java.util.concurrent CountDownLatch TimeUnit)))
 
 (defn current-child-command
   []
@@ -49,6 +50,15 @@
     (if (= :http (:type control))
       (control-client/heartbeat! (:client control) (:run-id bootstrap-spec) payload)
       (runtime/heartbeat! (:runtime-service control) (:run-id bootstrap-spec) payload))))
+
+(defn- stopped? [^CountDownLatch stop-latch]
+  (zero? (.getCount stop-latch)))
+
+(defn- stop! [^CountDownLatch stop-latch]
+  (.countDown stop-latch))
+
+(defn- await-stop [^CountDownLatch stop-latch interval-ms]
+  (.await stop-latch (long interval-ms) TimeUnit/MILLISECONDS))
 
 (defn- checkpoint! [control state bootstrap-spec checkpoint-type payload]
   (let [checkpoint {:sequence-no (next-seq! state :checkpoint-seq)
@@ -98,7 +108,7 @@
     (flush)))
 
 (defn- handle-command!
-  [control state bootstrap-spec command]
+  [control state stop-latch bootstrap-spec command]
   (let [run-id (:run-id bootstrap-spec)
         command-id (:id command)
         command-type (keyword (:command-type command))
@@ -144,7 +154,7 @@
                        {:reason "cancelled"})
           (complete-command! control run-id command-id :completed nil)
           (transition-run! control run-id :cancelled)
-          (swap! state assoc :running? false))
+          (stop! stop-latch))
 
         (complete-command! control run-id command-id :failed
                            (str "unsupported_command:" (name command-type))))
@@ -181,8 +191,8 @@
   (let [control (create-control {:sqlite-path sqlite-path
                                  :control-url control-url
                                  :control-token control-token})
-        state (atom {:running? true
-                     :heartbeat-seq 0
+        stop-latch (CountDownLatch. 1)
+        state (atom {:heartbeat-seq 0
                      :checkpoint-seq (long (:checkpoint-seq bootstrap-spec 0))})
         heartbeat-interval-ms (long (:heartbeat-interval-ms bootstrap-spec 10000))
         command-poll-interval-ms (long (:command-poll-interval-ms bootstrap-spec 5000))]
@@ -204,32 +214,30 @@
     (let [heartbeat-loop
           (future
             (try
-              (while (:running? @state)
-                (Thread/sleep heartbeat-interval-ms)
-                (when (:running? @state)
-                  (heartbeat! control state bootstrap-spec {:phase "idle"})))
+              (while (not (await-stop stop-latch heartbeat-interval-ms))
+                (heartbeat! control state bootstrap-spec {:phase "idle"}))
               (catch InterruptedException _
                 nil)))]
       (try
-        (while (:running? @state)
+        (loop []
           (doseq [command (pending-commands control run-id)]
-            (when (:running? @state)
-              (handle-command! control state bootstrap-spec command)))
-          (when (:running? @state)
-            (Thread/sleep command-poll-interval-ms)))
+            (when-not (stopped? stop-latch)
+              (handle-command! control state stop-latch bootstrap-spec command)))
+          (when-not (await-stop stop-latch command-poll-interval-ms)
+            (recur)))
         (catch Exception ex
           (log-err! "child-runtime" "failed" run-id (.getMessage ex))
           (swap! state assoc :failed? true)
           (transition-run! control run-id :failed {:last-error (.getMessage ex)})
           (throw ex))
         (finally
-          (let [complete? (and (:running? @state)
+          (let [complete? (and (not (stopped? stop-latch))
                                (not (:failed? @state)))]
-          (swap! state assoc :running? false)
-          (future-cancel heartbeat-loop)
-          (when complete?
-            (transition-run! control run-id :completed))
-          (log-out! "child-runtime" "exit" run-id)))))))
+            (stop! stop-latch)
+            (future-cancel heartbeat-loop)
+            (when complete?
+              (transition-run! control run-id :completed))
+            (log-out! "child-runtime" "exit" run-id)))))))
 
 (defn -main
   [& _args]
