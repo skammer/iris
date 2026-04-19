@@ -31,11 +31,14 @@
   (str (trim-trailing-slash base-url) "/models"))
 
 (defn- completion-body [default-model messages opts]
-  {:model (or (:model opts) default-model)
-   :messages (llm-core/normalize-messages messages)
-   :temperature (or (:temperature opts) 0.2)
-   :max_tokens (or (:max-tokens opts) 1024)
-   :stream false})
+  (cond-> {:model (or (:model opts) default-model)
+           :messages (llm-core/normalize-messages messages)
+           :temperature (or (:temperature opts) 0.2)
+           :max_tokens (or (:max-tokens opts) 1024)
+           :stream false}
+    (:tools opts) (assoc :tools (:tools opts))
+    (:tool-choice opts) (assoc :tool_choice (:tool-choice opts))
+    (:cache_control opts) (assoc :cache_control (:cache_control opts))))
 
 (defn- stream-body [default-model messages opts]
   (assoc (completion-body default-model messages opts) :stream true))
@@ -51,12 +54,37 @@
     {:tokens (or (:total_tokens usage) 0)
      :prompt-tokens (or (:prompt_tokens usage) 0)
      :completion-tokens (or (:completion_tokens usage) 0)
+     :cached-tokens (or (get-in usage [:prompt_tokens_details :cached_tokens]) 0)
      :cost-usd nil}))
+
+(defn- retryable-http-error [response]
+  (llm-core/llm-error :http-error
+                      (str "LLM request failed: " (:status response))
+                      {:status (:status response)
+                       :headers (:headers response)
+                       :body (:body response)}))
+
+(defn- checked-response [response]
+  (if (<= 200 (:status response 0) 299)
+    response
+    (throw (retryable-http-error response))))
+
+(defn- post-json [url request]
+  (llm-core/retry-with-backoff
+   #(checked-response (http/post url (assoc request :throw-exceptions false)))))
+
+(defn- message->turn [body]
+  (let [message (-> body :choices first :message)]
+    {:role (:role message "assistant")
+     :content (:content message)
+     :tool-calls (vec (or (:tool_calls message) []))
+     :usage (usage->estimate body)
+     :raw message}))
 
 (defrecord OpenAICompatibleProvider [base-url api-key default-model site-url app-name extra-headers config]
   llm-core/ILLMProvider
   (complete [_ messages opts]
-    (let [response (http/post (chat-url base-url)
+    (let [response (post-json (chat-url base-url)
                               {:headers (bearer-headers {:api-key api-key
                                                          :site-url site-url
                                                          :app-name app-name
@@ -69,27 +97,29 @@
     (let [ch (async/chan)]
       (async/thread
         (try
-          (let [response (http/post (chat-url base-url)
-                                    {:headers (bearer-headers {:api-key api-key
-                                                               :site-url site-url
-                                                               :app-name app-name
-                                                               :extra-headers extra-headers})
-                                     :body (json/generate-string (stream-body default-model messages opts))
-                                     :as :stream})]
+          (let [response (checked-response
+                          (http/post (chat-url base-url)
+                                     {:headers (bearer-headers {:api-key api-key
+                                                                :site-url site-url
+                                                                :app-name app-name
+                                                                :extra-headers extra-headers})
+                                      :body (json/generate-string (stream-body default-model messages opts))
+                                      :throw-exceptions false
+                                      :as :stream}))]
             (with-open [reader (io/reader (:body response))]
               (doseq [line (line-seq reader)]
                 (when-let [event (parse-sse-line line)]
                   (when-let [content (-> event :choices first :delta :content)]
                     (async/>!! ch content))))))
           (catch Exception e
-            (async/>!! ch {:error (.getMessage e)}))
+            (async/>!! ch (llm-core/stream-error-event e)))
           (finally
             (async/close! ch))))
       ch))
 
   (embed [_ text opts]
     (let [input (if (string? text) [text] text)
-          response (http/post (embeddings-url base-url)
+          response (post-json (embeddings-url base-url)
                               {:headers (bearer-headers {:api-key api-key
                                                          :site-url site-url
                                                          :app-name app-name
@@ -124,6 +154,31 @@
     {:tokens (llm-core/count-tokens-estimate messages)
      :cost-usd nil
      :model model}))
+
+(extend-type OpenAICompatibleProvider
+  llm-core/ILLMProviderWithTools
+  (complete-with-tools [this messages tools opts]
+    (let [response (post-json (chat-url (:base-url this))
+                              {:headers (bearer-headers {:api-key (:api-key this)
+                                                         :site-url (:site-url this)
+                                                         :app-name (:app-name this)
+                                                         :extra-headers (:extra-headers this)})
+                               :body (json/generate-string
+                                      (completion-body (:default-model this)
+                                                       messages
+                                                       (assoc opts :tools tools)))
+                               :as :json})]
+      (message->turn (:body response)))))
+
+(extend-type OpenAICompatibleProvider
+  llm-core/ILLMProviderWithCache
+  (with-cache-controls [_ request cache-controls]
+    (assoc request :cache_control cache-controls)))
+
+(extend-type OpenAICompatibleProvider
+  llm-core/ILLMProviderWithUsage
+  (usage [_ response _opts]
+    (usage->estimate response)))
 
 (extend-type OpenAICompatibleProvider
   llm-core/ILLMProviderWithConfig

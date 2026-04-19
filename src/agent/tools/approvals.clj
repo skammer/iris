@@ -59,8 +59,7 @@
     (map? input)
     (->> input
          (remove (fn [[k v]]
-                   (or (nil? v)
-                       (and (= k :argv) (vector? v)))))
+                   (nil? v)))
          (map (fn [[k v]]
                 [k (cond
                      (keyword? v) (name v)

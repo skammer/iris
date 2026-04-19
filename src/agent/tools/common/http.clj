@@ -4,7 +4,9 @@
    [agent.tools.core :as tools]
    [cheshire.core :as json]
    [clj-http.client :as http]
-   [clojure.string :as str]))
+   [clojure.string :as str])
+  (:import
+   [java.net Inet4Address Inet6Address InetAddress URI]))
 
 (def ^:private allowed-methods
   #{:get :post :put :patch :delete :head})
@@ -21,6 +23,60 @@
     (catch Exception _
       body)))
 
+(defn- parse-uri! [url]
+  (try
+    (URI. url)
+    (catch Exception _
+      (throw (tools/validation-error "url must be an absolute HTTP(S) URL"
+                                     {:url url})))))
+
+(defn- ipv4-octets [^Inet4Address address]
+  (mapv #(bit-and 0xff %) (.getAddress address)))
+
+(defn- private-ip? [^InetAddress address]
+  (or (.isAnyLocalAddress address)
+      (.isLoopbackAddress address)
+      (.isLinkLocalAddress address)
+      (.isSiteLocalAddress address)
+      (.isMulticastAddress address)
+      (and (instance? Inet4Address address)
+           (let [[a b] (ipv4-octets address)]
+             (or (= [169 254] [a b])
+                 (and (= a 100) (<= 64 b 127)))))
+      (and (instance? Inet6Address address)
+           (let [first-byte (bit-and 0xff (aget (.getAddress address) 0))]
+             (= 0xfc (bit-and 0xfe first-byte))))))
+
+(defn- default-resolve-host [host]
+  (vec (InetAddress/getAllByName host)))
+
+(defn- response-location [response]
+  (or (get-in response [:headers "Location"])
+      (get-in response [:headers "location"])))
+
+(defn- validate-url! [config url]
+  (let [uri (parse-uri! url)
+        scheme (some-> (.getScheme uri) str/lower-case)
+        host (.getHost uri)]
+    (when-not (#{"http" "https"} scheme)
+      (throw (tools/validation-error "url scheme must be http or https"
+                                     {:url url
+                                      :scheme scheme})))
+    (when (str/blank? host)
+      (throw (tools/validation-error "url host is required" {:url url})))
+    (when-not (:allow-private? config)
+      (let [addresses ((:resolve-host-fn config) host)]
+        (when (empty? addresses)
+          (throw (tools/validation-error "url host did not resolve" {:url url
+                                                                     :host host})))
+        (when-let [blocked (some #(when (private-ip? %) %) addresses)]
+          (throw (tools/tool-error :url-not-allowed
+                                   "URL resolves to non-public address"
+                                   {:url url
+                                    :host host
+                                    :address (.getHostAddress ^InetAddress blocked)})))))
+    url))
+
 (defn- validate-input [input]
   (let [url (:url input)
         method (normalize-method (or (:method input) :get))]
@@ -35,7 +91,10 @@
 (defn create-http-tool
   [opts]
   (let [config (merge {:default-headers {"User-Agent" "clj-agent/0.1"}
-                       :timeout-ms 30000}
+                       :timeout-ms 30000
+                       :allow-private? false
+                       :max-redirects 3
+                       :resolve-host-fn default-resolve-host}
                       opts)]
     (tools/create-tool
      {:description
@@ -45,28 +104,57 @@
        :category :api
        :timeout-ms (:timeout-ms config)
        :required-permissions #{:http-request}
-       :input-schema {:required [:url]
-                      :optional [:method :headers :params :body :timeout-ms]})
+       :input-schema [:map {:closed true}
+                      [:url :string]
+                      [:method {:optional true}
+                       [:or
+                        [:enum :get :post :put :patch :delete :head]
+                        [:enum "get" "post" "put" "patch" "delete" "head"
+                         "GET" "POST" "PUT" "PATCH" "DELETE" "HEAD"]]]
+                      [:headers {:optional true} [:map-of :string :string]]
+                      [:params {:optional true} [:map-of :any :any]]
+                      [:body {:optional true} :any]
+                      [:timeout-ms {:optional true} [:int {:min 1}]]])
       :validate-fn validate-input
       :health-fn (fn []
                    {:healthy true
-                    :details {:timeout-ms (:timeout-ms config)}})
+                    :details {:timeout-ms (:timeout-ms config)
+                              :allow-private? (:allow-private? config)
+                              :max-redirects (:max-redirects config)}})
       :execute-fn
       (fn [input _context]
         (let [timeout-ms (or (:timeout-ms input) (:timeout-ms config))
-              request-opts {:method (:method input)
-                            :url (:url input)
-                            :headers (merge (:default-headers config) (:headers input))
-                            :query-params (:params input)
-                            :socket-timeout timeout-ms
-                            :conn-timeout timeout-ms
-                            :throw-exceptions false}
-              request-opts (cond-> request-opts
-                             (contains? input :body)
-                             (assoc :body (json/generate-string (:body input))
-                                    :content-type :json
-                                    :accept :json))
-              response (http/request request-opts)
+              request-opts (fn [url]
+                             (cond-> {:method (:method input)
+                                      :url url
+                                      :headers (merge (:default-headers config) (:headers input))
+                                      :query-params (:params input)
+                                      :socket-timeout timeout-ms
+                                      :conn-timeout timeout-ms
+                                      :follow-redirects false
+                                      :throw-exceptions false}
+                               (contains? input :body)
+                               (assoc :body (json/generate-string (:body input))
+                                      :content-type :json
+                                      :accept :json)))
+              response (loop [url (:url input)
+                              redirects-left (:max-redirects config)]
+                         (validate-url! config url)
+                         (let [response (http/request (request-opts url))
+                               status (:status response)]
+                           (if (and (<= 300 status 399)
+                                    (response-location response))
+                             (do
+                               (when (zero? redirects-left)
+                                 (throw (tools/tool-error :too-many-redirects
+                                                          "HTTP redirect limit exceeded"
+                                                          {:url url
+                                                           :max-redirects (:max-redirects config)})))
+                               (let [next-url (str (.resolve (URI. url)
+                                                              (response-location response)))]
+                                 (validate-url! config next-url)
+                                 (recur next-url (dec redirects-left))))
+                             response)))
               status (:status response)
               parsed-body (some-> (:body response) parse-response-body)]
           (if (<= 200 status 299)

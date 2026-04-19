@@ -3,7 +3,12 @@
    [agent.tools.common.http :as http-tool]
    [agent.tools.core :as tools]
    [clj-http.client :as http]
-   [clojure.test :refer :all]))
+   [clojure.test :refer :all])
+  (:import
+   [java.net InetAddress]))
+
+(defn public-resolver [_]
+  [(InetAddress/getByName "93.184.216.34")])
 
 (deftest http-tool-executes-successful-request
   (with-redefs [http/request (fn [request]
@@ -12,7 +17,8 @@
                                 :body "{\"ok\":true}"
                                 :request request})]
     (let [registry (-> (tools/create-registry)
-                       (tools/register-tool (http-tool/create-http-tool {:default-headers {"X-Test" "1"}})))
+                       (tools/register-tool (http-tool/create-http-tool {:default-headers {"X-Test" "1"}
+                                                                         :resolve-host-fn public-resolver})))
           result (tools/execute-tool registry
                                      :http
                                      {:url "https://example.com"
@@ -27,7 +33,7 @@
                                 :headers {}
                                 :body "{\"error\":\"boom\"}"})]
     (let [registry (-> (tools/create-registry)
-                       (tools/register-tool (http-tool/create-http-tool {})))]
+                       (tools/register-tool (http-tool/create-http-tool {:resolve-host-fn public-resolver})))]
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"url must be a non-blank string"
                             (tools/execute-tool registry :http {:url ""} {:permissions #{:http-request}})))
@@ -37,3 +43,15 @@
                                                 :http
                                                 {:url "https://example.com"}
                                                 {:permissions #{:http-request}}))))))
+
+(deftest http-tool-blocks-private-resolutions
+  (let [registry (-> (tools/create-registry)
+                     (tools/register-tool
+                      (http-tool/create-http-tool {:resolve-host-fn (fn [_]
+                                                                      [(InetAddress/getByName "127.0.0.1")])})))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"non-public"
+                          (tools/execute-tool registry
+                                              :http
+                                              {:url "https://example.com"}
+                                              {:permissions #{:http-request}})))))

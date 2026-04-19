@@ -132,7 +132,11 @@
                       :store store
                       :event-bus event-bus
                       :event-sink event-sink
-                      :tool-registry (system/create-tool-registry (:tools (:config base-system)) event-sink store)
+                      :tool-registry (system/create-tool-registry (assoc-in (:tools (:config base-system))
+                                                                           [:http :allow-private?]
+                                                                           true)
+                                                                  event-sink
+                                                                  store)
                       :memory-service (memory/create-memory-service (:memory (:config base-system)) store)
                       :runtime-service runtime-service
                       :runner-registry (system/create-runner-registry runtime-service)
@@ -222,10 +226,10 @@
                                   :permissions ["filesystem-read"]})
             tool-exec-body (json/parse-string (:body tool-exec) true)
             shell-exec-blocked (http-post (str base-url "/v1/tools/shell/execute")
-                                          {:input {:command "printf hello"}})
+                                          {:input {:argv ["printf" "hello"]}})
             shell-approval-create (http-post (str base-url "/v1/tool-approvals")
                                              {:tool "shell"
-                                              :input {:command "printf hello"}
+                                              :input {:argv ["printf" "hello"]}
                                               :reason "test shell"})
             shell-approval-create-body (json/parse-string (:body shell-approval-create) true)
             approval-id (get-in shell-approval-create-body [:data :id])
@@ -233,7 +237,7 @@
                                               {:actor "tester"
                                                :reason "ok"})
             shell-approved-exec (http-post (str base-url "/v1/tools/shell/execute")
-                                           {:input {:command "printf hello"}
+                                           {:input {:argv ["printf" "hello"]}
                                             :approval_id approval-id})
             shell-approved-exec-body (json/parse-string (:body shell-approved-exec) true)
             skills (http-get (str base-url "/v1/skills"))

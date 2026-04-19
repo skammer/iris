@@ -158,7 +158,7 @@
         shell-cfg (get cfg :shell)
         registry (tools/create-registry
                   {:event-sink event-sink
-                   :before-execute (tool-approvals/create-policy-hook store)
+                   :approval-check (tool-approvals/create-policy-hook store)
                    :after-execute (fn [_] nil)})]
     (cond-> registry
       (not= false (:enabled http-cfg))
