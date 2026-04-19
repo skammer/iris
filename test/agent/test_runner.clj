@@ -20,6 +20,7 @@
    [agent.skills-test]
    [agent.tools.common.fs-test]
    [agent.llm.providers.ollama-test]
+   [agent.llm.core-test]
    [agent.llm.providers.openai-compatible-test]
    [agent.tools.common.http-test]
     [agent.tools.common.shell-test]
@@ -45,6 +46,7 @@
     agent.skills-test
     agent.tools.common.fs-test
     agent.llm.providers.ollama-test
+    agent.llm.core-test
     agent.llm.providers.openai-compatible-test
     agent.tools.common.http-test
     agent.tools.common.shell-test

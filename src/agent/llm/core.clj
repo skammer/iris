@@ -2,7 +2,11 @@
   "Core LLM protocols and interfaces for the agent system.
   Provides abstract interfaces for LLM providers with extended capabilities."
   (:require
-   [clojure.spec.alpha :as s]))
+   [clojure.spec.alpha :as s]
+   [clojure.string :as str])
+  (:import
+   [java.time ZonedDateTime]
+   [java.time.format DateTimeFormatter]))
 
 ;; ======================
 ;; Extended LLM Protocol
@@ -39,6 +43,22 @@
   (estimate-cost [this messages model]
     "Estimate cost for completing messages with model.
     Returns: map with :tokens, :cost-usd, etc."))
+
+(defprotocol ILLMProviderWithTools
+  "Optional tool-call capable provider API."
+  (complete-with-tools [this messages tools opts]
+    "Complete with provider-native tool definitions.
+    Returns structured content/tool-call/usage data."))
+
+(defprotocol ILLMProviderWithCache
+  "Optional provider API for prompt-cache controls."
+  (with-cache-controls [this request cache-controls]
+    "Attach provider-native cache controls to request data."))
+
+(defprotocol ILLMProviderWithUsage
+  "Optional provider API for normalized usage extraction."
+  (usage [this response opts]
+    "Return normalized usage map: prompt/completion/cached tokens and cost."))
 
 (defprotocol ILLMProviderWithConfig
   "Protocol for providers that support configuration updates."
@@ -154,6 +174,14 @@
             (not (string? (:content msg))) (update :content str)))
         messages))
 
+(defn validate-messages?
+  [messages]
+  (s/valid? ::messages messages))
+
+(def ProviderError :provider-error)
+(def ConfigurationError :configuration-error)
+(def ConnectionError :connection-error)
+
 (defn count-tokens-estimate
   "Estimate token count for messages (rough approximation).
   Uses 4 chars per token as a rough estimate."
@@ -190,22 +218,50 @@
   ([type message details]
    (ex-info message (merge {:type type} details))))
 
+(defn stream-error-event
+  [error]
+  {:type :error
+   :error (if (instance? Throwable error)
+            (.getMessage ^Throwable error)
+            (str error))})
+
+(defn- retry-after-ms [headers]
+  (when-let [value (or (get headers "Retry-After")
+                       (get headers "retry-after"))]
+    (or (try
+          (* 1000 (Long/parseLong (str/trim value)))
+          (catch Exception _ nil))
+        (try
+          (let [retry-at (ZonedDateTime/parse value DateTimeFormatter/RFC_1123_DATE_TIME)
+                now (ZonedDateTime/now)]
+            (max 0 (.toMillis (java.time.Duration/between now retry-at))))
+          (catch Exception _ nil)))))
+
+(defn retryable-status?
+  [status]
+  (contains? #{429 503} status))
+
+(defn- retryable-exception? [e]
+  (retryable-status? (:status (ex-data e))))
+
 (defn retry-with-backoff
-  "Retry function with exponential backoff."
+  "Retry function with exponential backoff and Retry-After support."
   [f & {:keys [max-retries initial-delay max-delay]
-        :or {max-retries 3 initial-delay 1000 max-delay 10000}}]
+        :or {max-retries 3 initial-delay 1000 max-delay 60000}}]
   (loop [retry 0
          delay initial-delay]
     (let [result (try
                    (f)
                    (catch Exception e
-                     (if (>= retry max-retries)
+                     (if (or (>= retry max-retries)
+                             (not (retryable-exception? e)))
                        (throw e)
                        e)))]
       (cond
         (not (instance? Exception result)) result
         :else (do
-                (Thread/sleep delay)
+                (Thread/sleep (or (retry-after-ms (:headers (ex-data result)))
+                                  delay))
                 (recur (inc retry)
                        (min (* delay 2) max-delay)))))))
 

@@ -5,8 +5,6 @@
    [clojure.java.io :as io]
    [clojure.string :as str]))
 
-(def ^:private shell-metachar-pattern #"[|&;<>$`(){}\[\]\\'\"]")
-
 (defn- canonical-path [path]
   (.getCanonicalPath (io/file path)))
 
@@ -26,28 +24,12 @@
     candidate))
 
 (defn- validate-input [input]
-  (cond
-    (vector? (:argv input))
-    (do
-      (when-not (and (seq (:argv input)) (every? string? (:argv input)))
-        (throw (tools/validation-error "argv must be a non-empty vector of strings" {:input input})))
-      (assoc input :argv (vec (:argv input))))
-
-    (and (string? (:command input)) (not (str/blank? (:command input))))
-    (let [command (str/trim (:command input))]
-      (when (re-find shell-metachar-pattern command)
-        (throw (tools/validation-error
-                "command contains unsupported shell metacharacters; use plain argv/command only"
-                {:command command})))
-      (let [argv (->> (str/split command #"\s+")
-                      (remove str/blank?)
-                      vec)]
-        (when (empty? argv)
-          (throw (tools/validation-error "command must not be empty" {:input input})))
-        (assoc input :argv argv)))
-
-    :else
-    (throw (tools/validation-error "command or argv is required" {:input input}))))
+  (when (contains? input :command)
+    (throw (tools/validation-error "command string is not supported; use argv"
+                                   {:input input})))
+  (when-not (and (vector? (:argv input)) (seq (:argv input)) (every? string? (:argv input)))
+    (throw (tools/validation-error "argv must be a non-empty vector of strings" {:input input})))
+  (assoc input :argv (vec (:argv input))))
 
 (defn- wait-for [^Process process timeout-ms]
   (.waitFor process timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS))
@@ -92,8 +74,12 @@
        :category :system
        :timeout-ms (:timeout-ms config)
        :required-permissions #{:shell-exec}
-       :input-schema {:required [:command]
-                      :optional [:argv :working-dir :timeout-ms]}
+       :input-schema [:map {:closed true}
+                      [:argv {:optional true} [:vector {:min 1} :string]]
+                      [:command {:optional true} :string]
+                      [:working-dir {:optional true} :string]
+                      [:timeout-ms {:optional true} [:int {:min 1}]]]
+       :sensitive true
        :source :builtin)
       :validate-fn validate-input
       :health-fn (fn []
@@ -110,9 +96,9 @@
               _ (ensure-allowed-command! config argv)
               process (.start (doto (ProcessBuilder. argv)
                                 (.directory (io/file working-dir))))
-              finished? (wait-for process timeout-ms)
               stdout (future (slurp-limited (.getInputStream process) (:max-output-bytes config)))
-              stderr (future (slurp-limited (.getErrorStream process) (:max-output-bytes config)))]
+              stderr (future (slurp-limited (.getErrorStream process) (:max-output-bytes config)))
+              finished? (wait-for process timeout-ms)]
           (when-not finished?
             (.destroyForcibly process)
             (throw (tools/tool-error :timeout
@@ -120,7 +106,6 @@
                                      {:argv argv
                                       :timeout-ms timeout-ms})))
           {:argv argv
-           :command (str/join " " argv)
            :working-dir working-dir
            :exit (.exitValue process)
            :stdout @stdout

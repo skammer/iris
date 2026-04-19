@@ -1728,12 +1728,15 @@
     (vector? value) (set (map keyword value))
     :else (throw (api-error 400 "bad_request" "permissions must be a string or vector of strings"))))
 
+(declare split-command-plain)
+
 (defn- tool-input-from-map [tool-name body]
   (case tool-name
     :fs (cond-> {:action (:action body)
                  :path (:path body)}
           (contains? body :content) (assoc :content (:content body)))
-    :shell (cond-> {:command (:command body)}
+    :shell (cond-> {:argv (or (:argv body)
+                              (split-command-plain (:command body)))}
              (not (str/blank? (:working_dir body))) (assoc :working-dir (:working_dir body)))
     (throw (api-error 400 "bad_request" "Unsupported tool"))))
 
@@ -1882,8 +1885,6 @@
   (let [trimmed (str/trim (or command ""))]
     (when (str/blank? trimmed)
       (throw (api-error 400 "bad_request" "command must be a non-blank string")))
-    (when (re-find #"[|&;<>$`(){}\[\]\\'\"]" trimmed)
-      (throw (api-error 400 "bad_request" "command contains unsupported shell metacharacters")))
     (vec (remove str/blank? (str/split trimmed #"\s+")))))
 
 (defn- split-command-optional [command]

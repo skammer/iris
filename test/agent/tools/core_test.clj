@@ -10,6 +10,7 @@
               {:description (tools/create-tool-description
                              :echo
                              "Echo tool"
+                             :input-schema [:map [:message :string]]
                              :required-permissions #{:echo}
                              :source :builtin)
                :validate-fn (fn [input]
@@ -42,6 +43,7 @@
               {:description (tools/create-tool-description
                              :echo
                              "Echo tool"
+                             :input-schema [:map [:message :string]]
                              :required-permissions #{:echo})
                :execute-fn (fn [input _context] input)})
         registry (-> (tools/create-registry
@@ -57,6 +59,7 @@
               {:description (tools/create-tool-description
                              :echo
                              "Echo tool"
+                             :input-schema [:map [:message :string]]
                              :required-permissions #{:echo})
                :execute-fn (fn [input _context] input)})
         registry (-> (tools/create-registry)
@@ -70,3 +73,23 @@
                           (tools/execute-tool registry :echo {:message "hi"}
                                               {:permissions #{:echo}
                                                :allowed-tools #{:http}})))))
+
+(deftest registry-requires-approval-policy-for-sensitive-tools-test
+  (let [tool (tools/create-tool
+              {:description (tools/create-tool-description
+                             :sensitive-echo
+                             "Sensitive echo"
+                             :input-schema [:map [:message :string]]
+                             :required-permissions #{:echo}
+                             :sensitive true)
+               :execute-fn (fn [input _context] input)})
+        registry (-> (tools/create-registry)
+                     (tools/register-tool tool))
+        approved-registry (tools/with-approval registry (fn [_] nil))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"requires approval policy"
+                          (tools/execute-tool registry :sensitive-echo {:message "hi"}
+                                              {:permissions #{:echo}})))
+    (is (= {:message "hi"}
+           (tools/execute-tool approved-registry :sensitive-echo {:message "hi"}
+                               {:permissions #{:echo}})))))

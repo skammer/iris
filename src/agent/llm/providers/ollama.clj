@@ -15,18 +15,32 @@
   (str (trim-trailing-slash base-url) path))
 
 (defn- chat-body [default-model keep-alive messages opts stream?]
-  {:model (or (:model opts) default-model)
-   :messages (llm-core/normalize-messages messages)
-   :stream stream?
-   :keep_alive (or (:keep-alive opts) keep-alive)
-   :options (cond-> {}
-              (:temperature opts) (assoc :temperature (:temperature opts))
-              (:max-tokens opts) (assoc :num_predict (:max-tokens opts)))})
+  (cond-> {:model (or (:model opts) default-model)
+           :messages (llm-core/normalize-messages messages)
+           :stream stream?
+           :keep_alive (or (:keep-alive opts) keep-alive)
+           :options (cond-> {}
+                      (:temperature opts) (assoc :temperature (:temperature opts))
+                      (:max-tokens opts) (assoc :num_predict (:max-tokens opts)))}
+    (:tools opts) (assoc :tools (:tools opts))))
+
+(defn- checked-response [response]
+  (if (<= 200 (:status response 0) 299)
+    response
+    (throw (llm-core/llm-error :http-error
+                               (str "Ollama request failed: " (:status response))
+                               {:status (:status response)
+                                :headers (:headers response)
+                                :body (:body response)}))))
+
+(defn- post-json [url request]
+  (llm-core/retry-with-backoff
+   #(checked-response (http/post url (assoc request :throw-exceptions false)))))
 
 (defrecord OllamaProvider [base-url default-model embedding-model keep-alive config]
   llm-core/ILLMProvider
   (complete [_ messages opts]
-    (let [response (http/post (endpoint base-url "/api/chat")
+    (let [response (post-json (endpoint base-url "/api/chat")
                               {:body (json/generate-string (chat-body default-model keep-alive messages opts false))
                                :content-type :json
                                :accept :json
@@ -37,11 +51,13 @@
     (let [ch (async/chan)]
       (async/thread
         (try
-          (let [response (http/post (endpoint base-url "/api/chat")
-                                    {:body (json/generate-string (chat-body default-model keep-alive messages opts true))
-                                     :content-type :json
-                                     :accept :json
-                                     :as :stream})]
+          (let [response (checked-response
+                          (http/post (endpoint base-url "/api/chat")
+                                     {:body (json/generate-string (chat-body default-model keep-alive messages opts true))
+                                      :content-type :json
+                                      :accept :json
+                                      :throw-exceptions false
+                                      :as :stream}))]
             (with-open [reader (io/reader (:body response))]
               (doseq [line (line-seq reader)]
                 (when-not (str/blank? line)
@@ -49,14 +65,14 @@
                     (when-let [content (-> event :message :content)]
                       (async/>!! ch content)))))))
           (catch Exception e
-            (async/>!! ch {:error (.getMessage e)}))
+            (async/>!! ch (llm-core/stream-error-event e)))
           (finally
             (async/close! ch))))
       ch))
 
   (embed [_ text opts]
     (let [input (if (string? text) text (vec text))
-          response (http/post (endpoint base-url "/api/embed")
+          response (post-json (endpoint base-url "/api/embed")
                               {:body (json/generate-string {:model (or (:model opts)
                                                                        (:embedding-model opts)
                                                                        embedding-model)
@@ -85,6 +101,40 @@
     {:tokens (llm-core/count-tokens-estimate messages)
      :cost-usd 0.0
      :model model}))
+
+(extend-type OllamaProvider
+  llm-core/ILLMProviderWithTools
+  (complete-with-tools [this messages tools opts]
+    (let [response (post-json (endpoint (:base-url this) "/api/chat")
+                              {:body (json/generate-string
+                                      (chat-body (:default-model this)
+                                                 (:keep-alive this)
+                                                 messages
+                                                 (assoc opts :tools tools)
+                                                 false))
+                               :content-type :json
+                               :accept :json
+                               :as :json})
+          message (-> response :body :message)]
+      {:role (:role message "assistant")
+       :content (:content message)
+       :tool-calls (vec (or (:tool_calls message) []))
+       :usage {:prompt-tokens 0
+               :completion-tokens 0
+               :cached-tokens 0
+               :tokens 0
+               :cost-usd 0.0}
+       :raw message})))
+
+(extend-type OllamaProvider
+  llm-core/ILLMProviderWithUsage
+  (usage [_ response _opts]
+    {:prompt-tokens (or (:prompt_eval_count response) 0)
+     :completion-tokens (or (:eval_count response) 0)
+     :cached-tokens 0
+     :tokens (+ (or (:prompt_eval_count response) 0)
+                (or (:eval_count response) 0))
+     :cost-usd 0.0}))
 
 (extend-type OllamaProvider
   llm-core/ILLMProviderWithConfig

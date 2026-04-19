@@ -1,23 +1,26 @@
 (ns agent.tools.core
   "Rewritten tool registry and execution helpers."
   (:require
-   [clojure.set :as set]))
+   [clojure.set :as set]
+   [malli.core :as m]
+   [malli.error :as me]
+   [malli.json-schema :as json-schema]))
 
 (defprotocol ITool
   (execute [this input context])
   (describe [this])
   (health-check [this]))
 
-(defrecord BasicTool [description execute-fn validate-fn health-fn]
+(defrecord BasicTool [description execute-fn validate-fn health-fn sensitive-fn]
   ITool
   (execute [_ input context]
     (execute-fn (validate-fn input) context))
   (describe [_]
-    description)
+    (dissoc description :malli-schema :sensitive-predicate))
   (health-check [_]
     (health-fn)))
 
-(defrecord ToolRegistry [tools before-execute after-execute event-sink])
+(defrecord ToolRegistry [tools before-execute after-execute event-sink approval-check])
 
 (defn tool-error
   ([type message] (tool-error type message {}))
@@ -33,28 +36,70 @@
 (defn validation-error [message details]
   (tool-error :validation-failed message details))
 
+(defn- json-input-schema [input-schema]
+  (try
+    (json-schema/transform input-schema)
+    (catch Exception e
+      (throw (validation-error "input-schema must be a valid Malli schema"
+                               {:input-schema input-schema
+                                :error (.getMessage e)})))))
+
 (defn create-tool-description
-  [name description & {:keys [version category input-schema required-permissions timeout-ms source source-details]
+  [name description & {:keys [version category input-schema required-permissions timeout-ms source source-details sensitive]
                        :or {version "1.0.0"
                             required-permissions #{}
                             timeout-ms 30000
-                            source :builtin}}]
+                            source :builtin
+                            sensitive false}}]
+  (when-not input-schema
+    (throw (validation-error "input-schema is required" {:tool-name name})))
   {:name name
    :description description
    :version version
    :category category
-   :input-schema input-schema
+   :input-schema (json-input-schema input-schema)
+   :malli-schema input-schema
    :required-permissions required-permissions
    :timeout-ms timeout-ms
    :source source
-   :source-details source-details})
+   :source-details source-details
+   :sensitive (if (ifn? sensitive) true (boolean sensitive))
+   :sensitive-predicate sensitive})
+
+(defn- schema-validator [description]
+  (let [schema (:malli-schema description)
+        valid? (m/validator schema)]
+    (fn [input]
+      (if (valid? input)
+        input
+        (throw (validation-error
+                "input failed schema validation"
+                {:input input
+                 :errors (me/humanize (m/explain schema input))}))))))
+
+(defn- sensitive-fn [description]
+  (let [sensitive (:sensitive-predicate description)]
+    (cond
+      (ifn? sensitive) sensitive
+      (true? sensitive) (constantly true)
+      :else (constantly false))))
 
 (defn create-tool
   [{:keys [description execute-fn validate-fn health-fn]}]
-  (->BasicTool description
-               execute-fn
-               (or validate-fn identity)
-               (or health-fn (fn [] {:healthy true}))))
+  (when-not (:malli-schema description)
+    (throw (validation-error "tool description must include Malli input-schema"
+                             {:tool-name (:name description)})))
+  (when-not execute-fn
+    (throw (validation-error "execute-fn is required" {:tool-name (:name description)})))
+  (let [base-validator (schema-validator description)
+        validator (if validate-fn
+                    (fn [input] (validate-fn (base-validator input)))
+                    base-validator)]
+    (->BasicTool description
+                 execute-fn
+                 validator
+                 (or health-fn (fn [] {:healthy true}))
+                 (sensitive-fn description))))
 
 (defn create-execution-context
   ([] (create-execution-context {}))
@@ -73,9 +118,13 @@
 
 (defn create-registry
   ([] (create-registry {}))
-  ([{:keys [tools before-execute after-execute event-sink]
+  ([{:keys [tools before-execute after-execute event-sink approval-check]
      :or {tools {}}}]
-   (->ToolRegistry tools before-execute after-execute event-sink)))
+   (->ToolRegistry tools before-execute after-execute event-sink approval-check)))
+
+(defn with-approval
+  [registry approval-check]
+  (assoc registry :approval-check approval-check))
 
 (defn- emit-event!
   [registry event]
@@ -86,6 +135,22 @@
   {:tool tool-description
    :input input
    :context context})
+
+(defn- sensitive-input? [tool input]
+  (boolean ((:sensitive-fn tool) input)))
+
+(defn- enforce-approval! [registry tool tool-description input context]
+  (when (sensitive-input? tool input)
+    (let [approval-check (:approval-check registry)]
+      (when-not approval-check
+        (throw (tool-error :approval-required
+                           "Sensitive tool requires approval policy"
+                           {:tool-name (:name tool-description)})))
+      (when-let [decision (approval-check (hook-context tool-description input context))]
+        (when (:block decision)
+          (throw (tool-error :approval-required
+                             (or (:reason decision) "Sensitive tool requires approved request")
+                             {:tool-name (:name tool-description)})))))))
 
 (defn register-tool
   [registry tool]
@@ -126,7 +191,7 @@
                              :allowed-tools (vec allowed-tools)})))
        (when-not (set/subset? required actual)
          (throw (permission-error required actual)))
-       (let [validated-input ((or (:validate-fn tool) identity) input)]
+       (let [validated-input ((:validate-fn tool) input)]
          (emit-event! registry
                       {:event-type :tool.execution.requested
                        :entity-type :tool
@@ -136,6 +201,17 @@
                                  :source (name (:source tool-description))
                                  :user (:user context*)
                                  :input validated-input}})
+         (try
+           (enforce-approval! registry tool tool-description validated-input context*)
+           (catch Exception e
+             (emit-event! registry
+                          {:event-type :tool.execution.blocked
+                           :entity-type :tool
+                           :entity-id (name tool-name)
+                           :request-id (:request-id context*)
+                           :payload {:tool-name (name tool-name)
+                                     :reason (.getMessage e)}})
+             (throw e)))
          (when-let [decision (when-let [before-execute (:before-execute registry)]
                                (before-execute (hook-context tool-description validated-input context*)))]
            (when (:block decision)

@@ -1,4 +1,4 @@
-(ns test.agent.llm.core-test
+(ns agent.llm.core-test
   "Tests for LLM core protocols and interfaces."
   (:require
    [clojure.test :refer :all]
@@ -7,29 +7,34 @@
 (deftest test-llm-protocol-definitions
   (testing "ILLMProvider protocol exists"
     (is (some? llm-core/ILLMProvider))
-    (is (map? (meta llm-core/ILLMProvider)))))
+    (is (map? llm-core/ILLMProvider))))
 
 (deftest test-protocol-methods
   (testing "Protocol has required methods"
-    (let [protocol-methods (keys (methods llm-core/ILLMProvider))]
-      (is (some #{'complete} protocol-methods))
-      (is (some #{'stream} protocol-methods))
-      (is (some #{'embed} protocol-methods))
-      (is (some #{'list-models} protocol-methods))
-      (is (some #{'get-capabilities} protocol-methods))
-      (is (some #{'estimate-cost} protocol-methods)))))
+    (let [protocol-methods (keys (:sigs llm-core/ILLMProvider))]
+      (is (some #{:complete} protocol-methods))
+      (is (some #{:stream} protocol-methods))
+      (is (some #{:embed} protocol-methods))
+      (is (some #{:list-models} protocol-methods))
+      (is (some #{:get-capabilities} protocol-methods))
+      (is (some #{:estimate-cost} protocol-methods)))))
 
 (deftest test-configuration-protocols
   (testing "Configuration protocols exist"
     (is (some? llm-core/ILLMProviderWithConfig))
     (is (some? llm-core/ILLMProviderWithHealth))
     
-    (let [config-methods (keys (methods llm-core/ILLMProviderWithConfig))]
-      (is (some #{'update-config} config-methods))
-      (is (some #{'get-config} config-methods)))
+    (let [config-methods (keys (:sigs llm-core/ILLMProviderWithConfig))]
+      (is (some #{:update-config} config-methods))
+      (is (some #{:get-config} config-methods)))
     
-    (let [health-methods (keys (methods llm-core/ILLMProviderWithHealth))]
-      (is (some #{'health-check} health-methods)))))
+    (let [health-methods (keys (:sigs llm-core/ILLMProviderWithHealth))]
+      (is (some #{:health-check} health-methods)))))
+
+(deftest test-optional-protocols
+  (is (some #{:complete-with-tools} (keys (:sigs llm-core/ILLMProviderWithTools))))
+  (is (some #{:with-cache-controls} (keys (:sigs llm-core/ILLMProviderWithCache))))
+  (is (some #{:usage} (keys (:sigs llm-core/ILLMProviderWithUsage)))))
 
 (deftest test-helper-functions
   (testing "Normalize messages function"

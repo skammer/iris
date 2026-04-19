@@ -25,10 +25,13 @@
                       :journal-mode "WAL"}}
    :tools {:http {:enabled true
                   :timeout-ms 30000
+                  :allow-private? false
+                  :max-redirects 3
                   :default-headers {"User-Agent" "clj-agent/0.1"}}
            :fs {:enabled true
                 :roots ["."]
-                :max-read-bytes 1048576}
+                :max-read-bytes 1048576
+                :max-write-bytes 1048576}
            :shell {:enabled true
                    :roots ["."]
                    :working-dir "."
