@@ -22,6 +22,20 @@
 (defn- render-many [& nodes]
   (apply str (map render nodes)))
 
+(defn- trusted-fragment [html]
+  ;; Invariant: only pass fragments produced by this namespace's render helpers.
+  (h/raw html))
+
+(defn- render-message-content [content]
+  ;; Markdown intentionally disabled; Hiccup escapes LLM/user text here.
+  [:div.code (str content)])
+
+(defn- render-message [{:keys [role content created-at]}]
+  [:article.message
+   [:div.message-role {:class role} role]
+   (render-message-content content)
+   [:div.meta created-at]])
+
 (defn- now-ms []
   (.toEpochMilli (Instant/now)))
 
@@ -129,27 +143,28 @@
       [:nav.shell-nav
        (for [tab tabs]
          (tab-link tab active-tab))]
-      (h/raw (case active-tab
+      (trusted-fragment (case active-tab
              :chat (render-many
                     [:section.workspace-grid.two-up
-                     (h/raw (sessions-fragment system))
-                     (h/raw (session-detail-fragment system nil))])
+                     (trusted-fragment (sessions-fragment system))
+                     (trusted-fragment (session-detail-fragment system nil))])
              :runs (render-many
                     [:section.workspace-grid.two-up
-                     (h/raw (runs-fragment system))
-                     (h/raw (run-detail-fragment system nil))])
+                     (trusted-fragment (runs-fragment system))
+                     (trusted-fragment (run-detail-fragment system nil))])
              :tools (render-many
                      [:section.workspace-grid.tools
                       [:section.panel.stack
-                       (h/raw (tools-fragment system))]
+                       (trusted-fragment (tools-fragment system))]
                       [:section.panel.stack
-                       (h/raw (tool-approvals-fragment
-                               (tool-approvals/list-requests (:store system) {:limit 50})))
+                       (trusted-fragment
+                        (tool-approvals-fragment
+                         (tool-approvals/list-requests (:store system) {:limit 50})))
                        [:div#tool-results-panel.empty "Request approval, approve, then run."]]])
              :memory (render-many
                       [:section.workspace-grid.two-up
                        [:section.panel.stack
-                        (h/raw (memory-prompt-fragment system))]
+                        (trusted-fragment (memory-prompt-fragment system))]
                        [:section.panel.stack
                         [:form#memory-search-form
                          [:h3 "Memory Search"]
@@ -161,8 +176,8 @@
                         [:div#memory-search-results-panel.empty "Run memory search."]]])
              (render-many
               [:section.workspace-grid.two-up
-               (h/raw (dashboard-fragment system))
-               (h/raw (operator-board-fragment system))])))])))
+               (trusted-fragment (dashboard-fragment system))
+               (trusted-fragment (operator-board-fragment system))])))])))
 
 (defn dashboard-fragment [system]
   (let [storage (sqlite/health-check (:store system))
@@ -391,7 +406,7 @@
         {:data-session-id (:id session)}
         [:h2 (or (:title session) "Untitled session")]
         [:p.meta.code (:id session)]
-        (h/raw (session-messages-fragment system (:id session)))
+        (trusted-fragment (session-messages-fragment system (:id session)))
         [:form#chat-form
          {"data-on:submit" "@chatSubmit()"}
          [:input {:type "hidden" :name "session_id" :value (:id session)}]
@@ -411,11 +426,8 @@
     {"data-on-interval__duration.3s" (str "@get('/ui/session-messages?session_id=" session-id "')")}
     (if-let [messages (seq (sqlite/list-messages (:store system) session-id))]
       [:div.messages
-       (for [{:keys [role content created-at]} messages]
-         [:article.message
-          [:div.message-role {:class role} role]
-          [:div.code content]
-          [:div.meta created-at]])]
+       (for [message messages]
+         (render-message message))]
       [:div.empty "No messages yet."])]))
 
 (defn events-fragment [system]
@@ -457,7 +469,7 @@
           [:article.result
            [:strong "message"]
            [:div.meta.code (str session-id " / " role)]
-           [:div.code content]
+           (render-message-content content)
            [:div.meta created-at]])
         (for [{:keys [event-type entity-type entity-id payload created-at]} (:events results)]
           [:article.result
@@ -720,4 +732,4 @@
        [:agent-run-panel#run-detail-panel.panel
         {:data-run-id (:id run)
          :data-live-state "live"}
-        (h/raw (run-detail-body system (:id run)))]))))
+        (trusted-fragment (run-detail-body system (:id run)))]))))
