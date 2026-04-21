@@ -6,6 +6,8 @@
    [agent.runners.policy :as policy]
    [clojure.string :as str]))
 
+(def default-container-user "65532:65532")
+
 (defn- normalize-command [command]
   (when-not (and (vector? command) (seq command) (every? string? command))
     (throw (ex-info "container command must be a non-empty vector of strings"
@@ -63,7 +65,7 @@
       [engine-binary "run" "--rm" "--name" (container-name (keyword engine-binary) run-id)]
       (when (some? pull-policy) ["--pull" (normalize-name pull-policy)])
       (when-not share-network? ["--network" "none"])
-      (when (some? user) ["--user" user])
+      ["--user" (or user default-container-user)]
       ["-w" working-dir]
       (mapcat mount-args mounts)
       (env-args env)

@@ -2,29 +2,80 @@
   "Minimal μ/log bootstrap and helpers."
   (:require
    [clojure.java.io :as io]
+   [clojure.string :as str]
    [com.brunobonacci.mulog :as mulog]
    [com.brunobonacci.mulog.core :as mulog-core]))
 
 (def ^:private default-path "logs/clj-agent.log")
+(def ^:private default-max-bytes (* 10 1024 1024))
+(def ^:private default-max-files 5)
+(def ^:private sensitive-key-fragments
+  #{"api-key" "api_key" "authorization" "password" "secret" "token" "credential"})
 (defonce ^:private publisher-state (atom nil))
 
 (defn- normalize-config
   [cfg]
-  (let [enabled? (not= false (:enabled cfg))
+  (let [enabled? (true? (:enabled cfg))
         path (or (get-in cfg [:file :path])
                  (get-in cfg [:publisher :filename])
                  default-path)
+        max-bytes (long (or (get-in cfg [:file :max-bytes]) default-max-bytes))
+        max-files (long (or (get-in cfg [:file :max-files]) default-max-files))
         context (merge {:service-name "clj-agent"
                         :environment "local"}
                        (:context cfg))]
     {:enabled enabled?
-     :file {:path path}
+     :file {:path path
+            :max-bytes max-bytes
+            :max-files max-files}
      :context context}))
 
 (defn- ensure-parent-dir!
   [path]
   (when-let [parent (.getParentFile (io/file path))]
     (.mkdirs parent)))
+
+(defn- rotated-path [path n]
+  (str path "." n))
+
+(defn- rotate-logs!
+  [{:keys [path max-bytes max-files]}]
+  (let [file (io/file path)]
+    (when (and (pos? max-bytes)
+               (pos? max-files)
+               (.exists file)
+               (>= (.length file) max-bytes))
+      (doseq [n (range max-files 0 -1)]
+        (let [src (io/file (if (= n 1) path (rotated-path path (dec n))))
+              dst (io/file (rotated-path path n))]
+          (when (.exists src)
+            (io/delete-file dst true)
+            (.renameTo src dst)))))))
+
+(defn- sensitive-key? [k]
+  (let [text (str/lower-case (cond
+                               (keyword? k) (name k)
+                               (string? k) k
+                               :else (str k)))]
+    (boolean (some #(str/includes? text %) sensitive-key-fragments))))
+
+(declare mask-sensitive)
+
+(defn- mask-map [m]
+  (into (empty m)
+        (map (fn [[k v]]
+               [k (if (sensitive-key? k)
+                    "***REDACTED***"
+                    (mask-sensitive v))]))
+        m))
+
+(defn- mask-sensitive [value]
+  (cond
+    (map? value) (mask-map value)
+    (vector? value) (mapv mask-sensitive value)
+    (set? value) (set (map mask-sensitive value))
+    (sequential? value) (doall (map mask-sensitive value))
+    :else value))
 
 (defn enabled?
   []
@@ -51,11 +102,14 @@
                         (mapcat identity
                                 (into (sorted-map)
                                       (for [[k v] attrs]
-                                        [(cond
-                                           (keyword? k) k
-                                           (string? k) (keyword k)
-                                           :else (keyword (str k)))
-                                         v]))))))))
+                                        (let [k* (cond
+                                                   (keyword? k) k
+                                                   (string? k) (keyword k)
+                                                   :else (keyword (str k)))]
+                                          [k*
+                                           (if (sensitive-key? k*)
+                                             "***REDACTED***"
+                                             (mask-sensitive v))])))))))))
 
 (defn log-error!
   ([event-name error] (log-error! event-name error {}))
@@ -97,6 +151,7 @@
           (or @publisher-state
               (do
                 (ensure-parent-dir! (get-in cfg* [:file :path]))
+                (rotate-logs! (:file cfg*))
                 (mulog/set-global-context! (:context cfg*))
                 (let [stop-fn* (mulog/start-publisher!
                                 {:type :simple-file

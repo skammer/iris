@@ -10,8 +10,10 @@
     (is (= "llama3.2:3b" (get-in cfg [:llm :model])))
     (is (= "http://localhost:11434" (get-in cfg [:llm :ollama :base-url])))
     (is (true? (get-in cfg [:tools :http :enabled])))
-    (is (true? (get-in cfg [:logging :enabled])))
-    (is (= "logs/clj-agent.log" (get-in cfg [:logging :file :path])))))
+    (is (false? (get-in cfg [:logging :enabled])))
+    (is (= "logs/clj-agent.log" (get-in cfg [:logging :file :path])))
+    (is (= 10485760 (get-in cfg [:logging :file :max-bytes])))
+    (is (= "65532:65532" (get-in cfg [:runners :docker :user])))))
 
 (deftest load-config-explicit-file-test
   (let [cfg (config/load-config "config/default.edn")]

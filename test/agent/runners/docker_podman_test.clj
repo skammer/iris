@@ -36,7 +36,22 @@
                :command ["printf" "hello"]})]
     (is (= "podman" (first argv)))
     (is (not-any? #{"none"} argv))
+    (is (some #{"--user"} argv))
+    (is (some #{docker-podman/default-container-user} argv))
     (is (= ["printf" "hello"] (subvec argv (- (count argv) 2))))))
+
+(deftest docker-runner-rejects-root-user-test
+  (let [runner (docker-podman/create-docker-podman-runner)
+        run-spec (runners/create-run-spec
+                  {:run-id "run-root"
+                   :agent-id "agent-root"
+                   :substrate :docker
+                   :runner-options {:image "agent:test"
+                                    :user "0:0"
+                                    :command ["printf" "hello"]}})]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"must not be root"
+                          (runners/launch runner run-spec)))))
 
 (deftest docker-runner-forwards-bootstrap-env-test
   (let [captured (atom nil)
