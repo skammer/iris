@@ -12,6 +12,10 @@
 
 (def default-lease-duration-seconds 60)
 (def default-stale-grace-seconds 30)
+(def terminal-statuses #{"completed" "failed" "cancelled" "expired"})
+(def terminal-command-statuses #{"completed" "failed" "cancelled"})
+
+(declare get-run)
 
 (defn- now [] (str (Instant/now)))
 
@@ -30,10 +34,11 @@
    :event-sink event-sink})
 
 (defn create-run-request
-  [{:keys [agent-id parent-run-id name substrate capabilities network-identity runner-options requested-by]
+  [{:keys [idempotency-key agent-id parent-run-id name substrate capabilities network-identity runner-options requested-by]
     :or {substrate :local-unsandboxed
          capabilities []}}]
-  {:agent-id (or agent-id (str "agent-" (UUID/randomUUID)))
+  {:idempotency-key idempotency-key
+   :agent-id (or agent-id (str "agent-" (UUID/randomUUID)))
    :parent-run-id parent-run-id
    :name name
    :substrate substrate
@@ -44,7 +49,16 @@
 
 (defn request-run!
   [runtime request]
-  (let [run-id (str "run-" (UUID/randomUUID))
+  (if-let [existing (when-let [key (:idempotency-key request)]
+                      (sqlite/get-agent-run-by-idempotency-key (:store runtime) key))]
+    (let [lease (or (sqlite/latest-agent-run-lease (:store runtime) (:id existing))
+                    (sqlite/create-agent-run-lease! (:store runtime)
+                                                    {:id (:lease-id existing)
+                                                     :run-id (:id existing)
+                                                     :holder-id "control-plane"
+                                                     :expires-at (plus-seconds default-lease-duration-seconds)}))]
+      (assoc (get-run runtime (:id existing)) :lease lease))
+    (let [run-id (str "run-" (UUID/randomUUID))
         lease-id (str "lease-" (UUID/randomUUID))
         bootstrap-token (runners/random-token)
         bootstrap-spec (runners/create-bootstrap-spec
@@ -57,6 +71,7 @@
                          :checkpoint-seq (or (get-in request [:recovery :checkpoint-seq]) 0)})
         run (sqlite/create-agent-run! (:store runtime)
                                       {:id run-id
+                                       :idempotency-key (:idempotency-key request)
                                        :agent-id (:agent-id request)
                                        :parent-run-id (:parent-run-id request)
                                        :lease-id lease-id
@@ -69,19 +84,23 @@
                                        :bootstrap-token bootstrap-token
                                        :bootstrap-spec bootstrap-spec
                                        :requested-by (:requested-by request)})
-        lease (sqlite/create-agent-run-lease! (:store runtime)
-                                              {:id lease-id
-                                               :run-id (:id run)
-                                               :holder-id "control-plane"
-                                               :expires-at (plus-seconds default-lease-duration-seconds)})]
-    (emit-event! runtime
-                 {:event-type :agent.run.requested
-                  :entity-type :agent_run
-                  :entity-id (:id run)
-                  :payload {:agent-id (:agent-id run)
-                            :substrate (:substrate run)
-                            :lease-id (:id lease)}})
-    (assoc run :lease lease)))
+        created? (= run-id (:id run))
+        persisted-lease-id (or (:lease-id run) lease-id)
+        lease (or (sqlite/latest-agent-run-lease (:store runtime) (:id run))
+                  (sqlite/create-agent-run-lease! (:store runtime)
+                                                  {:id persisted-lease-id
+                                                   :run-id (:id run)
+                                                   :holder-id "control-plane"
+                                                   :expires-at (plus-seconds default-lease-duration-seconds)}))]
+    (when created?
+      (emit-event! runtime
+                   {:event-type :agent.run.requested
+                    :entity-type :agent_run
+                    :entity-id (:id run)
+                    :payload {:agent-id (:agent-id run)
+                              :substrate (:substrate run)
+                              :lease-id (:id lease)}}))
+    (assoc run :lease lease))))
 
 (defn list-runs
   ([runtime] (list-runs runtime {}))
@@ -116,54 +135,72 @@
 (defn heartbeat!
   [runtime run-id {:keys [sequence-no status metrics lease-id]
                    :or {status :running}}]
-  (let [heartbeat (sqlite/record-agent-run-heartbeat! (:store runtime)
-                                                      {:run-id run-id
-                                                       :sequence-no sequence-no
-                                                       :status status
-                                                       :metrics metrics})]
+  (let [existing (when sequence-no
+                   (sqlite/get-agent-run-heartbeat-by-sequence (:store runtime) run-id sequence-no))
+        heartbeat (or existing
+                      (sqlite/record-agent-run-heartbeat! (:store runtime)
+                                                          {:run-id run-id
+                                                           :sequence-no sequence-no
+                                                           :status status
+                                                           :metrics metrics}))]
     (when lease-id
       (sqlite/renew-agent-run-lease! (:store runtime) lease-id
                                      (plus-seconds default-lease-duration-seconds)))
-    (emit-event! runtime
-                 {:event-type :agent.run.heartbeat
-                  :entity-type :agent_run
-                  :entity-id run-id
-                  :payload {:sequence-no sequence-no
-                            :status (name status)}})
+    (when-not existing
+      (emit-event! runtime
+                   {:event-type :agent.run.heartbeat
+                    :entity-type :agent_run
+                    :entity-id run-id
+                    :payload {:sequence-no sequence-no
+                              :status (name status)}}))
     heartbeat))
 
 (defn checkpoint!
   [runtime run-id {:keys [sequence-no checkpoint-type state]
                    :or {checkpoint-type :state}}]
-  (let [checkpoint (sqlite/create-agent-run-checkpoint! (:store runtime)
-                                                        {:run-id run-id
-                                                         :sequence-no sequence-no
-                                                         :checkpoint-type checkpoint-type
-                                                         :state state})]
-    (emit-event! runtime
-                 {:event-type :agent.run.checkpointed
-                  :entity-type :agent_run
-                  :entity-id run-id
-                  :payload {:sequence-no sequence-no
-                            :checkpoint-type (name checkpoint-type)}})
+  (let [existing (when sequence-no
+                   (sqlite/get-agent-run-checkpoint-by-sequence-type (:store runtime)
+                                                                     run-id
+                                                                     sequence-no
+                                                                     checkpoint-type))
+        checkpoint (or existing
+                       (sqlite/create-agent-run-checkpoint! (:store runtime)
+                                                            {:run-id run-id
+                                                             :sequence-no sequence-no
+                                                             :checkpoint-type checkpoint-type
+                                                             :state state}))]
+    (when-not existing
+      (emit-event! runtime
+                   {:event-type :agent.run.checkpointed
+                    :entity-type :agent_run
+                    :entity-id run-id
+                    :payload {:sequence-no sequence-no
+                              :checkpoint-type (name checkpoint-type)}}))
     checkpoint))
 
 (defn enqueue-command!
   [runtime run-id {:keys [command-type payload request-id]}]
-  (let [command (sqlite/enqueue-agent-run-command! (:store runtime)
+  (let [request-id* (or request-id
+                        (:request-id payload)
+                        (str (UUID/randomUUID)))
+        existing (first (sqlite/list-agent-run-commands (:store runtime)
+                                                        run-id
+                                                        {:request-id request-id*
+                                                         :limit 1}))
+        command (or existing
+                    (sqlite/enqueue-agent-run-command! (:store runtime)
                                                    {:run-id run-id
                                                     :command-type command-type
                                                     :payload payload
-                                                    :request-id (or request-id
-                                                                    (:request-id payload)
-                                                                    (str (UUID/randomUUID)))})]
-    (emit-event! runtime
-                 {:event-type :agent.run.command.enqueued
-                  :entity-type :agent_run
-                  :entity-id run-id
-                  :payload {:command-id (:id command)
-                            :command-type (:command-type command)
-                            :request-id (:request-id command)}})
+                                                    :request-id request-id*}))]
+    (when-not existing
+      (emit-event! runtime
+                   {:event-type :agent.run.command.enqueued
+                    :entity-type :agent_run
+                    :entity-id run-id
+                    :payload {:command-id (:id command)
+                              :command-type (:command-type command)
+                              :request-id (:request-id command)}}))
     command))
 
 (defn pending-commands
@@ -185,50 +222,97 @@
   ([runtime run-id opts]
    (sqlite/list-agent-run-checkpoints (:store runtime) run-id opts)))
 
+(defn run-history
+  [runtime run-id]
+  (when-let [run (sqlite/get-agent-run (:store runtime) run-id)]
+    {:run run
+     :lease (sqlite/latest-agent-run-lease (:store runtime) run-id)
+     :heartbeats (sqlite/list-agent-run-heartbeats (:store runtime) run-id {:limit 1000})
+     :checkpoints (sqlite/list-agent-run-checkpoints (:store runtime) run-id {:limit 1000})
+     :commands (sqlite/list-agent-run-commands (:store runtime) run-id {:limit 1000})}))
+
+(defn replay-run
+  [history]
+  (when history
+    (let [latest-by (fn [key rows]
+                      (last (sort-by (juxt #(or (key %) 0) :created-at :observed-at) rows)))
+          heartbeat (latest-by :sequence-no (:heartbeats history))
+          checkpoint (latest-by :sequence-no (:checkpoints history))
+          pending (filterv #(= "pending" (:status %)) (:commands history))]
+      (assoc (:run history)
+             :lease (:lease history)
+             :heartbeat heartbeat
+             :checkpoint checkpoint
+             :pending-commands pending
+             :commands (:commands history)))))
+
 (defn acknowledge-command!
   [runtime run-id command-id]
-  (sqlite/update-agent-run-command! (:store runtime) command-id {:status :acknowledged})
-  (emit-event! runtime
-               {:event-type :agent.run.command.acknowledged
-                :entity-type :agent_run
-                :entity-id run-id
-                :payload {:command-id command-id}})
+  (let [existing (sqlite/get-agent-run-command (:store runtime) command-id)]
+    (when-not (or (= "acknowledged" (:status existing))
+                  (contains? terminal-command-statuses (:status existing)))
+      (sqlite/update-agent-run-command! (:store runtime) command-id {:status :acknowledged})
+      (emit-event! runtime
+                   {:event-type :agent.run.command.acknowledged
+                    :entity-type :agent_run
+                    :entity-id run-id
+                    :payload {:command-id command-id}})))
   command-id)
 
 (defn complete-command!
   ([runtime run-id command-id status error]
    (complete-command! runtime run-id command-id status error nil))
   ([runtime run-id command-id status error response]
-   (let [command (sqlite/update-agent-run-command! (:store runtime) command-id {:status status
-                                                                                :error error
-                                                                                :response response})]
-     (emit-event! runtime
-                  {:event-type :agent.run.command.completed
-                   :entity-type :agent_run
-                   :entity-id run-id
-                   :payload {:command-id command-id
-                             :request-id (:request-id command)
-                             :status (name status)
-                             :error error
-                             :response response}})
+   (let [existing (sqlite/get-agent-run-command (:store runtime) command-id)
+         command (if (contains? terminal-command-statuses (:status existing))
+                   existing
+                   (sqlite/update-agent-run-command! (:store runtime) command-id {:status status
+                                                                                  :error error
+                                                                                  :response response}))]
+     (when-not (contains? terminal-command-statuses (:status existing))
+       (emit-event! runtime
+                    {:event-type :agent.run.command.completed
+                     :entity-type :agent_run
+                     :entity-id run-id
+                     :payload {:command-id command-id
+                               :request-id (:request-id command)
+                               :status (name status)
+                               :error error
+                               :response response}}))
      command)))
 
 (defn transition-run!
   [runtime run-id status & [{:keys [last-error runner-metadata]}]]
-  (let [run (sqlite/update-agent-run! (:store runtime) run-id
-                                      {:status status
-                                       :last-error last-error
-                                       :runner-metadata runner-metadata})]
-    (when-let [lease-id (:lease-id run)]
-      (when (contains? #{:completed :failed :cancelled :expired} status)
-        (sqlite/release-agent-run-lease! (:store runtime) lease-id)))
-    (emit-event! runtime
-                 {:event-type (keyword (str "agent.run." (name status)))
-                  :entity-type :agent_run
-                  :entity-id run-id
-                  :payload {:status (name status)
-                            :last-error last-error}})
-    run))
+  (let [status* (name status)
+        current (or (sqlite/get-agent-run (:store runtime) run-id)
+                    (throw (ex-info "Run not found" {:type :run-not-found
+                                                     :run-id run-id})))]
+    (cond
+      (= status* (:status current))
+      current
+
+      (contains? terminal-statuses (:status current))
+      (throw (ex-info "Illegal terminal run transition"
+                      {:type :illegal-run-transition
+                       :run-id run-id
+                       :from (:status current)
+                       :to status*}))
+
+      :else
+      (let [run (sqlite/update-agent-run! (:store runtime) run-id
+                                          {:status status
+                                           :last-error last-error
+                                           :runner-metadata runner-metadata})]
+        (when-let [lease-id (:lease-id run)]
+          (when (contains? terminal-statuses status*)
+            (sqlite/release-agent-run-lease! (:store runtime) lease-id)))
+        (emit-event! runtime
+                     {:event-type (keyword (str "agent.run." status*))
+                      :entity-type :agent_run
+                      :entity-id run-id
+                      :payload {:status status*
+                                :last-error last-error}})
+        run))))
 
 (defn log-run-output!
   [runtime run-id {:keys [stream line captured-at]}]
@@ -282,8 +366,6 @@
        :pending-command-ids (mapv :id pending)
        :runner-options (:runner-options run)
        :recoverable? (contains? #{"requested" "launched" "running" "expired" "failed" "cancelled"} (:status run))})))
-
-(def terminal-statuses #{"completed" "failed" "cancelled" "expired"})
 
 (defn- terminal-run? [run]
   (contains? terminal-statuses (:status run)))

@@ -45,6 +45,7 @@
          relevant-run-event?
          relevant-session-event?
          system-get-run
+         exchange-header
          run->response
          ensure-string!
          ensure-session-exists!
@@ -298,6 +299,7 @@
 (defn- run->response [run]
   (when run
     {:id (:id run)
+     :idempotency_key (:idempotency-key run)
      :agent_id (:agent-id run)
      :parent_run_id (:parent-run-id run)
      :lease_id (:lease-id run)
@@ -1496,6 +1498,7 @@
       (throw (api-error 400 "bad_request" "network_identity must be an object")))
     {:agent-id (:agent_id body)
      :parent-run-id (:parent_run_id body)
+     :idempotency-key (:idempotency_key body)
      :name (:name body)
      :substrate (or (some-> (:substrate body) keyword) :local-unsandboxed)
      :capabilities (or capabilities [])
@@ -1517,7 +1520,11 @@
     (throw (api-error 404 "run_not_found" "Run not found"))))
 
 (defn- handle-create-run [system exchange]
-  (let [request (normalize-run-request (read-json-body exchange))
+  (let [body (read-json-body exchange)
+        request (cond-> (normalize-run-request body)
+                  (and (nil? (:idempotency_key body))
+                       (exchange-header exchange "Idempotency-Key"))
+                  (assoc :idempotency-key (exchange-header exchange "Idempotency-Key")))
         run (system-request-run! system request)
         launched-run (when (:auto-launch? request)
                        (system-launch-run! system (:id run)))]

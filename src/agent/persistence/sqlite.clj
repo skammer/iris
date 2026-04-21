@@ -94,6 +94,9 @@
 (defn get-agent-run [store run-id]
   (runs/get-agent-run store run-id))
 
+(defn get-agent-run-by-idempotency-key [store idempotency-key]
+  (runs/get-agent-run-by-idempotency-key store idempotency-key))
+
 (defn list-agent-runs
   ([store] (runs/list-agent-runs store))
   ([store opts] (runs/list-agent-runs store opts)))
@@ -119,6 +122,9 @@
 (defn latest-agent-run-heartbeat [store run-id]
   (runs/latest-agent-run-heartbeat store run-id))
 
+(defn get-agent-run-heartbeat-by-sequence [store run-id sequence-no]
+  (runs/get-agent-run-heartbeat-by-sequence store run-id sequence-no))
+
 (defn list-agent-run-heartbeats
   ([store run-id] (runs/list-agent-run-heartbeats store run-id))
   ([store run-id opts] (runs/list-agent-run-heartbeats store run-id opts)))
@@ -141,6 +147,9 @@
 
 (defn latest-agent-run-checkpoint [store run-id]
   (runs/latest-agent-run-checkpoint store run-id))
+
+(defn get-agent-run-checkpoint-by-sequence-type [store run-id sequence-no checkpoint-type]
+  (runs/get-agent-run-checkpoint-by-sequence-type store run-id sequence-no checkpoint-type))
 
 (defn list-agent-run-checkpoints
   ([store run-id] (runs/list-agent-run-checkpoints store run-id))
