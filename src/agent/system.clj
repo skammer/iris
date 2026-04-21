@@ -188,11 +188,16 @@
 
 (defn create-orchestrator
   ([_cfg event-sink]
-   (create-orchestrator _cfg event-sink nil))
+   (create-orchestrator _cfg event-sink nil nil))
   ([_cfg event-sink telemetry-collector]
+   (create-orchestrator _cfg event-sink telemetry-collector nil))
+  ([cfg event-sink telemetry-collector store]
   (orchestrator/create-orchestrator {:event-sink event-sink
                                      :telemetry telemetry-collector
-                                     :federation-deliver (federation-http/create-forwarder)})))
+                                     :federation-deliver (federation-http/create-forwarder
+                                                          (assoc (:federation cfg)
+                                                                 :store store
+                                                                 :telemetry telemetry-collector))})))
 
 (defn create-skills-registry
   [cfg]
@@ -312,7 +317,7 @@
       :runtime-service runtime-service
       :runner-registry (create-runner-registry runtime-service)
       :channel-adapter-registry (create-channel-adapter-registry (:channel-adapters cfg))
-      :orchestrator (create-orchestrator (:orchestrator cfg) event-sink telemetry-collector)})))
+      :orchestrator (create-orchestrator (:orchestrator cfg) event-sink telemetry-collector store)})))
 
 (defn complete
   ([system prompt]

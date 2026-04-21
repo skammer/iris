@@ -10,6 +10,7 @@
    [agent.kernel :as kernel]
    [agent.kernel.ops :as kernel-ops]
    [agent.kernel.runtime :as kernel-runtime]
+   [agent.federation.http :as federation-http]
    [agent.llm.core :as llm-core]
    [agent.logging :as logging]
    [agent.memory.core :as memory]
@@ -255,6 +256,7 @@
    :base_url (:base-url peer)
    :logical_address_prefix (:logical-address-prefix peer)
    :capabilities (:capabilities peer)
+   :key_ids (:key-ids peer)
    :status (:status peer)
    :created_at (:created-at peer)})
 
@@ -1202,7 +1204,10 @@
         base-url (:base_url body)
         logical-address-prefix (:logical_address_prefix body)
         capabilities (or (:capabilities body) [])
-        status (or (:status body) "online")]
+        status (or (:status body) "online")
+        key-id (:key_id body)
+        public-key (:public_key body)
+        private-key (:private_key body)]
     (when id
       (ensure-string! :id id))
     (when name
@@ -1211,16 +1216,32 @@
       (ensure-string! :base_url base-url))
     (when logical-address-prefix
       (ensure-string! :logical_address_prefix logical-address-prefix))
+    (when key-id
+      (ensure-string! :key_id key-id))
+    (when public-key
+      (ensure-string! :public_key public-key))
+    (when private-key
+      (ensure-string! :private_key private-key))
     (ensure-string-vec! :capabilities capabilities)
-    (write-json! exchange 201
-                 {:data (federated-peer->response
-                         (orchestrator/register-federated-peer! (:orchestrator system)
-                                                                {:id id
-                                                                 :name name
-                                                                 :base-url base-url
-                                                                 :logical-address-prefix logical-address-prefix
-                                                                 :capabilities capabilities
-                                                                 :status status}))})))
+    (let [peer (orchestrator/register-federated-peer! (:orchestrator system)
+                                                      {:id id
+                                                       :name name
+                                                       :base-url base-url
+                                                       :logical-address-prefix logical-address-prefix
+                                                       :capabilities capabilities
+                                                       :status status
+                                                       :key-id key-id
+                                                       :public-key public-key
+                                                       :private-key private-key})]
+      (when (and (:store system) public-key)
+        (sqlite/upsert-federation-peer-key!
+         (:store system)
+         {:peer-id (:id peer)
+          :key-id (or key-id "default")
+          :public-key public-key
+          :status "active"}))
+      (write-json! exchange 201
+                   {:data (federated-peer->response peer)}))))
 
 (defn- handle-federation-inbox [system exchange]
   (let [body (read-json-body exchange)
@@ -1232,6 +1253,10 @@
     (when-not (map? envelope)
       (throw (api-error 400 "bad_request" "envelope must be an object")))
     (try
+      (federation-http/verify-request!
+       {:store (:store system)
+        :peer (orchestrator/get-federated-peer (:orchestrator system) peer-id)}
+       body)
       (write-json! exchange 202
                    {:data (interop->response
                            (orchestrator/receive-federated-message! (:orchestrator system)
@@ -1242,6 +1267,10 @@
         (case (:type (ex-data e))
           :peer-not-found (throw (api-error 404 "peer_not_found" "Federated peer not found"))
           :agent-not-found (throw (api-error 404 "agent_not_found" "Agent not found"))
+          :signature-missing (throw (api-error 401 "signature_missing" "Federation signature missing"))
+          :signature-invalid (throw (api-error 401 "signature_invalid" "Federation signature invalid"))
+          :timestamp-skew (throw (api-error 401 "timestamp_skew" "Federation timestamp outside skew"))
+          :nonce-replay (throw (api-error 409 "nonce_replay" "Federation nonce replay"))
           (throw e))))))
 
 (defn- handle-agent-interop-message [system exchange agent-id]

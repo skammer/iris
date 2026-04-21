@@ -3,6 +3,7 @@
   (:require
    [agent.persistence.sqlite.common :as common]
    [agent.persistence.sqlite.events :as events]
+   [agent.persistence.sqlite.federation :as federation]
    [agent.persistence.sqlite.migrations :as migrations]
    [agent.persistence.sqlite.runs :as runs]
    [agent.persistence.sqlite.schema :as schema]
@@ -144,6 +145,24 @@
 (defn list-agent-run-checkpoints
   ([store run-id] (runs/list-agent-run-checkpoints store run-id))
   ([store run-id opts] (runs/list-agent-run-checkpoints store run-id opts)))
+
+(defn upsert-federation-peer-key! [store peer-key]
+  (federation/upsert-peer-key! store peer-key))
+
+(defn get-federation-peer-key [store peer-id key-id]
+  (federation/get-peer-key store peer-id key-id))
+
+(defn insert-federation-nonce! [store nonce]
+  (federation/insert-nonce! store nonce))
+
+(defn create-federation-outbox! [store outbox]
+  (federation/create-outbox! store outbox))
+
+(defn update-federation-outbox! [store id updates]
+  (federation/update-outbox! store id updates))
+
+(defn get-federation-outbox [store id]
+  (federation/get-outbox store id))
 
 (defn health-check [store]
   (schema/health-check store))
