@@ -6,6 +6,7 @@
    [clojure.test :as t]
    [agent.config-test]
    [agent.system-test]
+   [agent.telemetry-test]
    [agent.kernel-test]
    [agent.logging-test]
    [agent.memory.core-test]
@@ -33,6 +34,7 @@
     agent.channels.core-test
     agent.config-test
     agent.system-test
+    agent.telemetry-test
     agent.kernel-test
     agent.logging-test
     agent.memory.core-test
