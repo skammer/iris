@@ -174,6 +174,7 @@
    :base-url (:base-url peer)
    :logical-address-prefix (:logical-address-prefix peer)
    :capabilities (vec (sort (:capabilities peer)))
+   :key-ids (vec (sort (keys (:keys peer))))
    :status (:status peer)
    :created-at (:created-at peer)})
 
@@ -368,15 +369,21 @@
     (agent-view updated)))
 
 (defn register-federated-peer!
-  [orchestrator {:keys [id name base-url logical-address-prefix capabilities status]
+  [orchestrator {:keys [id name base-url logical-address-prefix capabilities status key-id public-key private-key]
                  :or {capabilities []
                       status "online"}}]
   (let [peer-id (or id (random-id "peer"))
+        key-id* (or key-id "default")
         peer {:id peer-id
               :name (or name peer-id)
               :base-url base-url
               :logical-address-prefix (or logical-address-prefix (str "federation://" peer-id "/"))
               :capabilities (set capabilities)
+              :key-id key-id
+              :private-key private-key
+              :keys (cond-> {}
+                      public-key (assoc key-id* {:public-key public-key
+                                                 :status "active"}))
               :status status
               :created-at (now)}]
     (swap-state! orchestrator assoc-in [:federated-peers peer-id] peer)
@@ -393,6 +400,10 @@
        vals
        (sort-by :created-at)
        (mapv federated-peer-view)))
+
+(defn get-federated-peer
+  [orchestrator peer-id]
+  (get (federated-peers-map orchestrator) peer-id))
 
 (defn list-agent-messages
   [orchestrator agent-id]

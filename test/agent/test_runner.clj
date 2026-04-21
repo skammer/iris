@@ -5,6 +5,7 @@
    [agent.channels.core-test]
    [clojure.test :as t]
    [agent.config-test]
+   [agent.federation.http-test]
    [agent.system-test]
    [agent.telemetry-test]
    [agent.kernel-test]
@@ -33,6 +34,7 @@
     agent.broker.local-test
     agent.channels.core-test
     agent.config-test
+    agent.federation.http-test
     agent.system-test
     agent.telemetry-test
     agent.kernel-test

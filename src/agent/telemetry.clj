@@ -57,6 +57,7 @@
                   :run-latencies []
                   :agents {}
                   :tools {}
+                  :federation {}
                   :llm {:calls 0
                         :errors 0
                         :latencies []}})}))
@@ -213,6 +214,28 @@
                                    :error/type (or (:type (ex-data error))
                                                    (.getName (class error)))))))))
 
+(defn record-federation-send!
+  [collector {:keys [peer-id duration-ms attempt success? status error]}]
+  (when (enabled? collector)
+    (let [peer-id* (or peer-id "unknown")
+          success?* (not (false? success?))]
+      (swap! (:state collector)
+             (fn [state]
+               (-> state
+                   (update-in [:federation peer-id* :calls] (fnil inc 0))
+                   (cond-> (not success?*) (update-in [:federation peer-id* :errors] (fnil inc 0)))
+                   (update-in [:federation peer-id* :retries] (fnil + 0) (max 0 (dec (long (or attempt 1)))))
+                   (update-in [:federation peer-id* :latencies] bounded-conj duration-ms (:max-latency-samples collector)))))
+      (logging/log! :agent.telemetry/federation-send
+                    (cond-> {:peer/id peer-id*
+                             :latency/ms duration-ms
+                             :attempt attempt
+                             :success success?*
+                             :http/status status}
+                      error (assoc :error/message (.getMessage ^Throwable error)
+                                   :error/type (or (:type (ex-data error))
+                                                   (.getName (class error)))))))))
+
 (defn- tool-summary [tool]
   (let [calls (long (or (:calls tool) 0))
         errors (long (or (:errors tool) 0))]
@@ -222,6 +245,16 @@
                :errors errors
                :error-rate (if (pos? calls) (/ (double errors) calls) 0.0)
                :latency-ms (latency-summary (:latencies tool))))))
+
+(defn- federation-summary [peer]
+  (let [calls (long (or (:calls peer) 0))
+        errors (long (or (:errors peer) 0))]
+    (-> peer
+        (dissoc :latencies)
+        (assoc :calls calls
+               :errors errors
+               :error-rate (if (pos? calls) (/ (double errors) calls) 0.0)
+               :latency-ms (latency-summary (:latencies peer))))))
 
 (defn snapshot [collector]
   (let [state (if (enabled? collector) @(:state collector) {})
@@ -238,6 +271,10 @@
                   (map (fn [[tool-name tool]]
                          [tool-name (tool-summary tool)]))
                   (:tools state))
+     :federation (into {}
+                       (map (fn [[peer-id peer]]
+                              [peer-id (federation-summary peer)]))
+                       (:federation state))
      :llm {:calls llm-calls
            :errors llm-errors
            :error-rate (if (pos? llm-calls) (/ (double llm-errors) llm-calls) 0.0)

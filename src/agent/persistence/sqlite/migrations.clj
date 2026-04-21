@@ -5,7 +5,7 @@
    [ragtime.protocols :as ragtime-protocols]
    [ragtime.strategy :as ragtime-strategy]))
 
-(def latest-schema-version 7)
+(def latest-schema-version 8)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -175,7 +175,51 @@
     :checksum "d715b4ea611c879e"
     :irreversible? true
     :up ["ALTER TABLE agent_run_commands ADD COLUMN request_id TEXT;"
-         "ALTER TABLE agent_run_commands ADD COLUMN response_json TEXT;"]}])
+         "ALTER TABLE agent_run_commands ADD COLUMN response_json TEXT;"]}
+   {:version 8
+    :id "8"
+    :name "federation-auth-outbox"
+    :checksum "11c3e7e33dfb0c2"
+    :irreversible? true
+    :up ["CREATE TABLE IF NOT EXISTS federation_peer_keys (
+            peer_id TEXT NOT NULL,
+            key_id TEXT NOT NULL,
+            public_key TEXT NOT NULL,
+            status TEXT NOT NULL,
+            valid_from TEXT,
+            valid_until TEXT,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(peer_id, key_id)
+          );"
+         "CREATE INDEX IF NOT EXISTS idx_federation_peer_keys_status
+          ON federation_peer_keys(peer_id, status);"
+         "CREATE TABLE IF NOT EXISTS federation_nonces (
+            peer_id TEXT NOT NULL,
+            nonce TEXT NOT NULL,
+            seen_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            PRIMARY KEY(peer_id, nonce)
+          );"
+         "CREATE INDEX IF NOT EXISTS idx_federation_nonces_expires
+          ON federation_nonces(expires_at);"
+         "CREATE TABLE IF NOT EXISTS federation_outbox (
+            id TEXT PRIMARY KEY,
+            peer_id TEXT NOT NULL,
+            key_id TEXT,
+            url TEXT,
+            envelope_json TEXT NOT NULL,
+            state TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at TEXT,
+            last_error TEXT,
+            last_status INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );"
+         "CREATE INDEX IF NOT EXISTS idx_federation_outbox_state_next
+          ON federation_outbox(state, next_attempt_at);"
+         "CREATE INDEX IF NOT EXISTS idx_federation_outbox_peer_created
+          ON federation_outbox(peer_id, created_at DESC);"]}])
 
 (defn descriptor-by-version [version]
   (some #(when (= version (:version %)) %) migration-descriptors))
