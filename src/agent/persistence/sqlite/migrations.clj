@@ -5,7 +5,7 @@
    [ragtime.protocols :as ragtime-protocols]
    [ragtime.strategy :as ragtime-strategy]))
 
-(def latest-schema-version 8)
+(def latest-schema-version 9)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -219,7 +219,25 @@
          "CREATE INDEX IF NOT EXISTS idx_federation_outbox_state_next
           ON federation_outbox(state, next_attempt_at);"
          "CREATE INDEX IF NOT EXISTS idx_federation_outbox_peer_created
-          ON federation_outbox(peer_id, created_at DESC);"]}])
+          ON federation_outbox(peer_id, created_at DESC);"]}
+   {:version 9
+    :id "9"
+    :name "workflow-idempotency"
+    :checksum "7bf4270de8c46bd8"
+    :irreversible? true
+    :up ["ALTER TABLE agent_runs ADD COLUMN idempotency_key TEXT;"
+         "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runs_idempotency_key
+          ON agent_runs(idempotency_key)
+          WHERE idempotency_key IS NOT NULL;"
+         "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_run_commands_run_request
+          ON agent_run_commands(run_id, request_id)
+          WHERE request_id IS NOT NULL;"
+         "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_run_heartbeats_run_sequence
+          ON agent_run_heartbeats(run_id, sequence_no)
+          WHERE sequence_no IS NOT NULL;"
+         "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_run_checkpoints_run_sequence_type
+          ON agent_run_checkpoints(run_id, sequence_no, checkpoint_type)
+          WHERE sequence_no IS NOT NULL;"]}])
 
 (defn descriptor-by-version [version]
   (some #(when (= version (:version %)) %) migration-descriptors))
@@ -282,6 +300,11 @@
          (conj (first up))
          (not (common/column-exists? conn "agent_run_commands" "response_json"))
          (conj (second up)))
+    9 (cond-> []
+         (not (common/column-exists? conn "agent_runs" "idempotency_key"))
+         (conj (first up))
+         true
+         (into (rest up)))
     up))
 
 (defn- ensure-ragtime-table! [conn]

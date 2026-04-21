@@ -82,6 +82,59 @@
     (is (= 1 (:pending-command-count health)))
     (io/delete-file path true)))
 
+(deftest runtime-workflow-idempotency-and-replay-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        events (atom [])
+        service (runtime/create-runtime-service {:store store
+                                                 :event-sink #(swap! events conj %)})
+        request (runtime/create-run-request
+                 {:idempotency-key "run-key-1"
+                  :agent-id "agent-idem"
+                  :substrate :local-unsandboxed})
+        run-a (runtime/request-run! service request)
+        run-b (runtime/request-run! service request)
+        run-id (:id run-a)
+        heartbeat-a (runtime/heartbeat! service run-id {:sequence-no 1
+                                                        :status :running
+                                                        :metrics {:phase "a"}})
+        heartbeat-b (runtime/heartbeat! service run-id {:sequence-no 1
+                                                        :status :running
+                                                        :metrics {:phase "b"}})
+        checkpoint-a (runtime/checkpoint! service run-id {:sequence-no 1
+                                                          :checkpoint-type :state
+                                                          :state {:phase "a"}})
+        checkpoint-b (runtime/checkpoint! service run-id {:sequence-no 1
+                                                          :checkpoint-type :state
+                                                          :state {:phase "b"}})
+        command-a (runtime/enqueue-command! service run-id {:command-type :run-task
+                                                            :payload {:x 1}
+                                                            :request-id "cmd-key-1"})
+        command-b (runtime/enqueue-command! service run-id {:command-type :run-task
+                                                            :payload {:x 2}
+                                                            :request-id "cmd-key-1"})
+        completed-a (runtime/complete-command! service run-id (:id command-a) :completed nil {:ok true})
+        completed-b (runtime/complete-command! service run-id (:id command-a) :failed "retry-error" {:ok false})
+        replayed (runtime/replay-run (runtime/run-history service run-id))
+        hydrated (runtime/get-run service run-id)]
+    (is (= (:id run-a) (:id run-b)))
+    (is (= "run-key-1" (:idempotency-key run-b)))
+    (is (= heartbeat-a heartbeat-b))
+    (is (= checkpoint-a checkpoint-b))
+    (is (= (:id command-a) (:id command-b)))
+    (is (= "completed" (:status completed-b)))
+    (is (= (:completed-at completed-a) (:completed-at completed-b)))
+    (is (= (:heartbeat hydrated) (:heartbeat replayed)))
+    (is (= (:checkpoint hydrated) (:checkpoint replayed)))
+    (is (= (:pending-commands hydrated) (:pending-commands replayed)))
+    (is (= ["agent.run.requested"
+            "agent.run.heartbeat"
+            "agent.run.checkpointed"
+            "agent.run.command.enqueued"
+            "agent.run.command.completed"]
+           (mapv (comp name :event-type) @events)))
+    (io/delete-file path true)))
+
 (deftest wait-for-run-uses-broker-events-test
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})

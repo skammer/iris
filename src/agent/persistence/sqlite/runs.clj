@@ -5,11 +5,18 @@
 
 (hugsql/def-sqlvec-fns "agent/persistence/sqlite/runs.sql")
 
-(defn- row->run [{:keys [id agent_id parent_run_id lease_id name substrate status capabilities_json
+(declare get-agent-run
+         get-agent-run-by-idempotency-key
+         get-agent-run-command
+         latest-agent-run-lease
+         list-agent-run-commands)
+
+(defn- row->run [{:keys [id idempotency_key agent_id parent_run_id lease_id name substrate status capabilities_json
                          network_identity_json bootstrap_token bootstrap_spec_json
                          runner_metadata_json runner_options_json requested_by last_error
                          created_at started_at finished_at]}]
   {:id id
+   :idempotency-key idempotency_key
    :agent-id agent_id
    :parent-run-id parent_run_id
    :lease-id lease_id
@@ -81,11 +88,21 @@
          updates))
 
 (defn create-agent-run!
-  [store {:keys [id agent-id parent-run-id lease-id name substrate status capabilities
+  [store {:keys [id idempotency-key agent-id parent-run-id lease-id name substrate status capabilities
                  network-identity bootstrap-token bootstrap-spec runner-metadata
                  runner-options requested-by last-error]
           :or {status "requested"}}]
-  (let [run {:id (or id (common/uuid-str))
+  (or (when idempotency-key
+        (common/with-connection
+          store
+          (fn [conn]
+            (some-> (common/select-one conn
+                                       (get-agent-run-by-idempotency-key-sqlvec
+                                        {:idempotency_key idempotency-key})
+                                       identity)
+                    row->run))))
+      (let [run {:id (or id (common/uuid-str))
+             :idempotency_key idempotency-key
              :agent_id agent-id
              :parent_run_id parent-run-id
              :lease_id lease-id
@@ -101,17 +118,30 @@
              :requested_by requested-by
              :last_error last-error
              :created_at (common/now-str)}]
-    (common/with-connection
-      store
-      (fn [conn]
-        (common/execute! conn (create-agent-run-sqlvec run))))
-    (row->run run)))
+        (common/with-connection
+          store
+          (fn [conn]
+            (common/execute! conn (create-agent-run-sqlvec run))))
+        (or (get-agent-run store (:id run))
+            (when idempotency-key
+              (get-agent-run-by-idempotency-key store idempotency-key))
+            (row->run run)))))
 
 (defn get-agent-run [store run-id]
   (common/with-connection
     store
     (fn [conn]
       (some-> (common/select-one conn (get-agent-run-sqlvec {:id run-id}) identity)
+              row->run))))
+
+(defn get-agent-run-by-idempotency-key [store idempotency-key]
+  (common/with-connection
+    store
+    (fn [conn]
+      (some-> (common/select-one conn
+                                 (get-agent-run-by-idempotency-key-sqlvec
+                                  {:idempotency_key idempotency-key})
+                                 identity)
               row->run))))
 
 (defn list-agent-runs
@@ -180,8 +210,9 @@
            (throw (ex-info "Agent run not found"
                            {:type :run-not-found
                             :run-id run-id}))))))
-    (assoc (row->lease (assoc lease :status "active" :released_at nil))
-           :run-id run-id)))
+    (or (latest-agent-run-lease store run-id)
+        (assoc (row->lease (assoc lease :status "active" :released_at nil))
+               :run-id run-id))))
 
 (defn latest-agent-run-lease [store run-id]
   (common/with-connection
@@ -226,14 +257,32 @@
     (common/with-connection
       store
       (fn [conn]
-        (common/execute! conn (insert-agent-run-heartbeat-sqlvec heartbeat))))
-    (row->heartbeat heartbeat)))
+        (common/execute! conn (insert-agent-run-heartbeat-sqlvec heartbeat))
+        (or (when sequence-no
+              (some-> (common/select-one conn
+                                         (get-agent-run-heartbeat-by-sequence-sqlvec
+                                          {:run_id run-id
+                                           :sequence_no sequence-no})
+                                         identity)
+                      row->heartbeat))
+            (row->heartbeat heartbeat))))))
 
 (defn latest-agent-run-heartbeat [store run-id]
   (common/with-connection
     store
     (fn [conn]
       (some-> (common/select-one conn (latest-agent-run-heartbeat-sqlvec {:run_id run-id}) identity)
+              row->heartbeat))))
+
+(defn get-agent-run-heartbeat-by-sequence [store run-id sequence-no]
+  (common/with-connection
+    store
+    (fn [conn]
+      (some-> (common/select-one conn
+                                 (get-agent-run-heartbeat-by-sequence-sqlvec
+                                  {:run_id run-id
+                                   :sequence_no sequence-no})
+                                 identity)
               row->heartbeat))))
 
 (defn list-agent-run-heartbeats
@@ -251,22 +300,29 @@
 
 (defn enqueue-agent-run-command! [store {:keys [run-id command-type payload request-id]
                                          :or {payload {}}}]
-  (let [command {:id (common/uuid-str)
-                 :run_id run-id
-                 :command_type (common/normalize-name command-type)
-                 :payload_json (common/json-string payload)
-                 :request_id request-id
-                 :created_at (common/now-str)}]
-    (common/with-connection
-      store
-      (fn [conn]
-        (common/execute! conn (create-agent-run-command-sqlvec command))))
-    (row->command (assoc command
-                         :response_json nil
-                         :status "pending"
-                         :acknowledged_at nil
-                         :completed_at nil
-                         :error nil))))
+  (or (when request-id
+        (first (list-agent-run-commands store run-id {:request-id request-id
+                                                      :limit 1})))
+      (let [command {:id (common/uuid-str)
+                     :run_id run-id
+                     :command_type (common/normalize-name command-type)
+                     :payload_json (common/json-string payload)
+                     :request_id request-id
+                     :created_at (common/now-str)}]
+        (common/with-connection
+          store
+          (fn [conn]
+            (common/execute! conn (create-agent-run-command-sqlvec command))))
+        (or (get-agent-run-command store (:id command))
+            (when request-id
+              (first (list-agent-run-commands store run-id {:request-id request-id
+                                                            :limit 1})))
+            (row->command (assoc command
+                                 :response_json nil
+                                 :status "pending"
+                                 :acknowledged_at nil
+                                 :completed_at nil
+                                 :error nil))))))
 
 (defn list-agent-run-commands
   ([store run-id] (list-agent-run-commands store run-id {}))
@@ -312,23 +368,44 @@
     (get-agent-run-command store command-id)))
 
 (defn create-agent-run-checkpoint! [store {:keys [run-id sequence-no checkpoint-type state]}]
-  (let [checkpoint {:id (common/uuid-str)
+  (let [checkpoint-type* (common/normalize-name checkpoint-type)
+        checkpoint {:id (common/uuid-str)
                     :run_id run-id
                     :sequence_no sequence-no
-                    :checkpoint_type (common/normalize-name checkpoint-type)
+                    :checkpoint_type checkpoint-type*
                     :state_json (common/json-string state)
                     :created_at (common/now-str)}]
     (common/with-connection
       store
       (fn [conn]
-        (common/execute! conn (create-agent-run-checkpoint-sqlvec checkpoint))))
-    (row->checkpoint checkpoint)))
+        (common/execute! conn (create-agent-run-checkpoint-sqlvec checkpoint))
+        (or (when (and sequence-no checkpoint-type*)
+              (some-> (common/select-one conn
+                                         (get-agent-run-checkpoint-by-sequence-type-sqlvec
+                                          {:run_id run-id
+                                           :sequence_no sequence-no
+                                           :checkpoint_type checkpoint-type*})
+                                         identity)
+                      row->checkpoint))
+            (row->checkpoint checkpoint))))))
 
 (defn latest-agent-run-checkpoint [store run-id]
   (common/with-connection
     store
     (fn [conn]
       (some-> (common/select-one conn (latest-agent-run-checkpoint-sqlvec {:run_id run-id}) identity)
+              row->checkpoint))))
+
+(defn get-agent-run-checkpoint-by-sequence-type [store run-id sequence-no checkpoint-type]
+  (common/with-connection
+    store
+    (fn [conn]
+      (some-> (common/select-one conn
+                                 (get-agent-run-checkpoint-by-sequence-type-sqlvec
+                                  {:run_id run-id
+                                   :sequence_no sequence-no
+                                   :checkpoint_type (common/normalize-name checkpoint-type)})
+                                 identity)
               row->checkpoint))))
 
 (defn list-agent-run-checkpoints
