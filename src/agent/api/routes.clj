@@ -66,6 +66,7 @@
    ["/v1/channel-adapters" {:get {:handler/id :list-channel-adapters}}]
    ["/v1/events" {:get {:handler/id :list-events}}]
    ["/v1/events/stream" {:get {:handler/id :events-stream}}]
+   ["/v1/telemetry" {:get {:handler/id :telemetry}}]
    ["/v1/memory/surfaces" {:get {:handler/id :memory-surfaces}}]
    ["/v1/memory/prompt" {:get {:handler/id :memory-prompt}}]
    ["/v1/memory/search" {:post {:handler/id :memory-search}}]

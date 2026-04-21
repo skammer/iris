@@ -68,10 +68,19 @@
                       :host-working-dir "."
                       :share-network? true}}
    :orchestrator {:enabled true}
+   :telemetry {:enabled true
+               :max-latency-samples 1000}
    :logging {:enabled false
              :file {:path "logs/clj-agent.log"
                     :max-bytes 10485760
-                    :max-files 5}}
+                    :max-files 5}
+             :otel {:enabled false
+                    :url "http://localhost:4318/"
+                    :send [:traces :logs]
+                    :max-items 5000
+                    :publish-delay 5000
+                    :http-opts {:conn-timeout 2000
+                                :socket-timeout 2000}}}
    :api {:host "127.0.0.1"
          :port 8080}})
 
@@ -127,6 +136,20 @@
         sqlite-path (System/getenv "AGENT_SQLITE_PATH")
         log-file (System/getenv "AGENT_LOG_FILE")
         log-enabled (parse-bool (System/getenv "AGENT_LOG_ENABLED"))
+        telemetry-enabled (parse-bool (System/getenv "AGENT_TELEMETRY_ENABLED"))
+        telemetry-max-latency-samples (parse-long* (System/getenv "AGENT_TELEMETRY_MAX_LATENCY_SAMPLES"))
+        otel-enabled (parse-bool (or (System/getenv "AGENT_OTEL_ENABLED")
+                                     (System/getenv "OTEL_ENABLED")))
+        otel-url (or (System/getenv "AGENT_OTEL_URL")
+                     (System/getenv "OTEL_EXPORTER_OTLP_ENDPOINT"))
+        otel-send (some-> (System/getenv "AGENT_OTEL_SEND")
+                          (str/split #",")
+                          (->> (map str/trim)
+                               (remove str/blank?)
+                               (map keyword)
+                               vec))
+        otel-publish-delay (parse-long* (System/getenv "AGENT_OTEL_PUBLISH_DELAY_MS"))
+        otel-max-items (parse-long* (System/getenv "AGENT_OTEL_MAX_ITEMS"))
         api-host (System/getenv "AGENT_API_HOST")
         api-port (parse-long* (System/getenv "AGENT_API_PORT"))]
     {:llm (cond-> {}
@@ -156,9 +179,19 @@
                      (assoc :api-key (System/getenv "OPENAI_API_KEY")))))
      :storage (cond-> {}
                 sqlite-path (assoc :sqlite {:path sqlite-path}))
+     :telemetry (cond-> {}
+                  (some? telemetry-enabled) (assoc :enabled telemetry-enabled)
+                  (some? telemetry-max-latency-samples) (assoc :max-latency-samples telemetry-max-latency-samples))
      :logging (cond-> {}
                 (some? log-enabled) (assoc :enabled log-enabled)
-                log-file (assoc :file {:path log-file}))
+                log-file (assoc :file {:path log-file})
+                (or (some? otel-enabled) otel-url otel-send otel-publish-delay otel-max-items)
+                (assoc :otel (cond-> {}
+                               (some? otel-enabled) (assoc :enabled otel-enabled)
+                               otel-url (assoc :url otel-url)
+                               otel-send (assoc :send otel-send)
+                               (some? otel-publish-delay) (assoc :publish-delay otel-publish-delay)
+                               (some? otel-max-items) (assoc :max-items otel-max-items))))
      :api (cond-> {}
             api-host (assoc :host api-host)
             (some? api-port) (assoc :port api-port))}))

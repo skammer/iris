@@ -25,6 +25,7 @@
    [agent.runners.seatbelt :as seatbelt]
    [agent.runtime.core :as runtime]
    [agent.skills :as skills]
+   [agent.telemetry :as telemetry]
    [agent.tools.common.fs :as fs-tool]
    [agent.tools.common.http :as http-tool]
    [agent.tools.common.shell :as shell-tool]
@@ -132,14 +133,21 @@
   []
   (create-broker nil))
 
+(defn create-telemetry
+  [cfg]
+  (telemetry/create-collector cfg))
+
 (defn create-event-sink
-  [store broker-instance]
+  ([store broker-instance]
+   (create-event-sink store broker-instance nil))
+  ([store broker-instance telemetry-collector]
   (fn [event]
     (let [recorded (sqlite/log-event! store event)]
       (logging/log-system-event! recorded)
+      (telemetry/record-system-event! telemetry-collector recorded)
       (doseq [message (broker/event->messages recorded)]
         (broker/publish! broker-instance message))
-      recorded)))
+      recorded))))
 
 (defn subscribe-events
   ([system] (subscribe-events system (broker/all-events-subject)))
@@ -151,14 +159,23 @@
   (broker/unsubscribe! (:broker system) subscription))
 
 (defn create-tool-registry
-  [cfg event-sink store]
+  ([cfg event-sink store]
+   (create-tool-registry cfg event-sink store nil))
+  ([cfg event-sink store telemetry-collector]
   (let [http-cfg (get cfg :http)
         fs-cfg (get cfg :fs)
         shell-cfg (get cfg :shell)
         registry (tools/create-registry
                   {:event-sink event-sink
                    :approval-check (tool-approvals/create-policy-hook store)
-                   :after-execute (fn [_] nil)})]
+                   :after-execute (fn [{:keys [tool context duration-ms is-error error] :as hook}]
+                                    (telemetry/record-tool! telemetry-collector
+                                                            {:tool-name (:name tool)
+                                                             :duration-ms duration-ms
+                                                             :success? (not is-error)
+                                                             :error error
+                                                             :user (:user context)})
+                                    hook)})]
     (cond-> registry
       (not= false (:enabled http-cfg))
       (tools/register-tool (http-tool/create-http-tool http-cfg))
@@ -167,12 +184,15 @@
       (tools/register-tool (fs-tool/create-fs-tool fs-cfg))
 
       (not= false (:enabled shell-cfg))
-      (tools/register-tool (shell-tool/create-shell-tool shell-cfg)))))
+      (tools/register-tool (shell-tool/create-shell-tool shell-cfg))))))
 
 (defn create-orchestrator
-  [_cfg event-sink]
+  ([_cfg event-sink]
+   (create-orchestrator _cfg event-sink nil))
+  ([_cfg event-sink telemetry-collector]
   (orchestrator/create-orchestrator {:event-sink event-sink
-                                     :federation-deliver (federation-http/create-forwarder)}))
+                                     :telemetry telemetry-collector
+                                     :federation-deliver (federation-http/create-forwarder)})))
 
 (defn create-skills-registry
   [cfg]
@@ -271,8 +291,9 @@
          _ (logging/start! (:logging cfg))
          llm-cfg (config/llm-config cfg)
          store (create-store (:storage cfg))
+         telemetry-collector (create-telemetry (:telemetry cfg))
          broker-instance (create-broker store)
-         event-sink (create-event-sink store broker-instance)
+         event-sink (create-event-sink store broker-instance telemetry-collector)
          runtime-service (create-runtime-service store event-sink broker-instance)]
      (logging/log! :agent.system/created
                    {:config-path config-path
@@ -282,21 +303,28 @@
      {:config cfg
       :llm-provider (create-llm-provider llm-cfg)
       :store store
+      :telemetry telemetry-collector
       :broker broker-instance
       :event-sink event-sink
-      :tool-registry (create-tool-registry (:tools cfg) event-sink store)
+      :tool-registry (create-tool-registry (:tools cfg) event-sink store telemetry-collector)
       :skills-registry (create-skills-registry (:skills cfg))
       :memory-service (create-memory-service (:memory cfg) store)
       :runtime-service runtime-service
       :runner-registry (create-runner-registry runtime-service)
       :channel-adapter-registry (create-channel-adapter-registry (:channel-adapters cfg))
-      :orchestrator (create-orchestrator (:orchestrator cfg) event-sink)})))
+      :orchestrator (create-orchestrator (:orchestrator cfg) event-sink telemetry-collector)})))
 
 (defn complete
   ([system prompt]
    (complete system [{:role "user" :content prompt}] {}))
   ([system messages opts]
-   (llm-core/complete (:llm-provider system) messages opts)))
+   (telemetry/complete-with-telemetry! (:telemetry system)
+                                       (:llm-provider system)
+                                       messages
+                                       opts
+                                       {:agent-id "system"
+                                        :model (or (:model opts)
+                                                   (get-in system [:config :llm :model]))})))
 
 (defn stream
   ([system prompt]
@@ -317,6 +345,7 @@
    :tools (tools/registry-health (:tool-registry system))
    :skills (skills/registry-health (:skills-registry system))
    :memory (memory/health-check (:memory-service system))
+   :telemetry (telemetry/health-check (:telemetry system))
    :runtime (runtime/runtime-health (:runtime-service system))
    :channel-adapters (channel-adapters/registry-health (:channel-adapter-registry system))
    :orchestrator (orchestrator/health-check (:orchestrator system))
@@ -380,6 +409,10 @@
   ([system] (list-events system {}))
   ([system opts]
    (sqlite/list-events (:store system) opts)))
+
+(defn telemetry-snapshot
+  [system]
+  (telemetry/snapshot (:telemetry system)))
 
 (defn memory-surfaces
   [system]

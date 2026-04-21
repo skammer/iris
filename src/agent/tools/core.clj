@@ -225,39 +225,44 @@
              (throw (tool-error :tool-blocked
                                 (or (:reason decision) "Tool execution blocked")
                                 {:tool-name tool-name}))))
-         (try
-           (let [result ((:execute-fn tool) validated-input context*)
-                 final-result (if-let [postprocess (:after-execute registry)]
-                                (let [hook-result (postprocess (assoc (hook-context tool-description validated-input context*)
-                                                                      :result result
-                                                                      :is-error false))]
-                                  (or (:result hook-result) result))
-                                result)]
-             (emit-event! registry
-                          {:event-type :tool.execution.succeeded
-                           :entity-type :tool
-                           :entity-id (name tool-name)
-                           :request-id (:request-id context*)
-                           :payload {:tool-name (name tool-name)
-                                     :source (name (:source tool-description))
-                                     :input validated-input
-                                     :result final-result}})
-             final-result)
-           (catch Exception e
-             (when-let [postprocess (:after-execute registry)]
-               (postprocess (assoc (hook-context tool-description validated-input context*)
-                                   :error e
-                                   :is-error true)))
-             (emit-event! registry
-                          {:event-type :tool.execution.failed
-                           :entity-type :tool
-                           :entity-id (name tool-name)
-                           :request-id (:request-id context*)
-                           :payload {:tool-name (name tool-name)
-                                     :source (name (:source tool-description))
-                                     :input validated-input
-                                     :error (.getMessage e)}})
-             (throw e))))))))
+         (let [start-ns (System/nanoTime)]
+           (try
+             (let [result ((:execute-fn tool) validated-input context*)
+                   duration-ms (/ (double (- (System/nanoTime) start-ns)) 1000000.0)
+                   final-result (if-let [postprocess (:after-execute registry)]
+                                  (let [hook-result (postprocess (assoc (hook-context tool-description validated-input context*)
+                                                                        :result result
+                                                                        :duration-ms duration-ms
+                                                                        :is-error false))]
+                                    (or (:result hook-result) result))
+                                  result)]
+               (emit-event! registry
+                            {:event-type :tool.execution.succeeded
+                             :entity-type :tool
+                             :entity-id (name tool-name)
+                             :request-id (:request-id context*)
+                             :payload {:tool-name (name tool-name)
+                                       :source (name (:source tool-description))
+                                       :input validated-input
+                                       :result final-result}})
+               final-result)
+             (catch Exception e
+               (let [duration-ms (/ (double (- (System/nanoTime) start-ns)) 1000000.0)]
+                 (when-let [postprocess (:after-execute registry)]
+                   (postprocess (assoc (hook-context tool-description validated-input context*)
+                                       :error e
+                                       :duration-ms duration-ms
+                                       :is-error true)))
+                 (emit-event! registry
+                              {:event-type :tool.execution.failed
+                               :entity-type :tool
+                               :entity-id (name tool-name)
+                               :request-id (:request-id context*)
+                               :payload {:tool-name (name tool-name)
+                                         :source (name (:source tool-description))
+                                         :input validated-input
+                                         :error (.getMessage e)}})
+                 (throw e))))))))))
 
 (defn registry-health
   [registry]

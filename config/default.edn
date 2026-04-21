@@ -38,7 +38,14 @@
  :logging {:enabled false
            :file {:path "logs/clj-agent.log"
                   :max-bytes 10485760
-                  :max-files 5}}
+                  :max-files 5}
+           :otel {:enabled false
+                  :url "http://localhost:4318/"
+                  :send [:traces :logs]
+                  :max-items 5000
+                  :publish-delay 5000
+                  :http-opts {:conn-timeout 2000
+                              :socket-timeout 2000}}}
  :runners {:docker {:image "clojure:temurin-21-alpine"
                     :image-mode :mounted-dev
                     :pull-policy :missing
@@ -58,5 +65,7 @@
                     :host-working-dir "."
                     :share-network? true}}
  :orchestrator {:enabled true}
+ :telemetry {:enabled true
+             :max-latency-samples 1000}
  :api {:host "127.0.0.1"
        :port 8080}}

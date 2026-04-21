@@ -3,6 +3,7 @@
         org.clojure/core.async {:mvn/version "1.6.681"}
         org.clojure/data.json {:mvn/version "2.5.1"}
         com.brunobonacci/mulog {:mvn/version "0.10.1"}
+        com.brunobonacci/mulog-opentelemetry {:mvn/version "0.10.1"}
         clj-http/clj-http {:mvn/version "3.13.1"}
         cheshire/cheshire {:mvn/version "5.11.0"}
         metosin/malli {:mvn/version "0.20.1"}

@@ -19,6 +19,7 @@
    [agent.runners.core :as runners]
    [agent.runners.options :as runner-options]
    [agent.skills :as skills]
+   [agent.telemetry :as telemetry]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [agent.ui :as ui]
@@ -520,7 +521,12 @@
 (defn- complete! [system messages {:keys [session-id]}]
   (persist-user-message! system messages session-id)
   (let [provider (:llm-provider system)
-        content (llm-core/complete provider messages {})]
+        content (telemetry/complete-with-telemetry! (:telemetry system)
+                                                    provider
+                                                    messages
+                                                    {}
+                                                    {:agent-id "api"
+                                                     :model (get-in system [:config :llm :model])})]
     (persist-completion! system messages content {:session-id session-id})
     {:content content}))
 
@@ -796,6 +802,7 @@
                              :storage (sqlite/health-check (:store system))
                              :tools (tools/registry-health (:tool-registry system))
                              :skills (skills/registry-health (:skills-registry system))
+                             :telemetry (telemetry/health-check (:telemetry system))
                              :memory (memory/health-check (:memory-service system))
                              :channel-adapters (channel-adapters/registry-health (:channel-adapter-registry system))
                              :orchestrator (orchestrator/health-check (:orchestrator system))
@@ -816,6 +823,9 @@
 (defn- handle-list-events [system exchange]
   (write-json! exchange 200 {:data (mapv event->response
                                          (sqlite/list-events (:store system) {:limit 100}))}))
+
+(defn- handle-telemetry [system exchange]
+  (write-json! exchange 200 {:data (telemetry/snapshot (:telemetry system))}))
 
 (defn- handle-events-stream [system exchange]
   (let [stream-id (str "events-" (System/currentTimeMillis))
@@ -2127,6 +2137,7 @@
    :list-skills (fn [request] (exchange-handler request #(handle-list-skills system %)))
    :list-channel-adapters (fn [request] (exchange-handler request #(handle-list-channel-adapters system %)))
    :list-events (fn [request] (exchange-handler request #(handle-list-events system %)))
+   :telemetry (fn [request] (exchange-handler request #(handle-telemetry system %)))
    :memory-surfaces (fn [request] (exchange-handler request #(handle-memory-surfaces system %)))
    :memory-prompt (fn [request] (exchange-handler request #(handle-memory-prompt system %)))
    :memory-search (fn [request] (exchange-handler request #(handle-memory-search system %)))

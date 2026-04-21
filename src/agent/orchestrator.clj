@@ -1,7 +1,7 @@
 (ns agent.orchestrator
   "Rewritten in-memory orchestrator/subagent runtime."
   (:require
-   [agent.llm.core :as llm-core]
+   [agent.telemetry :as telemetry]
    [clojure.core.async :as async]
    [clojure.string :as str])
   (:import
@@ -115,10 +115,11 @@
 
 (defn create-orchestrator
   ([] (create-orchestrator {}))
-  ([{:keys [event-sink federation-deliver]}]
+  ([{:keys [event-sink federation-deliver telemetry]}]
    {:state (atom (initial-state))
     :federation-deliver federation-deliver
-    :event-sink event-sink}))
+    :event-sink event-sink
+    :telemetry telemetry}))
 
 (defn- make-logical-address [agent-id]
   (str "agent://" agent-id))
@@ -409,7 +410,12 @@
                        :created-at (now)}
         agent-before (ensure-agent! orchestrator agent-id)
         agent-after-input (update agent-before :messages conj input-message)
-        completion (llm-core/complete llm-provider (build-llm-messages agent-after-input) {})
+        llm-messages (build-llm-messages agent-after-input)
+        completion (telemetry/complete-with-telemetry! (:telemetry orchestrator)
+                                                       llm-provider
+                                                       llm-messages
+                                                       {}
+                                                       {:agent-id agent-id})
         assistant-message {:role "assistant"
                            :content completion
                            :created-at (now)}]
@@ -878,7 +884,12 @@
        :consumed 0
        :response nil}
       (let [agent-after-input (update agent :messages into drained)
-            completion (llm-core/complete llm-provider (build-llm-messages agent-after-input) {})
+            llm-messages (build-llm-messages agent-after-input)
+            completion (telemetry/complete-with-telemetry! (:telemetry orchestrator)
+                                                           llm-provider
+                                                           llm-messages
+                                                           {}
+                                                           {:agent-id agent-id})
             assistant-message {:role "assistant"
                                :content completion
                                :created-at (now)}]

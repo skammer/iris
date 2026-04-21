@@ -13,22 +13,67 @@
   #{"api-key" "api_key" "authorization" "password" "secret" "token" "credential"})
 (defonce ^:private publisher-state (atom nil))
 
+(defn- normalize-send [send]
+  (let [values (cond
+                 (nil? send) [:traces :logs]
+                 (sequential? send) send
+                 :else [send])]
+    (mapv (fn [value]
+            (if (keyword? value) value (keyword (str value))))
+          values)))
+
 (defn- normalize-config
   [cfg]
-  (let [enabled? (true? (:enabled cfg))
+  (let [file-enabled? (true? (:enabled cfg))
+        otel-enabled? (true? (get-in cfg [:otel :enabled]))
         path (or (get-in cfg [:file :path])
                  (get-in cfg [:publisher :filename])
                  default-path)
         max-bytes (long (or (get-in cfg [:file :max-bytes]) default-max-bytes))
         max-files (long (or (get-in cfg [:file :max-files]) default-max-files))
+        otel-send (normalize-send (get-in cfg [:otel :send]))
         context (merge {:service-name "clj-agent"
+                        :app-name "clj-agent"
                         :environment "local"}
                        (:context cfg))]
-    {:enabled enabled?
+    {:enabled (or file-enabled? otel-enabled?)
+     :file-enabled file-enabled?
      :file {:path path
             :max-bytes max-bytes
             :max-files max-files}
+     :otel {:enabled otel-enabled?
+            :url (or (get-in cfg [:otel :url]) "http://localhost:4318/")
+            :send otel-send
+            :max-items (long (or (get-in cfg [:otel :max-items]) 5000))
+            :publish-delay (long (or (get-in cfg [:otel :publish-delay]) 5000))
+            :http-opts (merge {:conn-timeout 2000
+                               :socket-timeout 2000}
+                              (get-in cfg [:otel :http-opts]))}
      :context context}))
+
+(defn- file-publisher-config [cfg]
+  {:type :simple-file
+   :filename (get-in cfg [:file :path])})
+
+(defn- otel-publisher-config [otel send]
+  {:type :open-telemetry
+   :send send
+   :url (:url otel)
+   :max-items (:max-items otel)
+   :publish-delay (:publish-delay otel)
+   :http-opts (:http-opts otel)})
+
+(defn- publisher-config [cfg]
+  (let [publishers (cond-> []
+                     (:file-enabled cfg) (conj (file-publisher-config cfg))
+                     (get-in cfg [:otel :enabled])
+                     (into (mapv #(otel-publisher-config (:otel cfg) %)
+                                 (get-in cfg [:otel :send]))))]
+    (case (count publishers)
+      0 nil
+      1 (first publishers)
+      {:type :multi
+       :publishers publishers})))
 
 (defn- ensure-parent-dir!
   [path]
@@ -89,7 +134,9 @@
   []
   {:healthy true
    :enabled (enabled?)
-   :path (get-in @publisher-state [:config :file :path])})
+   :path (get-in @publisher-state [:config :file :path])
+   :otel (select-keys (get-in @publisher-state [:config :otel])
+                      [:enabled :url :send :publish-delay :max-items])})
 
 (defn log!
   ([event-name] (log! event-name {}))
@@ -150,16 +197,17 @@
             (reset! publisher-state nil))
           (or @publisher-state
               (do
-                (ensure-parent-dir! (get-in cfg* [:file :path]))
-                (rotate-logs! (:file cfg*))
+                (when (:file-enabled cfg*)
+                  (ensure-parent-dir! (get-in cfg* [:file :path]))
+                  (rotate-logs! (:file cfg*)))
                 (mulog/set-global-context! (:context cfg*))
-                (let [stop-fn* (mulog/start-publisher!
-                                {:type :simple-file
-                                 :filename (get-in cfg* [:file :path])})]
+                (let [stop-fn* (mulog/start-publisher! (publisher-config cfg*))]
                   (reset! publisher-state {:config cfg*
                                            :stop-fn stop-fn*})
                   (log! :agent.logging/started
-                        {:path (get-in cfg* [:file :path])})
+                        {:path (get-in cfg* [:file :path])
+                         :otel/enabled (get-in cfg* [:otel :enabled])
+                         :otel/url (get-in cfg* [:otel :url])})
                   @publisher-state))))))))
 
 (defn stop!
