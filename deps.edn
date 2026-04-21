@@ -1,14 +1,14 @@
 {:paths ["src" "resources"]
- :deps {org.clojure/clojure {:mvn/version "1.11.1"}
+ :deps {org.clojure/clojure {:mvn/version "1.12.4"}
         org.clojure/core.async {:mvn/version "1.6.681"}
         org.clojure/data.json {:mvn/version "2.5.1"}
         com.brunobonacci/mulog {:mvn/version "0.10.1"}
-        clj-http/clj-http {:mvn/version "3.12.3"}
+        clj-http/clj-http {:mvn/version "3.13.1"}
         cheshire/cheshire {:mvn/version "5.11.0"}
         metosin/malli {:mvn/version "0.20.1"}
-        hiccup/hiccup {:mvn/version "2.0.0-RC3"}
+        hiccup/hiccup {:mvn/version "2.0.0"}
         http-kit/http-kit {:mvn/version "2.8.0"}
-        io.replikativ/datahike {:mvn/version "0.6.1599"}
+        io.replikativ/datahike {:mvn/version "0.6.1612"}
         metosin/reitit {:mvn/version "0.7.2"}
         com.layerware/hugsql {:mvn/version "0.5.3"}
         com.zaxxer/HikariCP {:mvn/version "6.2.1"}

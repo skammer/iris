@@ -14,6 +14,9 @@
            (not (str/includes? user "/"))
            (not (str/includes? user "\u0000")))))
 
+(defn- root-user? [user]
+  (contains? #{"0" "0:0" "root" "root:root"} user))
+
 (defn- validate-command! [substrate command]
   (when-not (command-vector? command)
     (throw (ex-info "runner command must be a non-empty vector of strings"
@@ -24,6 +27,12 @@
 (defn- validate-user! [substrate user]
   (when-not (valid-user? user)
     (throw (ex-info "runner user must be nil or a simple non-blank string"
+                    {:type :validation-failed
+                     :substrate substrate
+                     :user user})))
+  (when (and (contains? #{:docker :podman} substrate)
+             (root-user? user))
+    (throw (ex-info "container runner user must not be root"
                     {:type :validation-failed
                      :substrate substrate
                      :user user}))))

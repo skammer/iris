@@ -54,7 +54,8 @@
                       :pull-policy :missing
                       :container-working-dir "/workspace"
                       :container-data-dir "/tmp/clj-agent"
-                      :container-home-dir "/root"
+                      :container-home-dir "/tmp/clj-agent/home"
+                      :user "65532:65532"
                       :host-working-dir "."
                       :share-network? true}
              :podman {:image "clojure:temurin-21-alpine"
@@ -62,12 +63,15 @@
                       :pull-policy :missing
                       :container-working-dir "/workspace"
                       :container-data-dir "/tmp/clj-agent"
-                      :container-home-dir "/root"
+                      :container-home-dir "/tmp/clj-agent/home"
+                      :user "65532:65532"
                       :host-working-dir "."
                       :share-network? true}}
    :orchestrator {:enabled true}
-   :logging {:enabled true
-             :file {:path "logs/clj-agent.log"}}
+   :logging {:enabled false
+             :file {:path "logs/clj-agent.log"
+                    :max-bytes 10485760
+                    :max-files 5}}
    :api {:host "127.0.0.1"
          :port 8080}})
 

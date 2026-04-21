@@ -17,6 +17,7 @@
    [agent.persistence.sqlite :as sqlite]
    [agent.runners.docker-podman :as docker-podman]
    [agent.runners.core :as runners]
+   [agent.runners.options :as runner-options]
    [agent.skills :as skills]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
@@ -1404,23 +1405,30 @@
   (let [run (or (system-get-run system run-id)
                 (throw (api-error 404 "run_not_found" "Run not found")))
         runner (or (get (:runner-registry system) (keyword (:substrate run)))
-                   (throw (api-error 404 "runner_not_found" "Runner not found")))]
-    (let [launch-result (runners/launch runner
-                                        (runners/create-run-spec
-                                         {:run-id (:id run)
-                                          :agent-id (:agent-id run)
-                                          :parent-run-id (:parent-run-id run)
-                                          :lease-id (:lease-id run)
-                                          :name (:name run)
-                                          :substrate (keyword (:substrate run))
-                                          :capabilities (:capabilities run)
-                                          :network-identity (:network-identity run)
-                                          :bootstrap-token (:bootstrap-token run)
-                                          :bootstrap-spec (:bootstrap-spec run)
-                                          :requested-by (:requested-by run)
-                                          :runner-options (:runner-options run)}))]
-      (runtime/transition-run! (:runtime-service system) run-id :launched {:runner-metadata launch-result})
-      (system-get-run system run-id))))
+                   (throw (api-error 404 "runner_not_found" "Runner not found")))
+        checkpoint-seq (or (get-in run [:checkpoint :sequence-no]) 0)]
+    (try
+      (let [launch-result (runners/launch runner
+                                          (runners/create-run-spec
+                                           {:run-id (:id run)
+                                            :agent-id (:agent-id run)
+                                            :parent-run-id (:parent-run-id run)
+                                            :lease-id (:lease-id run)
+                                            :name (:name run)
+                                            :substrate (keyword (:substrate run))
+                                            :capabilities (:capabilities run)
+                                            :network-identity (:network-identity run)
+                                            :bootstrap-token (:bootstrap-token run)
+                                            :bootstrap-spec (assoc (:bootstrap-spec run)
+                                                              :checkpoint-seq checkpoint-seq)
+                                            :requested-by (:requested-by run)
+                                            :runner-options (runner-options/prepare-runner-options system run)}))]
+        (runtime/transition-run! (:runtime-service system) run-id :launched {:runner-metadata launch-result})
+        (system-get-run system run-id))
+      (catch clojure.lang.ExceptionInfo e
+        (case (:type (ex-data e))
+          :validation-failed (throw (api-error 400 "bad_request" (.getMessage e) (ex-data e)))
+          (throw e))))))
 
 (defn- system-signal-run! [system run-id command]
   (let [run (or (system-get-run system run-id)
