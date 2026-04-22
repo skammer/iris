@@ -25,3 +25,7 @@ limit :limit
 -- :name count-events :? :1
 select count(*) as n
 from agent_events
+
+-- :name latest-event-id :? :1
+select coalesce(max(id), 0) as id
+from agent_events

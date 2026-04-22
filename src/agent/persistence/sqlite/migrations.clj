@@ -5,7 +5,7 @@
    [ragtime.protocols :as ragtime-protocols]
    [ragtime.strategy :as ragtime-strategy]))
 
-(def latest-schema-version 9)
+(def latest-schema-version 10)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -237,7 +237,106 @@
           WHERE sequence_no IS NOT NULL;"
          "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_run_checkpoints_run_sequence_type
           ON agent_run_checkpoints(run_id, sequence_no, checkpoint_type)
-          WHERE sequence_no IS NOT NULL;"]}])
+          WHERE sequence_no IS NOT NULL;"]}
+   {:version 10
+    :id "10"
+    :name "workflow-events-activities"
+    :checksum "366f6a2322665cc9"
+    :irreversible? true
+    :up ["CREATE TRIGGER IF NOT EXISTS trg_agent_runs_requested_event
+          AFTER INSERT ON agent_runs
+          BEGIN
+            INSERT INTO agent_events (event_type, entity_type, entity_id, request_id, payload, created_at)
+            VALUES ('agent.run.requested', 'agent_run', NEW.id, NEW.idempotency_key,
+                    json_object('agent-id', NEW.agent_id,
+                                'name', NEW.name,
+                                'parent-run-id', NEW.parent_run_id,
+                                'substrate', NEW.substrate,
+                                'lease-id', NEW.lease_id,
+                                'requested-by', NEW.requested_by,
+                                'capabilities', json(NEW.capabilities_json),
+                                'runner-options', json(NEW.runner_options_json)),
+                    NEW.created_at);
+          END;"
+         "CREATE TRIGGER IF NOT EXISTS trg_agent_runs_status_event
+          AFTER UPDATE OF status ON agent_runs
+          WHEN OLD.status <> NEW.status
+          BEGIN
+            INSERT INTO agent_events (event_type, entity_type, entity_id, request_id, payload, created_at)
+            VALUES (CASE
+                      WHEN NEW.status = 'running' THEN 'agent.run.registered'
+                      ELSE 'agent.run.' || NEW.status
+                    END,
+                    'agent_run', NEW.id, NEW.idempotency_key,
+                    json_object('status', NEW.status,
+                                'last-error', NEW.last_error,
+                                'agent-id', NEW.agent_id,
+                                'network-identity', json(NEW.network_identity_json),
+                                'runner-metadata', json(NEW.runner_metadata_json),
+                                'finished-at', NEW.finished_at),
+                    strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+          END;"
+         "CREATE TRIGGER IF NOT EXISTS trg_agent_run_heartbeats_event
+          AFTER INSERT ON agent_run_heartbeats
+          BEGIN
+            INSERT INTO agent_events (event_type, entity_type, entity_id, request_id, payload, created_at)
+            VALUES ('agent.run.heartbeat', 'agent_run', NEW.run_id, NULL,
+                    json_object('sequence-no', NEW.sequence_no,
+                                'status', NEW.status),
+                    NEW.observed_at);
+          END;"
+         "CREATE TRIGGER IF NOT EXISTS trg_agent_run_checkpoints_event
+          AFTER INSERT ON agent_run_checkpoints
+          BEGIN
+            INSERT INTO agent_events (event_type, entity_type, entity_id, request_id, payload, created_at)
+            VALUES ('agent.run.checkpointed', 'agent_run', NEW.run_id, NULL,
+                    json_object('sequence-no', NEW.sequence_no,
+                                'checkpoint-type', NEW.checkpoint_type),
+                    NEW.created_at);
+          END;"
+         "CREATE TRIGGER IF NOT EXISTS trg_agent_run_commands_enqueued_event
+          AFTER INSERT ON agent_run_commands
+          BEGIN
+            INSERT INTO agent_events (event_type, entity_type, entity_id, request_id, payload, created_at)
+            VALUES ('agent.run.command.enqueued', 'agent_run', NEW.run_id, NEW.request_id,
+                    json_object('command-id', NEW.id,
+                                'command-type', NEW.command_type,
+                                'request-id', NEW.request_id),
+                    NEW.created_at);
+          END;"
+         "CREATE TRIGGER IF NOT EXISTS trg_agent_run_commands_status_event
+          AFTER UPDATE OF status ON agent_run_commands
+          WHEN OLD.status <> NEW.status
+          BEGIN
+            INSERT INTO agent_events (event_type, entity_type, entity_id, request_id, payload, created_at)
+            VALUES (CASE
+                      WHEN NEW.status = 'acknowledged' THEN 'agent.run.command.acknowledged'
+                      ELSE 'agent.run.command.completed'
+                    END,
+                    'agent_run', NEW.run_id, NEW.request_id,
+                    json_object('command-id', NEW.id,
+                                'request-id', NEW.request_id,
+                                'status', NEW.status,
+                                'error', NEW.error,
+                                'response', json(NEW.response_json)),
+                    coalesce(NEW.completed_at, NEW.acknowledged_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')));
+          END;"
+         "CREATE TABLE IF NOT EXISTS agent_run_activities (
+            activity_key TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            command_id TEXT,
+            activity_name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            input_json TEXT,
+            result_json TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );"
+         "CREATE INDEX IF NOT EXISTS idx_agent_run_activities_run_created
+          ON agent_run_activities(run_id, created_at DESC);"
+         "CREATE INDEX IF NOT EXISTS idx_agent_run_activities_command_created
+          ON agent_run_activities(command_id, created_at DESC);"]}])
 
 (defn descriptor-by-version [version]
   (some #(when (= version (:version %)) %) migration-descriptors))

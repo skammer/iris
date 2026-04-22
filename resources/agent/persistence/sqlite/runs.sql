@@ -143,3 +143,28 @@ limit :limit
 -- :name count-agent-runs :? :1
 select count(*) as n
 from agent_runs
+
+-- :name start-agent-run-activity :! :n
+insert or ignore into agent_run_activities (activity_key, run_id, command_id, activity_name, status, input_json, result_json, error, created_at, updated_at)
+values (:activity_key, :run_id, :command_id, :activity_name, 'running', :input_json, null, null, :created_at, :updated_at)
+
+-- :name get-agent-run-activity :? :1
+select activity_key, run_id, command_id, activity_name, status, input_json, result_json, error, created_at, updated_at
+from agent_run_activities
+where activity_key = :activity_key
+
+-- :name complete-agent-run-activity :! :n
+update agent_run_activities
+set status = :status,
+    result_json = :result_json,
+    error = :error,
+    updated_at = :updated_at
+where activity_key = :activity_key
+
+-- :name list-agent-run-activities :? :*
+select activity_key, run_id, command_id, activity_name, status, input_json, result_json, error, created_at, updated_at
+from agent_run_activities
+where run_id = :run_id
+  and (:command_id is null or command_id = :command_id)
+order by created_at asc
+limit :limit

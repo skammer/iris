@@ -1007,7 +1007,8 @@
                                                                           {:permissions permissions
                                                                            :approval-id approval-id
                                                                            :user (str "agent:" agent-id)
-                                                                           :request-id (:request_id body)})
+                                                                           :request-id (:request_id body)
+                                                                           :activity (:activity body)})
                                                        {:allowed-tools (set (:tool-access agent))})))})
       (catch Exception e
         (let [data (ex-data e)]
@@ -1449,21 +1450,26 @@
                    (throw (api-error 404 "runner_not_found" "Runner not found")))
         checkpoint-seq (or (get-in run [:checkpoint :sequence-no]) 0)]
     (try
-      (let [launch-result (runners/launch runner
-                                          (runners/create-run-spec
-                                           {:run-id (:id run)
-                                            :agent-id (:agent-id run)
-                                            :parent-run-id (:parent-run-id run)
-                                            :lease-id (:lease-id run)
-                                            :name (:name run)
-                                            :substrate (keyword (:substrate run))
-                                            :capabilities (:capabilities run)
-                                            :network-identity (:network-identity run)
-                                            :bootstrap-token (:bootstrap-token run)
-                                            :bootstrap-spec (assoc (:bootstrap-spec run)
-                                                              :checkpoint-seq checkpoint-seq)
-                                            :requested-by (:requested-by run)
-                                            :runner-options (runner-options/prepare-runner-options system run)}))]
+      (let [run-spec (runners/create-run-spec
+                      {:run-id (:id run)
+                       :agent-id (:agent-id run)
+                       :parent-run-id (:parent-run-id run)
+                       :lease-id (:lease-id run)
+                       :name (:name run)
+                       :substrate (keyword (:substrate run))
+                       :capabilities (:capabilities run)
+                       :network-identity (:network-identity run)
+                       :bootstrap-token (:bootstrap-token run)
+                       :bootstrap-spec (assoc (:bootstrap-spec run)
+                                         :checkpoint-seq checkpoint-seq)
+                       :requested-by (:requested-by run)
+                       :runner-options (runner-options/prepare-runner-options system run)})
+            launch-result (:result (runtime/execute-activity!
+                                    (:runtime-service system)
+                                    {:run-id run-id
+                                     :activity-name :runner.launch
+                                     :input run-spec}
+                                    #(runners/launch runner run-spec)))]
         (runtime/transition-run! (:runtime-service system) run-id :launched {:runner-metadata launch-result})
         (system-get-run system run-id))
       (catch clojure.lang.ExceptionInfo e
@@ -1476,14 +1482,19 @@
                 (throw (api-error 404 "run_not_found" "Run not found")))
         runner (or (get (:runner-registry system) (keyword (:substrate run)))
                    (throw (api-error 404 "runner_not_found" "Runner not found")))
-        signal-result (runners/signal runner run-id command)
         command-type (keyword (:command-type command))]
+    (let [signal-result (:result (runtime/execute-activity!
+                                  (:runtime-service system)
+                                  {:run-id run-id
+                                   :activity-name (keyword (str "runner.signal." (name command-type)))
+                                   :input command}
+                                  #(runners/signal runner run-id command)))]
     (when (contains? #{:cancel :terminate :kill} command-type)
       (runtime/transition-run! (:runtime-service system)
                                run-id
                                :cancelled
                                {:runner-metadata (merge (:runner-metadata run) signal-result)}))
-    signal-result))
+    signal-result)))
 
 (defn- normalize-run-request [body]
   (let [capabilities (:capabilities body)
@@ -1794,14 +1805,15 @@
              (not (str/blank? (:working_dir body))) (assoc :working-dir (:working_dir body)))
     (throw (api-error 400 "bad_request" "Unsupported tool"))))
 
-(defn- execution-context [tool-name input {:keys [permissions approval-id user request-id]}]
+(defn- execution-context [tool-name input {:keys [permissions approval-id user request-id activity]}]
   (let [granted (if approval-id
                   (tool-approvals/granted-permissions tool-name input)
                   permissions)]
-    {:permissions granted
-     :approval-id approval-id
-     :user (or user "api")
-     :request-id request-id}))
+    (cond-> {:permissions granted
+             :approval-id approval-id
+             :user (or user "api")
+             :request-id request-id}
+      activity (assoc :activity activity))))
 
 (defn- handle-execute-tool [system exchange tool-name]
   (let [body (read-json-body exchange)
@@ -1819,7 +1831,8 @@
                                               (execution-context tool-key input
                                                                  {:permissions permissions
                                                                   :approval-id approval-id
-                                                                  :user "api"}))})
+                                                                  :user "api"
+                                                                  :activity (:activity body)}))})
       (catch Exception e
         (throw (tool-error->api-error e))))))
 
@@ -2100,7 +2113,8 @@
                                                       (execution-context tool-name input
                                                                          {:approval-id approval-id
                                                                           :permissions permissions
-                                                                          :user "ui"}))})))
+                                                                          :user "ui"
+                                                                          :activity (:activity input)}))})))
       (catch Exception e
         (let [api-e (tool-error->api-error e)]
           (write-html! exchange

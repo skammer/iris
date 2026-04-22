@@ -1,10 +1,13 @@
 (ns agent.tools.core
   "Rewritten tool registry and execution helpers."
   (:require
+   [cheshire.core :as json]
    [clojure.set :as set]
    [malli.core :as m]
    [malli.error :as me]
-   [malli.json-schema :as json-schema]))
+   [malli.json-schema :as json-schema])
+  (:import
+   (java.security MessageDigest)))
 
 (defprotocol ITool
   (execute [this input context])
@@ -20,7 +23,7 @@
   (health-check [_]
     (health-fn)))
 
-(defrecord ToolRegistry [tools before-execute after-execute event-sink approval-check])
+(defrecord ToolRegistry [tools before-execute after-execute event-sink approval-check activity-executor])
 
 (defn tool-error
   ([type message] (tool-error type message {}))
@@ -118,9 +121,9 @@
 
 (defn create-registry
   ([] (create-registry {}))
-  ([{:keys [tools before-execute after-execute event-sink approval-check]
+  ([{:keys [tools before-execute after-execute event-sink approval-check activity-executor]
      :or {tools {}}}]
-   (->ToolRegistry tools before-execute after-execute event-sink approval-check)))
+   (->ToolRegistry tools before-execute after-execute event-sink approval-check activity-executor)))
 
 (defn with-approval
   [registry approval-check]
@@ -151,6 +154,31 @@
           (throw (tool-error :approval-required
                              (or (:reason decision) "Sensitive tool requires approved request")
                              {:tool-name (:name tool-description)})))))))
+
+(defn- sha256-hex [value]
+  (let [digest (.digest (MessageDigest/getInstance "SHA-256")
+                        (.getBytes (str value) "UTF-8"))]
+    (apply str (map #(format "%02x" (bit-and 0xff %)) digest))))
+
+(defn- canonical-json [value]
+  (json/generate-string value {:canonical true}))
+
+(defn- tool-activity-name [tool-name validated-input]
+  (let [tool (name tool-name)]
+    (str "tool." tool "." (subs (sha256-hex (canonical-json validated-input)) 0 16))))
+
+(defn- execute-effect! [registry tool tool-name validated-input context* f]
+  (if-let [activity-executor (:activity-executor registry)]
+    (if-let [{:keys [run-id command-id activity-name]} (:activity context*)]
+      (activity-executor {:run-id run-id
+                          :command-id command-id
+                          :activity-name (or activity-name
+                                             (tool-activity-name tool-name validated-input))
+                          :input {:tool-name (name tool-name)
+                                  :input validated-input}}
+                         f)
+      (f))
+    (f)))
 
 (defn register-tool
   [registry tool]
@@ -227,7 +255,12 @@
                                 {:tool-name tool-name}))))
          (let [start-ns (System/nanoTime)]
            (try
-             (let [result ((:execute-fn tool) validated-input context*)
+             (let [result (execute-effect! registry
+                                           tool
+                                           tool-name
+                                           validated-input
+                                           context*
+                                           #((:execute-fn tool) validated-input context*))
                    duration-ms (/ (double (- (System/nanoTime) start-ns)) 1000000.0)
                    final-result (if-let [postprocess (:after-execute registry)]
                                   (let [hook-result (postprocess (assoc (hook-context tool-description validated-input context*)
