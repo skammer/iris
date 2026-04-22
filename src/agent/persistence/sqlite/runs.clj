@@ -7,6 +7,7 @@
 
 (declare get-agent-run
          get-agent-run-by-idempotency-key
+         get-agent-run-activity
          get-agent-run-command
          latest-agent-run-lease
          list-agent-run-commands)
@@ -72,6 +73,19 @@
    :checkpoint-type checkpoint_type
    :state (common/parse-json-string state_json)
    :created-at created_at})
+
+(defn- row->activity [{:keys [activity_key run_id command_id activity_name status input_json
+                              result_json error created_at updated_at]}]
+  {:activity-key activity_key
+   :run-id run_id
+   :command-id command_id
+   :activity-name activity_name
+   :status status
+   :input (common/parse-json-string input_json)
+   :result (common/parse-json-string result_json)
+   :error error
+   :created-at created_at
+   :updated-at updated_at})
 
 (defn- run-update-params [run-id updates]
   (merge {:id run-id
@@ -426,3 +440,62 @@
     store
     (fn [conn]
       (some-> (common/select-one conn (count-agent-runs-sqlvec) identity) :n int))))
+
+(defn start-agent-run-activity!
+  [store {:keys [activity-key run-id command-id activity-name input]}]
+  (let [now* (common/now-str)
+        activity {:activity_key activity-key
+                  :run_id run-id
+                  :command_id command-id
+                  :activity_name (common/normalize-name activity-name)
+                  :input_json (common/json-string input)
+                  :created_at now*
+                  :updated_at now*}]
+    (common/with-connection
+      store
+      (fn [conn]
+        (common/execute! conn (start-agent-run-activity-sqlvec activity))))
+    (get-agent-run-activity store activity-key)))
+
+(defn get-agent-run-activity [store activity-key]
+  (common/with-connection
+    store
+    (fn [conn]
+      (some-> (common/select-one conn
+                                 (get-agent-run-activity-sqlvec
+                                  {:activity_key activity-key})
+                                 identity)
+              row->activity))))
+
+(defn complete-agent-run-activity!
+  [store activity-key {:keys [status result error]}]
+  (let [status* (common/normalize-name status)]
+    (common/with-connection
+      store
+      (fn [conn]
+        (let [updated (common/execute! conn
+                                       (complete-agent-run-activity-sqlvec
+                                        {:activity_key activity-key
+                                         :status status*
+                                         :result_json (when (= "completed" status*)
+                                                        (common/json-string result))
+                                         :error error
+                                         :updated_at (common/now-str)}))]
+          (when (zero? updated)
+            (throw (ex-info "Activity not found" {:type :activity-not-found
+                                                  :activity-key activity-key}))))))
+    (get-agent-run-activity store activity-key)))
+
+(defn list-agent-run-activities
+  ([store run-id] (list-agent-run-activities store run-id {}))
+  ([store run-id {:keys [command-id limit] :or {limit 100}}]
+   (common/with-connection
+     store
+     (fn [conn]
+       (mapv row->activity
+             (common/select-many conn
+                                 (list-agent-run-activities-sqlvec
+                                  {:run_id run-id
+                                   :command_id command-id
+                                   :limit limit})
+                                 identity))))))

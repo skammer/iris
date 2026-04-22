@@ -115,8 +115,28 @@
                                                             :request-id "cmd-key-1"})
         completed-a (runtime/complete-command! service run-id (:id command-a) :completed nil {:ok true})
         completed-b (runtime/complete-command! service run-id (:id command-a) :failed "retry-error" {:ok false})
+        activity-runs (atom 0)
+        activity-a (runtime/execute-activity! service
+                                              {:run-id run-id
+                                               :command-id (:id command-a)
+                                               :activity-name :test.effect
+                                               :input {:x 1}}
+                                              #(do
+                                                 (swap! activity-runs inc)
+                                                 {:value 42}))
+        activity-b (runtime/execute-activity! service
+                                              {:run-id run-id
+                                               :command-id (:id command-a)
+                                               :activity-name :test.effect
+                                               :input {:x 1}}
+                                              #(do
+                                                 (swap! activity-runs inc)
+                                                 {:value 100}))
         replayed (runtime/replay-run (runtime/run-history service run-id))
-        hydrated (runtime/get-run service run-id)]
+        hydrated (runtime/get-run service run-id)
+        persisted-events (sqlite/list-events store {:entity-type :agent_run
+                                                    :entity-id run-id
+                                                    :limit 20})]
     (is (= (:id run-a) (:id run-b)))
     (is (= "run-key-1" (:idempotency-key run-b)))
     (is (= heartbeat-a heartbeat-b))
@@ -124,6 +144,10 @@
     (is (= (:id command-a) (:id command-b)))
     (is (= "completed" (:status completed-b)))
     (is (= (:completed-at completed-a) (:completed-at completed-b)))
+    (is (= {:value 42} (:result activity-a)))
+    (is (= {:value 42} (:result activity-b)))
+    (is (true? (:cached? activity-b)))
+    (is (= 1 @activity-runs))
     (is (= (:heartbeat hydrated) (:heartbeat replayed)))
     (is (= (:checkpoint hydrated) (:checkpoint replayed)))
     (is (= (:pending-commands hydrated) (:pending-commands replayed)))
@@ -133,6 +157,8 @@
             "agent.run.command.enqueued"
             "agent.run.command.completed"]
            (mapv (comp name :event-type) @events)))
+    (is (= (mapv :event-type persisted-events)
+           (reverse (mapv :event-type @events))))
     (io/delete-file path true)))
 
 (deftest wait-for-run-uses-broker-events-test

@@ -66,3 +66,10 @@
     store
     (fn [conn]
       (some-> (common/select-one conn (count-events-sqlvec) identity) :n int))))
+
+(defn latest-event-id [store]
+  (common/with-connection
+    store
+    (fn [conn]
+      (long (or (some-> (common/select-one conn (latest-event-id-sqlvec) identity) :id)
+                0)))))

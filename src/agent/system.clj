@@ -149,6 +149,17 @@
         (broker/publish! broker-instance message))
       recorded))))
 
+(defn create-recorded-event-sink
+  ([broker-instance]
+   (create-recorded-event-sink broker-instance nil))
+  ([broker-instance telemetry-collector]
+   (fn [recorded]
+     (logging/log-system-event! recorded)
+     (telemetry/record-system-event! telemetry-collector recorded)
+     (doseq [message (broker/event->messages recorded)]
+       (broker/publish! broker-instance message))
+     recorded)))
+
 (defn subscribe-events
   ([system] (subscribe-events system (broker/all-events-subject)))
   ([system pattern]
@@ -168,6 +179,12 @@
         registry (tools/create-registry
                   {:event-sink event-sink
                    :approval-check (tool-approvals/create-policy-hook store)
+                   :activity-executor (when store
+                                        (fn [activity f]
+                                          (:result (runtime/execute-activity!
+                                                   (runtime/create-runtime-service {:store store})
+                                                   activity
+                                                   f))))
                    :after-execute (fn [{:keys [tool context duration-ms is-error error] :as hook}]
                                     (telemetry/record-tool! telemetry-collector
                                                             {:tool-name (:name tool)
@@ -212,8 +229,13 @@
    (create-runtime-service store event-sink nil))
   ([store event-sink broker-instance]
    (runtime/create-runtime-service {:store store
+                                     :broker broker-instance
+                                     :event-sink event-sink}))
+  ([store event-sink broker-instance recorded-event-sink]
+   (runtime/create-runtime-service {:store store
                                     :broker broker-instance
-                                    :event-sink event-sink})))
+                                    :event-sink event-sink
+                                    :recorded-event-sink recorded-event-sink})))
 
 (defn- runner-exit-status [run exit-code]
   (cond
@@ -299,7 +321,8 @@
          telemetry-collector (create-telemetry (:telemetry cfg))
          broker-instance (create-broker store)
          event-sink (create-event-sink store broker-instance telemetry-collector)
-         runtime-service (create-runtime-service store event-sink broker-instance)]
+         recorded-event-sink (create-recorded-event-sink broker-instance telemetry-collector)
+         runtime-service (create-runtime-service store event-sink broker-instance recorded-event-sink)]
      (logging/log! :agent.system/created
                    {:config-path config-path
                     :provider (name (get-in cfg [:llm :provider]))
@@ -311,6 +334,7 @@
       :telemetry telemetry-collector
       :broker broker-instance
       :event-sink event-sink
+      :recorded-event-sink recorded-event-sink
       :tool-registry (create-tool-registry (:tools cfg) event-sink store telemetry-collector)
       :skills-registry (create-skills-registry (:skills cfg))
       :memory-service (create-memory-service (:memory cfg) store)

@@ -179,7 +179,8 @@
                          {:store store
                           :event-sink #(do
                                          (logging/log-system-event! %)
-                                         (sqlite/log-event! store %))})})))
+                                         (sqlite/log-event! store %))
+                          :recorded-event-sink logging/log-system-event!})})))
 
 (defn run-child!
   [{:keys [sqlite-path run-id bootstrap-spec control-url control-token child-sqlite-path]}]

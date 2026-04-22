@@ -71,6 +71,9 @@
   ([store] (events/list-events store))
   ([store opts] (events/list-events store opts)))
 
+(defn latest-event-id [store]
+  (events/latest-event-id store))
+
 (defn search-events
   ([store query] (events/search-events store query))
   ([store query opts] (events/search-events store query opts)))
@@ -154,6 +157,19 @@
 (defn list-agent-run-checkpoints
   ([store run-id] (runs/list-agent-run-checkpoints store run-id))
   ([store run-id opts] (runs/list-agent-run-checkpoints store run-id opts)))
+
+(defn start-agent-run-activity! [store activity]
+  (runs/start-agent-run-activity! store activity))
+
+(defn get-agent-run-activity [store activity-key]
+  (runs/get-agent-run-activity store activity-key))
+
+(defn complete-agent-run-activity! [store activity-key updates]
+  (runs/complete-agent-run-activity! store activity-key updates))
+
+(defn list-agent-run-activities
+  ([store run-id] (runs/list-agent-run-activities store run-id))
+  ([store run-id opts] (runs/list-agent-run-activities store run-id opts)))
 
 (defn upsert-federation-peer-key! [store peer-key]
   (federation/upsert-peer-key! store peer-key))
