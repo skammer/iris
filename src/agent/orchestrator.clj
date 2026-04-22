@@ -1,6 +1,7 @@
 (ns agent.orchestrator
   "Rewritten in-memory orchestrator/subagent runtime."
   (:require
+   [agent.mcp.core :as mcp]
    [agent.telemetry :as telemetry]
    [clojure.core.async :as async]
    [clojure.string :as str])
@@ -612,7 +613,15 @@
      :acked-at nil
      :acknowledged-by nil
      :ack-type nil
-     :last-error nil}))
+     :last-error nil
+     :mcp (mcp/agent-envelope {:id request-id
+                               :from-address (:logical-address from-agent)
+                               :to-address (or (some-> to-agent :logical-address)
+                                               (:logical-address federated-target))
+                               :message-type message-type
+                               :content content
+                               :metadata {:route (name route)
+                                          :delivery-mode delivery-mode}})}))
 
 (defn- deliver-local-interop! [to-agent envelope]
   (async/>!! (:inbox to-agent)

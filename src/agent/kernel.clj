@@ -1,10 +1,9 @@
 (ns agent.kernel
   "Pure agent/orchestrator directive contract."
   (:require
-   [clojure.set :as set]))
+   [agent.kernel.schema :as schema]))
 
-(def ^:private directive-types
-  #{:spawn-worker :send-message :await :complete :tool-call :state-patch})
+(def directive-types schema/directive-types)
 
 (defn directive
   [type payload]
@@ -12,8 +11,8 @@
     (throw (ex-info "Unknown directive type"
                     {:type :validation-failed
                      :directive-type type})))
-  {:type type
-   :payload payload})
+  (schema/validate-directive! {:type type
+                               :payload payload}))
 
 (defn step-result
   [{:keys [state directives receipts]
@@ -24,9 +23,9 @@
     (throw (ex-info "Invalid directives"
                     {:type :validation-failed
                      :directives directives})))
-  {:state state
-   :directives (vec directives)
-   :receipts (vec receipts)})
+  (schema/validate-step! {:state state
+                          :directives (vec directives)
+                          :receipts (vec receipts)}))
 
 (defn orchestrator-spawn-worker-step
   [{:keys [task worker-name worker-role capability-bundle memory-scopes budgets system-prompt]

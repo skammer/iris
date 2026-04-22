@@ -11,8 +11,10 @@
    [agent.kernel-test]
    [agent.logging-test]
    [agent.memory.core-test]
+   [agent.mcp.core-test]
    [agent.orchestrator-test]
    [agent.persistence.sqlite-test]
+   [agent.planner-test]
    [agent.runners.docker-podman-e2e-test]
    [agent.runners.docker-podman-test]
    [agent.runners.local-unsandboxed-test]
@@ -40,8 +42,10 @@
     agent.kernel-test
     agent.logging-test
     agent.memory.core-test
+    agent.mcp.core-test
     agent.orchestrator-test
     agent.persistence.sqlite-test
+    agent.planner-test
     agent.runners.docker-podman-e2e-test
     agent.runners.docker-podman-test
     agent.runners.local-unsandboxed-test

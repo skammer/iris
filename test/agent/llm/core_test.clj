@@ -34,7 +34,24 @@
 (deftest test-optional-protocols
   (is (some #{:complete-with-tools} (keys (:sigs llm-core/ILLMProviderWithTools))))
   (is (some #{:with-cache-controls} (keys (:sigs llm-core/ILLMProviderWithCache))))
-  (is (some #{:usage} (keys (:sigs llm-core/ILLMProviderWithUsage)))))
+  (is (some #{:usage} (keys (:sigs llm-core/ILLMProviderWithUsage))))
+  (is (some #{:invoke} (keys (:sigs llm-core/ILLMProviderInvoke))))
+  (is (some #{:generate} (keys (:sigs llm-core/ILLMProviderInvoke)))))
+
+(deftest test-default-invoke-fallback
+  (let [provider (reify llm-core/ILLMProvider
+                   (complete [_ _ _] "ok")
+                   (stream [_ _ _] nil)
+                   (embed [_ _ _] [])
+                   (list-models [_] [])
+                   (get-capabilities [_ _] {})
+                   (estimate-cost [_ _ _] {:tokens 1 :cost-usd 0.0}))]
+    (is (= {:role "assistant"
+            :content "ok"
+            :tool-calls []
+            :usage nil
+            :raw "ok"}
+           (llm-core/invoke provider {:messages [{:role "user" :content "hi"}]})))))
 
 (deftest test-helper-functions
   (testing "Normalize messages function"
