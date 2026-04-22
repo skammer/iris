@@ -30,14 +30,24 @@
 (defn- models-url [base-url]
   (str (trim-trailing-slash base-url) "/models"))
 
+(defn- structured-output-format [{:keys [name schema strict?]}]
+  {:type "json_schema"
+   :json_schema {:name (or name "structured_output")
+                 :schema schema
+                 :strict (not (false? strict?))}})
+
 (defn- completion-body [default-model messages opts]
-  (cond-> {:model (or (:model opts) default-model)
-           :messages (llm-core/normalize-messages messages)
-           :temperature (or (:temperature opts) 0.2)
-           :max_tokens (or (:max-tokens opts) 1024)
-           :stream false}
+  (cond-> (merge {:model (or (:model opts) default-model)
+                  :messages (llm-core/normalize-messages messages)
+                  :temperature (or (:temperature opts) 0.2)
+                  :max_tokens (or (:max-tokens opts) 1024)
+                  :stream false}
+                 (:extra-body opts))
     (:tools opts) (assoc :tools (:tools opts))
     (:tool-choice opts) (assoc :tool_choice (:tool-choice opts))
+    (:structured-output opts) (assoc :response_format (structured-output-format (:structured-output opts)))
+    (:response-format opts) (assoc :response_format (:response-format opts))
+    (:cache-control opts) (assoc :cache_control (:cache-control opts))
     (:cache_control opts) (assoc :cache_control (:cache_control opts))))
 
 (defn- stream-body [default-model messages opts]
@@ -169,6 +179,24 @@
                                                        (assoc opts :tools tools)))
                                :as :json})]
       (message->turn (:body response)))))
+
+(extend-type OpenAICompatibleProvider
+  llm-core/ILLMProviderInvoke
+  (invoke [this request]
+    (let [response (post-json (chat-url (:base-url this))
+                              {:headers (bearer-headers {:api-key (:api-key this)
+                                                         :site-url (:site-url this)
+                                                         :app-name (:app-name this)
+                                                         :extra-headers (:extra-headers this)})
+                               :body (json/generate-string
+                                      (completion-body (:default-model this)
+                                                       (:messages request)
+                                                       (llm-core/request->completion-opts request)))
+                               :as :json})]
+      (llm-core/normalize-llm-response (message->turn (:body response))
+                                       {:usage (usage->estimate (:body response))})))
+  (generate [this messages opts]
+    (llm-core/invoke this (assoc opts :messages messages))))
 
 (extend-type OpenAICompatibleProvider
   llm-core/ILLMProviderWithCache

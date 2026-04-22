@@ -58,6 +58,13 @@
                   :agents {}
                   :tools {}
                   :federation {}
+                  :mcp {:calls 0
+                        :errors 0
+                        :latencies []}
+                  :planner {:calls 0
+                            :errors 0
+                            :latencies []}
+                  :directives {}
                   :llm {:calls 0
                         :errors 0
                         :latencies []}})}))
@@ -112,7 +119,17 @@
                             {:run/id run-id
                              :agent/id (get-in @(:state collector) [:runs run-id :agent-id])
                              :run/status status
-                             :latency/ms latency-ms}))))))))
+                             :latency/ms latency-ms})))))
+      (when (= "agent.kernel.step.executed" event-type)
+        (let [receipts (get-in event [:payload :receipts])]
+          (swap! (:state collector)
+                 (fn [state]
+                   (reduce (fn [acc receipt]
+                             (update-in acc
+                                        [:directives (name (:directive receipt)) :count]
+                                        (fnil inc 0)))
+                           state
+                           receipts))))))))
 
 (defn- safe-estimate-cost [provider messages model]
   (try
@@ -236,6 +253,40 @@
                                    :error/type (or (:type (ex-data error))
                                                    (.getName (class error)))))))))
 
+(defn record-mcp-call!
+  [collector {:keys [server-url method duration-ms success? error]}]
+  (when (enabled? collector)
+    (let [success?* (not (false? success?))]
+      (swap! (:state collector)
+             (fn [state]
+               (-> state
+                   (update-in [:mcp :calls] (fnil inc 0))
+                   (cond-> (not success?*) (update-in [:mcp :errors] (fnil inc 0)))
+                   (update-in [:mcp :latencies] bounded-conj duration-ms (:max-latency-samples collector)))))
+      (logging/log! :agent.telemetry/mcp-call
+                    (cond-> {:mcp/server-url server-url
+                             :mcp/method method
+                             :latency/ms duration-ms
+                             :success success?*}
+                      error (assoc :error/message (.getMessage ^Throwable error)))))))
+
+(defn record-planner!
+  [collector {:keys [agent-id duration-ms success? error directive-count]}]
+  (when (enabled? collector)
+    (let [success?* (not (false? success?))]
+      (swap! (:state collector)
+             (fn [state]
+               (-> state
+                   (update-in [:planner :calls] (fnil inc 0))
+                   (cond-> (not success?*) (update-in [:planner :errors] (fnil inc 0)))
+                   (update-in [:planner :latencies] bounded-conj duration-ms (:max-latency-samples collector)))))
+      (logging/log! :agent.telemetry/planner
+                    (cond-> {:agent/id (or agent-id "system")
+                             :latency/ms duration-ms
+                             :success success?*
+                             :directives/count (long (or directive-count 0))}
+                      error (assoc :error/message (.getMessage ^Throwable error)))))))
+
 (defn- tool-summary [tool]
   (let [calls (long (or (:calls tool) 0))
         errors (long (or (:errors tool) 0))]
@@ -260,8 +311,14 @@
   (let [state (if (enabled? collector) @(:state collector) {})
         run-latencies (:run-latencies state)
         llm (:llm state)
+        mcp (:mcp state)
+        planner (:planner state)
         llm-calls (long (or (:calls llm) 0))
-        llm-errors (long (or (:errors llm) 0))]
+        llm-errors (long (or (:errors llm) 0))
+        mcp-calls (long (or (:calls mcp) 0))
+        mcp-errors (long (or (:errors mcp) 0))
+        planner-calls (long (or (:calls planner) 0))
+        planner-errors (long (or (:errors planner) 0))]
     {:enabled (enabled? collector)
      :runs {:count (count (:runs state))
             :terminal-count (count run-latencies)
@@ -275,6 +332,15 @@
                        (map (fn [[peer-id peer]]
                               [peer-id (federation-summary peer)]))
                        (:federation state))
+     :mcp {:calls mcp-calls
+           :errors mcp-errors
+           :error-rate (if (pos? mcp-calls) (/ (double mcp-errors) mcp-calls) 0.0)
+           :latency-ms (latency-summary (:latencies mcp))}
+     :planner {:calls planner-calls
+               :errors planner-errors
+               :error-rate (if (pos? planner-calls) (/ (double planner-errors) planner-calls) 0.0)
+               :latency-ms (latency-summary (:latencies planner))}
+     :directives (:directives state)
      :llm {:calls llm-calls
            :errors llm-errors
            :error-rate (if (pos? llm-calls) (/ (double llm-errors) llm-calls) 0.0)

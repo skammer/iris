@@ -60,6 +60,16 @@
   (usage [this response opts]
     "Return normalized usage map: prompt/completion/cached tokens and cost."))
 
+(defprotocol ILLMProviderInvoke
+  "Normalized expandable LLM request/response API."
+  (invoke [this request]
+    "Execute normalized request map.
+    request keys: :messages, :model, :tools, :tool-choice, :structured-output,
+    :cache-control, :modalities, :metadata.
+    Returns normalized assistant turn map with :content, :tool-calls, :usage, :raw.")
+  (generate [this messages opts]
+    "Generate one assistant turn from messages and opts. Returns normalized response map."))
+
 (defprotocol ILLMProviderWithConfig
   "Protocol for providers that support configuration updates."
   
@@ -207,6 +217,62 @@
   [text {:keys [model] :or {model "text-embedding-ada-002"}}]
   {:model model
    :input (if (string? text) [text] text)})
+
+(defn request->completion-opts
+  [request]
+  (merge
+   (:opts request)
+   (select-keys request
+                [:model :temperature :max-tokens :top-p :frequency-penalty
+                 :presence-penalty :tools :tool-choice :structured-output
+                 :response-format :cache-control :cache_control :modalities
+                 :metadata :extra-body])))
+
+(defn normalize-llm-response
+  [response opts]
+  (cond
+    (string? response)
+    {:role "assistant"
+     :content response
+     :tool-calls []
+     :usage nil
+     :raw response}
+
+    (map? response)
+    (let [content (or (:content response) "")
+          usage* (or (:usage response)
+                     (:usage opts))]
+      (-> response
+          (assoc :role (or (:role response) "assistant"))
+          (assoc :content content)
+          (assoc :tool-calls (vec (or (:tool-calls response)
+                                      (:tool_calls response)
+                                      [])))
+          (assoc :usage usage*)
+          (assoc :raw (or (:raw response) response))))
+
+    :else
+    {:role "assistant"
+     :content (str response)
+     :tool-calls []
+     :usage nil
+     :raw response}))
+
+(defn default-invoke
+  [provider {:keys [messages tools] :as request}]
+  (let [opts (request->completion-opts request)
+        result (if (and (seq tools)
+                        (satisfies? ILLMProviderWithTools provider))
+                 (complete-with-tools provider messages tools opts)
+                 (complete provider messages opts))]
+    (normalize-llm-response result opts)))
+
+(extend-protocol ILLMProviderInvoke
+  Object
+  (invoke [this request]
+    (default-invoke this request))
+  (generate [this messages opts]
+    (invoke this (assoc opts :messages messages))))
 
 ;; ======================
 ;; Error Handling

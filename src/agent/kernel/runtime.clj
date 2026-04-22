@@ -1,11 +1,12 @@
 (ns agent.kernel.runtime
   (:require
-   [agent.kernel :as kernel]
-   [agent.kernel.ops :as ops]))
+   [agent.kernel.ops :as ops]
+   [agent.kernel.schema :as schema]))
 
 (defn execute-directive!
   [ops parent-agent-id directive]
-  (case (:type directive)
+  (let [directive (schema/validate-directive! directive)]
+    (case (:type directive)
     :spawn-worker
     (let [{:keys [task name role capability-bundle memory-scopes budgets system-prompt]} (:payload directive)
           worker (ops/spawn-task-worker! ops {:task task
@@ -56,11 +57,12 @@
 
     (throw (ex-info "Unsupported directive"
                     {:type :validation-failed
-                     :directive (:type directive)}))))
+                     :directive (:type directive)})))))
 
 (defn execute-step!
   [ops parent-agent-id step]
-  (let [receipts (mapv #(execute-directive! ops parent-agent-id %)
+  (let [step (schema/validate-step! step)
+        receipts (mapv #(execute-directive! ops parent-agent-id %)
                        (:directives step))]
     (ops/emit-kernel-event!
      ops

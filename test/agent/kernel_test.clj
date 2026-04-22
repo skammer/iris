@@ -1,6 +1,7 @@
 (ns agent.kernel-test
   (:require
    [agent.kernel :as kernel]
+   [agent.kernel.schema :as kernel-schema]
    [clojure.test :refer :all]))
 
 (deftest orchestrator-spawn-worker-step-test
@@ -16,3 +17,15 @@
     (is (= :spawn-worker (get-in result [:directives 0 :type])))
     (is (= "Fact Worker" (get-in result [:directives 0 :payload :name])))
     (is (= {:max_tokens 1000} (get-in result [:directives 0 :payload :budgets])))))
+
+(deftest directive-schema-validation-test
+  (is (= :tool-call
+         (-> {:type "tool-call"
+              :payload {:tool-name "http"
+                        :input {:url "https://example.com"}}}
+             kernel-schema/validate-directive!
+             :type)))
+  (is (map? (kernel-schema/planner-json-schema)))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"directive failed schema validation"
+                        (kernel/directive :tool-call {:input {}}))))
