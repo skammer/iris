@@ -30,6 +30,7 @@
                   :allow-private? false
                   :max-redirects 3
                   :default-headers {"User-Agent" "clj-agent/0.1"}}
+           :yolo? false
            :fs {:enabled true
                 :roots ["."]
                 :max-read-bytes 1048576
@@ -154,6 +155,7 @@
                                vec))
         otel-publish-delay (parse-long* (System/getenv "AGENT_OTEL_PUBLISH_DELAY_MS"))
         otel-max-items (parse-long* (System/getenv "AGENT_OTEL_MAX_ITEMS"))
+        tools-yolo? (parse-bool (System/getenv "AGENT_TOOLS_YOLO"))
         api-host (System/getenv "AGENT_API_HOST")
         api-port (parse-long* (System/getenv "AGENT_API_PORT"))]
     {:llm (cond-> {}
@@ -185,6 +187,8 @@
                      (assoc :api-key (System/getenv "OPENAI_API_KEY")))))
      :storage (cond-> {}
                 sqlite-path (assoc :sqlite {:path sqlite-path}))
+     :tools (cond-> {}
+              (some? tools-yolo?) (assoc :yolo? tools-yolo?))
      :telemetry (cond-> {}
                   (some? telemetry-enabled) (assoc :enabled telemetry-enabled)
                   (some? telemetry-max-latency-samples) (assoc :max-latency-samples telemetry-max-latency-samples))

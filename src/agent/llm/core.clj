@@ -2,6 +2,7 @@
   "Core LLM protocols and interfaces for the agent system.
   Provides abstract interfaces for LLM providers with extended capabilities."
   (:require
+   [cheshire.core :as json]
    [clojure.spec.alpha :as s]
    [clojure.string :as str])
   (:import
@@ -45,7 +46,7 @@
     Returns: map with :tokens, :cost-usd, etc."))
 
 (defprotocol ILLMProviderWithTools
-  "Optional tool-call capable provider API."
+  "Deprecated compatibility API. Prefer ILLMProviderInvoke/invoke with :tools."
   (complete-with-tools [this messages tools opts]
     "Complete with provider-native tool definitions.
     Returns structured content/tool-call/usage data."))
@@ -258,13 +259,48 @@
      :usage nil
      :raw response}))
 
+(declare llm-error)
+
+(defn- parse-tool-arguments [arguments]
+  (cond
+    (nil? arguments) {}
+    (map? arguments) arguments
+    (string? arguments) (try
+                          (json/parse-string arguments true)
+                          (catch Exception _
+                            {:arguments arguments}))
+    :else {:arguments arguments}))
+
+(defn tool-call->directive
+  [tool-call]
+  (let [function (or (:function tool-call)
+                     (:function_call tool-call)
+                     tool-call)
+        tool-name (or (:name function)
+                      (:tool-name tool-call)
+                      (:tool_name tool-call)
+                      (:name tool-call))
+        input (parse-tool-arguments (or (:arguments function)
+                                        (:input tool-call)
+                                        (:args tool-call)))]
+    (when-not tool-name
+      (throw (llm-error :invalid-tool-call
+                        "Provider tool call missing tool name"
+                        {:tool-call tool-call})))
+    {:type :tool-call
+     :payload {:tool-name tool-name
+               :input input
+               :context (cond-> {:provider-tool-call tool-call}
+                          (:id tool-call) (assoc :provider-tool-call-id (:id tool-call)))}}))
+
+(defn tool-calls->directives
+  [tool-calls]
+  (mapv tool-call->directive (or tool-calls [])))
+
 (defn default-invoke
-  [provider {:keys [messages tools] :as request}]
+  [provider {:keys [messages] :as request}]
   (let [opts (request->completion-opts request)
-        result (if (and (seq tools)
-                        (satisfies? ILLMProviderWithTools provider))
-                 (complete-with-tools provider messages tools opts)
-                 (complete provider messages opts))]
+        result (complete provider messages opts)]
     (normalize-llm-response result opts)))
 
 (extend-protocol ILLMProviderInvoke

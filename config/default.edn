@@ -17,6 +17,7 @@
  :tools {:http {:enabled true
                 :timeout-ms 30000
                 :default-headers {"User-Agent" "clj-agent/0.1"}}
+         :yolo? false
          :fs {:enabled true
               :roots ["."]
               :max-read-bytes 1048576}

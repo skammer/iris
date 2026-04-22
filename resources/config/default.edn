@@ -19,6 +19,7 @@
                 :allow-private? false
                 :max-redirects 3
                 :default-headers {"User-Agent" "clj-agent/0.1"}}
+         :yolo? false
          :fs {:enabled true
               :roots ["."]
               :max-read-bytes 1048576
