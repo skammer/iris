@@ -4,7 +4,9 @@
    [agent.kernel.schema :as schema]))
 
 (defn execute-directive!
-  [ops parent-agent-id directive]
+  ([ops parent-agent-id directive]
+   (execute-directive! ops parent-agent-id directive {}))
+  ([ops parent-agent-id directive {:keys [yolo?]}]
   (let [directive (schema/validate-directive! directive)]
     (case (:type directive)
     :spawn-worker
@@ -27,11 +29,18 @@
 
     :tool-call
     (let [{:keys [tool-name input context]} (:payload directive)
-          result (ops/execute-agent-tool! ops parent-agent-id (keyword tool-name) input (or context {}))]
-      {:directive (:type directive)
-       :status :ok
-       :tool-name tool-name
-       :result result})
+          context* (cond-> (or context {})
+                     (:approval_id context) (assoc :approval-id (:approval_id context)))]
+      (if (or yolo? (:approval-id context*) (:approval_id context*))
+        (let [result (ops/execute-agent-tool! ops parent-agent-id (keyword tool-name) input context*)]
+          {:directive (:type directive)
+           :status :ok
+           :tool-name tool-name
+           :result result})
+        {:directive (:type directive)
+         :status :approval-required
+         :tool-name tool-name
+         :input input}))
 
     :send-message
     (let [{:keys [agent-id message]} (:payload directive)
@@ -57,12 +66,14 @@
 
     (throw (ex-info "Unsupported directive"
                     {:type :validation-failed
-                     :directive (:type directive)})))))
+                     :directive (:type directive)}))))))
 
 (defn execute-step!
-  [ops parent-agent-id step]
+  ([ops parent-agent-id step]
+   (execute-step! ops parent-agent-id step {}))
+  ([ops parent-agent-id step opts]
   (let [step (schema/validate-step! step)
-        receipts (mapv #(execute-directive! ops parent-agent-id %)
+        receipts (mapv #(execute-directive! ops parent-agent-id % opts)
                        (:directives step))]
     (ops/emit-kernel-event!
      ops
@@ -72,4 +83,4 @@
       :payload {:directive-count (count (:directives step))
                 :receipt-count (count receipts)
                 :receipts receipts}})
-    (assoc step :receipts receipts)))
+    (assoc step :receipts receipts))))

@@ -8,6 +8,8 @@
 (def directive-types
   #{:spawn-worker :send-message :await :complete :tool-call :state-patch})
 
+(def current-step-schema-version "agent.step.v1")
+
 (def spawn-worker-payload-schema
   [:map {:closed true}
    [:task :any]
@@ -74,6 +76,7 @@
 
 (def step-schema
   [:map {:closed true}
+   [:schema-version :string]
    [:state {:optional true} [:map-of :any :any]]
    [:directives [:vector directive-schema]]
    [:receipts {:optional true} [:vector receipt-schema]]])
@@ -86,6 +89,7 @@
 (defn normalize-step
   [step]
   (-> step
+      (update :schema-version #(or % current-step-schema-version))
       (update :directives #(mapv normalize-directive (or % [])))
       (update :receipts #(vec (or % [])))
       (update :state #(or % {}))))

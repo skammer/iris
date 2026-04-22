@@ -12,6 +12,7 @@
     (is (true? (get-in cfg [:llm :stream-structured-output?])))
     (is (= "http://localhost:11434" (get-in cfg [:llm :ollama :base-url])))
     (is (true? (get-in cfg [:tools :http :enabled])))
+    (is (false? (get-in cfg [:tools :yolo?])))
     (is (false? (get-in cfg [:logging :enabled])))
     (is (= "logs/clj-agent.log" (get-in cfg [:logging :file :path])))
     (is (= 10485760 (get-in cfg [:logging :file :max-bytes])))

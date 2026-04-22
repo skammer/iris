@@ -1087,7 +1087,8 @@
   (let [directives (or (:directives body) [])]
     (when-not (vector? directives)
       (throw (api-error 400 "bad_request" "directives must be a vector")))
-    {:state (or (:state body) {})
+    {:schema-version (or (:schema-version body) (:schema_version body))
+     :state (or (:state body) {})
      :directives (mapv (fn [directive]
                          (when-not (map? directive)
                            (throw (api-error 400 "bad_request" "directive must be an object")))
@@ -1135,12 +1136,19 @@
 
 (defn- handle-agent-step-execute [system exchange agent-id]
   (let [agent (orchestrator/get-agent (:orchestrator system) agent-id)
-        step (normalize-step-body (read-json-body exchange))]
+        body (read-json-body exchange)
+        step (normalize-step-body body)
+        yolo-override (if (contains? body :yolo?)
+                        (:yolo? body)
+                        (:yolo body))
+        opts {:yolo? (if (or (contains? body :yolo?) (contains? body :yolo))
+                       (true? yolo-override)
+                       (true? (get-in system [:config :tools :yolo?])))}]
     (when-not agent
       (throw (api-error 404 "agent_not_found" "Agent not found")))
     (let [ops (->ApiKernelOps system)]
       (write-json! exchange 200
-                   {:data (kernel-runtime/execute-step! ops agent-id step)}))))
+                   {:data (kernel-runtime/execute-step! ops agent-id step opts)}))))
 
 (defn- handle-consume-agent-inbox [system exchange agent-id]
   (try

@@ -53,6 +53,21 @@
             :raw "ok"}
            (llm-core/invoke provider {:messages [{:role "user" :content "hi"}]})))))
 
+(deftest test-tool-call-directive-normalization
+  (is (= [{:type :tool-call
+           :payload {:tool-name "search"
+                     :input {:q "clojure"}
+                     :context {:provider-tool-call-id "call-1"
+                               :provider-tool-call {:id "call-1"
+                                                    :type "function"
+                                                    :function {:name "search"
+                                                               :arguments "{\"q\":\"clojure\"}"}}}}}]
+         (llm-core/tool-calls->directives
+          [{:id "call-1"
+            :type "function"
+            :function {:name "search"
+                       :arguments "{\"q\":\"clojure\"}"}}]))))
+
 (deftest test-helper-functions
   (testing "Normalize messages function"
     (let [messages [{:role "user" :content "Hello"}

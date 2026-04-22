@@ -513,12 +513,24 @@
   (->SystemKernelOps system))
 
 (defn execute-directive!
-  [system parent-agent-id directive]
-  (kernel-runtime/execute-directive! (kernel-ops system) parent-agent-id directive))
+  ([system parent-agent-id directive]
+   (execute-directive! system parent-agent-id directive {}))
+  ([system parent-agent-id directive opts]
+   (kernel-runtime/execute-directive!
+    (kernel-ops system)
+    parent-agent-id
+    directive
+    (merge {:yolo? (true? (get-in system [:config :tools :yolo?]))} opts))))
 
 (defn execute-step!
-  [system parent-agent-id step]
-  (kernel-runtime/execute-step! (kernel-ops system) parent-agent-id step))
+  ([system parent-agent-id step]
+   (execute-step! system parent-agent-id step {}))
+  ([system parent-agent-id step opts]
+   (kernel-runtime/execute-step!
+    (kernel-ops system)
+    parent-agent-id
+    step
+    (merge {:yolo? (true? (get-in system [:config :tools :yolo?]))} opts))))
 
 (defn request-run!
   [system request]
