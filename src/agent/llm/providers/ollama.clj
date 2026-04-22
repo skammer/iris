@@ -29,6 +29,12 @@
     (:structured-output opts) (assoc :format (get-in opts [:structured-output :schema]))
     (:response-format opts) (assoc :format (:response-format opts))))
 
+(defn- stream-structured-output? [config opts]
+  (and (:structured-output opts)
+       (not (false? (if (contains? opts :stream-structured-output?)
+                      (:stream-structured-output? opts)
+                      (:stream-structured-output? config true))))))
+
 (defn- checked-response [response]
   (if (<= 200 (:status response 0) 299)
     response
@@ -42,15 +48,48 @@
   (llm-core/retry-with-backoff
    #(checked-response (http/post url (assoc request :throw-exceptions false)))))
 
+(defn- stream-response->turn [body-stream]
+  (with-open [reader (io/reader body-stream)]
+    (loop [content []
+           prompt-tokens 0
+           completion-tokens 0
+           raw []]
+      (if-let [line (.readLine reader)]
+        (if (str/blank? line)
+          (recur content prompt-tokens completion-tokens raw)
+          (let [event (json/parse-string line true)]
+            (recur (cond-> content
+                     (-> event :message :content) (conj (-> event :message :content)))
+                   (or (:prompt_eval_count event) prompt-tokens)
+                   (or (:eval_count event) completion-tokens)
+                   (conj raw event))))
+        {:role "assistant"
+         :content (apply str content)
+         :tool-calls []
+         :usage {:prompt-tokens prompt-tokens
+                 :completion-tokens completion-tokens
+                 :cached-tokens 0
+                 :tokens (+ prompt-tokens completion-tokens)
+                 :cost-usd 0.0}
+         :raw raw}))))
+
 (defrecord OllamaProvider [base-url default-model embedding-model keep-alive config]
   llm-core/ILLMProvider
   (complete [_ messages opts]
-    (let [response (post-json (endpoint base-url "/api/chat")
-                              {:body (json/generate-string (structured-chat-body default-model keep-alive messages opts false))
-                               :content-type :json
-                               :accept :json
-                               :as :json})]
-      (-> response :body :message :content)))
+    (let [stream? (stream-structured-output? config opts)
+          request {:body (json/generate-string (structured-chat-body default-model keep-alive messages opts stream?))
+                   :content-type :json
+                   :accept :json}]
+      (if stream?
+        (let [response (checked-response
+                        (http/post (endpoint base-url "/api/chat")
+                                   (assoc request
+                                          :throw-exceptions false
+                                          :as :stream)))]
+          (:content (stream-response->turn (:body response))))
+        (let [response (post-json (endpoint base-url "/api/chat")
+                                  (assoc request :as :json))]
+          (-> response :body :message :content)))))
 
   (stream [_ messages opts]
     (let [ch (async/chan)]
@@ -135,30 +174,37 @@
   llm-core/ILLMProviderInvoke
   (invoke [this request]
     (let [opts (llm-core/request->completion-opts request)
-          response (post-json (endpoint (:base-url this) "/api/chat")
-                              {:body (json/generate-string
-                                      (structured-chat-body (:default-model this)
-                                                            (:keep-alive this)
-                                                            (:messages request)
-                                                            opts
-                                                            false))
-                               :content-type :json
-                               :accept :json
-                               :as :json})
-          body (:body response)
-          message (:message body)]
-      (llm-core/normalize-llm-response
-       {:role (:role message "assistant")
-        :content (:content message)
-        :tool-calls (vec (or (:tool_calls message) []))
-        :usage {:prompt-tokens (or (:prompt_eval_count body) 0)
-                :completion-tokens (or (:eval_count body) 0)
-                :cached-tokens 0
-                :tokens (+ (or (:prompt_eval_count body) 0)
-                           (or (:eval_count body) 0))
-                :cost-usd 0.0}
-        :raw body}
-       {})))
+          request* {:body (json/generate-string
+                           (structured-chat-body (:default-model this)
+                                                 (:keep-alive this)
+                                                 (:messages request)
+                                                 opts
+                                                 (stream-structured-output? (:config this) opts)))
+                    :content-type :json
+                    :accept :json}]
+      (if (stream-structured-output? (:config this) opts)
+        (let [response (checked-response
+                        (http/post (endpoint (:base-url this) "/api/chat")
+                                   (assoc request*
+                                          :throw-exceptions false
+                                          :as :stream)))]
+          (llm-core/normalize-llm-response (stream-response->turn (:body response)) {}))
+        (let [response (post-json (endpoint (:base-url this) "/api/chat")
+                                  (assoc request* :as :json))
+              body (:body response)
+              message (:message body)]
+          (llm-core/normalize-llm-response
+           {:role (:role message "assistant")
+            :content (:content message)
+            :tool-calls (vec (or (:tool_calls message) []))
+            :usage {:prompt-tokens (or (:prompt_eval_count body) 0)
+                    :completion-tokens (or (:eval_count body) 0)
+                    :cached-tokens 0
+                    :tokens (+ (or (:prompt_eval_count body) 0)
+                               (or (:eval_count body) 0))
+                    :cost-usd 0.0}
+            :raw body}
+           {})))))
   (generate [this messages opts]
     (llm-core/invoke this (assoc opts :messages messages))))
 
@@ -207,7 +253,8 @@
     {:provider :ollama}))
 
 (defn create-ollama-provider
-  [{:keys [base-url model default-model embedding-model keep-alive]
+  [{:keys [base-url model default-model embedding-model keep-alive config]
+    :as opts
     :or {base-url "http://localhost:11434"
          keep-alive "5m"
          embedding-model "nomic-embed-text"}}]
@@ -215,4 +262,5 @@
                     (or default-model model "llama3.2:3b")
                     embedding-model
                     keep-alive
-                    {}))
+                    (merge (select-keys opts [:stream-structured-output?])
+                           config)))

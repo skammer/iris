@@ -36,22 +36,75 @@
                  :schema schema
                  :strict (not (false? strict?))}})
 
-(defn- completion-body [default-model messages opts]
-  (cond-> (merge {:model (or (:model opts) default-model)
-                  :messages (llm-core/normalize-messages messages)
-                  :temperature (or (:temperature opts) 0.2)
-                  :max_tokens (or (:max-tokens opts) 1024)
-                  :stream false}
-                 (:extra-body opts))
+(defn- provider-kind [base-url]
+  (let [url (str/lower-case (or base-url ""))]
+    (cond
+      (str/includes? url "openrouter.ai") :openrouter
+      (str/includes? url "api.openai.com") :openai
+      :else :openai-compatible)))
+
+(defn- anthropic-model? [model]
+  (let [value (str/lower-case (or model ""))]
+    (or (str/starts-with? value "anthropic/")
+        (str/includes? value "claude"))))
+
+(defn- prompt-cache-enabled? [config opts]
+  (not (false? (if (contains? opts :prompt-cache?)
+                 (:prompt-cache? opts)
+                 (:prompt-cache? config true)))))
+
+(defn- prompt-cache-fields [base-url model config opts]
+  (if-not (prompt-cache-enabled? config opts)
+    {}
+    (let [kind (provider-kind base-url)
+          cache-control (or (:cache-control opts)
+                            (:cache_control opts)
+                            (:cache-control config)
+                            (:cache_control config)
+                            {:type "ephemeral"})
+          retention (or (:prompt-cache-retention opts)
+                        (:prompt_cache_retention opts)
+                        (:prompt-cache-retention config)
+                        (:prompt_cache_retention config)
+                        "in_memory")]
+      (cond
+        (or (:cache-control opts) (:cache_control opts))
+        {:cache_control cache-control}
+
+        (and (= :openrouter kind) (anthropic-model? model))
+        {:cache_control cache-control}
+
+        (= :openai kind)
+        {:prompt_cache_retention retention}
+
+        :else {}))))
+
+(defn- stream-structured-output? [config opts]
+  (and (:structured-output opts)
+       (not (false? (if (contains? opts :stream-structured-output?)
+                      (:stream-structured-output? opts)
+                      (:stream-structured-output? config true))))))
+
+(defn- completion-body [base-url default-model config messages opts]
+  (let [model (or (:model opts) default-model)]
+    (cond-> (merge {:model model
+                    :messages (llm-core/normalize-messages messages)
+                    :temperature (or (:temperature opts) 0.2)
+                    :max_tokens (or (:max-tokens opts) 1024)
+                    :stream false}
+                   (prompt-cache-fields base-url model config opts)
+                   (:extra-body opts))
     (:tools opts) (assoc :tools (:tools opts))
     (:tool-choice opts) (assoc :tool_choice (:tool-choice opts))
     (:structured-output opts) (assoc :response_format (structured-output-format (:structured-output opts)))
     (:response-format opts) (assoc :response_format (:response-format opts))
     (:cache-control opts) (assoc :cache_control (:cache-control opts))
-    (:cache_control opts) (assoc :cache_control (:cache_control opts))))
+      (:cache_control opts) (assoc :cache_control (:cache_control opts)))))
 
-(defn- stream-body [default-model messages opts]
-  (assoc (completion-body default-model messages opts) :stream true))
+(defn- stream-body [base-url default-model config messages opts]
+  (cond-> (assoc (completion-body base-url default-model config messages opts) :stream true)
+    (or (:structured-output opts) (:include-usage? opts true))
+    (assoc :stream_options {:include_usage true})))
 
 (defn- parse-sse-line [line]
   (when (str/starts-with? line "data: ")
@@ -91,17 +144,62 @@
      :usage (usage->estimate body)
      :raw message}))
 
+(defn- stream->turn [body-stream]
+  (with-open [reader (io/reader body-stream)]
+    (loop [content []
+           tool-calls []
+           usage nil
+           raw []]
+      (if-let [line (.readLine reader)]
+        (if-let [event (parse-sse-line line)]
+          (let [delta (-> event :choices first :delta)]
+            (recur (cond-> content
+                     (:content delta) (conj (:content delta)))
+                   (cond-> tool-calls
+                     (:tool_calls delta) (into (:tool_calls delta)))
+                   (or (:usage event) usage)
+                   (conj raw event)))
+          (recur content tool-calls usage raw))
+        {:role "assistant"
+         :content (apply str content)
+         :tool-calls (vec tool-calls)
+         :usage (usage->estimate {:usage usage})
+         :raw raw}))))
+
+(defn- post-stream-turn [url request]
+  (stream->turn
+   (:body (checked-response
+           (http/post url (assoc request
+                                 :throw-exceptions false
+                                 :as :stream))))))
+
 (defrecord OpenAICompatibleProvider [base-url api-key default-model site-url app-name extra-headers config]
   llm-core/ILLMProvider
   (complete [_ messages opts]
-    (let [response (post-json (chat-url base-url)
-                              {:headers (bearer-headers {:api-key api-key
-                                                         :site-url site-url
-                                                         :app-name app-name
-                                                         :extra-headers extra-headers})
-                               :body (json/generate-string (completion-body default-model messages opts))
-                               :as :json})]
-      (-> response :body :choices first :message :content)))
+    (let [request {:headers (bearer-headers {:api-key api-key
+                                             :site-url site-url
+                                             :app-name app-name
+                                             :extra-headers extra-headers})}]
+      (if (stream-structured-output? config opts)
+        (:content (post-stream-turn
+                   (chat-url base-url)
+                   (assoc request
+                          :body (json/generate-string
+                                 (stream-body base-url
+                                              default-model
+                                              config
+                                              messages
+                                              opts)))))
+        (let [response (post-json (chat-url base-url)
+                                  (assoc request
+                                         :body (json/generate-string
+                                                (completion-body base-url
+                                                                 default-model
+                                                                 config
+                                                                 messages
+                                                                 opts))
+                                         :as :json))]
+          (-> response :body :choices first :message :content)))))
 
   (stream [_ messages opts]
     (let [ch (async/chan)]
@@ -113,7 +211,12 @@
                                                                 :site-url site-url
                                                                 :app-name app-name
                                                                 :extra-headers extra-headers})
-                                      :body (json/generate-string (stream-body default-model messages opts))
+                                      :body (json/generate-string
+                                             (stream-body base-url
+                                                          default-model
+                                                          config
+                                                          messages
+                                                          opts))
                                       :throw-exceptions false
                                       :as :stream}))]
             (with-open [reader (io/reader (:body response))]
@@ -174,7 +277,9 @@
                                                          :app-name (:app-name this)
                                                          :extra-headers (:extra-headers this)})
                                :body (json/generate-string
-                                      (completion-body (:default-model this)
+                                      (completion-body (:base-url this)
+                                                       (:default-model this)
+                                                       (:config this)
                                                        messages
                                                        (assoc opts :tools tools)))
                                :as :json})]
@@ -183,18 +288,34 @@
 (extend-type OpenAICompatibleProvider
   llm-core/ILLMProviderInvoke
   (invoke [this request]
-    (let [response (post-json (chat-url (:base-url this))
-                              {:headers (bearer-headers {:api-key (:api-key this)
-                                                         :site-url (:site-url this)
-                                                         :app-name (:app-name this)
-                                                         :extra-headers (:extra-headers this)})
-                               :body (json/generate-string
-                                      (completion-body (:default-model this)
-                                                       (:messages request)
-                                                       (llm-core/request->completion-opts request)))
-                               :as :json})]
-      (llm-core/normalize-llm-response (message->turn (:body response))
-                                       {:usage (usage->estimate (:body response))})))
+    (let [opts (llm-core/request->completion-opts request)
+          request* {:headers (bearer-headers {:api-key (:api-key this)
+                                              :site-url (:site-url this)
+                                              :app-name (:app-name this)
+                                              :extra-headers (:extra-headers this)})}
+          response (if (stream-structured-output? (:config this) opts)
+                     (post-stream-turn
+                      (chat-url (:base-url this))
+                      (assoc request*
+                             :body (json/generate-string
+                                    (stream-body (:base-url this)
+                                                 (:default-model this)
+                                                 (:config this)
+                                                 (:messages request)
+                                                 opts))))
+                     (let [response* (post-json
+                                      (chat-url (:base-url this))
+                                      (assoc request*
+                                             :body (json/generate-string
+                                                    (completion-body (:base-url this)
+                                                                     (:default-model this)
+                                                                     (:config this)
+                                                                     (:messages request)
+                                                                     opts))
+                                             :as :json))]
+                       (message->turn (:body response*))))]
+      (llm-core/normalize-llm-response response
+                                       {:usage (:usage response)})))
   (generate [this messages opts]
     (llm-core/invoke this (assoc opts :messages messages))))
 
@@ -249,7 +370,8 @@
     {:provider :openai-compatible}))
 
 (defn create-openai-compatible-provider
-  [{:keys [base-url api-key default-model model site-url app-name extra-headers]
+  [{:keys [base-url api-key default-model model site-url app-name extra-headers config]
+    :as opts
     :or {base-url "https://api.openai.com/v1"
          app-name "clj-agent"}}]
   (->OpenAICompatibleProvider base-url
@@ -258,15 +380,31 @@
                               site-url
                               app-name
                               extra-headers
-                              {}))
+                              (merge (select-keys opts
+                                                  [:prompt-cache?
+                                                   :prompt-cache-retention
+                                                   :prompt_cache_retention
+                                                   :cache-control
+                                                   :cache_control
+                                                   :stream-structured-output?])
+                                     config)))
 
 (defn create-openrouter-provider
-  [{:keys [api-key base-url model site-url app-name]
+  [{:keys [api-key base-url model site-url app-name config]
+    :as opts
     :or {base-url "https://openrouter.ai/api/v1"
          app-name "clj-agent"}}]
   (create-openai-compatible-provider
-   {:base-url base-url
-    :api-key api-key
-    :default-model (or model "openai/gpt-4o-mini")
-    :site-url site-url
-    :app-name app-name}))
+   (merge (select-keys opts
+                       [:prompt-cache?
+                        :prompt-cache-retention
+                        :prompt_cache_retention
+                        :cache-control
+                        :cache_control
+                        :stream-structured-output?])
+          {:base-url base-url
+           :api-key api-key
+           :default-model (or model "openai/gpt-4o-mini")
+           :site-url site-url
+           :app-name app-name
+           :config config})))

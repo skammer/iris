@@ -11,6 +11,8 @@
          :temperature 0.2
          :max-tokens 1024
          :stream? false
+         :prompt-cache? true
+         :stream-structured-output? true
          :timeout-ms 60000
          :site-url nil
          :app-name "clj-agent"
@@ -125,6 +127,8 @@
                             Double/parseDouble)
         max-tokens (parse-long* (System/getenv "AGENT_LLM_MAX_TOKENS"))
         stream? (parse-bool (System/getenv "AGENT_LLM_STREAM"))
+        prompt-cache? (parse-bool (System/getenv "AGENT_LLM_PROMPT_CACHE"))
+        stream-structured-output? (parse-bool (System/getenv "AGENT_LLM_STREAM_STRUCTURED_OUTPUT"))
         site-url (System/getenv "OPENROUTER_SITE_URL")
         app-name (or (System/getenv "OPENROUTER_APP_NAME")
                      (System/getenv "AGENT_APP_NAME"))
@@ -159,6 +163,8 @@
             (some? temperature) (assoc :temperature temperature)
             (some? max-tokens) (assoc :max-tokens max-tokens)
             (some? stream?) (assoc :stream? stream?)
+            (some? prompt-cache?) (assoc :prompt-cache? prompt-cache?)
+            (some? stream-structured-output?) (assoc :stream-structured-output? stream-structured-output?)
             site-url (assoc :site-url site-url)
             app-name (assoc :app-name app-name)
             (or openrouter-base-url (System/getenv "OPENROUTER_API_KEY"))
