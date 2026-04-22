@@ -2,6 +2,7 @@
   (:require
    [agent.llm.core :as llm-core]
    [agent.llm.providers.ollama :as provider]
+   [cheshire.core :as json]
    [clj-http.client :as http]
    [clojure.core.async :as async]
    [clojure.test :refer :all]))
@@ -42,3 +43,28 @@
           embedding (llm-core/embed llm "hi" {})]
       (is (= ["hello" " world"] chunks))
       (is (= [0.1 0.2 0.3] embedding)))))
+
+(deftest ollama-structured-output-invoke-streams-by-default-test
+  (let [body* (atom nil)
+        as* (atom nil)]
+    (with-redefs [http/post (fn [_ request]
+                              (reset! body* (json/parse-string (:body request) true))
+                              (reset! as* (:as request))
+                              {:status 200
+                               :headers {"Content-Type" "application/x-ndjson"}
+                               :body (byte-stream
+                                      (str "{\"message\":{\"content\":\"{\\\"ok\\\":\"},\"done\":false}\n"
+                                           "{\"message\":{\"content\":\"true}\"},\"done\":true,\"prompt_eval_count\":10,\"eval_count\":2}\n"))})]
+      (let [llm (provider/create-ollama-provider {})
+            response (llm-core/invoke
+                      llm
+                      {:messages [{:role "user" :content "hi"}]
+                       :structured-output {:name "answer"
+                                           :schema {:type "object"
+                                                    :properties {:ok {:type "boolean"}}
+                                                    :required ["ok"]
+                                                    :additionalProperties false}}})]
+        (is (= :stream @as*))
+        (is (true? (:stream @body*)))
+        (is (= "{\"ok\":true}" (:content response)))
+        (is (= 12 (get-in response [:usage :tokens])))))))

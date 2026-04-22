@@ -3,6 +3,8 @@
        :temperature 0.2
        :max-tokens 1024
        :stream? false
+       :prompt-cache? true
+       :stream-structured-output? true
        :timeout-ms 60000
        :app-name "clj-agent"
        :openrouter {:base-url "https://openrouter.ai/api/v1"}
