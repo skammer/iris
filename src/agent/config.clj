@@ -49,7 +49,10 @@
                     :backend :datahike
                     :datahike {:path "data/memory-graph"
                                :keep-history? true}}}
-   :channel-adapters {:telegram {:enabled false}
+   :channel-adapters {:telegram {:enabled false
+                                  :bot-token nil
+                                  :allowlist {:user-ids []
+                                              :chat-ids []}}
                       :discord {:enabled false}
                       :slack {:enabled false}}
    :runners {:docker {:image "clojure:temurin-21-alpine"
@@ -95,6 +98,13 @@
   (when (some? value)
     (Long/parseLong (str value))))
 
+(defn- parse-csv [value]
+  (when (some? value)
+    (->> (str/split (str value) #",")
+         (map str/trim)
+         (remove str/blank?)
+         vec)))
+
 (defn- deep-merge
   [& maps]
   (apply merge-with
@@ -139,6 +149,14 @@
         embedding-model (System/getenv "OLLAMA_EMBEDDING_MODEL")
         openai-base-url (System/getenv "OPENAI_BASE_URL")
         sqlite-path (System/getenv "AGENT_SQLITE_PATH")
+        memory-prompt-paths (parse-csv (System/getenv "AGENT_MEMORY_PROMPT_PATHS"))
+        memory-search-limit (parse-long* (System/getenv "AGENT_MEMORY_SEARCH_DEFAULT_LIMIT"))
+        memory-graph-enabled (parse-bool (System/getenv "AGENT_MEMORY_GRAPH_ENABLED"))
+        memory-graph-path (System/getenv "AGENT_MEMORY_GRAPH_PATH")
+        telegram-enabled (parse-bool (System/getenv "AGENT_TELEGRAM_ENABLED"))
+        telegram-bot-token (System/getenv "AGENT_TELEGRAM_BOT_TOKEN")
+        telegram-user-ids (parse-csv (System/getenv "AGENT_TELEGRAM_ALLOWED_USER_IDS"))
+        telegram-chat-ids (parse-csv (System/getenv "AGENT_TELEGRAM_ALLOWED_CHAT_IDS"))
         log-file (System/getenv "AGENT_LOG_FILE")
         log-enabled (parse-bool (System/getenv "AGENT_LOG_ENABLED"))
         telemetry-enabled (parse-bool (System/getenv "AGENT_TELEMETRY_ENABLED"))
@@ -157,7 +175,24 @@
         otel-max-items (parse-long* (System/getenv "AGENT_OTEL_MAX_ITEMS"))
         tools-yolo? (parse-bool (System/getenv "AGENT_TOOLS_YOLO"))
         api-host (System/getenv "AGENT_API_HOST")
-        api-port (parse-long* (System/getenv "AGENT_API_PORT"))]
+        api-port (parse-long* (System/getenv "AGENT_API_PORT"))
+        memory-config (cond-> {}
+                        memory-prompt-paths (assoc :prompt {:paths memory-prompt-paths})
+                        (some? memory-search-limit) (assoc :search {:default-limit memory-search-limit})
+                        (or (some? memory-graph-enabled) memory-graph-path)
+                        (assoc :graph (cond-> {}
+                                        (some? memory-graph-enabled) (assoc :enabled memory-graph-enabled)
+                                        memory-graph-path (assoc :datahike {:path memory-graph-path}))))
+        telegram-allowlist (cond-> {}
+                             telegram-user-ids (assoc :user-ids telegram-user-ids)
+                             telegram-chat-ids (assoc :chat-ids telegram-chat-ids))
+        telegram-config (cond-> {}
+                          (some? telegram-enabled) (assoc :enabled telegram-enabled)
+                          telegram-bot-token (assoc :bot-token telegram-bot-token)
+                          (or telegram-user-ids telegram-chat-ids) (assoc :allowlist telegram-allowlist))
+        channel-adapters-config (cond-> {}
+                                  (or (some? telegram-enabled) telegram-bot-token telegram-user-ids telegram-chat-ids)
+                                  (assoc :telegram telegram-config))]
     {:llm (cond-> {}
             provider (assoc :provider provider)
             model (assoc :model model)
@@ -187,6 +222,8 @@
                      (assoc :api-key (System/getenv "OPENAI_API_KEY")))))
      :storage (cond-> {}
                 sqlite-path (assoc :sqlite {:path sqlite-path}))
+     :memory memory-config
+     :channel-adapters channel-adapters-config
      :tools (cond-> {}
               (some? tools-yolo?) (assoc :yolo? tools-yolo?))
      :telemetry (cond-> {}

@@ -90,3 +90,65 @@ Then launch normally, including `--config` if needed:
 ```bash
 clojure -M -m agent.core --config config/deepseek.local.edn serve
 ```
+
+## Docker
+
+0.1 deploy target: one Docker image. Kubernetes manifests were removed; Compose is only an optional local wrapper.
+
+Build:
+
+```bash
+docker build -t clj-agent:0.1 .
+```
+
+Run:
+
+```bash
+docker run --rm \
+  -p 8080:8080 \
+  -v clj-agent-data:/app/data \
+  -e AGENT_API_KEY=change-me \
+  -e AGENT_API_HOST=0.0.0.0 \
+  -e AGENT_SQLITE_PATH=/app/data/agent.db \
+  -e JAVA_TOOL_OPTIONS=--enable-native-access=ALL-UNNAMED \
+  -e AGENT_LLM_PROVIDER=ollama \
+  -e AGENT_LLM_MODEL=llama3.2:3b \
+  -e OLLAMA_BASE_URL=http://host.docker.internal:11434 \
+  -e AGENT_TELEGRAM_ENABLED=false \
+  -e AGENT_TELEGRAM_BOT_TOKEN= \
+  -e AGENT_MEMORY_PROMPT_PATHS=/app/data/MEMORY.md \
+  -e AGENT_MEMORY_GRAPH_ENABLED=false \
+  -e AGENT_MEMORY_GRAPH_PATH=/app/data/memory-graph \
+  clj-agent:0.1
+```
+
+OpenRouter/OpenAI-compatible example:
+
+```bash
+docker run --rm \
+  -p 8080:8080 \
+  -v clj-agent-data:/app/data \
+  -e AGENT_API_KEY=change-me \
+  -e AGENT_API_HOST=0.0.0.0 \
+  -e AGENT_SQLITE_PATH=/app/data/agent.db \
+  -e AGENT_LLM_PROVIDER=openrouter \
+  -e AGENT_LLM_MODEL=openai/gpt-4.1-mini \
+  -e OPENROUTER_API_KEY="$OPENROUTER_API_KEY" \
+  clj-agent:0.1
+```
+
+Health:
+
+```bash
+curl http://localhost:8080/health
+```
+
+Required/important env:
+
+- `AGENT_API_KEY`: required for 0.1 API auth work; set now for deploy parity.
+- `AGENT_API_HOST=0.0.0.0`: required inside container.
+- `AGENT_SQLITE_PATH=/app/data/agent.db`: persisted SQLite path.
+- `JAVA_TOOL_OPTIONS=--enable-native-access=ALL-UNNAMED`: suppresses sqlite-jdbc native access warning.
+- LLM: `AGENT_LLM_PROVIDER`, `AGENT_LLM_MODEL`, plus `OLLAMA_BASE_URL`, `OPENROUTER_API_KEY`, or `OPENAI_API_KEY`.
+- Telegram: `AGENT_TELEGRAM_ENABLED`, `AGENT_TELEGRAM_BOT_TOKEN`, `AGENT_TELEGRAM_ALLOWED_USER_IDS`, `AGENT_TELEGRAM_ALLOWED_CHAT_IDS`.
+- Memory: `AGENT_MEMORY_PROMPT_PATHS`, `AGENT_MEMORY_SEARCH_DEFAULT_LIMIT`, `AGENT_MEMORY_GRAPH_ENABLED`, `AGENT_MEMORY_GRAPH_PATH`.

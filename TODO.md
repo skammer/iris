@@ -1,5 +1,94 @@
 # TODO
 
+## LATEST PLAN
+
+## 0.1 Release Blockers
+
+Goal: easy single-image deploy agent with Telegram chat, tool use, SQLite + graph + file memory.
+
+### Phase 1: Single-Image Deploy
+
+1. [x] Remove Kubernetes target.
+   Delete stale `k8s/` manifests and deployment docs that imply K8s support.
+2. [x] Remove or de-emphasize Compose.
+   0.1 deploy target is one Docker image; Compose not required unless kept as optional local example.
+3. [x] Fix Docker runtime.
+   Container must run `serve`, bind API to `0.0.0.0`, expose `/health`, persist `/app/data`, and support `JAVA_TOOL_OPTIONS=--enable-native-access=ALL-UNNAMED`.
+4. [x] Add minimal Docker run docs.
+   Include required env: `AGENT_API_KEY`, `AGENT_API_HOST=0.0.0.0`, `AGENT_SQLITE_PATH`, LLM provider vars, Telegram vars, memory vars.
+
+### Phase 2: Startup Config + Auth
+
+5. [ ] Add single API key auth.
+   Protect `/v1/*` and `/ui/*`; keep `/health` public. Read key from config/env.
+6. [ ] Move tool permissions to startup config.
+   API requests must not grant permissions. Runtime resolves permissions from configured policy/profile.
+7. [ ] Add Telegram allowlist config.
+   Empty allowlist means allow all. Non-empty allowlist is required allowlist for user IDs and group/chat IDs.
+8. [ ] Add fact extraction config.
+   Default fact extractor uses chat LLM provider/model. Allow override provider/model in config.
+
+### Phase 3: Tool Policy + Approval
+
+9. [ ] Implement config-driven tool policy.
+   Support allowlist, blocklist, per-tool scope, shell command blocklist/allowlist, fs roots, http private/IP rules, max bytes, max timeout.
+10. [ ] Harden approvals.
+   Approval binds tool, input hash, actor, expiry, and requested permissions. Audit all decisions to SQLite.
+11. [ ] Support yolo mode.
+   If `:tools :yolo? true`, skip approval gates but still enforce blocklist, scopes, roots, timeouts, and audit.
+
+### Phase 4: First-Class Chat
+
+12. [ ] Replace plain completion path with chat loop.
+   Session context -> memory recall -> planner -> tool calls -> approvals/yolo -> final response -> persist messages/events.
+13. [ ] Make tools usable from chat.
+   Chat agent can call allowed tools through directive/runtime path, not direct unsafe API permissions.
+14. [ ] Persist chat execution trace.
+   Store tool calls, approvals, memory recalls, final answer, and errors in SQLite events.
+
+### Phase 5: Mandatory Memory
+
+15. [ ] Enable memory as core feature.
+   SQLite transcript/event search + graph memory + file/vault memory should be first-class surfaces.
+16. [ ] Add writable file/vault memory.
+   Configured vault paths can be read/written when fs tool policy allows write access.
+17. [ ] Add auto fact extraction.
+   After user/assistant exchanges, extract structured facts with same LLM by default.
+18. [ ] Add fact dedup.
+   Dedup by normalized `(subject,predicate,object)`, source session/message IDs, and configurable similarity fallback.
+19. [ ] Scope memory.
+   Support global, per-agent, per-chat/session scopes. Retrieval must respect scope.
+20. [ ] Add explicit memory write path.
+   Tool/API for agents to intentionally store/update facts, with audit and conflict/update semantics.
+
+### Phase 6: Telegram
+
+21. [ ] Implement Telegram long polling adapter.
+   Read bot token from config/env, receive updates, send `sendMessage` replies.
+22. [ ] Map each Telegram chat to one session.
+   DM user chat = separate session. Group chat = separate session. Persist mapping in SQLite.
+23. [ ] Route Telegram messages through chat loop.
+   Incoming text becomes session message; response from first-class chat loop goes back to same Telegram chat.
+24. [ ] Add Telegram commands.
+   Minimal `/start`, `/help`, `/reset`, `/memory`, `/status`.
+25. [ ] Enforce Telegram allowlist.
+   Empty allowlist allows all. Non-empty allowlist blocks unknown users/groups and logs event.
+
+### Phase 7: Release Verification
+
+26. [ ] Add tests for API auth.
+   Unauthorized `/v1/*` rejected; valid `AGENT_API_KEY` accepted.
+27. [ ] Add tests for tool policy.
+   Config grants permissions; request body cannot grant; blocklist/scope/approval/yolo behavior covered.
+28. [ ] Add tests for chat tool loop.
+   Chat can call allowed tool, deny blocked tool, persist trace, return final answer.
+29. [ ] Add tests for memory extraction/dedup/scope.
+   Facts extracted once, duplicate ignored, session/global scopes respected.
+30. [ ] Add tests for Telegram session mapping.
+   Same Telegram `chat.id` reuses session; different DM/group IDs create distinct sessions.
+31. [ ] Add release smoke test.
+   Build image, run container, call `/health`, create chat session, verify memory write/search.
+
 ## Distributed Subagent Runtime
 
 Reference:
