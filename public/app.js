@@ -3,6 +3,41 @@ import { action } from "https://cdn.jsdelivr.net/gh/starfederation/datastar@1.0.
 const AUTOSCROLL_THRESHOLD_PX = 300;
 let lastConnectedSessionId = null;
 
+const themeStorageKey = "clj-agent-theme";
+
+const getStoredTheme = () => {
+  try {
+    return localStorage.getItem(themeStorageKey);
+  } catch (_error) {
+    return null;
+  }
+};
+
+const setStoredTheme = (theme) => {
+  try {
+    localStorage.setItem(themeStorageKey, theme);
+  } catch (_error) {
+    return;
+  }
+};
+
+const preferredTheme = () =>
+  getStoredTheme()
+  || (window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark");
+
+const setTheme = (theme) => {
+  const next = theme === "light" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  document.querySelectorAll("#theme-toggle").forEach((button) => {
+    const label = next === "light" ? "Light" : "Dark";
+    const pressed = String(next === "light");
+    if (button.textContent !== label) button.textContent = label;
+    if (button.getAttribute("aria-pressed") !== pressed) button.setAttribute("aria-pressed", pressed);
+  });
+};
+
+setTheme(preferredTheme());
+
 const parseHTML = (html) => new DOMParser().parseFromString(html, "text/html");
 
 const replaceById = (doc, id) => {
@@ -531,6 +566,17 @@ class AgentRunPanel extends HTMLElement {
 if (!customElements.get("agent-run-panel")) {
   customElements.define("agent-run-panel", AgentRunPanel);
 }
+
+document.addEventListener("click", (event) => {
+  const button = event.target instanceof Element ? event.target.closest("#theme-toggle") : null;
+  if (!button) return;
+  const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+  setStoredTheme(next);
+  setTheme(next);
+});
+
+new MutationObserver(() => setTheme(document.documentElement.dataset.theme || preferredTheme()))
+  .observe(document.body, { childList: true, subtree: true });
 
 action({
   name: "chatSubmit",
