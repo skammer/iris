@@ -31,6 +31,9 @@
                   :max-redirects 3
                   :default-headers {"User-Agent" "clj-agent/0.1"}}
            :yolo? false
+           :permissions {:api [:filesystem-read :filesystem-write :http-request]
+                         :ui [:filesystem-read :filesystem-write :http-request]
+                         :agent [:http-request]}
            :fs {:enabled true
                 :roots ["."]
                 :max-read-bytes 1048576
@@ -45,6 +48,9 @@
    :skills {:dirs ["skills"]}
    :memory {:prompt {:paths ["MEMORY.md"]}
             :search {:default-limit 20}
+            :facts {:extractor {:enabled true
+                                :provider nil
+                                :model nil}}
             :graph {:enabled false
                     :backend :datahike
                     :datahike {:path "data/memory-graph"
@@ -88,6 +94,7 @@
                     :http-opts {:conn-timeout 2000
                                 :socket-timeout 2000}}}
    :api {:host "127.0.0.1"
+         :key nil
          :port 8080}})
 
 (defn- parse-bool [value]
@@ -104,6 +111,11 @@
          (map str/trim)
          (remove str/blank?)
          vec)))
+
+(defn- parse-keyword-csv [value]
+  (some->> (parse-csv value)
+           (map keyword)
+           vec))
 
 (defn- deep-merge
   [& maps]
@@ -151,6 +163,9 @@
         sqlite-path (System/getenv "AGENT_SQLITE_PATH")
         memory-prompt-paths (parse-csv (System/getenv "AGENT_MEMORY_PROMPT_PATHS"))
         memory-search-limit (parse-long* (System/getenv "AGENT_MEMORY_SEARCH_DEFAULT_LIMIT"))
+        fact-extractor-enabled (parse-bool (System/getenv "AGENT_FACT_EXTRACTOR_ENABLED"))
+        fact-extractor-provider (keyword-env "AGENT_FACT_EXTRACTOR_PROVIDER")
+        fact-extractor-model (System/getenv "AGENT_FACT_EXTRACTOR_MODEL")
         memory-graph-enabled (parse-bool (System/getenv "AGENT_MEMORY_GRAPH_ENABLED"))
         memory-graph-path (System/getenv "AGENT_MEMORY_GRAPH_PATH")
         telegram-enabled (parse-bool (System/getenv "AGENT_TELEGRAM_ENABLED"))
@@ -174,11 +189,20 @@
         otel-publish-delay (parse-long* (System/getenv "AGENT_OTEL_PUBLISH_DELAY_MS"))
         otel-max-items (parse-long* (System/getenv "AGENT_OTEL_MAX_ITEMS"))
         tools-yolo? (parse-bool (System/getenv "AGENT_TOOLS_YOLO"))
+        api-tool-permissions (parse-keyword-csv (System/getenv "AGENT_API_TOOL_PERMISSIONS"))
+        ui-tool-permissions (parse-keyword-csv (System/getenv "AGENT_UI_TOOL_PERMISSIONS"))
+        agent-tool-permissions (parse-keyword-csv (System/getenv "AGENT_AGENT_TOOL_PERMISSIONS"))
         api-host (System/getenv "AGENT_API_HOST")
+        api-key (System/getenv "AGENT_API_KEY")
         api-port (parse-long* (System/getenv "AGENT_API_PORT"))
         memory-config (cond-> {}
                         memory-prompt-paths (assoc :prompt {:paths memory-prompt-paths})
                         (some? memory-search-limit) (assoc :search {:default-limit memory-search-limit})
+                        (or (some? fact-extractor-enabled) fact-extractor-provider fact-extractor-model)
+                        (assoc :facts {:extractor (cond-> {}
+                                                    (some? fact-extractor-enabled) (assoc :enabled fact-extractor-enabled)
+                                                    fact-extractor-provider (assoc :provider fact-extractor-provider)
+                                                    fact-extractor-model (assoc :model fact-extractor-model))})
                         (or (some? memory-graph-enabled) memory-graph-path)
                         (assoc :graph (cond-> {}
                                         (some? memory-graph-enabled) (assoc :enabled memory-graph-enabled)
@@ -225,7 +249,13 @@
      :memory memory-config
      :channel-adapters channel-adapters-config
      :tools (cond-> {}
-              (some? tools-yolo?) (assoc :yolo? tools-yolo?))
+              (some? tools-yolo?) (assoc :yolo? tools-yolo?)
+              (or api-tool-permissions ui-tool-permissions agent-tool-permissions)
+              (assoc :permissions
+                     (cond-> {}
+                       api-tool-permissions (assoc :api api-tool-permissions)
+                       ui-tool-permissions (assoc :ui ui-tool-permissions)
+                       agent-tool-permissions (assoc :agent agent-tool-permissions))))
      :telemetry (cond-> {}
                   (some? telemetry-enabled) (assoc :enabled telemetry-enabled)
                   (some? telemetry-max-latency-samples) (assoc :max-latency-samples telemetry-max-latency-samples))
@@ -241,6 +271,7 @@
                                (some? otel-max-items) (assoc :max-items otel-max-items))))
      :api (cond-> {}
             api-host (assoc :host api-host)
+            api-key (assoc :key api-key)
             (some? api-port) (assoc :port api-port))}))
 
 (defn load-config
