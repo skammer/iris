@@ -80,7 +80,7 @@
 
 (defn- normalize-tab [value]
   (let [tab (some-> value name str/lower-case keyword)]
-    (if (some #(= tab (:key %)) tabs) tab :overview)))
+    (if (some #(= tab (:key %)) tabs) tab :chat)))
 
 (defn- tab-link [tab active-tab]
   [:button.tab-link
@@ -108,7 +108,7 @@
     [:body
      [:main
       [:div#shell-fragment
-       {"data-init" "@get('/ui/shell?tab=overview')"}
+       {"data-init" "@get('/ui/shell?tab=chat')"}
        "[LOADING...]"]]]]))
 
 (defn shell-fragment [system active-tab]
@@ -121,31 +121,34 @@
         port (get-in system [:config :api :port])]
     (render
      [:div#shell-fragment.workspace-stack
-      [:header.status-bar
-       [:div.status-block
-        [:span.status-label "mode"]
-        [:span.status-value "dark"]]
-       [:div.status-block
-        [:span.status-label "provider"]
-        [:span.status-value provider]]
-       [:div.status-block
-        [:span.status-label "port"]
-        [:span.status-value (str port)]]
-       [:div.status-block
-        [:span.status-label "sessions"]
-        [:span.status-value (str session-count)]]
-       [:div.status-block
-        [:span.status-label "runs"]
-        [:span.status-value (str (:run-count runtime-health))]]
-       [:div.status-block
-        [:span.status-label "events"]
-        [:span.status-value (str event-count)]]]
+      [:header.shell-header
+       [:div.status-bar
+        [:div.status-block
+         [:span.status-label "provider"]
+         [:span.status-value provider]]
+        [:div.status-block
+         [:span.status-label "port"]
+         [:span.status-value (str port)]]
+        [:div.status-block
+         [:span.status-label "sessions"]
+         [:span.status-value (str session-count)]]
+        [:div.status-block
+         [:span.status-label "runs"]
+         [:span.status-value (str (:run-count runtime-health))]]
+        [:div.status-block
+         [:span.status-label "events"]
+         [:span.status-value (str event-count)]]]
+       [:button#theme-toggle.theme-toggle
+        {:type "button"
+         :aria-label "Toggle light or dark mode"
+         :title "Toggle light/dark mode"}
+        "Dark"]]
       [:nav.shell-nav
        (for [tab tabs]
          (tab-link tab active-tab))]
       (trusted-fragment (case active-tab
              :chat (render-many
-                    [:section.workspace-grid.two-up
+                    [:section.workspace-grid.chat-workspace
                      (trusted-fragment (sessions-fragment system))
                      (trusted-fragment (session-detail-fragment system nil))])
              :runs (render-many
@@ -372,26 +375,24 @@
 (defn sessions-fragment [system]
   (let [sessions (sqlite/list-sessions (:store system))]
     (render
-     [:section#sessions-panel.panel
+     [:aside#sessions-panel.panel.sessions-sidebar
       {"data-on-interval__duration.5s.leading" "@get('/ui/sessions')"}
+      [:form#create-session-form.create-session-form
+       [:div.compact-form-row
+        [:input {:type "text" :name "title" :placeholder "new session title"}]
+        [:button {:type "button"
+                  "data-on:click" "@post('/ui/sessions', {contentType: 'form', selector: '#create-session-form'})"}
+         "New"]]]
       [:h2 "Sessions"]
       (if (seq sessions)
-        [:div.stack
+        [:div.session-list
          (for [{:keys [id title created-at]} sessions]
            [:button.session-link
             {:type "button"
              "data-on:click" (str "@get('/ui/session-detail?session_id=" id "')")}
             [:strong (or title "Untitled session")]
-            [:div.session-meta.code id]
             [:div.session-meta created-at]])]
-        [:div.empty "No sessions yet."])
-      [:form#create-session-form
-       [:h3 "Create Session"]
-       [:input {:type "text" :name "title" :placeholder "optional title"}]
-       [:div.actions
-        [:button {:type "button"
-                  "data-on:click" "@post('/ui/sessions', {contentType: 'form', selector: '#create-session-form'})"}
-         "Create"]]]])))
+        [:div.empty "No sessions yet."])])))
 
 (defn session-detail-fragment [system session-id]
   (let [sessions (sqlite/list-sessions (:store system))
@@ -404,8 +405,9 @@
         [:div.empty "Create session to start chatting."]]
        [:agent-chat-panel#session-detail-panel.panel
         {:data-session-id (:id session)}
-        [:h2 (or (:title session) "Untitled session")]
-        [:p.meta.code (:id session)]
+        [:div.chat-titlebar
+         [:h2 (or (:title session) "Untitled session")]
+         [:span.meta.code (:id session)]]
         (trusted-fragment (session-messages-fragment system (:id session)))
         [:form#chat-form
          {"data-on:submit" "@chatSubmit()"}
@@ -415,10 +417,9 @@
                                 "data-on:input" "@chatInput()"
                                 "data-on:keydown" "@chatKeydown()"
                                 :placeholder "Ask model something concrete"}]
-         [:div#chat-status.meta.chat-status {:hidden true} "thinking..."]
-         [:div.actions
-          [:button {:type "submit"}
-           "Send"]]]]))))
+         [:button {:type "submit"}
+          "Send"]
+         [:div#chat-status.meta.chat-status {:hidden true} "thinking..."]]]))))
 
 (defn session-messages-fragment [system session-id]
   (render
