@@ -55,9 +55,33 @@
     {:status (.statusCode response)
      :body (.body response)}))
 
+(defn add-headers [builder headers]
+  (reduce-kv (fn [b k v] (.header b k v))
+             builder
+             headers))
+
+(defn http-get-headers [url headers]
+  (let [request (-> (HttpRequest/newBuilder (URI/create url))
+                    (add-headers headers)
+                    .build)
+        response (.send (http-client) request (HttpResponse$BodyHandlers/ofString))]
+    {:status (.statusCode response)
+     :body (.body response)}))
+
 (defn http-post [url payload]
   (let [request (-> (HttpRequest/newBuilder (URI/create url))
                     (.header "Content-Type" "application/json")
+                    (.POST (java.net.http.HttpRequest$BodyPublishers/ofString
+                            (json/generate-string payload)))
+                    .build)
+        response (.send (http-client) request (HttpResponse$BodyHandlers/ofString))]
+    {:status (.statusCode response)
+     :body (.body response)}))
+
+(defn http-post-headers [url payload headers]
+  (let [request (-> (HttpRequest/newBuilder (URI/create url))
+                    (.header "Content-Type" "application/json")
+                    (add-headers headers)
                     (.POST (java.net.http.HttpRequest$BodyPublishers/ofString
                             (json/generate-string payload)))
                     .build)
@@ -116,6 +140,73 @@
     (let [lines (deref result 10000 nil)]
       (future-cancel worker)
       lines)))
+
+(defn started-test-system [path port config-fn]
+  (let [base-system (system/create-system)
+        store (sqlite/create-store {:path path})
+        event-bus (system/create-event-bus)
+        event-sink (system/create-event-sink store event-bus)
+        runtime-service (system/create-runtime-service store event-sink)
+        config (-> (:config base-system)
+                   (assoc :api {:host "127.0.0.1" :port port}
+                          :storage {:sqlite {:path path}})
+                   config-fn)
+        system (assoc base-system
+                      :llm-provider (->TestProvider (atom nil))
+                      :store store
+                      :event-bus event-bus
+                      :event-sink event-sink
+                      :tool-registry (system/create-tool-registry (:tools config) event-sink store)
+                      :memory-service (memory/create-memory-service (:memory config) store)
+                      :runtime-service runtime-service
+                      :runner-registry (system/create-runner-registry runtime-service)
+                      :orchestrator (system/create-orchestrator (:orchestrator config) event-sink)
+                      :config config)]
+    {:system system
+     :server (api/start-server! system {:host "127.0.0.1" :port port})}))
+
+(deftest api-key-auth-protects-v1-and-ui-test
+  (let [path (temp-db-path)
+        port (free-port)
+        base-url (str "http://127.0.0.1:" port)
+        {:keys [server]} (started-test-system path port #(assoc-in % [:api :key] "secret"))]
+    (try
+      (is (= 200 (:status (http-get (str base-url "/health")))))
+      (is (= 401 (:status (http-get (str base-url "/v1/tools")))))
+      (is (= 401 (:status (http-get-headers (str base-url "/v1/tools")
+                                            {"X-Api-Key" "wrong"}))))
+      (is (= 200 (:status (http-get-headers (str base-url "/v1/tools")
+                                            {"X-Api-Key" "secret"}))))
+      (is (= 200 (:status (http-get-headers (str base-url "/v1/tools")
+                                            {"Authorization" "Bearer secret"}))))
+      (is (= 200 (:status (http-get-headers
+                           (str base-url "/ui/dashboard")
+                           {"Authorization"
+                            (str "Basic "
+                                 (.encodeToString
+                                  (java.util.Base64/getEncoder)
+                                  (.getBytes "operator:secret" "UTF-8")))}))))
+      (is (= 401 (:status (http-get (str base-url "/ui/dashboard")))))
+      (finally
+        (api/stop-server! server)
+        (io/delete-file path true)))))
+
+(deftest api-tool-permissions-come-from-config-test
+  (let [path (temp-db-path)
+        port (free-port)
+        base-url (str "http://127.0.0.1:" port)
+        {:keys [server]} (started-test-system
+                          path
+                          port
+                          #(assoc-in % [:tools :permissions :api] []))]
+    (try
+      (let [denied (http-post (str base-url "/v1/tools/fs/execute")
+                              {:input {:action "list" :path "."}
+                               :permissions ["filesystem-read"]})]
+        (is (= 403 (:status denied))))
+      (finally
+        (api/stop-server! server)
+        (io/delete-file path true)))))
 
 (deftest api-session-chat-flow-test
   (let [path (temp-db-path)

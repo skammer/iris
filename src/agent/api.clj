@@ -38,8 +38,8 @@
    (java.nio.charset StandardCharsets)
    (java.nio.file Files)))
 
-(declare normalize-permissions
-         execution-context
+(declare execution-context
+         configured-tool-permissions
          parse-urlencoded
          parse-int-param
          relevant-run-event?
@@ -991,7 +991,6 @@
 (defn- handle-agent-tool-execute [system exchange agent-id tool-name]
   (let [body (read-json-body exchange)
         input (:input body)
-        permissions (normalize-permissions (:permissions body))
         approval-id (:approval_id body)
         tool-key (keyword tool-name)]
     (try
@@ -1003,9 +1002,8 @@
                             (tools/execute-tool (:tool-registry system)
                                                 tool-key
                                                 input
-                                                (merge (execution-context tool-key input
-                                                                          {:permissions permissions
-                                                                           :approval-id approval-id
+                                                (merge (execution-context system :agent tool-key input
+                                                                          {:approval-id approval-id
                                                                            :user (str "agent:" agent-id)
                                                                            :request-id (:request_id body)
                                                                            :activity (:activity body)})
@@ -1121,6 +1119,7 @@
                           input
                           (merge context
                                  {:allowed-tools (set (:tool-access target-agent))
+                                  :permissions (configured-tool-permissions system :agent)
                                   :user (or (:user context) (str "agent:" target-agent-id))}))))
   (send-agent-message! [_ agent-id message]
     (orchestrator/send-agent-message! (:orchestrator system)
@@ -1794,13 +1793,6 @@
         (responses/json-response 200
                                  (openai-style-completion system session-id (:content result)))))))
 
-(defn- normalize-permissions [value]
-  (cond
-    (nil? value) #{}
-    (string? value) #{(keyword value)}
-    (vector? value) (set (map keyword value))
-    :else (throw (api-error 400 "bad_request" "permissions must be a string or vector of strings"))))
-
 (declare split-command-plain)
 
 (defn- tool-input-from-map [tool-name body]
@@ -1813,10 +1805,13 @@
              (not (str/blank? (:working_dir body))) (assoc :working-dir (:working_dir body)))
     (throw (api-error 400 "bad_request" "Unsupported tool"))))
 
-(defn- execution-context [tool-name input {:keys [permissions approval-id user request-id activity]}]
+(defn- configured-tool-permissions [system profile]
+  (set (get-in system [:config :tools :permissions profile] #{})))
+
+(defn- execution-context [system profile tool-name input {:keys [approval-id user request-id activity]}]
   (let [granted (if approval-id
                   (tool-approvals/granted-permissions tool-name input)
-                  permissions)]
+                  (configured-tool-permissions system profile))]
     (cond-> {:permissions granted
              :approval-id approval-id
              :user (or user "api")
@@ -1826,7 +1821,6 @@
 (defn- handle-execute-tool [system exchange tool-name]
   (let [body (read-json-body exchange)
         input (:input body)
-        permissions (normalize-permissions (:permissions body))
         approval-id (:approval_id body)
         tool-key (keyword tool-name)]
     (when-not (map? input)
@@ -1836,9 +1830,8 @@
                    {:data (tools/execute-tool (:tool-registry system)
                                               tool-key
                                               input
-                                              (execution-context tool-key input
-                                                                 {:permissions permissions
-                                                                  :approval-id approval-id
+                                              (execution-context system :api tool-key input
+                                                                 {:approval-id approval-id
                                                                   :user "api"
                                                                   :activity (:activity body)}))})
       (catch Exception e
@@ -2107,7 +2100,7 @@
                         :status (:status updated)})))))
 
 (defn- handle-ui-tool-approval-run [system exchange approval-id]
-  (let [{:keys [tool-name input permissions]} (tool-approvals/resolve-approved-request (:store system) approval-id)]
+  (let [{:keys [tool-name input]} (tool-approvals/resolve-approved-request (:store system) approval-id)]
     (try
       (write-html! exchange 200
                    (str (ui/tool-approvals-fragment
@@ -2118,9 +2111,8 @@
                          {:result (tools/execute-tool (:tool-registry system)
                                                       tool-name
                                                       input
-                                                      (execution-context tool-name input
+                                                      (execution-context system :ui tool-name input
                                                                          {:approval-id approval-id
-                                                                          :permissions permissions
                                                                           :user "ui"
                                                                           :activity (:activity input)}))})))
       (catch Exception e
@@ -2253,7 +2245,8 @@
    (ring/ring-handler
     (ring/router (bind-route-handlers system)
                  {:conflicts nil})
-    (fn [_] (responses/not-found-response)))))
+    (fn [_] (responses/not-found-response)))
+   (:api (:config system))))
 
 (defn start-server!
   [system {:keys [host port]}]

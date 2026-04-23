@@ -19,13 +19,13 @@ Goal: easy single-image deploy agent with Telegram chat, tool use, SQLite + grap
 
 ### Phase 2: Startup Config + Auth
 
-5. [ ] Add single API key auth.
+5. [x] Add single API key auth.
    Protect `/v1/*` and `/ui/*`; keep `/health` public. Read key from config/env.
-6. [ ] Move tool permissions to startup config.
+6. [x] Move tool permissions to startup config.
    API requests must not grant permissions. Runtime resolves permissions from configured policy/profile.
-7. [ ] Add Telegram allowlist config.
+7. [x] Add Telegram allowlist config.
    Empty allowlist means allow all. Non-empty allowlist is required allowlist for user IDs and group/chat IDs.
-8. [ ] Add fact extraction config.
+8. [x] Add fact extraction config.
    Default fact extractor uses chat LLM provider/model. Allow override provider/model in config.
 
 ### Phase 3: Tool Policy + Approval

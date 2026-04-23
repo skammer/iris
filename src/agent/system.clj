@@ -471,6 +471,10 @@
   ([system query opts]
    (memory/query-graph-memory (:memory-service system) query opts)))
 
+(defn tool-permissions
+  [system profile]
+  (set (get-in system [:config :tools :permissions profile] #{})))
+
 (defn execute-tool
   ([system tool-name input]
    (execute-tool system tool-name input {}))
@@ -492,6 +496,7 @@
      (execute-tool system tool-name input
                    (merge context
                           {:user (or (:user context) agent-id)
+                           :permissions (tool-permissions system :agent)
                            :allowed-tools (set (:tool-access agent))})))))
 
 (defrecord SystemKernelOps [system]

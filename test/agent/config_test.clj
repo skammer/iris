@@ -13,6 +13,17 @@
     (is (= "http://localhost:11434" (get-in cfg [:llm :ollama :base-url])))
     (is (true? (get-in cfg [:tools :http :enabled])))
     (is (false? (get-in cfg [:tools :yolo?])))
+    (is (= [:filesystem-read :filesystem-write :http-request]
+           (get-in cfg [:tools :permissions :api])))
+    (is (= {:enabled true
+            :provider nil
+            :model nil}
+           (get-in cfg [:memory :facts :extractor])))
+    (is (= {:enabled false
+            :bot-token nil
+            :allowlist {:user-ids []
+                        :chat-ids []}}
+           (get-in cfg [:channel-adapters :telegram])))
     (is (false? (get-in cfg [:logging :enabled])))
     (is (= "logs/clj-agent.log" (get-in cfg [:logging :file :path])))
     (is (= 10485760 (get-in cfg [:logging :file :max-bytes])))
