@@ -1,0 +1,13 @@
+.git
+.clj-kondo
+.cpcache
+.lsp
+target
+logs
+data
+tmp
+node_modules
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
