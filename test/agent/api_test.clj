@@ -654,6 +654,8 @@
         (is (= 200 (:status ui-chat)))
         (is (str/includes? (:body ui-chat) "test-response"))
         (is (= 200 (:status streamed)))
+        (is (str/includes? (first streamed-lines) "\"role\":\"assistant\""))
+        (is (some #(str/includes? % "\"event_type\":\"chat.started\"") streamed-lines))
         (is (some #(str/includes? % "\"content\":\"test-response\"") streamed-lines))
         (is (= "[DONE]" (last streamed-lines)))
         (is (= 200 (:status events)))

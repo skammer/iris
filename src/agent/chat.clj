@@ -48,13 +48,10 @@
           (sqlite/list-messages (:store system) session-id))
     []))
 
-(defn- persist-input-messages! [system session-id messages]
-  (when session-id
-    (doseq [{:keys [role content]} messages]
-      (when (and (#{"system" "user" "assistant" "tool"} role)
-                 (string? content)
-                 (not (str/blank? content)))
-        (append-message! system session-id role content)))))
+(defn- persist-user-turn! [system session-id messages]
+  (when-let [content (and session-id (latest-user-prompt messages))]
+    (when-not (str/blank? content)
+      (append-message! system session-id "user" content))))
 
 (defn- compact-json [value]
   (let [text (json/generate-string value)]
@@ -194,7 +191,7 @@
            :or {max-steps default-max-steps}}]
   (let [request-id (request-id)
         prompt (latest-user-prompt messages)]
-    (persist-input-messages! system session-id messages)
+    (persist-user-turn! system session-id messages)
     (let [history (if session-id (session-messages system session-id) messages)
           recall (recall-memory system prompt)
           initial-messages (into [(memory-message recall)] history)

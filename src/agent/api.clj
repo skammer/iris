@@ -554,37 +554,77 @@
   [system request messages session-id]
   (let [stream-id (str "chatcmpl-" (System/currentTimeMillis))
         provider (name (get-in system [:config :llm :provider]))
-        model (get-in system [:config :llm :model])]
+        model (get-in system [:config :llm :model])
+        broker-instance (or (:event-bus system) (:broker system))
+        subscription (broker/subscribe! broker-instance (broker/all-events-subject))
+        events-ch (:channel subscription)
+        result-ch (async/chan 1)
+        open? (atom true)]
     (sse-response
      request
      (fn [channel]
        (future
          (try
-           (let [result (complete! system messages {:session-id session-id})
-                 content (:content result)]
-             (send-sse-chunk! channel {:id stream-id
-                                       :object "chat.completion.chunk"
-                                       :session_id session-id
-                                       :provider provider
-                                       :model model
-                                       :choices [{:index 0
-                                                  :delta {:content content}
-                                                  :finish_reason nil}]})
-             (send-sse-chunk! channel {:id stream-id
-                                       :object "chat.completion.chunk"
-                                       :session_id session-id
-                                       :provider provider
-                                       :model model
-                                       :choices [{:index 0
-                                                  :delta {}
-                                                  :finish_reason "stop"}]}))
+           (send-sse-chunk! channel {:id stream-id
+                                     :object "chat.completion.chunk"
+                                     :session_id session-id
+                                     :provider provider
+                                     :model model
+                                     :choices [{:index 0
+                                                :delta {:role "assistant"}
+                                                :finish_reason nil}]})
+           (future
+             (async/>!! result-ch
+                        (try
+                          {:result (complete! system messages {:session-id session-id})}
+                          (catch Exception e
+                            {:error e}))))
+           (loop []
+             (when @open?
+               (let [[value port] (async/alts!! [result-ch events-ch])]
+                 (cond
+                   (= port result-ch)
+                   (do
+                     (if-let [error (:error value)]
+                       (send-sse-chunk! channel {:error "stream_error"
+                                                 :message (.getMessage error)})
+                       (do
+                         (send-sse-chunk! channel {:id stream-id
+                                                   :object "chat.completion.chunk"
+                                                   :session_id session-id
+                                                   :provider provider
+                                                   :model model
+                                                   :choices [{:index 0
+                                                              :delta {:content (get-in value [:result :content])}
+                                                              :finish_reason nil}]})
+                         (send-sse-chunk! channel {:id stream-id
+                                                   :object "chat.completion.chunk"
+                                                   :session_id session-id
+                                                   :provider provider
+                                                   :model model
+                                                   :choices [{:index 0
+                                                              :delta {}
+                                                              :finish_reason "stop"}]})))
+                     (send-sse-done! channel)
+                     (http-kit/close channel))
+
+                   (= port events-ch)
+                   (do
+                     (when-let [event (:payload value)]
+                       (when (relevant-session-event? event session-id)
+                         (send-sse-chunk! channel {:id stream-id
+                                                   :object "chat.progress"
+                                                   :session_id session-id
+                                                   :event (event->response event)})))
+                     (recur))))))
            (catch Exception e
              (send-sse-chunk! channel {:error "stream_error"
                                        :message (.getMessage e)}))
            (finally
-             (send-sse-done! channel)
-             (http-kit/close channel)))))
-     nil)))
+             (broker/unsubscribe! broker-instance subscription)))))
+     (fn [_ _]
+       (reset! open? false)
+       (broker/unsubscribe! broker-instance subscription)))))
 
 (defn- events-stream-response
   [system request]
@@ -702,33 +742,70 @@
 (defn- handle-chat-completions-stream [system exchange messages session-id]
   (let [stream-id (str "chatcmpl-" (System/currentTimeMillis))
         provider (name (get-in system [:config :llm :provider]))
-        model (get-in system [:config :llm :model])]
+        model (get-in system [:config :llm :model])
+        broker-instance (or (:event-bus system) (:broker system))
+        subscription (broker/subscribe! broker-instance (broker/all-events-subject))
+        events-ch (:channel subscription)
+        result-ch (async/chan 1)]
     (try
       (.add (.getResponseHeaders exchange) "Content-Type" "text/event-stream")
       (.add (.getResponseHeaders exchange) "Cache-Control" "no-cache")
       (.sendResponseHeaders exchange 200 0)
       (with-open [stream (.getResponseBody exchange)]
-        (let [result (complete! system messages {:session-id session-id})
-              content (:content result)]
-          (write-sse-chunk! stream {:id stream-id
-                                    :object "chat.completion.chunk"
-                                    :session_id session-id
-                                    :provider provider
-                                    :model model
-                                    :choices [{:index 0
-                                               :delta {:content content}
-                                               :finish_reason nil}]})
-          (write-sse-chunk! stream {:id stream-id
-                                    :object "chat.completion.chunk"
-                                    :session_id session-id
-                                    :provider provider
-                                    :model model
-                                    :choices [{:index 0
-                                               :delta {}
-                                               :finish_reason "stop"}]})
-          (write-sse-done! stream)))
+        (write-sse-chunk! stream {:id stream-id
+                                  :object "chat.completion.chunk"
+                                  :session_id session-id
+                                  :provider provider
+                                  :model model
+                                  :choices [{:index 0
+                                             :delta {:role "assistant"}
+                                             :finish_reason nil}]})
+        (future
+          (async/>!! result-ch
+                     (try
+                       {:result (complete! system messages {:session-id session-id})}
+                       (catch Exception e
+                         {:error e}))))
+        (loop []
+          (let [[value port] (async/alts!! [result-ch events-ch])]
+            (cond
+              (= port result-ch)
+              (do
+                (if-let [error (:error value)]
+                  (write-sse-chunk! stream {:error "stream_error"
+                                            :message (.getMessage error)})
+                  (do
+                    (write-sse-chunk! stream {:id stream-id
+                                              :object "chat.completion.chunk"
+                                              :session_id session-id
+                                              :provider provider
+                                              :model model
+                                              :choices [{:index 0
+                                                         :delta {:content (get-in value [:result :content])}
+                                                         :finish_reason nil}]})
+                    (write-sse-chunk! stream {:id stream-id
+                                              :object "chat.completion.chunk"
+                                              :session_id session-id
+                                              :provider provider
+                                              :model model
+                                              :choices [{:index 0
+                                                         :delta {}
+                                                         :finish_reason "stop"}]})))
+                (write-sse-done! stream))
+
+              (= port events-ch)
+              (do
+                (when-let [event (:payload value)]
+                  (when (relevant-session-event? event session-id)
+                    (write-sse-chunk! stream {:id stream-id
+                                              :object "chat.progress"
+                                              :session_id session-id
+                                              :event (event->response event)})))
+                (recur))))))
       (catch Exception e
-        (throw e)))))
+        (throw e))
+      (finally
+        (broker/unsubscribe! broker-instance subscription)))))
 
 (defn- handle-health [system exchange]
   (write-json! exchange 200 {:ok true
@@ -1812,7 +1889,8 @@
 (defn- relevant-session-event? [event session-id]
   (and (= "session" (:entity-type event))
        (= session-id (:entity-id event))
-       (contains? #{"message.appended" "completion.completed" "session.created"} (:event-type event))))
+       (or (contains? #{"message.appended" "completion.completed" "session.created"} (:event-type event))
+           (str/starts-with? (or (:event-type event) "") "chat."))))
 
 (defn- handle-ui-session-live [system exchange]
   (let [session-id (:session_id (query-params exchange))
