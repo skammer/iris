@@ -15,6 +15,11 @@
     (is (false? (get-in cfg [:tools :yolo?])))
     (is (= [:filesystem-read :filesystem-write :http-request]
            (get-in cfg [:tools :permissions :api])))
+    (is (= {:allowlist []
+            :blocklist []
+            :tool-scopes {}}
+           (get-in cfg [:tools :policy])))
+    (is (= 900 (get-in cfg [:tools :approvals :ttl-seconds])))
     (is (= {:enabled true
             :provider nil
             :model nil}

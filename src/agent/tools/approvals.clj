@@ -4,7 +4,10 @@
    [agent.persistence.sqlite :as sqlite]
    [agent.tools.core :as tools]
    [cheshire.core :as json]
-   [clojure.string :as str]))
+   [clojure.string :as str])
+  (:import
+   (java.security MessageDigest)
+   (java.time Instant)))
 
 (defn approval-required?
   [tool-name input]
@@ -29,13 +32,30 @@
           #{:filesystem-read})
     #{}))
 
+(defn- sha256-hex [value]
+  (let [digest (.digest (MessageDigest/getInstance "SHA-256")
+                        (.getBytes (str value) "UTF-8"))]
+    (apply str (map #(format "%02x" (bit-and 0xff %)) digest))))
+
+(declare canonicalize-input)
+
+(defn input-hash [input]
+  (sha256-hex (json/generate-string (canonicalize-input input) {:canonical true})))
+
+(defn- expired? [expires-at]
+  (when (seq expires-at)
+    (.isAfter (Instant/now) (Instant/parse expires-at))))
+
 (defn create-request!
-  [store {:keys [tool-name input requested-by reason]}]
+  [store {:keys [tool-name input requested-by reason expires-at]}]
   (sqlite/create-tool-approval! store
                                 {:tool-name tool-name
                                  :input input
+                                 :input-hash (input-hash input)
+                                 :requested-permissions (granted-permissions tool-name input)
                                  :requested-by requested-by
-                                 :reason reason}))
+                                 :reason reason
+                                 :expires-at expires-at}))
 
 (defn list-requests
   ([store] (list-requests store {}))
@@ -69,12 +89,21 @@
     :else input))
 
 (defn valid-approval?
-  [approval tool-name input]
+  ([approval tool-name input]
+   (valid-approval? approval tool-name input {}))
+  ([approval tool-name input context]
   (and approval
        (= "approved" (:status approval))
        (= (name tool-name) (:tool-name approval))
-       (= (canonicalize-input input)
-          (canonicalize-input (:input approval)))))
+       (= (input-hash input)
+          (or (:input-hash approval)
+              (input-hash (:input approval))))
+       (not (expired? (:expires-at approval)))
+       (let [requested-by (:requested-by approval)
+             user (:user context)]
+         (or (str/blank? requested-by)
+             (str/blank? user)
+             (= requested-by user))))))
 
 (defn resolve-approved-request
   [store approval-id]
@@ -100,6 +129,6 @@
       (when (approval-required? tool-name input)
         (let [approval-id (:approval-id context)
               approval (when approval-id (get-request store approval-id))]
-          (when-not (valid-approval? approval tool-name input)
+          (when-not (valid-approval? approval tool-name input context)
             {:block true
              :reason "Sensitive tool requires approved request"}))))))

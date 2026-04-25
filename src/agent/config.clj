@@ -27,6 +27,8 @@
                       :journal-mode "WAL"}}
    :tools {:http {:enabled true
                   :timeout-ms 30000
+                  :max-timeout-ms 30000
+                  :max-response-bytes 1048576
                   :allow-private? false
                   :max-redirects 3
                   :default-headers {"User-Agent" "clj-agent/0.1"}}
@@ -34,6 +36,10 @@
            :permissions {:api [:filesystem-read :filesystem-write :http-request]
                          :ui [:filesystem-read :filesystem-write :http-request]
                          :agent [:http-request]}
+           :policy {:allowlist []
+                    :blocklist []
+                    :tool-scopes {}}
+           :approvals {:ttl-seconds 900}
            :fs {:enabled true
                 :roots ["."]
                 :max-read-bytes 1048576
@@ -42,8 +48,10 @@
                    :roots ["."]
                    :working-dir "."
                    :timeout-ms 30000
+                   :max-timeout-ms 30000
                    :deny-by-default? true
                    :allowed-commands ["printf" "pwd" "ls" "echo" "cat" "rg" "git"]
+                   :blocked-commands []
                    :max-output-bytes 65536}}
    :skills {:dirs ["skills"]}
    :memory {:prompt {:paths ["MEMORY.md"]}
@@ -189,6 +197,9 @@
         otel-publish-delay (parse-long* (System/getenv "AGENT_OTEL_PUBLISH_DELAY_MS"))
         otel-max-items (parse-long* (System/getenv "AGENT_OTEL_MAX_ITEMS"))
         tools-yolo? (parse-bool (System/getenv "AGENT_TOOLS_YOLO"))
+        tool-allowlist (parse-keyword-csv (System/getenv "AGENT_TOOL_ALLOWLIST"))
+        tool-blocklist (parse-keyword-csv (System/getenv "AGENT_TOOL_BLOCKLIST"))
+        approval-ttl-seconds (parse-long* (System/getenv "AGENT_TOOL_APPROVAL_TTL_SECONDS"))
         api-tool-permissions (parse-keyword-csv (System/getenv "AGENT_API_TOOL_PERMISSIONS"))
         ui-tool-permissions (parse-keyword-csv (System/getenv "AGENT_UI_TOOL_PERMISSIONS"))
         agent-tool-permissions (parse-keyword-csv (System/getenv "AGENT_AGENT_TOOL_PERMISSIONS"))
@@ -250,6 +261,12 @@
      :channel-adapters channel-adapters-config
      :tools (cond-> {}
               (some? tools-yolo?) (assoc :yolo? tools-yolo?)
+              (or tool-allowlist tool-blocklist)
+              (assoc :policy
+                     (cond-> {}
+                       tool-allowlist (assoc :allowlist tool-allowlist)
+                       tool-blocklist (assoc :blocklist tool-blocklist)))
+              approval-ttl-seconds (assoc :approvals {:ttl-seconds approval-ttl-seconds})
               (or api-tool-permissions ui-tool-permissions agent-tool-permissions)
               (assoc :permissions
                      (cond-> {}

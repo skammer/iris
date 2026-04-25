@@ -36,7 +36,13 @@
 
 (defn- ensure-allowed-command! [config argv]
   (let [allowed (set (:allowed-commands config))
+        blocked (set (:blocked-commands config))
         binary (first argv)]
+    (when (contains? blocked binary)
+      (throw (tools/tool-error :command-not-allowed
+                               "Command is in shell blocklist"
+                               {:command binary
+                                :blocked-commands (vec (:blocked-commands config))})))
     (when (and (:deny-by-default? config)
                (not (contains? allowed binary)))
       (throw (tools/tool-error :command-not-allowed
@@ -61,8 +67,10 @@
   (let [config (merge {:roots ["."]
                        :working-dir "."
                        :timeout-ms 30000
+                       :max-timeout-ms 30000
                        :deny-by-default? true
                        :allowed-commands ["printf" "pwd" "ls" "echo" "cat" "rg" "git"]
+                       :blocked-commands []
                        :max-output-bytes 65536}
                       opts)
         roots (mapv canonical-path (:roots config))]
@@ -87,11 +95,15 @@
                     :details {:roots roots
                               :working-dir (canonical-path (:working-dir config))
                               :deny-by-default? (:deny-by-default? config)
-                              :allowed-commands (:allowed-commands config)}})
+                              :allowed-commands (:allowed-commands config)
+                              :blocked-commands (:blocked-commands config)
+                              :max-timeout-ms (:max-timeout-ms config)}})
       :execute-fn
       (fn [input _context]
         (let [working-dir (resolve-working-dir! roots (or (:working-dir input) (:working-dir config)))
-              timeout-ms (long (or (:timeout-ms input) (:timeout-ms config)))
+              requested-timeout-ms (long (or (:timeout-ms input) (:timeout-ms config)))
+              max-timeout-ms (long (:max-timeout-ms config))
+              timeout-ms (min requested-timeout-ms max-timeout-ms)
               argv (:argv input)
               _ (ensure-allowed-command! config argv)
               process (.start (doto (ProcessBuilder. argv)

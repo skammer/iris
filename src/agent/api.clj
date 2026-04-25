@@ -36,7 +36,8 @@
    (com.sun.net.httpserver HttpExchange)
    (java.net URLDecoder)
    (java.nio.charset StandardCharsets)
-   (java.nio.file Files)))
+   (java.nio.file Files)
+   (java.time Instant)))
 
 (declare execution-context
          configured-tool-permissions
@@ -289,10 +290,13 @@
    :tool_name (:tool-name approval)
    :status (:status approval)
    :input (:input approval)
+   :input_hash (:input-hash approval)
+   :requested_permissions (mapv name (:requested-permissions approval))
    :requested_by (:requested-by approval)
    :reason (:reason approval)
    :actor (:actor approval)
    :decision_reason (:decision-reason approval)
+   :expires_at (:expires-at approval)
    :created_at (:created-at approval)
    :decided_at (:decided-at approval)})
 
@@ -1120,6 +1124,7 @@
                           (merge context
                                  {:allowed-tools (set (:tool-access target-agent))
                                   :permissions (configured-tool-permissions system :agent)
+                                  :yolo? (true? (get-in system [:config :tools :yolo?]))
                                   :user (or (:user context) (str "agent:" target-agent-id))}))))
   (send-agent-message! [_ agent-id message]
     (orchestrator/send-agent-message! (:orchestrator system)
@@ -1814,6 +1819,7 @@
                   (configured-tool-permissions system profile))]
     (cond-> {:permissions granted
              :approval-id approval-id
+             :yolo? (true? (get-in system [:config :tools :yolo?]))
              :user (or user "api")
              :request-id request-id}
       activity (assoc :activity activity))))
@@ -2018,20 +2024,33 @@
                                                           {:status (:status (query-params exchange))
                                                            :limit 100}))}))
 
+(defn- approval-expires-at [system]
+  (str (.plusSeconds (Instant/now)
+                     (long (get-in system [:config :tools :approvals :ttl-seconds] 900)))))
+
 (defn- handle-create-tool-approval [system exchange]
   (let [body (read-json-body exchange)
         tool-name (keyword (:tool body))
         input (:input body)]
     (when-not (map? input)
       (throw (api-error 400 "bad_request" "input must be an object")))
-    (write-json! exchange 201
-                 {:data (approval->response
-                         (tool-approvals/create-request!
-                          (:store system)
-                          {:tool-name tool-name
-                           :input input
-                           :requested-by (or (:requested_by body) "api")
-                           :reason (:reason body)}))})))
+    (let [approval (tool-approvals/create-request!
+                    (:store system)
+                    {:tool-name tool-name
+                     :input input
+                     :requested-by (or (:requested_by body) "api")
+                     :reason (:reason body)
+                     :expires-at (approval-expires-at system)})]
+      (emit-system-event! system
+                          {:event-type :tool.approval.requested
+                           :entity-type :tool_approval
+                           :entity-id (:id approval)
+                           :payload {:tool-name (name tool-name)
+                                     :requested-by (:requested-by approval)
+                                     :requested-permissions (mapv name (:requested-permissions approval))
+                                     :expires-at (:expires-at approval)}})
+      (write-json! exchange 201
+                   {:data (approval->response approval)}))))
 
 (defn- handle-decide-tool-approval [system exchange approval-id status]
   (let [body (read-json-body exchange)
@@ -2045,7 +2064,9 @@
                          :entity-type :tool_approval
                          :entity-id approval-id
                          :payload {:tool-name (:tool-name updated)
-                                   :actor actor}})
+                                   :actor actor
+                                   :decision status
+                                   :reason reason}})
     (write-json! exchange 200 {:data (approval->response updated)})))
 
 (defn- handle-ui-tool-approvals [system exchange]
@@ -2062,12 +2083,16 @@
                   {:tool-name tool-name
                    :input input
                    :requested-by "ui"
-                   :reason (:reason body)})]
+                   :reason (:reason body)
+                   :expires-at (approval-expires-at system)})]
     (emit-system-event! system
                         {:event-type :tool.approval.requested
                          :entity-type :tool_approval
                          :entity-id (:id approval)
-                         :payload {:tool-name (name tool-name)}})
+                         :payload {:tool-name (name tool-name)
+                                   :requested-by (:requested-by approval)
+                                   :requested-permissions (mapv name (:requested-permissions approval))
+                                   :expires-at (:expires-at approval)}})
     (write-html! exchange 201
                  (str (ui/tool-approvals-fragment
                        (tool-approvals/list-requests (:store system) {:limit 50}))
@@ -2089,7 +2114,9 @@
                          :entity-type :tool_approval
                          :entity-id approval-id
                          :payload {:tool-name (:tool-name updated)
-                                   :actor actor}})
+                                   :actor actor
+                                   :decision status
+                                   :reason reason}})
     (write-html! exchange 200
                  (str (ui/tool-approvals-fragment
                        (tool-approvals/list-requests (:store system) {:limit 50}))
