@@ -51,13 +51,15 @@
 
 (defn search-events
   ([store query] (search-events store query {}))
-  ([store query {:keys [limit] :or {limit 20}}]
+  ([store query {:keys [limit entity-type entity-id] :or {limit 20}}]
    (common/with-connection
      store
      (fn [conn]
        (mapv row->event
              (common/select-many conn
                                  (search-events-sqlvec {:needle (str "%" (or query "") "%")
+                                                        :entity_type (common/normalize-name entity-type)
+                                                        :entity_id entity-id
                                                         :limit limit})
                                  identity))))))
 

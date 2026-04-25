@@ -3,6 +3,7 @@
    [agent.persistence.sqlite.common :as common]
    [agent.persistence.sqlite.events :as events]
    [agent.persistence.sqlite.federation :as federation]
+   [agent.persistence.sqlite.memory :as memory]
    [agent.persistence.sqlite.migrations :as migrations]
    [agent.persistence.sqlite.runs :as runs]
    [agent.persistence.sqlite.tools :as tools]
@@ -23,6 +24,7 @@
                :session-count (count-sessions store)
                :event-count (events/count-events store)
                :tool-approval-count (tools/count-tool-approvals store)
+               :memory-fact-count (memory/count-facts store)
                :agent-run-count (runs/count-agent-runs store)
                :federation-peer-key-count (federation/count-peer-keys store)
                :federation-outbox-count (federation/count-outbox store)

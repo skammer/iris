@@ -15,7 +15,7 @@
     (is (false? (get-in cfg [:tools :yolo?])))
     (is (= [:filesystem-read :filesystem-write :http-request]
            (get-in cfg [:tools :permissions :api])))
-    (is (= [:filesystem-read :http-request]
+    (is (= [:filesystem-read :http-request :memory-read :memory-write]
            (get-in cfg [:tools :permissions :chat])))
     (is (= {:allowlist []
             :blocklist []
@@ -26,6 +26,8 @@
             :provider nil
             :model nil}
            (get-in cfg [:memory :facts :extractor])))
+    (is (= :session (get-in cfg [:memory :facts :default-scope])))
+    (is (nil? (get-in cfg [:memory :facts :dedup :similarity-threshold])))
     (is (= {:enabled false
             :bot-token nil
             :allowlist {:user-ids []

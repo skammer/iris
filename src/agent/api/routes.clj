@@ -70,6 +70,10 @@
    ["/v1/memory/surfaces" {:get {:handler/id :memory-surfaces}}]
    ["/v1/memory/prompt" {:get {:handler/id :memory-prompt}}]
    ["/v1/memory/search" {:post {:handler/id :memory-search}}]
+   ["/v1/memory/facts" {:post {:handler/id :memory-fact-save}}]
+   ["/v1/memory/facts/search" {:post {:handler/id :memory-fact-search}}]
+   ["/v1/memory/vault/read" {:post {:handler/id :memory-vault-read}}]
+   ["/v1/memory/vault/write" {:post {:handler/id :memory-vault-write}}]
    ["/v1/memory/graph/facts" {:post {:handler/id :memory-graph-save}}]
    ["/v1/memory/graph/query" {:post {:handler/id :memory-graph-query}}]
 

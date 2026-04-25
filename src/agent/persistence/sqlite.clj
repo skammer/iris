@@ -4,6 +4,7 @@
    [agent.persistence.sqlite.common :as common]
    [agent.persistence.sqlite.events :as events]
    [agent.persistence.sqlite.federation :as federation]
+   [agent.persistence.sqlite.memory :as memory]
    [agent.persistence.sqlite.migrations :as migrations]
    [agent.persistence.sqlite.runs :as runs]
    [agent.persistence.sqlite.schema :as schema]
@@ -77,6 +78,19 @@
 (defn search-events
   ([store query] (events/search-events store query))
   ([store query opts] (events/search-events store query opts)))
+
+(defn save-memory-fact! [store fact]
+  (memory/save-fact! store fact))
+
+(defn merge-memory-fact-source! [store existing fact]
+  (memory/merge-fact-source! store existing fact))
+
+(defn search-memory-facts
+  ([store query] (memory/search-facts store query))
+  ([store query opts] (memory/search-facts store query opts)))
+
+(defn count-memory-facts [store]
+  (memory/count-facts store))
 
 (defn create-tool-approval! [store approval]
   (tools/create-tool-approval! store approval))

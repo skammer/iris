@@ -39,38 +39,43 @@
                  :role role
                  :content content
                  :created_at (common/now-str)}]
-    (common/with-connection
+    (let [id (common/with-transaction
       store
       (fn [conn]
-        (common/execute! conn (insert-message-sqlvec message))))
-    {:session-id session-id
+              (common/execute! conn (insert-message-sqlvec message))
+              (:id (common/select-one conn (last-insert-row-id-sqlvec) identity))))]
+      {:id id
+       :session-id session-id
      :role role
      :content content
-     :created-at (:created_at message)}))
+       :created-at (:created_at message)})))
 
 (defn list-messages [store session-id]
   (common/with-connection
     store
     (fn [conn]
-      (mapv (fn [{:keys [role content created_at]}]
-              {:role role
+      (mapv (fn [{:keys [id role content created_at]}]
+              {:id id
+               :role role
                :content content
                :created-at created_at})
             (common/select-many conn (list-messages-sqlvec {:session_id session-id}) identity)))))
 
 (defn search-messages
   ([store query] (search-messages store query {}))
-  ([store query {:keys [limit] :or {limit 20}}]
+  ([store query {:keys [limit session-id] :or {limit 20}}]
    (common/with-connection
      store
      (fn [conn]
-       (mapv (fn [{:keys [session_id role content created_at]}]
-               {:session-id session_id
+       (mapv (fn [{:keys [id session_id role content created_at]}]
+               {:id id
+                :session-id session_id
                 :role role
                 :content content
                 :created-at created_at})
              (common/select-many conn
                                  (search-messages-sqlvec {:needle (str "%" (or query "") "%")
+                                                          :session_id session-id
                                                           :limit limit})
                                  identity))))))
 
