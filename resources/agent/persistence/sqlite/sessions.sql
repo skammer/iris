@@ -18,17 +18,21 @@ insert into messages (session_id, role, content, created_at)
 values (:session_id, :role, :content, :created_at)
 
 -- :name list-messages :? :*
-select role, content, created_at
+select id, role, content, created_at
 from messages
 where session_id = :session_id
 order by id asc
 
 -- :name search-messages :? :*
-select session_id, role, content, created_at
+select id, session_id, role, content, created_at
 from messages
 where content like :needle
+  and (:session_id is null or session_id = :session_id)
 order by id desc
 limit :limit
+
+-- :name last-insert-row-id :? :1
+select last_insert_rowid() as id
 
 -- :name insert-completion :! :n
 insert into completions (session_id, provider, model, prompt, response, created_at)

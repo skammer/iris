@@ -156,3 +156,32 @@
         (is (some #{"chat.tool.approval_required"} (map :event-type events))))
       (finally
         (io/delete-file path true)))))
+
+(deftest chat-loop-auto-extracts-scoped-facts-test
+  (let [path (temp-db-path)
+        responses (atom [(step-json [{:type "complete"
+                                      :payload {:result "noted"}}])
+                         (json/generate-string
+                          {:facts [{:subject "user"
+                                    :predicate "prefers"
+                                    :object "concise answers"
+                                    :scope "session"
+                                    :confidence 0.9}]})])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider identity)
+        session (system/create-session! system "facts")]
+    (try
+      (chat/run! system {:session-id (:id session)
+                         :messages [{:role "user" :content "I prefer concise answers"}]})
+      (let [facts (memory/search-facts (:memory-service system)
+                                       "concise"
+                                       {:scope {:type :session :id (:id session)}})
+            other-session (memory/search-facts (:memory-service system)
+                                               "concise"
+                                               {:scope {:type :session :id "other"}})]
+        (is (= 1 (count facts)))
+        (is (= "prefers" (:predicate (first facts))))
+        (is (empty? other-session)))
+      (finally
+        (io/delete-file path true)))))

@@ -20,8 +20,8 @@
          :yolo? false
          :permissions {:api [:filesystem-read :filesystem-write :http-request]
                        :ui [:filesystem-read :filesystem-write :http-request]
-                       :agent [:http-request]
-                       :chat [:filesystem-read :http-request]}
+                       :agent [:http-request :memory-read :memory-write]
+                       :chat [:filesystem-read :http-request :memory-read :memory-write]}
          :fs {:enabled true
               :roots ["."]
               :max-read-bytes 1048576}
@@ -35,6 +35,13 @@
  :skills {:dirs ["skills"]}
  :memory {:prompt {:paths ["MEMORY.md"]}
           :search {:default-limit 20}
+          :vault {:paths ["memory"]
+                  :writable? true}
+          :facts {:extractor {:enabled true
+                              :provider nil
+                              :model nil}
+                  :default-scope :session
+                  :dedup {:similarity-threshold nil}}
           :graph {:enabled false
                   :backend :datahike
                   :datahike {:path "data/memory-graph"

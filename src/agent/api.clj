@@ -368,10 +368,24 @@
 (defn- memory-surface->response [surface]
   {:name (name (:name surface))
    :type (name (:type surface))
-   :writable (:writable surface)
-   :enabled (:enabled surface)
+   :writable (boolean (:writable surface))
+   :enabled (boolean (:enabled surface))
    :paths (:paths surface)
    :default_limit (:default-limit surface)})
+
+(defn- fact->response [fact]
+  {:id (:id fact)
+   :scope (:scope fact)
+   :subject (:subject fact)
+   :predicate (:predicate fact)
+   :object (:object fact)
+   :source_session_id (:source-session-id fact)
+   :source_message_ids (:source-message-ids fact)
+   :source_request_id (:source-request-id fact)
+   :confidence (:confidence fact)
+   :created (:created? fact)
+   :created_at (:created-at fact)
+   :updated_at (:updated-at fact)})
 
 (defn- session-exists? [system session-id]
   (sqlite/session-exists? (:store system) session-id))
@@ -878,6 +892,64 @@
                  (memory/search-memory (:memory-service system) query
                                        (cond-> {}
                                          limit (assoc :limit limit))))))
+
+(defn- normalize-memory-scope [body]
+  (when-let [scope (:scope body)]
+    (when-not (map? scope)
+      (throw (api-error 400 "bad_request" "scope must be an object")))
+    {:type (or (:type scope) "global")
+     :id (:id scope)}))
+
+(defn- handle-memory-fact-save [system exchange]
+  (let [body (read-json-body exchange)]
+    (doseq [field [:subject :predicate :object]]
+      (ensure-string! field (get body field)))
+    (write-json! exchange 201
+                 {:data (fact->response
+                         (memory/save-memory-fact!
+                          (:memory-service system)
+                          {:subject (:subject body)
+                           :predicate (:predicate body)
+                           :object (:object body)
+                           :confidence (:confidence body)}
+                          (cond-> {:source-session-id (:source_session_id body)
+                                   :source-message-ids (:source_message_ids body)
+                                   :source-request-id (:source_request_id body)}
+                            (:scope body) (assoc :scope (normalize-memory-scope body)))))})))
+
+(defn- handle-memory-fact-search [system exchange]
+  (let [body (read-json-body exchange)
+        query (:query body)
+        limit (:limit body)]
+    (when (and (some? query) (not (string? query)))
+      (throw (api-error 400 "bad_request" "query must be a string")))
+    (when (and (some? limit) (not (integer? limit)))
+      (throw (api-error 400 "bad_request" "limit must be an integer")))
+    (write-json! exchange 200
+                 {:data (mapv fact->response
+                              (memory/search-facts
+                               (:memory-service system)
+                               query
+                               (cond-> {}
+                                 limit (assoc :limit limit)
+                                 (:scope body) (assoc :scope (normalize-memory-scope body))
+                                 (:all_scopes body) (assoc :all-scopes? true))))})))
+
+(defn- handle-memory-vault-read [system exchange]
+  (let [body (read-json-body exchange)
+        path (:path body)]
+    (ensure-string! :path path)
+    (write-json! exchange 200
+                 {:data (memory/read-vault-file (:memory-service system) path)})))
+
+(defn- handle-memory-vault-write [system exchange]
+  (let [body (read-json-body exchange)
+        path (:path body)
+        content (:content body)]
+    (ensure-string! :path path)
+    (ensure-string! :content content)
+    (write-json! exchange 201
+                 {:data (memory/write-vault-file! (:memory-service system) path content)})))
 
 (defn- normalize-graph-fact [body]
   (doseq [field [:subject :predicate :object]]
@@ -2220,6 +2292,10 @@
    :memory-surfaces (fn [request] (exchange-handler request #(handle-memory-surfaces system %)))
    :memory-prompt (fn [request] (exchange-handler request #(handle-memory-prompt system %)))
    :memory-search (fn [request] (exchange-handler request #(handle-memory-search system %)))
+   :memory-fact-save (fn [request] (exchange-handler request #(handle-memory-fact-save system %)))
+   :memory-fact-search (fn [request] (exchange-handler request #(handle-memory-fact-search system %)))
+   :memory-vault-read (fn [request] (exchange-handler request #(handle-memory-vault-read system %)))
+   :memory-vault-write (fn [request] (exchange-handler request #(handle-memory-vault-write system %)))
    :memory-graph-save (fn [request] (exchange-handler request #(handle-memory-graph-save system %)))
    :memory-graph-query (fn [request] (exchange-handler request #(handle-memory-graph-query system %)))
    :list-agents (fn [request] (exchange-handler request #(handle-list-agents system %)))

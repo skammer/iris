@@ -48,17 +48,17 @@ Goal: easy single-image deploy agent with Telegram chat, tool use, SQLite + grap
 
 ### Phase 5: Mandatory Memory
 
-15. [ ] Enable memory as core feature.
+15. [x] Enable memory as core feature.
    SQLite transcript/event search + graph memory + file/vault memory should be first-class surfaces.
-16. [ ] Add writable file/vault memory.
+16. [x] Add writable file/vault memory.
    Configured vault paths can be read/written when fs tool policy allows write access.
-17. [ ] Add auto fact extraction.
+17. [x] Add auto fact extraction.
    After user/assistant exchanges, extract structured facts with same LLM by default.
-18. [ ] Add fact dedup.
+18. [x] Add fact dedup.
    Dedup by normalized `(subject,predicate,object)`, source session/message IDs, and configurable similarity fallback.
-19. [ ] Scope memory.
+19. [x] Scope memory.
    Support global, per-agent, per-chat/session scopes. Retrieval must respect scope.
-20. [ ] Add explicit memory write path.
+20. [x] Add explicit memory write path.
    Tool/API for agents to intentionally store/update facts, with audit and conflict/update semantics.
 
 ### Phase 6: Telegram

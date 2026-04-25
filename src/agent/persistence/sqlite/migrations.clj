@@ -5,7 +5,7 @@
    [ragtime.protocols :as ragtime-protocols]
    [ragtime.strategy :as ragtime-strategy]))
 
-(def latest-schema-version 11)
+(def latest-schema-version 12)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -346,7 +346,39 @@
          "ALTER TABLE tool_approvals ADD COLUMN requested_permissions_json TEXT;"
          "ALTER TABLE tool_approvals ADD COLUMN expires_at TEXT;"
          "CREATE INDEX IF NOT EXISTS idx_tool_approvals_expires
-          ON tool_approvals(expires_at);"]}])
+          ON tool_approvals(expires_at);"]}
+   {:version 12
+    :id "12"
+    :name "mandatory-memory-facts"
+    :checksum "8c3e2b2d4a5f1201"
+    :irreversible? true
+    :up ["CREATE TABLE IF NOT EXISTS memory_facts (
+            id TEXT PRIMARY KEY,
+            scope_type TEXT NOT NULL,
+            scope_id TEXT,
+            subject TEXT NOT NULL,
+            predicate TEXT NOT NULL,
+            object TEXT NOT NULL,
+            normalized_subject TEXT NOT NULL,
+            normalized_predicate TEXT NOT NULL,
+            normalized_object TEXT NOT NULL,
+            source_session_id TEXT,
+            source_message_ids_json TEXT,
+            source_request_id TEXT,
+            confidence REAL,
+            status TEXT NOT NULL,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );"
+         "CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_facts_dedup
+          ON memory_facts(scope_type,
+                          coalesce(scope_id, ''),
+                          normalized_subject,
+                          normalized_predicate,
+                          normalized_object);"
+         "CREATE INDEX IF NOT EXISTS idx_memory_facts_scope_updated
+          ON memory_facts(scope_type, scope_id, updated_at DESC);"]}])
 
 (defn descriptor-by-version [version]
   (some #(when (= version (:version %)) %) migration-descriptors))

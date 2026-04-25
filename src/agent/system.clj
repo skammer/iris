@@ -29,6 +29,7 @@
    [agent.telemetry :as telemetry]
    [agent.tools.common.fs :as fs-tool]
    [agent.tools.common.http :as http-tool]
+   [agent.tools.common.memory :as memory-tool]
    [agent.tools.common.shell :as shell-tool]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
@@ -71,6 +72,16 @@
 
       (throw (ex-info (str "Unsupported provider: " provider)
                       {:provider provider})))))
+
+(defn create-fact-llm-provider
+  [cfg]
+  (let [extractor (get-in cfg [:memory :facts :extractor])
+        provider (:provider extractor)
+        model (:model extractor)]
+    (when (or provider model)
+      (create-llm-provider (cond-> (:llm cfg)
+                             provider (assoc :provider provider)
+                             model (assoc :model model))))))
 
 (defn create-store
   [cfg]
@@ -218,39 +229,44 @@
 
 (defn create-tool-registry
   ([cfg event-sink store]
-   (create-tool-registry cfg event-sink store nil))
+   (create-tool-registry cfg event-sink store nil nil))
   ([cfg event-sink store telemetry-collector]
-  (let [http-cfg (get cfg :http)
-        fs-cfg (get cfg :fs)
-        shell-cfg (get cfg :shell)
-        policy-hook (create-tool-policy-hook cfg)
-        registry (tools/create-registry
-                  {:event-sink event-sink
-                   :approval-check (tool-approvals/create-policy-hook store)
-                   :before-execute policy-hook
-                   :activity-executor (when store
-                                        (fn [activity f]
-                                          (:result (runtime/execute-activity!
-                                                   (runtime/create-runtime-service {:store store})
-                                                   activity
-                                                   f))))
-                   :after-execute (fn [{:keys [tool context duration-ms is-error error] :as hook}]
-                                    (telemetry/record-tool! telemetry-collector
-                                                            {:tool-name (:name tool)
-                                                             :duration-ms duration-ms
-                                                             :success? (not is-error)
-                                                             :error error
-                                                             :user (:user context)})
-                                    hook)})]
-    (cond-> registry
-      (not= false (:enabled http-cfg))
-      (tools/register-tool (http-tool/create-http-tool http-cfg))
+   (create-tool-registry cfg event-sink store telemetry-collector nil))
+  ([cfg event-sink store telemetry-collector memory-service]
+   (let [http-cfg (get cfg :http)
+         fs-cfg (get cfg :fs)
+         shell-cfg (get cfg :shell)
+         policy-hook (create-tool-policy-hook cfg)
+         registry (tools/create-registry
+                   {:event-sink event-sink
+                    :approval-check (tool-approvals/create-policy-hook store)
+                    :before-execute policy-hook
+                    :activity-executor (when store
+                                         (fn [activity f]
+                                           (:result (runtime/execute-activity!
+                                                     (runtime/create-runtime-service {:store store})
+                                                     activity
+                                                     f))))
+                    :after-execute (fn [{:keys [tool context duration-ms is-error error] :as hook}]
+                                     (telemetry/record-tool! telemetry-collector
+                                                             {:tool-name (:name tool)
+                                                              :duration-ms duration-ms
+                                                              :success? (not is-error)
+                                                              :error error
+                                                              :user (:user context)})
+                                     hook)})]
+     (cond-> registry
+       (not= false (:enabled http-cfg))
+       (tools/register-tool (http-tool/create-http-tool http-cfg))
 
-      (not= false (:enabled fs-cfg))
-      (tools/register-tool (fs-tool/create-fs-tool fs-cfg))
+       (not= false (:enabled fs-cfg))
+       (tools/register-tool (fs-tool/create-fs-tool fs-cfg))
 
-      (not= false (:enabled shell-cfg))
-      (tools/register-tool (shell-tool/create-shell-tool shell-cfg))))))
+       memory-service
+       (tools/register-tool (memory-tool/create-memory-tool memory-service))
+
+       (not= false (:enabled shell-cfg))
+       (tools/register-tool (shell-tool/create-shell-tool shell-cfg))))))
 
 (defn create-orchestrator
   ([_cfg event-sink]
@@ -270,8 +286,11 @@
   (skills/create-registry cfg))
 
 (defn create-memory-service
-  [cfg store]
-  (memory/create-memory-service cfg store))
+  ([cfg store]
+   (memory/create-memory-service cfg store))
+  ([cfg tools-cfg store]
+   (memory/create-memory-service (assoc cfg :fs-roots (get-in tools-cfg [:fs :roots]))
+                                 store)))
 
 (defn create-runtime-service
   ([store event-sink]
@@ -371,7 +390,8 @@
          broker-instance (create-broker store)
          event-sink (create-event-sink store broker-instance telemetry-collector)
          recorded-event-sink (create-recorded-event-sink broker-instance telemetry-collector)
-         runtime-service (create-runtime-service store event-sink broker-instance recorded-event-sink)]
+         runtime-service (create-runtime-service store event-sink broker-instance recorded-event-sink)
+         memory-service (create-memory-service (:memory cfg) (:tools cfg) store)]
      (logging/log! :agent.system/created
                    {:config-path config-path
                     :provider (name (get-in cfg [:llm :provider]))
@@ -379,14 +399,15 @@
                     :log-path (get-in cfg [:logging :file :path])})
      {:config cfg
       :llm-provider (create-llm-provider llm-cfg)
+      :fact-llm-provider (create-fact-llm-provider cfg)
       :store store
       :telemetry telemetry-collector
       :broker broker-instance
       :event-sink event-sink
       :recorded-event-sink recorded-event-sink
-      :tool-registry (create-tool-registry (:tools cfg) event-sink store telemetry-collector)
+      :tool-registry (create-tool-registry (:tools cfg) event-sink store telemetry-collector memory-service)
       :skills-registry (create-skills-registry (:skills cfg))
-      :memory-service (create-memory-service (:memory cfg) store)
+      :memory-service memory-service
       :runtime-service runtime-service
       :runner-registry (create-runner-registry runtime-service)
       :channel-adapter-registry (create-channel-adapter-registry (:channel-adapters cfg))
@@ -504,6 +525,15 @@
   ([system query] (search-memory system query {}))
   ([system query opts]
    (memory/search-memory (:memory-service system) query opts)))
+
+(defn save-memory-fact!
+  [system fact opts]
+  (memory/save-memory-fact! (:memory-service system) fact opts))
+
+(defn search-memory-facts
+  ([system query] (search-memory-facts system query {}))
+  ([system query opts]
+   (memory/search-facts (:memory-service system) query opts)))
 
 (defn save-graph-fact!
   [system fact]

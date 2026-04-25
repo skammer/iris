@@ -59,12 +59,16 @@
       (subs text 0 memory-max-chars)
       text)))
 
-(defn- recall-memory [system query]
+(defn- recall-memory [system session-id query]
   (let [prompt (memory/read-prompt-memory (:memory-service system))
         search (when-not (str/blank? (or query ""))
                  (memory/search-memory (:memory-service system)
                                        query
-                                       {:limit memory-result-limit}))]
+                                       {:limit memory-result-limit
+                                        :session-id session-id
+                                        :entity-type :session
+                                        :entity-id session-id
+                                        :scope {:type :session :id session-id}}))]
     {:prompt prompt
      :search search}))
 
@@ -95,6 +99,7 @@
                         input
                         (merge context
                                {:user (or session-id "chat")
+                                :session-id session-id
                                 :request-id request-id
                                 :permissions (profile-permissions system :chat)
                                 :allowed-tools (all-tool-names system)
@@ -149,20 +154,34 @@
                       approvals))))
 
 (defn- persist-completion! [system session-id prompt content request-id]
-  (when session-id
-    (append-message! system session-id "assistant" content))
-  (sqlite/log-completion! (:store system)
-                          {:session-id session-id
-                           :provider (get-in system [:config :llm :provider])
-                           :model (get-in system [:config :llm :model])
-                           :prompt prompt
-                           :response content})
-  (emit! system {:event-type :completion.completed
-                 :entity-type :session
-                 :entity-id session-id
-                 :request-id request-id
-                 :payload {:provider (name (get-in system [:config :llm :provider]))
-                           :model (get-in system [:config :llm :model])}}))
+  (let [assistant-message (when session-id
+                            (append-message! system session-id "assistant" content))]
+    (sqlite/log-completion! (:store system)
+                            {:session-id session-id
+                             :provider (get-in system [:config :llm :provider])
+                             :model (get-in system [:config :llm :model])
+                             :prompt prompt
+                             :response content})
+    (emit! system {:event-type :completion.completed
+                   :entity-type :session
+                   :entity-id session-id
+                   :request-id request-id
+                   :payload {:provider (name (get-in system [:config :llm :provider]))
+                             :model (get-in system [:config :llm :model])}})
+    assistant-message))
+
+(defn- extract-turn-memory! [system session-id user-message assistant-message request-id]
+  (when (and session-id user-message assistant-message)
+    (memory/extract-and-save-facts!
+     (:memory-service system)
+     (or (:fact-llm-provider system) (:llm-provider system))
+     {:user-message (:content user-message)
+      :assistant-message (:content assistant-message)}
+     {:session-id session-id
+      :source-session-id session-id
+      :source-message-ids [(:id user-message) (:id assistant-message)]
+      :source-request-id request-id
+      :model (get-in system [:config :llm :model])})))
 
 (defn- fallback-complete! [system messages session-id prompt request-id error]
   (let [content (telemetry/complete-with-telemetry! (:telemetry system)
@@ -176,7 +195,8 @@
                    :entity-id session-id
                    :request-id request-id
                    :payload {:reason (.getMessage error)}})
-    (persist-completion! system session-id prompt content request-id)
+    (let [assistant-message (persist-completion! system session-id prompt content request-id)]
+      (extract-turn-memory! system session-id nil assistant-message request-id))
     (emit! system {:event-type :chat.completed
                    :entity-type :session
                    :entity-id session-id
@@ -190,90 +210,87 @@
   [system {:keys [messages session-id max-steps]
            :or {max-steps default-max-steps}}]
   (let [request-id (request-id)
-        prompt (latest-user-prompt messages)]
-    (persist-user-turn! system session-id messages)
-    (let [history (if session-id (session-messages system session-id) messages)
-          recall (recall-memory system prompt)
-          initial-messages (into [(memory-message recall)] history)
-          ops (->ChatKernelOps system session-id request-id)]
-      (emit! system {:event-type :chat.started
-                     :entity-type :session
-                     :entity-id session-id
-                     :request-id request-id
-                     :payload {:message-count (count history)}})
-      (emit! system {:event-type :chat.memory.recalled
-                     :entity-type :session
-                     :entity-id session-id
-                     :request-id request-id
-                     :payload {:query prompt
-                               :message-count (count (get-in recall [:search :messages]))
-                               :event-count (count (get-in recall [:search :events]))
-                               :prompt-document-count (count (get-in recall [:prompt :documents]))}})
-      (try
-        (loop [step-no 0
-               state {}
-               planner-messages initial-messages
-               trace []]
-          (if (>= step-no max-steps)
-            (let [content "Stopped: max chat tool steps reached."]
-              (persist-completion! system session-id prompt content request-id)
-              {:content content
-               :request-id request-id
-               :trace trace})
-            (let [step (planner/plan-step! (:llm-provider system)
-                                           {:messages planner-messages
-                                            :state state
-                                            :tools (tools/list-tools (:tool-registry system))
-                                            :telemetry (:telemetry system)
-                                            :agent-id (or session-id "chat")
-                                            :model (get-in system [:config :llm :model])})
-                  executable-step (select-keys step [:schema-version :state :directives :receipts])
-                  executed (kernel-runtime/execute-step!
-                            ops
-                            (or session-id "chat")
-                            executable-step
-                            {:execute-safe-tools? true
-                             :yolo? (true? (get-in system [:config :tools :yolo?]))})
-                  receipts (:receipts executed)
-                  trace* (conj trace {:step step-no
-                                      :directives (:directives step)
-                                      :receipts receipts})]
-              (emit! system {:event-type :chat.planner.step
-                             :entity-type :session
-                             :entity-id session-id
-                             :request-id request-id
-                             :payload {:step step-no
-                                       :directives (:directives step)
-                                       :receipts receipts}})
-              (if-let [receipt (complete-receipt receipts)]
-                (let [content (result-text (:result receipt))]
-                  (persist-completion! system session-id prompt content request-id)
-                  (emit! system {:event-type :chat.completed
-                                 :entity-type :session
-                                 :entity-id session-id
-                                 :request-id request-id
-                                 :payload {:steps (inc step-no)}})
-                  {:content content
+        prompt (latest-user-prompt messages)
+        user-message (persist-user-turn! system session-id messages)
+        history (if session-id (session-messages system session-id) messages)
+        recall (recall-memory system session-id prompt)
+        initial-messages (into [(memory-message recall)] history)
+        ops (->ChatKernelOps system session-id request-id)
+        finish! (fn [content trace extra]
+                  (let [assistant-message (persist-completion! system session-id prompt content request-id)]
+                    (extract-turn-memory! system session-id user-message assistant-message request-id))
+                  (merge {:content content
+                          :request-id request-id
+                          :trace trace}
+                         extra))]
+    (emit! system {:event-type :chat.started
+                   :entity-type :session
+                   :entity-id session-id
                    :request-id request-id
-                   :trace trace*})
-                (let [approval-needed (vec (approval-receipts receipts))]
-                  (if (seq approval-needed)
-                    (let [approvals (mapv #(request-approval! system session-id %) approval-needed)
-                          content (approval-message approvals)]
-                      (persist-completion! system session-id prompt content request-id)
-                      {:content content
+                   :payload {:message-count (count history)}})
+    (emit! system {:event-type :chat.memory.recalled
+                   :entity-type :session
+                   :entity-id session-id
+                   :request-id request-id
+                   :payload {:query prompt
+                             :message-count (count (get-in recall [:search :messages]))
+                             :event-count (count (get-in recall [:search :events]))
+                             :fact-count (count (get-in recall [:search :facts]))
+                             :prompt-document-count (count (get-in recall [:prompt :documents]))}})
+    (try
+      (loop [step-no 0
+             state {}
+             planner-messages initial-messages
+             trace []]
+        (if (>= step-no max-steps)
+          (finish! "Stopped: max chat tool steps reached." trace {})
+          (let [step (planner/plan-step! (:llm-provider system)
+                                         {:messages planner-messages
+                                          :state state
+                                          :tools (tools/list-tools (:tool-registry system))
+                                          :telemetry (:telemetry system)
+                                          :agent-id (or session-id "chat")
+                                          :model (get-in system [:config :llm :model])})
+                executable-step (select-keys step [:schema-version :state :directives :receipts])
+                executed (kernel-runtime/execute-step!
+                          ops
+                          (or session-id "chat")
+                          executable-step
+                          {:execute-safe-tools? true
+                           :yolo? (true? (get-in system [:config :tools :yolo?]))})
+                receipts (:receipts executed)
+                trace* (conj trace {:step step-no
+                                    :directives (:directives step)
+                                    :receipts receipts})]
+            (emit! system {:event-type :chat.planner.step
+                           :entity-type :session
+                           :entity-id session-id
+                           :request-id request-id
+                           :payload {:step step-no
+                                     :directives (:directives step)
+                                     :receipts receipts}})
+            (if-let [receipt (complete-receipt receipts)]
+              (let [content (result-text (:result receipt))]
+                (emit! system {:event-type :chat.completed
+                               :entity-type :session
+                               :entity-id session-id
+                               :request-id request-id
+                               :payload {:steps (inc step-no)}})
+                (finish! content trace* {}))
+              (let [approval-needed (vec (approval-receipts receipts))]
+                (if (seq approval-needed)
+                  (let [approvals (mapv #(request-approval! system session-id %) approval-needed)
+                        content (approval-message approvals)]
+                    (finish! content trace* {:approvals approvals}))
+                  (recur (inc step-no)
+                         (merge state (:state executed))
+                         (conj planner-messages (tool-result-message receipts))
+                         trace*)))))))
+      (catch Exception e
+        (emit! system {:event-type :chat.error
+                       :entity-type :session
+                       :entity-id session-id
                        :request-id request-id
-                       :approvals approvals
-                       :trace trace*})
-                    (recur (inc step-no)
-                           (merge state (:state executed))
-                           (conj planner-messages (tool-result-message receipts))
-                           trace*)))))))
-        (catch Exception e
-          (emit! system {:event-type :chat.error
-                         :entity-type :session
-                         :entity-id session-id
-                         :request-id request-id
-                         :payload {:message (.getMessage e)
-                                   :type (some-> e ex-data :type)}})
-          (fallback-complete! system initial-messages session-id prompt request-id e))))))
+                       :payload {:message (.getMessage e)
+                                 :type (some-> e ex-data :type)}})
+        (fallback-complete! system initial-messages session-id prompt request-id e)))))

@@ -16,9 +16,11 @@ limit :limit
 -- :name search-events :? :*
 select id, event_type, entity_type, entity_id, request_id, payload, created_at
 from agent_events
-where event_type like :needle
-   or entity_id like :needle
-   or payload like :needle
+where (event_type like :needle
+       or entity_id like :needle
+       or payload like :needle)
+  and (:entity_type is null or entity_type = :entity_type)
+  and (:entity_id is null or entity_id = :entity_id)
 order by id desc
 limit :limit
 

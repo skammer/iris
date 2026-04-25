@@ -35,8 +35,8 @@
            :yolo? false
            :permissions {:api [:filesystem-read :filesystem-write :http-request]
                          :ui [:filesystem-read :filesystem-write :http-request]
-                         :agent [:http-request]
-                         :chat [:filesystem-read :http-request]}
+                         :agent [:http-request :memory-read :memory-write]
+                         :chat [:filesystem-read :http-request :memory-read :memory-write]}
            :policy {:allowlist []
                     :blocklist []
                     :tool-scopes {}}
@@ -57,9 +57,13 @@
    :skills {:dirs ["skills"]}
    :memory {:prompt {:paths ["MEMORY.md"]}
             :search {:default-limit 20}
+            :vault {:paths ["memory"]
+                    :writable? true}
             :facts {:extractor {:enabled true
                                 :provider nil
-                                :model nil}}
+                                :model nil}
+                    :default-scope :session
+                    :dedup {:similarity-threshold nil}}
             :graph {:enabled false
                     :backend :datahike
                     :datahike {:path "data/memory-graph"
@@ -172,9 +176,13 @@
         sqlite-path (System/getenv "AGENT_SQLITE_PATH")
         memory-prompt-paths (parse-csv (System/getenv "AGENT_MEMORY_PROMPT_PATHS"))
         memory-search-limit (parse-long* (System/getenv "AGENT_MEMORY_SEARCH_DEFAULT_LIMIT"))
+        memory-vault-paths (parse-csv (System/getenv "AGENT_MEMORY_VAULT_PATHS"))
+        memory-vault-writable? (parse-bool (System/getenv "AGENT_MEMORY_VAULT_WRITABLE"))
         fact-extractor-enabled (parse-bool (System/getenv "AGENT_FACT_EXTRACTOR_ENABLED"))
         fact-extractor-provider (keyword-env "AGENT_FACT_EXTRACTOR_PROVIDER")
         fact-extractor-model (System/getenv "AGENT_FACT_EXTRACTOR_MODEL")
+        fact-dedup-similarity-threshold (some-> (System/getenv "AGENT_FACT_DEDUP_SIMILARITY_THRESHOLD")
+                                                Double/parseDouble)
         memory-graph-enabled (parse-bool (System/getenv "AGENT_MEMORY_GRAPH_ENABLED"))
         memory-graph-path (System/getenv "AGENT_MEMORY_GRAPH_PATH")
         telegram-enabled (parse-bool (System/getenv "AGENT_TELEGRAM_ENABLED"))
@@ -211,11 +219,21 @@
         memory-config (cond-> {}
                         memory-prompt-paths (assoc :prompt {:paths memory-prompt-paths})
                         (some? memory-search-limit) (assoc :search {:default-limit memory-search-limit})
-                        (or (some? fact-extractor-enabled) fact-extractor-provider fact-extractor-model)
-                        (assoc :facts {:extractor (cond-> {}
-                                                    (some? fact-extractor-enabled) (assoc :enabled fact-extractor-enabled)
-                                                    fact-extractor-provider (assoc :provider fact-extractor-provider)
-                                                    fact-extractor-model (assoc :model fact-extractor-model))})
+                        (or memory-vault-paths (some? memory-vault-writable?))
+                        (assoc :vault (cond-> {}
+                                        memory-vault-paths (assoc :paths memory-vault-paths)
+                                        (some? memory-vault-writable?) (assoc :writable? memory-vault-writable?)))
+                        (or (some? fact-extractor-enabled) fact-extractor-provider fact-extractor-model
+                            (some? fact-dedup-similarity-threshold))
+                        (assoc :facts (cond-> {}
+                                        (or (some? fact-extractor-enabled) fact-extractor-provider fact-extractor-model)
+                                        (assoc :extractor
+                                               (cond-> {}
+                                                 (some? fact-extractor-enabled) (assoc :enabled fact-extractor-enabled)
+                                                 fact-extractor-provider (assoc :provider fact-extractor-provider)
+                                                 fact-extractor-model (assoc :model fact-extractor-model)))
+                                        (some? fact-dedup-similarity-threshold)
+                                        (assoc :dedup {:similarity-threshold fact-dedup-similarity-threshold})))
                         (or (some? memory-graph-enabled) memory-graph-path)
                         (assoc :graph (cond-> {}
                                         (some? memory-graph-enabled) (assoc :enabled memory-graph-enabled)
