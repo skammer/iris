@@ -3,6 +3,7 @@
    [agent.api-test]
    [agent.broker.local-test]
    [agent.channels.core-test]
+   [agent.chat-test]
    [clojure.test :as t]
    [agent.config-test]
    [agent.federation.http-test]
@@ -35,6 +36,7 @@
   '[agent.api-test
     agent.broker.local-test
     agent.channels.core-test
+    agent.chat-test
     agent.config-test
     agent.federation.http-test
     agent.system-test

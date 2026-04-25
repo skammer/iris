@@ -35,7 +35,8 @@
            :yolo? false
            :permissions {:api [:filesystem-read :filesystem-write :http-request]
                          :ui [:filesystem-read :filesystem-write :http-request]
-                         :agent [:http-request]}
+                         :agent [:http-request]
+                         :chat [:filesystem-read :http-request]}
            :policy {:allowlist []
                     :blocklist []
                     :tool-scopes {}}
@@ -203,6 +204,7 @@
         api-tool-permissions (parse-keyword-csv (System/getenv "AGENT_API_TOOL_PERMISSIONS"))
         ui-tool-permissions (parse-keyword-csv (System/getenv "AGENT_UI_TOOL_PERMISSIONS"))
         agent-tool-permissions (parse-keyword-csv (System/getenv "AGENT_AGENT_TOOL_PERMISSIONS"))
+        chat-tool-permissions (parse-keyword-csv (System/getenv "AGENT_CHAT_TOOL_PERMISSIONS"))
         api-host (System/getenv "AGENT_API_HOST")
         api-key (System/getenv "AGENT_API_KEY")
         api-port (parse-long* (System/getenv "AGENT_API_PORT"))
@@ -267,12 +269,13 @@
                        tool-allowlist (assoc :allowlist tool-allowlist)
                        tool-blocklist (assoc :blocklist tool-blocklist)))
               approval-ttl-seconds (assoc :approvals {:ttl-seconds approval-ttl-seconds})
-              (or api-tool-permissions ui-tool-permissions agent-tool-permissions)
+              (or api-tool-permissions ui-tool-permissions agent-tool-permissions chat-tool-permissions)
               (assoc :permissions
                      (cond-> {}
                        api-tool-permissions (assoc :api api-tool-permissions)
                        ui-tool-permissions (assoc :ui ui-tool-permissions)
-                       agent-tool-permissions (assoc :agent agent-tool-permissions))))
+                       agent-tool-permissions (assoc :agent agent-tool-permissions)
+                       chat-tool-permissions (assoc :chat chat-tool-permissions))))
      :telemetry (cond-> {}
                   (some? telemetry-enabled) (assoc :enabled telemetry-enabled)
                   (some? telemetry-max-latency-samples) (assoc :max-latency-samples telemetry-max-latency-samples))

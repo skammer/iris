@@ -4,6 +4,7 @@
    [agent.broker.core :as broker]
    [agent.broker.local :as local-broker]
    [agent.channels.core :as channel-adapters]
+   [agent.chat :as chat]
    [agent.api :as api]
    [agent.config :as config]
    [agent.federation.http :as federation-http]
@@ -839,26 +840,9 @@
 
 (defn complete!
   [system messages {:keys [session-id] :as opts}]
-  (let [user-message (last (filter #(= "user" (:role %)) messages))]
-    (when session-id
-      (when-let [prompt (:content user-message)]
-        (append-session-message! system session-id "user" prompt)))
-    (let [content (complete system messages opts)]
-    (when session-id
-      (append-session-message! system session-id "assistant" content))
-    (sqlite/log-completion! (:store system)
-                            {:session-id session-id
-                             :provider (get-in system [:config :llm :provider])
-                             :model (get-in system [:config :llm :model])
-                             :prompt (:content user-message)
-                             :response content})
-    (log-event! system
-                {:event-type :completion.completed
-                 :entity-type :session
-                 :entity-id session-id
-                 :payload {:provider (name (get-in system [:config :llm :provider]))
-                           :model (get-in system [:config :llm :model])}})
-    {:content content})))
+  (chat/run! system (merge opts
+                           {:messages messages
+                            :session-id session-id})))
 
 (defn start-api!
   [system]
