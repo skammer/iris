@@ -30,11 +30,11 @@ Goal: easy single-image deploy agent with Telegram chat, tool use, SQLite + grap
 
 ### Phase 3: Tool Policy + Approval
 
-9. [ ] Implement config-driven tool policy.
+9. [x] Implement config-driven tool policy.
    Support allowlist, blocklist, per-tool scope, shell command blocklist/allowlist, fs roots, http private/IP rules, max bytes, max timeout.
-10. [ ] Harden approvals.
+10. [x] Harden approvals.
    Approval binds tool, input hash, actor, expiry, and requested permissions. Audit all decisions to SQLite.
-11. [ ] Support yolo mode.
+11. [x] Support yolo mode.
    If `:tools :yolo? true`, skip approval gates but still enforce blocklist, scopes, roots, timeouts, and audit.
 
 ### Phase 4: First-Class Chat

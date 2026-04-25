@@ -143,7 +143,8 @@
   (boolean ((:sensitive-fn tool) input)))
 
 (defn- enforce-approval! [registry tool tool-description input context]
-  (when (sensitive-input? tool input)
+  (when (and (not (:yolo? context))
+             (sensitive-input? tool input))
     (let [approval-check (:approval-check registry)]
       (when-not approval-check
         (throw (tool-error :approval-required
@@ -229,17 +230,6 @@
                                  :source (name (:source tool-description))
                                  :user (:user context*)
                                  :input validated-input}})
-         (try
-           (enforce-approval! registry tool tool-description validated-input context*)
-           (catch Exception e
-             (emit-event! registry
-                          {:event-type :tool.execution.blocked
-                           :entity-type :tool
-                           :entity-id (name tool-name)
-                           :request-id (:request-id context*)
-                           :payload {:tool-name (name tool-name)
-                                     :reason (.getMessage e)}})
-             (throw e)))
          (when-let [decision (when-let [before-execute (:before-execute registry)]
                                (before-execute (hook-context tool-description validated-input context*)))]
            (when (:block decision)
@@ -253,6 +243,17 @@
              (throw (tool-error :tool-blocked
                                 (or (:reason decision) "Tool execution blocked")
                                 {:tool-name tool-name}))))
+         (try
+           (enforce-approval! registry tool tool-description validated-input context*)
+           (catch Exception e
+             (emit-event! registry
+                          {:event-type :tool.execution.blocked
+                           :entity-type :tool
+                           :entity-id (name tool-name)
+                           :request-id (:request-id context*)
+                           :payload {:tool-name (name tool-name)
+                                     :reason (.getMessage e)}})
+             (throw e)))
          (let [start-ns (System/nanoTime)]
            (try
              (let [result (execute-effect! registry

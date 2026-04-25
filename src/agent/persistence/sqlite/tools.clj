@@ -5,24 +5,30 @@
 
 (hugsql/def-sqlvec-fns "agent/persistence/sqlite/tools.sql")
 
-(defn- row->approval [{:keys [id tool_name status input_json requested_by reason actor decision_reason created_at decided_at]}]
+(defn- row->approval [{:keys [id tool_name status input_json input_hash requested_permissions_json requested_by reason actor decision_reason expires_at created_at decided_at]}]
   {:id id
    :tool-name tool_name
    :status status
    :input (common/parse-json-string input_json)
+   :input-hash input_hash
+   :requested-permissions (set (map keyword (or (common/parse-json-string requested_permissions_json) [])))
    :requested-by requested_by
    :reason reason
    :actor actor
    :decision-reason decision_reason
+   :expires-at expires_at
    :created-at created_at
    :decided-at decided_at})
 
-(defn create-tool-approval! [store {:keys [tool-name input requested-by reason]}]
+(defn create-tool-approval! [store {:keys [tool-name input input-hash requested-permissions requested-by reason expires-at]}]
   (let [approval {:id (common/uuid-str)
                   :tool_name (common/normalize-name tool-name)
                   :input_json (common/json-string input)
+                  :input_hash input-hash
+                  :requested_permissions_json (common/json-string (mapv name requested-permissions))
                   :requested_by requested-by
                   :reason reason
+                  :expires_at expires-at
                   :created_at (common/now-str)}]
     (common/with-connection
       store

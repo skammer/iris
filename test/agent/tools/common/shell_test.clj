@@ -36,6 +36,21 @@
                                               {:permissions #{:shell-exec}})))
     (.delete root)))
 
+(deftest shell-tool-blocks-blocklisted-command-test
+  (let [root (temp-dir)
+        tool (shell-tool/create-shell-tool {:roots [(.getAbsolutePath root)]
+                                            :working-dir (.getAbsolutePath root)
+                                            :timeout-ms 5000
+                                            :allowed-commands ["printf"]
+                                            :blocked-commands ["printf"]})
+        registry (-> (tools/create-registry {:approval-check (fn [_] nil)})
+                     (tools/register-tool tool))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"blocklist"
+                          (tools/execute-tool registry :shell {:argv ["printf" "hello"]}
+                                              {:permissions #{:shell-exec}})))
+    (.delete root)))
+
 (deftest shell-tool-rejects-command-string-test
   (let [root (temp-dir)
         tool (shell-tool/create-shell-tool {:roots [(.getAbsolutePath root)]

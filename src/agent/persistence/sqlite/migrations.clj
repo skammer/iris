@@ -5,7 +5,7 @@
    [ragtime.protocols :as ragtime-protocols]
    [ragtime.strategy :as ragtime-strategy]))
 
-(def latest-schema-version 10)
+(def latest-schema-version 11)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -336,7 +336,17 @@
          "CREATE INDEX IF NOT EXISTS idx_agent_run_activities_run_created
           ON agent_run_activities(run_id, created_at DESC);"
          "CREATE INDEX IF NOT EXISTS idx_agent_run_activities_command_created
-          ON agent_run_activities(command_id, created_at DESC);"]}])
+          ON agent_run_activities(command_id, created_at DESC);"]}
+   {:version 11
+    :id "11"
+    :name "harden-tool-approvals"
+    :checksum "f5a70d2e197b3f1"
+    :irreversible? true
+    :up ["ALTER TABLE tool_approvals ADD COLUMN input_hash TEXT;"
+         "ALTER TABLE tool_approvals ADD COLUMN requested_permissions_json TEXT;"
+         "ALTER TABLE tool_approvals ADD COLUMN expires_at TEXT;"
+         "CREATE INDEX IF NOT EXISTS idx_tool_approvals_expires
+          ON tool_approvals(expires_at);"]}])
 
 (defn descriptor-by-version [version]
   (some #(when (= version (:version %)) %) migration-descriptors))

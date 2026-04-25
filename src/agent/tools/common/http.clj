@@ -92,6 +92,8 @@
   [opts]
   (let [config (merge {:default-headers {"User-Agent" "clj-agent/0.1"}
                        :timeout-ms 30000
+                       :max-timeout-ms 30000
+                       :max-response-bytes 1048576
                        :allow-private? false
                        :max-redirects 3
                        :resolve-host-fn default-resolve-host}
@@ -118,12 +120,15 @@
       :validate-fn validate-input
       :health-fn (fn []
                    {:healthy true
-                    :details {:timeout-ms (:timeout-ms config)
+                   :details {:timeout-ms (:timeout-ms config)
+                              :max-timeout-ms (:max-timeout-ms config)
+                              :max-response-bytes (:max-response-bytes config)
                               :allow-private? (:allow-private? config)
                               :max-redirects (:max-redirects config)}})
       :execute-fn
       (fn [input _context]
-        (let [timeout-ms (or (:timeout-ms input) (:timeout-ms config))
+        (let [timeout-ms (min (long (or (:timeout-ms input) (:timeout-ms config)))
+                              (long (:max-timeout-ms config)))
               request-opts (fn [url]
                              (cond-> {:method (:method input)
                                       :url url
@@ -156,6 +161,13 @@
                                  (recur next-url (dec redirects-left))))
                              response)))
               status (:status response)
+              body-size (alength (.getBytes (str (:body response)) "UTF-8"))
+              _ (when (> body-size (:max-response-bytes config))
+                  (throw (tools/tool-error :response-too-large
+                                           "HTTP response exceeds max-response-bytes"
+                                           {:url (:url input)
+                                            :size body-size
+                                            :max-response-bytes (:max-response-bytes config)})))
               parsed-body (some-> (:body response) parse-response-body)]
           (if (<= 200 status 299)
             {:status status

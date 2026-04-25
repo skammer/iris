@@ -30,7 +30,8 @@
    [agent.tools.common.http :as http-tool]
    [agent.tools.common.shell :as shell-tool]
    [agent.tools.approvals :as tool-approvals]
-   [agent.tools.core :as tools]))
+   [agent.tools.core :as tools]
+   [clojure.set :as set]))
 
 (declare spawn-task-worker! send-agent-message! execute-agent-tool!)
 
@@ -166,6 +167,45 @@
        (broker/publish! broker-instance message))
      recorded)))
 
+(defn- normalize-tool-name [tool]
+  (cond
+    (keyword? tool) tool
+    (string? tool) (keyword tool)
+    :else tool))
+
+(defn- tool-name-set [tools]
+  (set (map normalize-tool-name tools)))
+
+(defn create-tool-policy-hook
+  [cfg]
+  (let [policy (:policy cfg)
+        allowlist (tool-name-set (:allowlist policy))
+        blocklist (tool-name-set (:blocklist policy))
+        tool-scopes (into {}
+                          (map (fn [[tool scopes]]
+                                 [(normalize-tool-name tool) (set (map keyword scopes))]))
+                          (:tool-scopes policy))]
+    (fn [{:keys [tool context]}]
+      (let [tool-name (:name tool)
+            context-scopes (set (map keyword (or (:tool-scopes context) (:scopes context) [])))
+            required-scopes (get tool-scopes tool-name)]
+        (cond
+          (or (contains? blocklist :*) (contains? blocklist tool-name))
+          {:block true
+           :reason "Tool blocked by startup policy"}
+
+          (and (seq allowlist)
+               (not (or (contains? allowlist :*) (contains? allowlist tool-name))))
+          {:block true
+           :reason "Tool not in startup allowlist"}
+
+          (and (seq required-scopes)
+               (empty? (set/intersection required-scopes context-scopes)))
+          {:block true
+           :reason "Tool scope missing"}
+
+          :else nil)))))
+
 (defn subscribe-events
   ([system] (subscribe-events system (broker/all-events-subject)))
   ([system pattern]
@@ -182,9 +222,11 @@
   (let [http-cfg (get cfg :http)
         fs-cfg (get cfg :fs)
         shell-cfg (get cfg :shell)
+        policy-hook (create-tool-policy-hook cfg)
         registry (tools/create-registry
                   {:event-sink event-sink
                    :approval-check (tool-approvals/create-policy-hook store)
+                   :before-execute policy-hook
                    :activity-executor (when store
                                         (fn [activity f]
                                           (:result (runtime/execute-activity!
@@ -479,7 +521,10 @@
   ([system tool-name input]
    (execute-tool system tool-name input {}))
   ([system tool-name input context]
-   (tools/execute-tool (:tool-registry system) tool-name input context)))
+   (tools/execute-tool (:tool-registry system)
+                       tool-name
+                       input
+                       (assoc context :yolo? (true? (get-in system [:config :tools :yolo?]))))))
 
 (defn get-agent
   [system agent-id]
@@ -497,6 +542,7 @@
                    (merge context
                           {:user (or (:user context) agent-id)
                            :permissions (tool-permissions system :agent)
+                           :yolo? (true? (get-in system [:config :tools :yolo?]))
                            :allowed-tools (set (:tool-access agent))})))))
 
 (defrecord SystemKernelOps [system]

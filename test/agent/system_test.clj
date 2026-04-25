@@ -5,7 +5,12 @@
    [agent.kernel]
    [agent.llm.providers.ollama :as ollama]
    [agent.llm.providers.openai-compatible :as openai-compatible]
+   [agent.persistence.sqlite :as sqlite]
+   [clojure.java.io :as io]
    [clojure.test :refer :all]))
+
+(defn temp-db-path []
+  (.getAbsolutePath (java.io.File/createTempFile "clj-agent-system-" ".db")))
 
 (deftest create-llm-provider-selects-ollama
   (let [provider (system/create-llm-provider (:llm (config/load-config)))]
@@ -41,6 +46,51 @@
     (is (integer? (get-in (system/health-check system) [:runtime :run-count])))
     (is (= 3 (get-in (system/health-check system) [:channel-adapters :count])))
     (is (= 0 (get-in (system/health-check system) [:orchestrator :agent-count])))))
+
+(deftest tool-policy-blocks-and-yolo-skips-approval-only
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        events (atom [])
+        blocked-registry (system/create-tool-registry
+                          (assoc-in (:tools config/default-config) [:policy :blocklist] [:fs])
+                          #(swap! events conj %)
+                          store)
+        yolo-registry (system/create-tool-registry
+                       (assoc (:tools config/default-config) :yolo? true)
+                       #(swap! events conj %)
+                       store)
+        yolo-blocked-registry (system/create-tool-registry
+                               (-> (:tools config/default-config)
+                                   (assoc :yolo? true)
+                                   (assoc-in [:policy :blocklist] [:shell]))
+                               #(swap! events conj %)
+                               store)]
+    (try
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"startup policy"
+                            (system/execute-tool {:tool-registry blocked-registry
+                                                  :config {:tools (:tools config/default-config)}}
+                                                 :fs
+                                                 {:action "list" :path "."}
+                                                 {:permissions #{:filesystem-read}})))
+      (is (= "hi"
+             (:stdout (system/execute-tool {:tool-registry yolo-registry
+                                            :config {:tools (assoc (:tools config/default-config) :yolo? true)}}
+                                           :shell
+                                           {:argv ["printf" "hi"]}
+                                           {:permissions #{:shell-exec}}))))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"startup policy"
+                            (system/execute-tool {:tool-registry yolo-blocked-registry
+                                                  :config {:tools (-> (:tools config/default-config)
+                                                                     (assoc :yolo? true)
+                                                                     (assoc-in [:policy :blocklist] [:shell]))}}
+                                                 :shell
+                                                 {:argv ["printf" "hi"]}
+                                                 {:permissions #{:shell-exec}})))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
 
 (deftest prepare-runner-options-adds-container-child-defaults
   (let [system {:config {:storage {:sqlite {:path "data/agent.db"}}

@@ -55,3 +55,19 @@
                                               :http
                                               {:url "https://example.com"}
                                               {:permissions #{:http-request}})))))
+
+(deftest http-tool-enforces-max-response-bytes
+  (with-redefs [http/request (fn [_]
+                               {:status 200
+                                :headers {}
+                                :body "too large"})]
+    (let [registry (-> (tools/create-registry)
+                       (tools/register-tool
+                        (http-tool/create-http-tool {:resolve-host-fn public-resolver
+                                                     :max-response-bytes 3})))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"max-response-bytes"
+                            (tools/execute-tool registry
+                                                :http
+                                                {:url "https://example.com"}
+                                                {:permissions #{:http-request}}))))))
