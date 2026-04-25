@@ -18,6 +18,10 @@
                 :timeout-ms 30000
                 :default-headers {"User-Agent" "clj-agent/0.1"}}
          :yolo? false
+         :permissions {:api [:filesystem-read :filesystem-write :http-request]
+                       :ui [:filesystem-read :filesystem-write :http-request]
+                       :agent [:http-request]
+                       :chat [:filesystem-read :http-request]}
          :fs {:enabled true
               :roots ["."]
               :max-read-bytes 1048576}

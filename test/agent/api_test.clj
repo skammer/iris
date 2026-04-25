@@ -654,8 +654,7 @@
         (is (= 200 (:status ui-chat)))
         (is (str/includes? (:body ui-chat) "test-response"))
         (is (= 200 (:status streamed)))
-        (is (some #(str/includes? % "\"content\":\"hello\"") streamed-lines))
-        (is (some #(str/includes? % "\"content\":\" world\"") streamed-lines))
+        (is (some #(str/includes? % "\"content\":\"test-response\"") streamed-lines))
         (is (= "[DONE]" (last streamed-lines)))
         (is (= 200 (:status events)))
         (is (some #{"session.created"} (map :event_type (:data events-body))))
@@ -667,11 +666,13 @@
         (is (= "hello ui" (get-in messages-body [:data 2 :content])))
         (is (= "test-response" (get-in messages-body [:data 3 :content])))
         (is (= "hello" (get-in messages-body [:data 4 :content])))
-        (is (= "hello world" (get-in messages-body [:data 5 :content])))
-        (is (= ["user" "assistant" "user" "assistant" "user"]
+        (is (= "test-response" (get-in messages-body [:data 5 :content])))
+        (is (= ["system" "user" "assistant" "user" "assistant" "user"]
                (mapv :role @messages*)))
+        (is (str/starts-with? (first (mapv :content @messages*))
+                              "Relevant memory JSON: "))
         (is (= ["hello" "test-response" "hello ui" "test-response" "hello"]
-               (mapv :content @messages*))))
+               (vec (rest (mapv :content @messages*))))))
       (finally
         (api/stop-server! server)
         (io/delete-file path true)))))

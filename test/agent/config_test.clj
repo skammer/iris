@@ -15,6 +15,8 @@
     (is (false? (get-in cfg [:tools :yolo?])))
     (is (= [:filesystem-read :filesystem-write :http-request]
            (get-in cfg [:tools :permissions :api])))
+    (is (= [:filesystem-read :http-request]
+           (get-in cfg [:tools :permissions :chat])))
     (is (= {:allowlist []
             :blocklist []
             :tool-scopes {}}

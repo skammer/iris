@@ -6,7 +6,7 @@
 (defn execute-directive!
   ([ops parent-agent-id directive]
    (execute-directive! ops parent-agent-id directive {}))
-  ([ops parent-agent-id directive {:keys [yolo?]}]
+  ([ops parent-agent-id directive {:keys [yolo? execute-safe-tools?]}]
   (let [directive (schema/validate-directive! directive)]
     (case (:type directive)
     :spawn-worker
@@ -31,12 +31,21 @@
     (let [{:keys [tool-name input context]} (:payload directive)
           context* (cond-> (or context {})
                      (:approval_id context) (assoc :approval-id (:approval_id context)))]
-      (if (or yolo? (:approval-id context*) (:approval_id context*))
-        (let [result (ops/execute-agent-tool! ops parent-agent-id (keyword tool-name) input context*)]
-          {:directive (:type directive)
-           :status :ok
-           :tool-name tool-name
-           :result result})
+      (if (or yolo? execute-safe-tools? (:approval-id context*) (:approval_id context*))
+        (try
+          (let [result (ops/execute-agent-tool! ops parent-agent-id (keyword tool-name) input context*)]
+            {:directive (:type directive)
+             :status :ok
+             :tool-name tool-name
+             :result result})
+          (catch Exception e
+            (if (= :approval-required (:type (ex-data e)))
+              {:directive (:type directive)
+               :status :approval-required
+               :tool-name tool-name
+               :input input
+               :reason (.getMessage e)}
+              (throw e))))
         {:directive (:type directive)
          :status :approval-required
          :tool-name tool-name

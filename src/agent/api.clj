@@ -7,6 +7,7 @@
    [agent.api.routes :as routes]
    [agent.broker.core :as broker]
    [agent.channels.core :as channel-adapters]
+   [agent.chat :as chat]
    [agent.kernel :as kernel]
    [agent.kernel.ops :as kernel-ops]
    [agent.kernel.runtime :as kernel-runtime]
@@ -444,17 +445,6 @@
     (sink event)
     (sqlite/log-event! (:store system) event)))
 
-(defn- append-session-message!
-  [system session-id role content]
-  (let [message (sqlite/append-message! (:store system) session-id role content)]
-    (emit-system-event! system
-                        {:event-type :message.appended
-                         :entity-type :session
-                         :entity-id session-id
-                         :payload {:role role
-                                   :content content}})
-    message))
-
 (defn- normalize-chat-request [body]
   (let [messages (:messages body)
         prompt (:prompt body)
@@ -488,55 +478,9 @@
       :else
       (throw (api-error 400 "bad_request" "Expected messages vector or prompt string")))))
 
-(defn- session-context-messages [system session-id]
-  (if session-id
-    (mapv (fn [{:keys [role content]}]
-            {:role role
-             :content content})
-          (sqlite/list-messages (:store system) session-id))
-    []))
-
-(defn- attach-session-context [system {:keys [messages session-id] :as request}]
-  (if (and session-id (seq messages))
-    (assoc request :messages (into (session-context-messages system session-id) messages))
-    request))
-
-(defn- latest-user-prompt [messages]
-  (:content (last (filter #(= "user" (:role %)) messages))))
-
-(defn- persist-user-message! [system messages session-id]
-  (when-let [prompt (and session-id (latest-user-prompt messages))]
-    (append-session-message! system session-id "user" prompt)))
-
-(defn- persist-completion! [system messages content {:keys [session-id]}]
-  (let [provider (name (get-in system [:config :llm :provider]))
-        prompt (latest-user-prompt messages)]
-    (when session-id
-      (append-session-message! system session-id "assistant" content))
-    (sqlite/log-completion! (:store system)
-                            {:session-id session-id
-                             :provider provider
-                             :model (get-in system [:config :llm :model])
-                             :prompt prompt
-                             :response content})
-    (emit-system-event! system
-                        {:event-type :completion.completed
-                         :entity-type :session
-                         :entity-id session-id
-                         :payload {:provider provider
-                                   :model (get-in system [:config :llm :model])}})))
-
 (defn- complete! [system messages {:keys [session-id]}]
-  (persist-user-message! system messages session-id)
-  (let [provider (:llm-provider system)
-        content (telemetry/complete-with-telemetry! (:telemetry system)
-                                                    provider
-                                                    messages
-                                                    {}
-                                                    {:agent-id "api"
-                                                     :model (get-in system [:config :llm :model])})]
-    (persist-completion! system messages content {:session-id session-id})
-    {:content content}))
+  (chat/run! system {:messages messages
+                     :session-id session-id}))
 
 (defn- openai-style-completion [system session-id content]
   {:id (str "chatcmpl-" (System/currentTimeMillis))
@@ -610,43 +554,36 @@
   [system request messages session-id]
   (let [stream-id (str "chatcmpl-" (System/currentTimeMillis))
         provider (name (get-in system [:config :llm :provider]))
-        model (get-in system [:config :llm :model])
-        chunks (llm-core/stream (:llm-provider system) messages {})]
-    (persist-user-message! system messages session-id)
+        model (get-in system [:config :llm :model])]
     (sse-response
      request
      (fn [channel]
        (future
-         (loop [parts []]
-           (if-let [chunk (async/<!! chunks)]
-             (if (map? chunk)
-               (do
-                 (send-sse-chunk! channel {:error "stream_error"
-                                           :message (or (:error chunk) "Provider stream failed")})
-                 (send-sse-done! channel)
-                 (http-kit/close channel))
-               (do
-                 (send-sse-chunk! channel {:id stream-id
-                                           :object "chat.completion.chunk"
-                                           :session_id session-id
-                                           :provider provider
-                                           :model model
-                                           :choices [{:index 0
-                                                      :delta {:content chunk}
-                                                      :finish_reason nil}]})
-                 (recur (conj parts chunk))))
-             (let [content (apply str parts)]
-               (persist-completion! system messages content {:session-id session-id})
-               (send-sse-chunk! channel {:id stream-id
-                                         :object "chat.completion.chunk"
-                                         :session_id session-id
-                                         :provider provider
-                                         :model model
-                                         :choices [{:index 0
-                                                    :delta {}
-                                                    :finish_reason "stop"}]})
-               (send-sse-done! channel)
-               (http-kit/close channel))))))
+         (try
+           (let [result (complete! system messages {:session-id session-id})
+                 content (:content result)]
+             (send-sse-chunk! channel {:id stream-id
+                                       :object "chat.completion.chunk"
+                                       :session_id session-id
+                                       :provider provider
+                                       :model model
+                                       :choices [{:index 0
+                                                  :delta {:content content}
+                                                  :finish_reason nil}]})
+             (send-sse-chunk! channel {:id stream-id
+                                       :object "chat.completion.chunk"
+                                       :session_id session-id
+                                       :provider provider
+                                       :model model
+                                       :choices [{:index 0
+                                                  :delta {}
+                                                  :finish_reason "stop"}]}))
+           (catch Exception e
+             (send-sse-chunk! channel {:error "stream_error"
+                                       :message (.getMessage e)}))
+           (finally
+             (send-sse-done! channel)
+             (http-kit/close channel)))))
      nil)))
 
 (defn- events-stream-response
@@ -765,42 +702,31 @@
 (defn- handle-chat-completions-stream [system exchange messages session-id]
   (let [stream-id (str "chatcmpl-" (System/currentTimeMillis))
         provider (name (get-in system [:config :llm :provider]))
-        model (get-in system [:config :llm :model])
-        chunks (llm-core/stream (:llm-provider system) messages {})]
+        model (get-in system [:config :llm :model])]
     (try
-      (persist-user-message! system messages session-id)
       (.add (.getResponseHeaders exchange) "Content-Type" "text/event-stream")
       (.add (.getResponseHeaders exchange) "Cache-Control" "no-cache")
       (.sendResponseHeaders exchange 200 0)
       (with-open [stream (.getResponseBody exchange)]
-        (loop [parts []]
-          (if-let [chunk (async/<!! chunks)]
-            (if (map? chunk)
-              (do
-                (write-sse-chunk! stream {:error "stream_error"
-                                          :message (or (:error chunk) "Provider stream failed")})
-                (write-sse-done! stream))
-              (do
-                (write-sse-chunk! stream {:id stream-id
-                                          :object "chat.completion.chunk"
-                                          :session_id session-id
-                                          :provider provider
-                                          :model model
-                                          :choices [{:index 0
-                                                     :delta {:content chunk}
-                                                     :finish_reason nil}]})
-                (recur (conj parts chunk))))
-            (let [content (apply str parts)]
-              (persist-completion! system messages content {:session-id session-id})
-              (write-sse-chunk! stream {:id stream-id
-                                        :object "chat.completion.chunk"
-                                        :session_id session-id
-                                        :provider provider
-                                        :model model
-                                        :choices [{:index 0
-                                                   :delta {}
-                                                   :finish_reason "stop"}]})
-              (write-sse-done! stream)))))
+        (let [result (complete! system messages {:session-id session-id})
+              content (:content result)]
+          (write-sse-chunk! stream {:id stream-id
+                                    :object "chat.completion.chunk"
+                                    :session_id session-id
+                                    :provider provider
+                                    :model model
+                                    :choices [{:index 0
+                                               :delta {:content content}
+                                               :finish_reason nil}]})
+          (write-sse-chunk! stream {:id stream-id
+                                    :object "chat.completion.chunk"
+                                    :session_id session-id
+                                    :provider provider
+                                    :model model
+                                    :choices [{:index 0
+                                               :delta {}
+                                               :finish_reason "stop"}]})
+          (write-sse-done! stream)))
       (catch Exception e
         (throw e)))))
 
@@ -1771,9 +1697,8 @@
                             (runtime/reclaim-stale-runs! (:runtime-service system)))}))
 
 (defn- handle-chat-completions [system exchange]
-  (let [{:keys [messages session-id stream?]}
-        (attach-session-context system
-                                (normalize-chat-request (read-json-body exchange)))]
+  (let [{:keys [messages session-id stream?] :as chat-request}
+        (normalize-chat-request (read-json-body exchange))]
     (ensure-session-exists! system session-id)
     (if stream?
       (handle-chat-completions-stream system exchange messages session-id)
@@ -1782,15 +1707,14 @@
 
 (defn- chat-completions-response
   [system request]
-  (let [{:keys [messages session-id stream?]}
-        (attach-session-context system
-                                (normalize-chat-request
-                                 (if-let [body (:body request)]
-                                   (let [raw (slurp body)]
-                                     (if (str/blank? raw)
-                                       {}
-                                       (json/parse-string raw true)))
-                                   {})))]
+  (let [{:keys [messages session-id stream?] :as chat-request}
+        (normalize-chat-request
+         (if-let [body (:body request)]
+           (let [raw (slurp body)]
+             (if (str/blank? raw)
+               {}
+               (json/parse-string raw true)))
+           {}))]
     (ensure-session-exists! system session-id)
     (if stream?
       (chat-completions-stream-response system request messages session-id)

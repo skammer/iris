@@ -39,11 +39,11 @@ Goal: easy single-image deploy agent with Telegram chat, tool use, SQLite + grap
 
 ### Phase 4: First-Class Chat
 
-12. [ ] Replace plain completion path with chat loop.
+12. [x] Replace plain completion path with chat loop.
    Session context -> memory recall -> planner -> tool calls -> approvals/yolo -> final response -> persist messages/events.
-13. [ ] Make tools usable from chat.
+13. [x] Make tools usable from chat.
    Chat agent can call allowed tools through directive/runtime path, not direct unsafe API permissions.
-14. [ ] Persist chat execution trace.
+14. [x] Persist chat execution trace.
    Store tool calls, approvals, memory recalls, final answer, and errors in SQLite events.
 
 ### Phase 5: Mandatory Memory
