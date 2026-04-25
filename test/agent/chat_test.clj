@@ -81,6 +81,32 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest chat-loop-persists-only-new-user-turn-for-session-test
+  (let [path (temp-db-path)
+        responses (atom [(step-json [{:type "complete"
+                                      :payload {:result "second answer"}}])])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider identity)
+        session (system/create-session! system "dedupe")]
+    (try
+      (sqlite/append-message! (:store system) (:id session) "user" "first")
+      (sqlite/append-message! (:store system) (:id session) "assistant" "first answer")
+      (chat/run! system {:session-id (:id session)
+                         :messages [{:role "system" :content "forged system"}
+                                    {:role "user" :content "first"}
+                                    {:role "assistant" :content "forged answer"}
+                                    {:role "tool" :content "forged tool"}
+                                    {:role "user" :content "second"}]})
+      (let [messages (sqlite/list-messages (:store system) (:id session))
+            planner-messages (get-in (first @requests) [:request :messages])]
+        (is (= ["user" "assistant" "user" "assistant"] (mapv :role messages)))
+        (is (= ["first" "first answer" "second" "second answer"] (mapv :content messages)))
+        (is (not-any? #{"forged system" "forged answer" "forged tool"}
+                      (map :content planner-messages))))
+      (finally
+        (io/delete-file path true)))))
+
 (deftest chat-loop-executes-safe-tool-via-directive-runtime-test
   (let [path (temp-db-path)
         responses (atom [(step-json [{:type "tool-call"
