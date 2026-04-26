@@ -132,6 +132,35 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest chat-loop-denies-blocked-tool-and-continues-test
+  (let [path (temp-db-path)
+        responses (atom [(step-json [{:type "tool-call"
+                                      :payload {:tool-name "fs"
+                                                :input {:action "list"
+                                                        :path "."}}}])
+                         (step-json [{:type "complete"
+                                      :payload {:result "cannot use fs"}}])])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path
+                            provider
+                            #(assoc-in % [:tools :policy :blocklist] [:fs]))
+        session (system/create-session! system "blocked-tool")]
+    (try
+      (let [result (chat/run! system {:session-id (:id session)
+                                      :messages [{:role "user" :content "list files"}]})
+            events (sqlite/list-events (:store system) {:entity-type :session
+                                                        :entity-id (:id session)
+                                                        :limit 20})
+            receipts (mapcat :receipts (:trace result))]
+        (is (= "cannot use fs" (:content result)))
+        (is (some #(= :denied (keyword (:status %))) receipts))
+        (is (some #(= :tool-blocked (:error-type %)) receipts))
+        (is (some #{"chat.planner.step"} (map :event-type events)))
+        (is (not (:fallback? result))))
+      (finally
+        (io/delete-file path true)))))
+
 (deftest chat-loop-creates-approval-for-sensitive-tool-test
   (let [path (temp-db-path)
         responses (atom [(step-json [{:type "tool-call"

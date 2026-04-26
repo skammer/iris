@@ -450,6 +450,7 @@
     :timeout (api-error 408 "timeout" (.getMessage error) (dissoc (ex-data error) :type))
     :approval-not-found (api-error 404 "approval_not_found" (.getMessage error) (dissoc (ex-data error) :type))
     :approval-not-approved (api-error 409 "approval_not_approved" (.getMessage error) (dissoc (ex-data error) :type))
+    :approval-required (api-error 403 "approval_required" (.getMessage error) (dissoc (ex-data error) :type))
     :tool-blocked (api-error 403 "tool_blocked" (.getMessage error) (dissoc (ex-data error) :type))
     error))
 

@@ -92,6 +92,54 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest tool-policy-enforces-scope-and-approval-test
+  (let [path (temp-db-path)
+        target "tool-policy-scope-test.txt"
+        store (sqlite/create-store {:path path})
+        scoped-tools (assoc-in (:tools config/default-config)
+                               [:policy :tool-scopes]
+                               {:fs [:workspace]})
+        scoped-registry (system/create-tool-registry scoped-tools (constantly nil) store)
+        write-registry (system/create-tool-registry (:tools config/default-config)
+                                                   (constantly nil)
+                                                   store)]
+    (try
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"Tool scope missing"
+                            (system/execute-tool {:tool-registry scoped-registry
+                                                  :config {:tools scoped-tools}}
+                                                 :fs
+                                                 {:action "list" :path "."}
+                                                 {:permissions #{:filesystem-read}})))
+      (is (vector?
+           (:entries (system/execute-tool {:tool-registry scoped-registry
+                                           :config {:tools scoped-tools}}
+                                          :fs
+                                          {:action "list" :path "."}
+                                          {:permissions #{:filesystem-read}
+                                           :tool-scopes [:workspace]}))))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"approved request"
+                            (system/execute-tool {:tool-registry write-registry
+                                                  :config {:tools (:tools config/default-config)}}
+                                                 :fs
+                                                 {:action "write"
+                                                  :path target
+                                                  :content "blocked"}
+                                                 {:permissions #{:filesystem-write}})))
+      (is (:written (system/execute-tool {:tool-registry write-registry
+                                          :config {:tools (assoc (:tools config/default-config) :yolo? true)}}
+                                         :fs
+                                         {:action "write"
+                                          :path target
+                                          :content "allowed"}
+                                         {:permissions #{:filesystem-write}})))
+      (is (= "allowed" (slurp target)))
+      (finally
+        (io/delete-file target true)
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest prepare-runner-options-adds-container-child-defaults
   (let [system {:config {:storage {:sqlite {:path "data/agent.db"}}
                          :api {:port 8689}

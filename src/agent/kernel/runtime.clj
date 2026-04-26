@@ -39,13 +39,24 @@
              :tool-name tool-name
              :result result})
           (catch Exception e
-            (if (= :approval-required (:type (ex-data e)))
-              {:directive (:type directive)
-               :status :approval-required
-               :tool-name tool-name
-               :input input
-               :reason (.getMessage e)}
-              (throw e))))
+            (let [error-type (:type (ex-data e))]
+              (case error-type
+                :approval-required
+                {:directive (:type directive)
+                 :status :approval-required
+                 :tool-name tool-name
+                 :input input
+                 :reason (.getMessage e)}
+
+                (:tool-blocked :permission-denied :path-not-allowed)
+                {:directive (:type directive)
+                 :status :denied
+                 :tool-name tool-name
+                 :input input
+                 :reason (.getMessage e)
+                 :error-type error-type}
+
+                (throw e)))))
         {:directive (:type directive)
          :status :approval-required
          :tool-name tool-name

@@ -173,10 +173,15 @@
     (try
       (is (= 200 (:status (http-get (str base-url "/health")))))
       (is (= 401 (:status (http-get (str base-url "/v1/tools")))))
+      (is (= 401 (:status (http-post (str base-url "/v1/sessions")
+                                      {:title "blocked"}))))
       (is (= 401 (:status (http-get-headers (str base-url "/v1/tools")
                                             {"X-Api-Key" "wrong"}))))
       (is (= 200 (:status (http-get-headers (str base-url "/v1/tools")
                                             {"X-Api-Key" "secret"}))))
+      (is (= 201 (:status (http-post-headers (str base-url "/v1/sessions")
+                                             {:title "authorized"}
+                                             {"X-Api-Key" "secret"}))))
       (is (= 200 (:status (http-get-headers (str base-url "/v1/tools")
                                             {"Authorization" "Bearer secret"}))))
       (is (= 200 (:status (http-get-headers
@@ -204,6 +209,28 @@
                               {:input {:action "list" :path "."}
                                :permissions ["filesystem-read"]})]
         (is (= 403 (:status denied))))
+      (finally
+        (api/stop-server! server)
+        (io/delete-file path true)))))
+
+(deftest api-tool-policy-exposes-approval-required-test
+  (let [path (temp-db-path)
+        port (free-port)
+        base-url (str "http://127.0.0.1:" port)
+        {:keys [server]} (started-test-system
+                          path
+                          port
+                          #(-> %
+                               (assoc-in [:tools :permissions :api] [:filesystem-read :filesystem-write])
+                               (assoc-in [:tools :policy :blocklist] [])))]
+    (try
+      (let [write-denied (http-post (str base-url "/v1/tools/fs/execute")
+                                    {:input {:action "write"
+                                             :path "target/api-tool-policy-test.txt"
+                                             :content "blocked"}})
+            write-denied-body (json/parse-string (:body write-denied) true)]
+        (is (= 403 (:status write-denied)))
+        (is (= "approval_required" (:error write-denied-body))))
       (finally
         (api/stop-server! server)
         (io/delete-file path true)))))
