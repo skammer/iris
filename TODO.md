@@ -76,17 +76,17 @@ Goal: easy single-image deploy agent with Telegram chat, tool use, SQLite + grap
 
 ### Phase 7: Release Verification
 
-26. [ ] Add tests for API auth.
+26. [x] Add tests for API auth.
    Unauthorized `/v1/*` rejected; valid `AGENT_API_KEY` accepted.
-27. [ ] Add tests for tool policy.
+27. [x] Add tests for tool policy.
    Config grants permissions; request body cannot grant; blocklist/scope/approval/yolo behavior covered.
-28. [ ] Add tests for chat tool loop.
+28. [x] Add tests for chat tool loop.
    Chat can call allowed tool, deny blocked tool, persist trace, return final answer.
-29. [ ] Add tests for memory extraction/dedup/scope.
+29. [x] Add tests for memory extraction/dedup/scope.
    Facts extracted once, duplicate ignored, session/global scopes respected.
 30. [x] Add tests for Telegram session mapping.
    Same Telegram `chat.id` reuses session; different DM/group IDs create distinct sessions.
-31. [ ] Add release smoke test.
+31. [x] Add release smoke test.
    Build image, run container, call `/health`, create chat session, verify memory write/search.
 
 ## Distributed Subagent Runtime

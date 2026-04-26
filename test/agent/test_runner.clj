@@ -17,6 +17,7 @@
    [agent.orchestrator-test]
    [agent.persistence.sqlite-test]
    [agent.planner-test]
+   [agent.release-smoke-test]
    [agent.runners.docker-podman-e2e-test]
    [agent.runners.docker-podman-test]
    [agent.runners.local-unsandboxed-test]
@@ -50,6 +51,7 @@
     agent.orchestrator-test
     agent.persistence.sqlite-test
     agent.planner-test
+    agent.release-smoke-test
     agent.runners.docker-podman-e2e-test
     agent.runners.docker-podman-test
     agent.runners.local-unsandboxed-test
