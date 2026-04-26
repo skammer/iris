@@ -569,6 +569,18 @@ textarea {
 #session-messages-panel .messages,
 #session-messages-panel .empty {
   height: 100%;
+  min-height: 0;
+}
+
+#session-messages-panel .messages {
+  align-content: end;
+  grid-auto-rows: max-content;
+  padding-bottom: 141px;
+  scroll-padding-bottom: 12px;
+}
+
+#session-messages-panel .message {
+  align-self: start;
 }
 
 #chat-form {

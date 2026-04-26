@@ -32,6 +32,21 @@
   (generate [this messages opts]
     (llm-core/invoke this (assoc opts :messages messages))))
 
+(defrecord FailingProvider []
+  llm-core/ILLMProvider
+  (complete [_ _ _]
+    (throw (llm-core/llm-error :http-error "LLM request failed: 400")))
+  (stream [_ _ _] (async/to-chan! []))
+  (embed [_ _ _] [])
+  (list-models [_] [])
+  (get-capabilities [_ _] {:supports-tools true})
+  (estimate-cost [_ _ _] {:tokens 1 :cost-usd 0.0})
+  llm-core/ILLMProviderInvoke
+  (invoke [_ _]
+    (throw (llm-core/llm-error :http-error "LLM request failed: 400")))
+  (generate [this messages opts]
+    (llm-core/invoke this (assoc opts :messages messages))))
+
 (defn- temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "clj-agent-chat-" ".db")))
 
@@ -212,5 +227,24 @@
         (is (= 1 (count facts)))
         (is (= "prefers" (:predicate (first facts))))
         (is (empty? other-session)))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-persists-visible-error-when-planner-and-fallback-fail-test
+  (let [path (temp-db-path)
+        provider (->FailingProvider)
+        system (test-system path provider identity)
+        session (system/create-session! system "failing")]
+    (try
+      (let [result (chat/run! system {:session-id (:id session)
+                                      :messages [{:role "user" :content "hello"}]})
+            messages (sqlite/list-messages (:store system) (:id session))
+            events (sqlite/list-events (:store system) {:entity-type :session
+                                                        :entity-id (:id session)
+                                                        :limit 20})]
+        (is (:error? result))
+        (is (str/includes? (:content result) "Chat failed: LLM request failed: 400"))
+        (is (= ["user" "assistant"] (mapv :role messages)))
+        (is (some #{"chat.failed"} (map :event-type events))))
       (finally
         (io/delete-file path true)))))

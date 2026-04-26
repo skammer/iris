@@ -245,21 +245,22 @@
         event-bus (system/create-event-bus)
         event-sink (system/create-event-sink store event-bus)
         runtime-service (system/create-runtime-service store event-sink)
+        config (assoc-in (:config base-system) [:memory :facts :extractor :enabled] false)
         system (assoc base-system
                       :llm-provider (->TestProvider messages*)
                       :store store
                       :event-bus event-bus
                       :event-sink event-sink
-                      :tool-registry (system/create-tool-registry (assoc-in (:tools (:config base-system))
+                      :tool-registry (system/create-tool-registry (assoc-in (:tools config)
                                                                            [:http :allow-private?]
                                                                            true)
                                                                   event-sink
                                                                   store)
-                      :memory-service (memory/create-memory-service (:memory (:config base-system)) store)
+                      :memory-service (memory/create-memory-service (:memory config) store)
                       :runtime-service runtime-service
                       :runner-registry (system/create-runner-registry runtime-service)
-                      :orchestrator (system/create-orchestrator (:orchestrator (:config base-system)) event-sink)
-                      :config (assoc (:config base-system)
+                      :orchestrator (system/create-orchestrator (:orchestrator config) event-sink)
+                      :config (assoc config
                                      :api {:host "127.0.0.1" :port port}
                                      :storage {:sqlite {:path path}}))
         server (api/start-server! system {:host "127.0.0.1" :port port})]
@@ -697,7 +698,8 @@
         (is (= 200 (:status streamed)))
         (is (str/includes? (first streamed-lines) "\"role\":\"assistant\""))
         (is (some #(str/includes? % "\"event_type\":\"chat.started\"") streamed-lines))
-        (is (some #(str/includes? % "\"content\":\"test-response\"") streamed-lines))
+        (is (some #(str/includes? % "\"content\":\"hello\"") streamed-lines))
+        (is (some #(str/includes? % "\"content\":\" world\"") streamed-lines))
         (is (= "[DONE]" (last streamed-lines)))
         (is (= 200 (:status events)))
         (is (some #{"session.created"} (map :event_type (:data events-body))))
@@ -709,7 +711,7 @@
         (is (= "hello ui" (get-in messages-body [:data 2 :content])))
         (is (= "test-response" (get-in messages-body [:data 3 :content])))
         (is (= "hello" (get-in messages-body [:data 4 :content])))
-        (is (= "test-response" (get-in messages-body [:data 5 :content])))
+        (is (= "hello world" (get-in messages-body [:data 5 :content])))
         (is (= ["system" "user" "assistant" "user" "assistant" "user"]
                (mapv :role @messages*)))
         (is (str/starts-with? (first (mapv :content @messages*))

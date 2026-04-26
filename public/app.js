@@ -1,5 +1,3 @@
-import { action } from "https://cdn.jsdelivr.net/gh/starfederation/datastar@1.0.0-RC.8/bundles/datastar.js";
-
 const AUTOSCROLL_THRESHOLD_PX = 300;
 let lastConnectedSessionId = null;
 
@@ -48,7 +46,37 @@ const replaceById = (doc, id) => {
 
 const distanceFromBottom = (panel) => panel.scrollHeight - panel.clientHeight - panel.scrollTop;
 
-const nearestChatPanel = (el) => el instanceof Element ? el.closest("agent-chat-panel") : null;
+const setCreateSessionPending = (form, pending) => {
+  const button = form.querySelector('button[type="submit"]');
+  if (button instanceof HTMLButtonElement) button.disabled = pending;
+};
+
+const createSession = async (form) => {
+  if (!(form instanceof HTMLFormElement) || form.dataset.submitting === "true") return;
+  form.dataset.submitting = "true";
+  setCreateSessionPending(form, true);
+
+  try {
+    const response = await fetch("/ui/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(new FormData(form))
+    });
+    if (!response.ok) return;
+
+    const doc = parseHTML(await response.text());
+    replaceById(doc, "sessions-panel");
+    replaceById(doc, "session-detail-panel");
+    replaceById(doc, "dashboard-summary");
+    document.getElementById("create-session-form")?.reset();
+  } finally {
+    const currentForm = document.getElementById("create-session-form");
+    if (currentForm instanceof HTMLFormElement) {
+      delete currentForm.dataset.submitting;
+      setCreateSessionPending(currentForm, false);
+    }
+  }
+};
 
 class AgentChatPanel extends HTMLElement {
   #streamAbortController = null;
@@ -119,8 +147,10 @@ class AgentChatPanel extends HTMLElement {
   autogrow() {
     const textarea = this.textarea;
     if (!(textarea instanceof HTMLTextAreaElement)) return;
+    const stick = this.shouldStickToBottom();
     textarea.style.height = "auto";
     textarea.style.height = `${textarea.scrollHeight}px`;
+    if (stick) requestAnimationFrame(() => this.scrollToBottom(true));
   }
 
   shouldStickToBottom(panel = this.messagesContainer) {
@@ -157,10 +187,12 @@ class AgentChatPanel extends HTMLElement {
   setLoading(loading) {
     const form = this.form;
     if (!form) return;
+    const stick = this.shouldStickToBottom();
     form.classList.toggle("is-loading", loading);
     const submit = form.querySelector('button[type="submit"]');
     if (submit instanceof HTMLButtonElement) submit.disabled = loading;
     if (this.statusNode) this.statusNode.hidden = !loading;
+    if (stick) requestAnimationFrame(() => this.scrollToBottom(true));
   }
 
   renderMessage(role, content, meta = "", extraClass = "") {
@@ -295,6 +327,16 @@ class AgentChatPanel extends HTMLElement {
     const data = lines.map((line) => line.slice(6)).join("\n");
     if (data === "[DONE]") return;
     const payload = JSON.parse(data);
+    if (payload.object === "chat.progress") {
+      if (!this.#streamState) return;
+      const eventType = payload.event?.event_type;
+      const label = this.progressLabel(eventType);
+      if (label) {
+        this.#streamState.meta = label;
+        this.#renderStreamState();
+      }
+      return;
+    }
     if (payload.error) {
       this.#streamState = {
         sessionId: this.sessionId,
@@ -330,6 +372,21 @@ class AgentChatPanel extends HTMLElement {
     assistant.article.classList.toggle("is-error", this.#streamState.error);
   }
 
+  progressLabel(eventType) {
+    switch (eventType) {
+      case "chat.tool.approval_required":
+        return "approval needed";
+      case "chat.planner.step":
+        return "using tools...";
+      case "chat.started":
+      case "chat.memory.recalled":
+      case "chat.fallback_completion":
+        return "thinking...";
+      default:
+        return null;
+    }
+  }
+
   async submitPrompt() {
     if (this.#isSubmitting) return;
     const textarea = this.textarea;
@@ -343,7 +400,7 @@ class AgentChatPanel extends HTMLElement {
     this.#streamState = {
       sessionId: this.sessionId,
       content: "",
-      meta: "streaming...",
+      meta: "thinking...",
       error: false
     };
     this.pausePolling();
@@ -575,26 +632,12 @@ document.addEventListener("click", (event) => {
   setTheme(next);
 });
 
+document.addEventListener("submit", (event) => {
+  const form = event.target;
+  if (!(form instanceof HTMLFormElement) || form.id !== "create-session-form") return;
+  event.preventDefault();
+  void createSession(form);
+});
+
 new MutationObserver(() => setTheme(document.documentElement.dataset.theme || preferredTheme()))
   .observe(document.body, { childList: true, subtree: true });
-
-action({
-  name: "chatSubmit",
-  apply({ el }, evt) {
-    nearestChatPanel(el)?.handleSubmit(evt);
-  }
-});
-
-action({
-  name: "chatInput",
-  apply({ el }) {
-    nearestChatPanel(el)?.handleInput();
-  }
-});
-
-action({
-  name: "chatKeydown",
-  apply({ el }, evt) {
-    nearestChatPanel(el)?.handleKeydown(evt);
-  }
-});

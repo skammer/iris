@@ -380,8 +380,7 @@
       [:form#create-session-form.create-session-form
        [:div.compact-form-row
         [:input {:type "text" :name "title" :placeholder "new session title"}]
-        [:button {:type "button"
-                  "data-on:click" "@post('/ui/sessions', {contentType: 'form', selector: '#create-session-form'})"}
+        [:button {:type "submit"}
          "New"]]]
       [:h2 "Sessions"]
       (if (seq sessions)
@@ -410,12 +409,9 @@
          [:span.meta.code (:id session)]]
         (trusted-fragment (session-messages-fragment system (:id session)))
         [:form#chat-form
-         {"data-on:submit" "@chatSubmit()"}
          [:input {:type "hidden" :name "session_id" :value (:id session)}]
          [:textarea.chat-input {:name "prompt"
                                 :rows 1
-                                "data-on:input" "@chatInput()"
-                                "data-on:keydown" "@chatKeydown()"
                                 :placeholder "Ask model something concrete"}]
          [:button {:type "submit"}
           "Send"]

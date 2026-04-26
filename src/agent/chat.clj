@@ -12,6 +12,7 @@
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [cheshire.core :as json]
+   [clojure.core.async :as async]
    [clojure.string :as str])
   (:import
    (java.time Instant)
@@ -172,39 +173,135 @@
 
 (defn- extract-turn-memory! [system session-id user-message assistant-message request-id]
   (when (and session-id user-message assistant-message)
-    (memory/extract-and-save-facts!
-     (:memory-service system)
-     (or (:fact-llm-provider system) (:llm-provider system))
-     {:user-message (:content user-message)
-      :assistant-message (:content assistant-message)}
-     {:session-id session-id
-      :source-session-id session-id
-      :source-message-ids [(:id user-message) (:id assistant-message)]
-      :source-request-id request-id
-      :model (get-in system [:config :llm :model])})))
+    (try
+      (memory/extract-and-save-facts!
+       (:memory-service system)
+       (or (:fact-llm-provider system) (:llm-provider system))
+       {:user-message (:content user-message)
+        :assistant-message (:content assistant-message)}
+       {:session-id session-id
+        :source-session-id session-id
+        :source-message-ids [(:id user-message) (:id assistant-message)]
+        :source-request-id request-id
+        :model (get-in system [:config :llm :model])})
+      (catch Exception e
+        (emit! system {:event-type :chat.memory.extract_failed
+                       :entity-type :session
+                       :entity-id session-id
+                       :request-id request-id
+                       :payload {:message (.getMessage e)
+                                 :type (some-> e ex-data :type)}})))))
+
+(defn- error-content [error]
+  (str "Chat failed: " (.getMessage ^Throwable error)))
 
 (defn- fallback-complete! [system messages session-id prompt request-id error]
-  (let [content (telemetry/complete-with-telemetry! (:telemetry system)
-                                                    (:llm-provider system)
-                                                    messages
-                                                    {}
-                                                    {:agent-id "chat"
-                                                     :model (get-in system [:config :llm :model])})]
-    (emit! system {:event-type :chat.fallback_completion
+  (try
+    (let [content (telemetry/complete-with-telemetry! (:telemetry system)
+                                                      (:llm-provider system)
+                                                      messages
+                                                      {}
+                                                      {:agent-id "chat"
+                                                       :model (get-in system [:config :llm :model])})]
+      (emit! system {:event-type :chat.fallback_completion
+                     :entity-type :session
+                     :entity-id session-id
+                     :request-id request-id
+                     :payload {:reason (.getMessage error)}})
+      (let [assistant-message (persist-completion! system session-id prompt content request-id)]
+        (extract-turn-memory! system session-id nil assistant-message request-id))
+      (emit! system {:event-type :chat.completed
+                     :entity-type :session
+                     :entity-id session-id
+                     :request-id request-id
+                     :payload {:fallback true}})
+      {:content content
+       :request-id request-id
+       :fallback? true})
+    (catch Exception fallback-error
+      (let [content (error-content fallback-error)
+            assistant-message (persist-completion! system session-id prompt content request-id)]
+        (emit! system {:event-type :chat.failed
+                       :entity-type :session
+                       :entity-id session-id
+                       :request-id request-id
+                       :payload {:message (.getMessage fallback-error)
+                                 :type (some-> fallback-error ex-data :type)
+                                 :initial-error (.getMessage error)}})
+        {:content (:content assistant-message)
+         :request-id request-id
+         :error? true}))))
+
+(defn- stream-delta-text [value]
+  (cond
+    (string? value) value
+    (= :error (:type value)) (throw (ex-info (or (:error value) "LLM stream failed")
+                                             {:type :llm-stream-error}))
+    (map? value) (or (:content value)
+                     (get-in value [:delta :content])
+                     (get-in value [:message :content])
+                     "")
+    (nil? value) ""
+    :else (str value)))
+
+(defn stream!
+  [system {:keys [messages session-id on-delta]}]
+  (let [request-id (request-id)
+        prompt (latest-user-prompt messages)
+        user-message (persist-user-turn! system session-id messages)
+        history (if session-id (session-messages system session-id) messages)
+        recall (recall-memory system session-id prompt)
+        stream-messages (into [(memory-message recall)] history)
+        emit-delta! (or on-delta (constantly nil))]
+    (emit! system {:event-type :chat.started
                    :entity-type :session
                    :entity-id session-id
                    :request-id request-id
-                   :payload {:reason (.getMessage error)}})
-    (let [assistant-message (persist-completion! system session-id prompt content request-id)]
-      (extract-turn-memory! system session-id nil assistant-message request-id))
-    (emit! system {:event-type :chat.completed
+                   :payload {:message-count (count history)
+                             :stream true}})
+    (emit! system {:event-type :chat.memory.recalled
                    :entity-type :session
                    :entity-id session-id
                    :request-id request-id
-                   :payload {:fallback true}})
-    {:content content
-     :request-id request-id
-     :fallback? true}))
+                   :payload {:query prompt
+                             :message-count (count (get-in recall [:search :messages]))
+                             :event-count (count (get-in recall [:search :events]))
+                             :fact-count (count (get-in recall [:search :facts]))
+                             :prompt-document-count (count (get-in recall [:prompt :documents]))}})
+    (try
+      (let [ch (llm-core/stream (:llm-provider system)
+                                stream-messages
+                                {:model (get-in system [:config :llm :model])})
+            content (loop [acc ""]
+                      (if-let [value (async/<!! ch)]
+                        (let [delta (stream-delta-text value)]
+                          (when-not (str/blank? delta)
+                            (emit-delta! delta))
+                          (recur (str acc delta)))
+                        acc))
+            assistant-message (persist-completion! system session-id prompt content request-id)]
+        (extract-turn-memory! system session-id user-message assistant-message request-id)
+        (emit! system {:event-type :chat.completed
+                       :entity-type :session
+                       :entity-id session-id
+                       :request-id request-id
+                       :payload {:stream true}})
+        {:content content
+         :request-id request-id
+         :stream? true})
+      (catch Exception e
+        (let [content (error-content e)
+              assistant-message (persist-completion! system session-id prompt content request-id)]
+          (emit! system {:event-type :chat.failed
+                         :entity-type :session
+                         :entity-id session-id
+                         :request-id request-id
+                         :payload {:message (.getMessage e)
+                                   :type (some-> e ex-data :type)
+                                   :stream true}})
+          {:content (:content assistant-message)
+           :request-id request-id
+           :error? true})))))
 
 (defn run!
   [system {:keys [messages session-id max-steps]
