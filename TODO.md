@@ -24,7 +24,7 @@ Goal: easy single-image deploy agent with Telegram chat, tool use, SQLite + grap
 6. [x] Move tool permissions to startup config.
    API requests must not grant permissions. Runtime resolves permissions from configured policy/profile.
 7. [x] Add Telegram allowlist config.
-   Empty allowlist means allow all. Non-empty allowlist is required allowlist for user IDs and group/chat IDs.
+   Empty allowlist denies by default. `allow-all?` must be explicit; otherwise allowlisted user IDs or chat IDs required.
 8. [x] Add fact extraction config.
    Default fact extractor uses chat LLM provider/model. Allow override provider/model in config.
 
@@ -72,7 +72,7 @@ Goal: easy single-image deploy agent with Telegram chat, tool use, SQLite + grap
 24. [x] Add Telegram commands.
    Minimal `/start`, `/help`, `/reset`, `/memory`, `/status`.
 25. [x] Enforce Telegram allowlist.
-   Empty allowlist allows all. Non-empty allowlist blocks unknown users/groups and logs event.
+   Empty allowlist denies by default. Unknown users/groups are blocked and logged unless `allow-all?` is explicit.
 
 ### Phase 7: Release Verification
 

@@ -32,7 +32,8 @@
             :bot-token nil
             :poll-timeout-seconds 30
             :poll-limit 100
-            :allowlist {:user-ids []
+            :allowlist {:allow-all? false
+                        :user-ids []
                         :chat-ids []}}
            (get-in cfg [:channel-adapters :telegram])))
     (is (false? (get-in cfg [:logging :enabled])))

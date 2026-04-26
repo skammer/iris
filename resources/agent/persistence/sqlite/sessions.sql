@@ -54,3 +54,55 @@ on conflict(source, external_chat_id) do update set
   session_id = excluded.session_id,
   metadata_json = excluded.metadata_json,
   updated_at = excluded.updated_at
+
+-- :name insert-session-ignore :! :n
+insert or ignore into sessions (id, title, created_at)
+values (:id, :title, :created_at)
+
+-- :name insert-channel-session-mapping-ignore :! :n
+insert or ignore into channel_session_mappings
+  (source, external_chat_id, session_id, metadata_json, created_at, updated_at)
+values
+  (:source, :external_chat_id, :session_id, :metadata_json, :created_at, :updated_at)
+
+-- :name get-channel-offset :? :1
+select source, next_offset, updated_at
+from channel_offsets
+where source = :source
+limit 1
+
+-- :name upsert-channel-offset :! :n
+insert into channel_offsets (source, next_offset, updated_at)
+values (:source, :next_offset, :updated_at)
+on conflict(source) do update set
+  next_offset = excluded.next_offset,
+  updated_at = excluded.updated_at
+
+-- :name upsert-channel-inbox :! :n
+insert into channel_inbox
+  (source, update_id, status, raw_json, attempts, last_error, created_at, updated_at)
+values
+  (:source, :update_id, :status, :raw_json, :attempts, :last_error, :created_at, :updated_at)
+on conflict(source, update_id) do update set
+  raw_json = excluded.raw_json,
+  status = case
+    when channel_inbox.status = 'processed' then channel_inbox.status
+    else excluded.status
+  end,
+  updated_at = excluded.updated_at
+
+-- :name update-channel-inbox-status :! :n
+update channel_inbox
+set status = :status,
+    attempts = attempts + :attempt_delta,
+    last_error = :last_error,
+    updated_at = :updated_at
+where source = :source
+  and update_id = :update_id
+
+-- :name get-channel-inbox-update :? :1
+select source, update_id, status, raw_json, attempts, last_error, created_at, updated_at
+from channel_inbox
+where source = :source
+  and update_id = :update_id
+limit 1

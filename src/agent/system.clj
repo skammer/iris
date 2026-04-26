@@ -347,13 +347,13 @@
               {:delegate (create-exit-aware-local-unsandboxed-runner runtime-service)})})
 
 (defn create-channel-adapter-registry
-  [cfg]
+  ([cfg] (create-channel-adapter-registry cfg nil))
+  ([cfg telegram-service]
   (let [registry (channel-adapters/create-registry)
-        specs [{:key :telegram
-                :display-name "Telegram"
-                :inbound-mode :polling
-                :capabilities #{:supports-outbound :supports-streaming :supports-voice-ingest :supports-reactions :supports-location :supports-otp}}
-               {:key :discord
+        registry* (if telegram-service
+                    (channel-adapters/register-adapter registry telegram-service)
+                    registry)
+        specs [{:key :discord
                 :display-name "Discord"
                 :inbound-mode :gateway
                 :capabilities #{:supports-outbound :supports-streaming :supports-interactive :supports-threads :supports-voice-ingest :supports-reactions}}
@@ -377,8 +377,8 @@
           :health-fn (fn []
                        {:healthy true
                         :enabled (true? (get-in cfg [key :enabled]))})})))
-     registry
-     specs)))
+     registry*
+     specs))))
 
 (defn create-system
   ([] (create-system nil))
@@ -398,7 +398,7 @@
                     :provider (name (get-in cfg [:llm :provider]))
                     :sqlite-path (get-in cfg [:storage :sqlite :path])
                     :log-path (get-in cfg [:logging :file :path])})
-     (let [system {:config cfg
+     (let [base-system {:config cfg
                    :llm-provider (create-llm-provider llm-cfg)
                    :fact-llm-provider (create-fact-llm-provider cfg)
                    :store store
@@ -411,9 +411,12 @@
                    :memory-service memory-service
                    :runtime-service runtime-service
                    :runner-registry (create-runner-registry runtime-service)
-                   :channel-adapter-registry (create-channel-adapter-registry (:channel-adapters cfg))
                    :orchestrator (create-orchestrator (:orchestrator cfg) event-sink telemetry-collector store)}]
-       (assoc system :telegram-service (telegram/create-service system))))))
+       (let [telegram-service (telegram/create-service base-system)]
+         (assoc base-system
+                :telegram-service telegram-service
+                :channel-adapter-registry (create-channel-adapter-registry (:channel-adapters cfg)
+                                                                           telegram-service)))))))
 
 (defn complete
   ([system prompt]
@@ -449,7 +452,6 @@
    :telemetry (telemetry/health-check (:telemetry system))
    :runtime (runtime/runtime-health (:runtime-service system))
    :channel-adapters (channel-adapters/registry-health (:channel-adapter-registry system))
-   :telegram (telegram/health-check (:telegram-service system))
    :orchestrator (orchestrator/health-check (:orchestrator system))
    :provider (get-in system [:config :llm :provider])})
 
@@ -881,7 +883,8 @@
   [system]
   (let [{:keys [host port]} (:api (:config system))
         server (api/start-server! system (:api (:config system)))
-        telegram-service (telegram/start! (:telegram-service system))]
+        telegram-service (some-> (:telegram-service system)
+                                 channel-adapters/start-adapter!)]
     (logging/log! :agent.api/started
                   {:host host
                    :port port})
@@ -891,7 +894,8 @@
 
 (defn stop-api!
   [system]
-  (telegram/stop! (:telegram-service system))
+  (some-> (:telegram-service system)
+          channel-adapters/stop-adapter!)
   (when-let [server (:api-server system)]
     (logging/log! :agent.api/stopping {})
     (api/stop-server! server))
