@@ -9,6 +9,12 @@
 (defn- temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "clj-agent-ui-" ".db")))
 
+(deftest index-page-uses-datastar-and-web-components
+  (let [html (ui/index-page)]
+    (is (str/includes? html "datastar.js"))
+    (is (str/includes? html "/public/web-components.js"))
+    (is (not (str/includes? html "/public/app.js")))))
+
 (deftest session-message-content-is-escaped
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})]

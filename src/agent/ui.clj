@@ -103,7 +103,7 @@
      [:link {:rel "stylesheet" :href "/public/app.css"}]
      [:script {:type "module"
                :src "https://cdn.jsdelivr.net/gh/starfederation/datastar@1.0.0-RC.8/bundles/datastar.js"}]
-     [:script {:type "module" :src "/public/app.js"}]
+     [:script {:type "module" :src "/public/web-components.js"}]
      ]
     [:body
      [:main
@@ -138,11 +138,12 @@
         [:div.status-block
          [:span.status-label "events"]
          [:span.status-value (str event-count)]]]
-       [:button#theme-toggle.theme-toggle
-        {:type "button"
-         :aria-label "Toggle light or dark mode"
-         :title "Toggle light/dark mode"}
-        "Dark"]]
+       [:theme-toggle
+        [:button#theme-toggle.theme-toggle
+         {:type "button"
+          :aria-label "Toggle light or dark mode"
+          :title "Toggle light/dark mode"}
+         "Dark"]]]
       [:nav.shell-nav
        (for [tab tabs]
          (tab-link tab active-tab))]
@@ -378,9 +379,12 @@
      [:aside#sessions-panel.panel.sessions-sidebar
       {"data-on-interval__duration.5s.leading" "@get('/ui/sessions')"}
       [:form#create-session-form.create-session-form
+       {"data-on:submit" "@post('/ui/sessions', {contentType: 'form'})"
+        "data-indicator:createSessionLoading" true}
        [:div.compact-form-row
         [:input {:type "text" :name "title" :placeholder "new session title"}]
-        [:button {:type "submit"}
+        [:button {:type "submit"
+                  "data-attr:disabled" "$createSessionLoading"}
          "New"]]]
       [:h2 "Sessions"]
       (if (seq sessions)
@@ -409,17 +413,25 @@
          [:span.meta.code (:id session)]]
         (trusted-fragment (session-messages-fragment system (:id session)))
         [:form#chat-form
+         {"data-on:submit" "@post('/ui/chat', {contentType: 'form'})"
+          "data-indicator:chatLoading" true
+          "data-class:is-loading" "$chatLoading"}
          [:input {:type "hidden" :name "session_id" :value (:id session)}]
-         [:textarea.chat-input {:name "prompt"
-                                :rows 1
-                                :placeholder "Ask model something concrete"}]
-         [:button {:type "submit"}
+         [:auto-grow-textarea {:submit-on-enter true}
+          [:textarea.chat-input {:name "prompt"
+                                 :rows 1
+                                 :placeholder "Ask model something concrete"}]]
+         [:button {:type "submit"
+                   "data-attr:disabled" "$chatLoading"}
           "Send"]
-         [:div#chat-status.meta.chat-status {:hidden true} "thinking..."]]]))))
+         [:div#chat-status.meta.chat-status
+          {:style "display:none"
+           "data-show" "$chatLoading"}
+          "thinking..."]]]))))
 
 (defn session-messages-fragment [system session-id]
   (render
-   [:div#session-messages-panel
+   [:scroll-bottom#session-messages-panel
     {"data-on-interval__duration.3s" (str "@get('/ui/session-messages?session_id=" session-id "')")}
     (if-let [messages (seq (sqlite/list-messages (:store system) session-id))]
       [:div.messages
@@ -645,7 +657,7 @@
           [:div.meta.code (:id run)]]
          [:div.meta
           "stream "
-          [:span.run-live-state {"data-run-live-state" true}]]]
+          [:span.run-live-state.poll {"data-run-live-state" true} "poll"]]]
         [:div.meta
          (str "agent: " (:agent-id run)
               " | substrate: " (:substrate run)
@@ -728,5 +740,6 @@
         [:div.empty "No runs yet."]]
        [:agent-run-panel#run-detail-panel.panel
         {:data-run-id (:id run)
-         :data-live-state "live"}
+         :data-live-state "poll"
+         "data-on-interval__duration.5s.leading" (str "@get('/ui/run-detail?run_id=" (:id run) "')")}
         (trusted-fragment (run-detail-body system (:id run)))]))))
