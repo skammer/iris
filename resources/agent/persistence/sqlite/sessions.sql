@@ -37,3 +37,20 @@ select last_insert_rowid() as id
 -- :name insert-completion :! :n
 insert into completions (session_id, provider, model, prompt, response, created_at)
 values (:session_id, :provider, :model, :prompt, :response, :created_at)
+
+-- :name get-channel-session-mapping :? :1
+select source, external_chat_id, session_id, metadata_json, created_at, updated_at
+from channel_session_mappings
+where source = :source
+  and external_chat_id = :external_chat_id
+limit 1
+
+-- :name upsert-channel-session-mapping :! :n
+insert into channel_session_mappings
+  (source, external_chat_id, session_id, metadata_json, created_at, updated_at)
+values
+  (:source, :external_chat_id, :session_id, :metadata_json, :created_at, :updated_at)
+on conflict(source, external_chat_id) do update set
+  session_id = excluded.session_id,
+  metadata_json = excluded.metadata_json,
+  updated_at = excluded.updated_at

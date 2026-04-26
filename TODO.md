@@ -63,15 +63,15 @@ Goal: easy single-image deploy agent with Telegram chat, tool use, SQLite + grap
 
 ### Phase 6: Telegram
 
-21. [ ] Implement Telegram long polling adapter.
+21. [x] Implement Telegram long polling adapter.
    Read bot token from config/env, receive updates, send `sendMessage` replies.
-22. [ ] Map each Telegram chat to one session.
+22. [x] Map each Telegram chat to one session.
    DM user chat = separate session. Group chat = separate session. Persist mapping in SQLite.
-23. [ ] Route Telegram messages through chat loop.
+23. [x] Route Telegram messages through chat loop.
    Incoming text becomes session message; response from first-class chat loop goes back to same Telegram chat.
-24. [ ] Add Telegram commands.
+24. [x] Add Telegram commands.
    Minimal `/start`, `/help`, `/reset`, `/memory`, `/status`.
-25. [ ] Enforce Telegram allowlist.
+25. [x] Enforce Telegram allowlist.
    Empty allowlist allows all. Non-empty allowlist blocks unknown users/groups and logs event.
 
 ### Phase 7: Release Verification
@@ -84,7 +84,7 @@ Goal: easy single-image deploy agent with Telegram chat, tool use, SQLite + grap
    Chat can call allowed tool, deny blocked tool, persist trace, return final answer.
 29. [ ] Add tests for memory extraction/dedup/scope.
    Facts extracted once, duplicate ignored, session/global scopes respected.
-30. [ ] Add tests for Telegram session mapping.
+30. [x] Add tests for Telegram session mapping.
    Same Telegram `chat.id` reuses session; different DM/group IDs create distinct sessions.
 31. [ ] Add release smoke test.
    Build image, run container, call `/health`, create chat session, verify memory write/search.
