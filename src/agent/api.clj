@@ -1991,7 +1991,8 @@
                                    :source :ui}})
     (write-html! exchange 201
                  (str (ui/sessions-fragment system)
-                      (ui/session-detail-fragment system (:id session))))))
+                      (ui/session-detail-fragment system (:id session))
+                      (ui/dashboard-fragment system)))))
 
 (defn- handle-ui-session-detail [system exchange]
   (write-html! exchange 200

@@ -104,6 +104,19 @@ agent-run-panel {
   display: block;
 }
 
+auto-grow-textarea {
+  display: contents;
+}
+
+scroll-bottom {
+  display: block;
+}
+
+theme-toggle {
+  display: block;
+  flex: 0 0 auto;
+}
+
 .panel,
 .shell-nav,
 .status-bar,
