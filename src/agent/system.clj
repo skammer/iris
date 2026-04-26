@@ -26,6 +26,7 @@
    [agent.runners.seatbelt :as seatbelt]
    [agent.runtime.core :as runtime]
    [agent.skills :as skills]
+   [agent.telegram :as telegram]
    [agent.telemetry :as telemetry]
    [agent.tools.common.fs :as fs-tool]
    [agent.tools.common.http :as http-tool]
@@ -397,21 +398,22 @@
                     :provider (name (get-in cfg [:llm :provider]))
                     :sqlite-path (get-in cfg [:storage :sqlite :path])
                     :log-path (get-in cfg [:logging :file :path])})
-     {:config cfg
-      :llm-provider (create-llm-provider llm-cfg)
-      :fact-llm-provider (create-fact-llm-provider cfg)
-      :store store
-      :telemetry telemetry-collector
-      :broker broker-instance
-      :event-sink event-sink
-      :recorded-event-sink recorded-event-sink
-      :tool-registry (create-tool-registry (:tools cfg) event-sink store telemetry-collector memory-service)
-      :skills-registry (create-skills-registry (:skills cfg))
-      :memory-service memory-service
-      :runtime-service runtime-service
-      :runner-registry (create-runner-registry runtime-service)
-      :channel-adapter-registry (create-channel-adapter-registry (:channel-adapters cfg))
-      :orchestrator (create-orchestrator (:orchestrator cfg) event-sink telemetry-collector store)})))
+     (let [system {:config cfg
+                   :llm-provider (create-llm-provider llm-cfg)
+                   :fact-llm-provider (create-fact-llm-provider cfg)
+                   :store store
+                   :telemetry telemetry-collector
+                   :broker broker-instance
+                   :event-sink event-sink
+                   :recorded-event-sink recorded-event-sink
+                   :tool-registry (create-tool-registry (:tools cfg) event-sink store telemetry-collector memory-service)
+                   :skills-registry (create-skills-registry (:skills cfg))
+                   :memory-service memory-service
+                   :runtime-service runtime-service
+                   :runner-registry (create-runner-registry runtime-service)
+                   :channel-adapter-registry (create-channel-adapter-registry (:channel-adapters cfg))
+                   :orchestrator (create-orchestrator (:orchestrator cfg) event-sink telemetry-collector store)}]
+       (assoc system :telegram-service (telegram/create-service system))))))
 
 (defn complete
   ([system prompt]
@@ -447,6 +449,7 @@
    :telemetry (telemetry/health-check (:telemetry system))
    :runtime (runtime/runtime-health (:runtime-service system))
    :channel-adapters (channel-adapters/registry-health (:channel-adapter-registry system))
+   :telegram (telegram/health-check (:telegram-service system))
    :orchestrator (orchestrator/health-check (:orchestrator system))
    :provider (get-in system [:config :llm :provider])})
 
@@ -877,14 +880,18 @@
 (defn start-api!
   [system]
   (let [{:keys [host port]} (:api (:config system))
-        server (api/start-server! system (:api (:config system)))]
+        server (api/start-server! system (:api (:config system)))
+        telegram-service (telegram/start! (:telegram-service system))]
     (logging/log! :agent.api/started
                   {:host host
                    :port port})
-    (assoc system :api-server server)))
+    (assoc system
+           :api-server server
+           :telegram-service telegram-service)))
 
 (defn stop-api!
   [system]
+  (telegram/stop! (:telegram-service system))
   (when-let [server (:api-server system)]
     (logging/log! :agent.api/stopping {})
     (api/stop-server! server))

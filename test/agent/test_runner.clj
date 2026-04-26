@@ -8,6 +8,7 @@
    [agent.config-test]
    [agent.federation.http-test]
    [agent.system-test]
+   [agent.telegram-test]
    [agent.telemetry-test]
    [agent.kernel-test]
    [agent.logging-test]
@@ -40,6 +41,7 @@
     agent.config-test
     agent.federation.http-test
     agent.system-test
+    agent.telegram-test
     agent.telemetry-test
     agent.kernel-test
     agent.logging-test

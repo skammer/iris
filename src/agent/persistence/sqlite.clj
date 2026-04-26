@@ -65,6 +65,18 @@
 (defn log-completion! [store completion]
   (sessions/log-completion! store completion))
 
+(defn get-channel-session-mapping [store source external-chat-id]
+  (sessions/get-channel-session-mapping store source external-chat-id))
+
+(defn upsert-channel-session-mapping! [store mapping]
+  (sessions/upsert-channel-session-mapping! store mapping))
+
+(defn ensure-channel-session! [store mapping]
+  (sessions/ensure-channel-session! store mapping))
+
+(defn reset-channel-session! [store mapping]
+  (sessions/reset-channel-session! store mapping))
+
 (defn log-event! [store event]
   (events/log-event! store event))
 

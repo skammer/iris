@@ -96,3 +96,67 @@
      :prompt prompt
      :response response
      :created-at (:created_at completion)}))
+
+(defn- row->channel-session
+  [{:keys [source external_chat_id session_id metadata_json created_at updated_at]}]
+  {:source source
+   :external-chat-id external_chat_id
+   :session-id session_id
+   :metadata (common/parse-json-string metadata_json)
+   :created-at created_at
+   :updated-at updated_at})
+
+(defn get-channel-session-mapping [store source external-chat-id]
+  (common/with-connection
+    store
+    (fn [conn]
+      (some-> (common/select-one conn
+                                  (get-channel-session-mapping-sqlvec
+                                   {:source (common/normalize-name source)
+                                    :external_chat_id (str external-chat-id)})
+                                  identity)
+              row->channel-session))))
+
+(defn upsert-channel-session-mapping!
+  [store {:keys [source external-chat-id session-id metadata]}]
+  (let [now (common/now-str)
+        mapping {:source (common/normalize-name source)
+                 :external_chat_id (str external-chat-id)
+                 :session_id session-id
+                 :metadata_json (common/json-string metadata)
+                 :created_at now
+                 :updated_at now}]
+    (common/with-connection store
+      (fn [conn]
+        (common/execute! conn (upsert-channel-session-mapping-sqlvec mapping))))
+    (row->channel-session mapping)))
+
+(defn ensure-channel-session!
+  [store {:keys [source external-chat-id title metadata]}]
+  (if-let [mapping (get-channel-session-mapping store source external-chat-id)]
+    (if (session-exists? store (:session-id mapping))
+      mapping
+      (let [session (create-session! store title)]
+        (upsert-channel-session-mapping!
+         store
+         {:source source
+          :external-chat-id external-chat-id
+          :session-id (:id session)
+          :metadata metadata})))
+    (let [session (create-session! store title)]
+      (upsert-channel-session-mapping!
+       store
+       {:source source
+        :external-chat-id external-chat-id
+        :session-id (:id session)
+        :metadata metadata}))))
+
+(defn reset-channel-session!
+  [store {:keys [source external-chat-id title metadata]}]
+  (let [session (create-session! store title)]
+    (upsert-channel-session-mapping!
+     store
+     {:source source
+      :external-chat-id external-chat-id
+      :session-id (:id session)
+      :metadata metadata})))

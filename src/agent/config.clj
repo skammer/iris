@@ -70,6 +70,8 @@
                                :keep-history? true}}}
    :channel-adapters {:telegram {:enabled false
                                   :bot-token nil
+                                  :poll-timeout-seconds 30
+                                  :poll-limit 100
                                   :allowlist {:user-ids []
                                               :chat-ids []}}
                       :discord {:enabled false}

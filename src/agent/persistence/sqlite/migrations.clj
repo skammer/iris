@@ -5,7 +5,7 @@
    [ragtime.protocols :as ragtime-protocols]
    [ragtime.strategy :as ragtime-strategy]))
 
-(def latest-schema-version 12)
+(def latest-schema-version 13)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -378,7 +378,24 @@
                           normalized_predicate,
                           normalized_object);"
          "CREATE INDEX IF NOT EXISTS idx_memory_facts_scope_updated
-          ON memory_facts(scope_type, scope_id, updated_at DESC);"]}])
+          ON memory_facts(scope_type, scope_id, updated_at DESC);"]}
+   {:version 13
+    :id "13"
+    :name "channel-session-mappings"
+    :checksum "b35b0839c3f4b987"
+    :irreversible? true
+    :up ["CREATE TABLE IF NOT EXISTS channel_session_mappings (
+            source TEXT NOT NULL,
+            external_chat_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(source, external_chat_id),
+            FOREIGN KEY(session_id) REFERENCES sessions(id)
+          );"
+         "CREATE INDEX IF NOT EXISTS idx_channel_session_mappings_session
+          ON channel_session_mappings(session_id);"]}])
 
 (defn descriptor-by-version [version]
   (some #(when (= version (:version %)) %) migration-descriptors))
