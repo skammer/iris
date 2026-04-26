@@ -72,7 +72,8 @@
                                   :bot-token nil
                                   :poll-timeout-seconds 30
                                   :poll-limit 100
-                                  :allowlist {:user-ids []
+                                  :allowlist {:allow-all? false
+                                              :user-ids []
                                               :chat-ids []}}
                       :discord {:enabled false}
                       :slack {:enabled false}}
@@ -189,6 +190,7 @@
         memory-graph-path (System/getenv "AGENT_MEMORY_GRAPH_PATH")
         telegram-enabled (parse-bool (System/getenv "AGENT_TELEGRAM_ENABLED"))
         telegram-bot-token (System/getenv "AGENT_TELEGRAM_BOT_TOKEN")
+        telegram-allow-all? (parse-bool (System/getenv "AGENT_TELEGRAM_ALLOW_ALL"))
         telegram-user-ids (parse-csv (System/getenv "AGENT_TELEGRAM_ALLOWED_USER_IDS"))
         telegram-chat-ids (parse-csv (System/getenv "AGENT_TELEGRAM_ALLOWED_CHAT_IDS"))
         log-file (System/getenv "AGENT_LOG_FILE")
@@ -241,6 +243,7 @@
                                         (some? memory-graph-enabled) (assoc :enabled memory-graph-enabled)
                                         memory-graph-path (assoc :datahike {:path memory-graph-path}))))
         telegram-allowlist (cond-> {}
+                             (some? telegram-allow-all?) (assoc :allow-all? telegram-allow-all?)
                              telegram-user-ids (assoc :user-ids telegram-user-ids)
                              telegram-chat-ids (assoc :chat-ids telegram-chat-ids))
         telegram-config (cond-> {}
@@ -248,7 +251,8 @@
                           telegram-bot-token (assoc :bot-token telegram-bot-token)
                           (or telegram-user-ids telegram-chat-ids) (assoc :allowlist telegram-allowlist))
         channel-adapters-config (cond-> {}
-                                  (or (some? telegram-enabled) telegram-bot-token telegram-user-ids telegram-chat-ids)
+                                  (or (some? telegram-enabled) telegram-bot-token (some? telegram-allow-all?)
+                                      telegram-user-ids telegram-chat-ids)
                                   (assoc :telegram telegram-config))]
     {:llm (cond-> {}
             provider (assoc :provider provider)

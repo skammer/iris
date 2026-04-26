@@ -133,23 +133,38 @@
 
 (defn ensure-channel-session!
   [store {:keys [source external-chat-id title metadata]}]
-  (if-let [mapping (get-channel-session-mapping store source external-chat-id)]
-    (if (session-exists? store (:session-id mapping))
-      mapping
-      (let [session (create-session! store title)]
-        (upsert-channel-session-mapping!
-         store
-         {:source source
-          :external-chat-id external-chat-id
-          :session-id (:id session)
-          :metadata metadata})))
-    (let [session (create-session! store title)]
-      (upsert-channel-session-mapping!
-       store
-       {:source source
-        :external-chat-id external-chat-id
-        :session-id (:id session)
-        :metadata metadata}))))
+  (common/with-transaction
+    store
+    (fn [conn]
+      (let [source* (common/normalize-name source)
+            external-chat-id* (str external-chat-id)
+            now (common/now-str)
+            existing (common/select-one
+                      conn
+                      (get-channel-session-mapping-sqlvec
+                       {:source source*
+                        :external_chat_id external-chat-id*})
+                      identity)]
+        (if existing
+          (row->channel-session existing)
+          (let [session-id (common/uuid-str)
+                session {:id session-id
+                         :title title
+                         :created_at now}
+                mapping {:source source*
+                         :external_chat_id external-chat-id*
+                         :session_id session-id
+                         :metadata_json (common/json-string metadata)
+                         :created_at now
+                         :updated_at now}]
+            (common/execute! conn (insert-session-ignore-sqlvec session))
+            (common/execute! conn (insert-channel-session-mapping-ignore-sqlvec mapping))
+            (row->channel-session
+             (common/select-one conn
+                                (get-channel-session-mapping-sqlvec
+                                 {:source source*
+                                  :external_chat_id external-chat-id*})
+                                identity))))))))
 
 (defn reset-channel-session!
   [store {:keys [source external-chat-id title metadata]}]
@@ -160,3 +175,64 @@
       :external-chat-id external-chat-id
       :session-id (:id session)
       :metadata metadata})))
+
+(defn get-channel-offset [store source]
+  (common/with-connection
+    store
+    (fn [conn]
+      (some-> (common/select-one conn
+                                  (get-channel-offset-sqlvec
+                                   {:source (common/normalize-name source)})
+                                  identity)
+              (update :next_offset long)))))
+
+(defn save-channel-offset!
+  [store source next-offset]
+  (let [row {:source (common/normalize-name source)
+             :next_offset (long next-offset)
+             :updated_at (common/now-str)}]
+    (common/with-connection store
+      (fn [conn]
+        (common/execute! conn (upsert-channel-offset-sqlvec row))))
+    {:source (:source row)
+     :next-offset (:next_offset row)
+     :updated-at (:updated_at row)}))
+
+(defn upsert-channel-inbox-update!
+  [store source update-id update]
+  (let [now (common/now-str)
+        row {:source (common/normalize-name source)
+             :update_id (long update-id)
+             :status "received"
+             :raw_json (common/json-string update)
+             :attempts 0
+             :last_error nil
+             :created_at now
+             :updated_at now}]
+    (common/with-connection store
+      (fn [conn]
+        (common/execute! conn (upsert-channel-inbox-sqlvec row))))
+    row))
+
+(defn mark-channel-inbox-update!
+  [store source update-id status last-error]
+  (let [row {:source (common/normalize-name source)
+             :update_id (long update-id)
+             :status (common/normalize-name status)
+             :attempt_delta (if (= "failed" (common/normalize-name status)) 1 0)
+             :last_error last-error
+             :updated_at (common/now-str)}]
+    (common/with-connection store
+      (fn [conn]
+        (common/execute! conn (update-channel-inbox-status-sqlvec row))))
+    row))
+
+(defn get-channel-inbox-update [store source update-id]
+  (common/with-connection
+    store
+    (fn [conn]
+      (common/select-one conn
+                         (get-channel-inbox-update-sqlvec
+                          {:source (common/normalize-name source)
+                           :update_id (long update-id)})
+                         identity))))

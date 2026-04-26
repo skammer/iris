@@ -77,6 +77,21 @@
 (defn reset-channel-session! [store mapping]
   (sessions/reset-channel-session! store mapping))
 
+(defn get-channel-offset [store source]
+  (sessions/get-channel-offset store source))
+
+(defn save-channel-offset! [store source next-offset]
+  (sessions/save-channel-offset! store source next-offset))
+
+(defn upsert-channel-inbox-update! [store source update-id update]
+  (sessions/upsert-channel-inbox-update! store source update-id update))
+
+(defn mark-channel-inbox-update! [store source update-id status last-error]
+  (sessions/mark-channel-inbox-update! store source update-id status last-error))
+
+(defn get-channel-inbox-update [store source update-id]
+  (sessions/get-channel-inbox-update store source update-id))
+
 (defn log-event! [store event]
   (events/log-event! store event))
 

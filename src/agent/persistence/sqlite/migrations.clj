@@ -5,7 +5,7 @@
    [ragtime.protocols :as ragtime-protocols]
    [ragtime.strategy :as ragtime-strategy]))
 
-(def latest-schema-version 13)
+(def latest-schema-version 14)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -395,7 +395,30 @@
             FOREIGN KEY(session_id) REFERENCES sessions(id)
           );"
          "CREATE INDEX IF NOT EXISTS idx_channel_session_mappings_session
-          ON channel_session_mappings(session_id);"]}])
+          ON channel_session_mappings(session_id);"]}
+   {:version 14
+    :id "14"
+    :name "channel-inbox-offsets"
+    :checksum "d8b29a4f61c83e21"
+    :irreversible? true
+    :up ["CREATE TABLE IF NOT EXISTS channel_offsets (
+            source TEXT PRIMARY KEY,
+            next_offset INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+          );"
+         "CREATE TABLE IF NOT EXISTS channel_inbox (
+            source TEXT NOT NULL,
+            update_id INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            raw_json TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(source, update_id)
+          );"
+         "CREATE INDEX IF NOT EXISTS idx_channel_inbox_status_updated
+          ON channel_inbox(source, status, updated_at DESC);"]}])
 
 (defn descriptor-by-version [version]
   (some #(when (= version (:version %)) %) migration-descriptors))

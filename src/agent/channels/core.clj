@@ -16,12 +16,19 @@
 
 (defprotocol IChannelAdapter
   (describe-adapter [this])
-  (adapter-health-check [this]))
+  (adapter-health-check [this])
+  (start-adapter! [this])
+  (stop-adapter! [this])
+  (send-adapter-message! [this destination message]))
 
 (defrecord BasicChannelAdapter [description health-fn]
   IChannelAdapter
   (describe-adapter [_] description)
-  (adapter-health-check [_] (health-fn)))
+  (adapter-health-check [_] (health-fn))
+  (start-adapter! [this] this)
+  (stop-adapter! [this] this)
+  (send-adapter-message! [_ _ _]
+    (throw (ex-info "Adapter does not support send" {:type :unsupported-channel-send}))))
 
 (defrecord ChannelAdapterRegistry [adapters])
 

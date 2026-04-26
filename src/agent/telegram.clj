@@ -2,6 +2,7 @@
   "Telegram long-polling adapter."
   (:require
    [agent.chat :as chat]
+   [agent.channels.core :as channels]
    [agent.persistence.sqlite :as sqlite]
    [agent.tools.core :as tools]
    [cheshire.core :as json]
@@ -71,12 +72,13 @@
 (defn allowed?
   [config update]
   (let [allowlist (:allowlist config)
+        allow-all? (true? (:allow-all? allowlist))
         user-ids (id-set (:user-ids allowlist))
         chat-ids (id-set (:chat-ids allowlist))
         message (:message update)
         user-id (some-> message :from :id str)
         chat-id (some-> message :chat :id str)]
-    (or (and (empty? user-ids) (empty? chat-ids))
+    (or allow-all?
         (contains? user-ids user-id)
         (contains? chat-ids chat-id))))
 
@@ -159,59 +161,98 @@
           (send! chat-id response)
           :processed)))))
 
+(declare start! stop! health-check)
+
+(defn- description []
+  (channels/create-adapter-description
+   :telegram
+   "Telegram"
+   :polling
+   #{:supports-outbound :supports-streaming :supports-voice-ingest :supports-reactions :supports-location :supports-otp}
+   :public-url-required? false
+   :config-schema {:enabled :boolean
+                   :bot-token :string
+                   :allowlist :map}))
+
+(defrecord TelegramService [system config running? future last-offset opts]
+  channels/IChannelAdapter
+  (describe-adapter [_] (description))
+  (adapter-health-check [this] (health-check this))
+  (start-adapter! [this] (start! this))
+  (stop-adapter! [this] (stop! this))
+  (send-adapter-message! [_ destination message]
+    (send-message! (:bot-token config) destination message)))
+
 (defn create-service
   ([system] (create-service system {}))
   ([system opts]
-   {:system system
-    :config (get-in system [:config :channel-adapters :telegram])
-    :running? (atom false)
-    :future (atom nil)
-    :last-offset (atom nil)
-    :opts opts}))
+   (->TelegramService system
+                      (get-in system [:config :channel-adapters :telegram])
+                      (atom false)
+                      (atom nil)
+                      (atom nil)
+                      opts)))
 
 (defn enabled? [service]
   (and (true? (get-in service [:config :enabled]))
        (not (str/blank? (get-in service [:config :bot-token])))))
 
+(defn- process-polled-update!
+  [system config opts last-offset update]
+  (let [update-id (long (:update_id update))
+        next-offset (inc update-id)
+        store (:store system)]
+    (sqlite/upsert-channel-inbox-update! store :telegram update-id update)
+    (try
+      (process-update! system config opts update)
+      (sqlite/mark-channel-inbox-update! store :telegram update-id :processed nil)
+      (sqlite/save-channel-offset! store :telegram next-offset)
+      (reset! last-offset next-offset)
+      (catch Exception e
+        (sqlite/mark-channel-inbox-update! store :telegram update-id :failed (.getMessage e))
+        (throw e)))))
+
 (defn start!
   [service]
-  (if-not (enabled? service)
-    service
+  (when (enabled? service)
     (let [{:keys [system config running? last-offset opts]} service
           worker (:future service)
           get-updates-fn (or (:get-updates-fn opts)
                              #(get-updates! (:bot-token config) %))
           poll-timeout (or (:poll-timeout-seconds config) 30)
-          poll-limit (or (:poll-limit config) 100)]
+          poll-limit (or (:poll-limit config) 100)
+          initial-offset (or (:next_offset (sqlite/get-channel-offset (:store system) :telegram))
+                             @last-offset)]
       (when-not @running?
+        (reset! last-offset initial-offset)
         (reset! running? true)
-        (reset!
-         worker
-         (future
-           (while @running?
-             (try
-               (let [updates (get-updates-fn {:offset @last-offset
-                                              :timeout poll-timeout
-                                              :limit poll-limit})]
-                 (doseq [update updates]
-                   (reset! last-offset (inc (long (:update_id update))))
-                   (process-update! system config opts update)))
-               (catch Exception e
-                 ((:event-sink system) {:event-type :telegram.error
-                                        :entity-type :telegram
-                                        :payload {:message (.getMessage e)
-                                                  :type (some-> e ex-data :type)}})
-                 (Thread/sleep 1000)))))))
-      service)))
+        (reset! worker
+                (future
+                  (while @running?
+                    (try
+                      (let [updates (get-updates-fn {:offset @last-offset
+                                                     :timeout poll-timeout
+                                                     :limit poll-limit})]
+                        (doseq [update updates]
+                          (process-polled-update! system config opts last-offset update)))
+                      (catch Exception e
+                        ((:event-sink system) {:event-type :telegram.error
+                                               :entity-type :telegram
+                                               :payload {:message (.getMessage e)
+                                                         :type (some-> e ex-data :type)}})
+                        (Thread/sleep 1000)))))))))
+  service)
 
 (defn stop!
-  [service]
-  (when service
-    (reset! (:running? service) false)
-    (when-let [f @(:future service)]
-      (future-cancel f))
-    (reset! (:future service) nil))
-  service)
+  ([service] (stop! service 5000))
+  ([service timeout-ms]
+   (when service
+     (reset! (:running? service) false)
+     (when-let [f @(:future service)]
+       (deref f timeout-ms ::timeout)
+       (future-cancel f))
+     (reset! (:future service) nil))
+   service))
 
 (defn health-check [service]
   {:healthy true
