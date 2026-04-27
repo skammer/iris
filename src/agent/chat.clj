@@ -2,6 +2,7 @@
   "First-class session chat loop."
   (:refer-clojure :exclude [run!])
   (:require
+   [agent.broker.core :as broker]
    [agent.kernel.ops :as kernel-ops]
    [agent.kernel.runtime :as kernel-runtime]
    [agent.llm.core :as llm-core]
@@ -24,6 +25,23 @@
 
 (defn- request-id []
   (str (UUID/randomUUID)))
+
+(defonce ^:private streaming-state (atom {}))
+
+(defn streaming-content
+  "Returns in-progress assistant text accumulated for `session-id`, or nil."
+  [session-id]
+  (when session-id (get @streaming-state session-id)))
+
+(defn- broadcast-delta! [system session-id request-id delta]
+  (when-let [bus (or (:event-bus system) (:broker system))]
+    (let [event {:event-type "chat.delta"
+                 :entity-type "session"
+                 :entity-id session-id
+                 :request-id request-id
+                 :payload {:delta delta}}]
+      (doseq [msg (broker/event->messages event)]
+        (broker/publish! bus msg)))))
 
 (defn- emit! [system event]
   (if-let [sink (:event-sink system)]
@@ -252,7 +270,11 @@
         history (if session-id (session-messages system session-id) messages)
         recall (recall-memory system session-id prompt)
         stream-messages (into [(memory-message recall)] history)
-        emit-delta! (or on-delta (constantly nil))]
+        emit-delta! (fn [delta]
+                      (swap! streaming-state update session-id (fnil str "") delta)
+                      (broadcast-delta! system session-id request-id delta)
+                      (when on-delta (on-delta delta)))
+        clear-streaming! (fn [] (swap! streaming-state dissoc session-id))]
     (emit! system {:event-type :chat.started
                    :entity-type :session
                    :entity-id session-id
@@ -279,6 +301,7 @@
                             (emit-delta! delta))
                           (recur (str acc delta)))
                         acc))
+            _ (clear-streaming!)
             assistant-message (persist-completion! system session-id prompt content request-id)]
         (extract-turn-memory! system session-id user-message assistant-message request-id)
         (emit! system {:event-type :chat.completed
@@ -290,6 +313,7 @@
          :request-id request-id
          :stream? true})
       (catch Exception e
+        (clear-streaming!)
         (let [content (error-content e)
               assistant-message (persist-completion! system session-id prompt content request-id)]
           (emit! system {:event-type :chat.failed

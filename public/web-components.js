@@ -58,16 +58,22 @@ class ThemeToggle extends HTMLElement {
 }
 
 class AutoGrowTextarea extends HTMLElement {
+  #form = null;
+
   connectedCallback() {
     this.style.display = "contents";
     this.textarea?.addEventListener("input", this);
     this.textarea?.addEventListener("keydown", this);
+    this.#form = this.closest("form");
+    this.#form?.addEventListener("submit", this);
     requestAnimationFrame(() => this.grow());
   }
 
   disconnectedCallback() {
     this.textarea?.removeEventListener("input", this);
     this.textarea?.removeEventListener("keydown", this);
+    this.#form?.removeEventListener("submit", this);
+    this.#form = null;
   }
 
   get textarea() {
@@ -78,6 +84,16 @@ class AutoGrowTextarea extends HTMLElement {
   handleEvent(event) {
     if (event.type === "input") {
       this.grow();
+      return;
+    }
+    if (event.type === "submit") {
+      // Defer so other submit listeners (e.g. Datastar) read FormData first.
+      queueMicrotask(() => {
+        const textarea = this.textarea;
+        if (!textarea) return;
+        textarea.value = "";
+        this.grow();
+      });
       return;
     }
     if (
