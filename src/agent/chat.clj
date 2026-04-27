@@ -214,14 +214,68 @@
 (defn- error-content [error]
   (str "Chat failed: " (.getMessage ^Throwable error)))
 
-(defn- fallback-complete! [system messages session-id prompt request-id error]
+(defn- stream-delta-text [value]
+  (cond
+    (string? value) value
+    (= :error (:type value)) (throw (ex-info (or (:error value) "LLM stream failed")
+                                             {:type :llm-stream-error}))
+    (map? value) (or (:content value)
+                     (get-in value [:delta :content])
+                     (get-in value [:message :content])
+                     "")
+    (nil? value) ""
+    :else (str value)))
+
+(defn- emit-delta!
+  [system session-id request-id on-delta delta]
+  (when-not (str/blank? delta)
+    (when session-id
+      (swap! streaming-state update session-id (fnil str "") delta))
+    (broadcast-delta! system session-id request-id delta)
+    (when on-delta (on-delta delta))))
+
+(defn- clear-streaming! [session-id]
+  (when session-id
+    (swap! streaming-state dissoc session-id)))
+
+(defn- consume-llm-stream!
+  "Drains an LLM stream channel, dispatching deltas. Returns accumulated text."
+  [ch system session-id request-id on-delta]
+  (loop [acc ""]
+    (if-let [value (async/<!! ch)]
+      (let [delta (stream-delta-text value)]
+        (emit-delta! system session-id request-id on-delta delta)
+        (recur (str acc delta)))
+      acc)))
+
+(defn- stream-llm-response!
+  "Issues a plain streaming LLM call and dispatches deltas. Returns content string."
+  [system session-id request-id messages on-delta]
+  (let [ch (llm-core/stream (:llm-provider system)
+                            messages
+                            {:model (get-in system [:config :llm :model])})]
+    (consume-llm-stream! ch system session-id request-id on-delta)))
+
+(defn- emit-content-as-delta!
+  "Streams a pre-known content string through on-delta as a single delta. For
+   synthesized terminal text (max-steps, approval-required) so consumers see a
+   final chunk."
+  [system session-id request-id on-delta content]
+  (when (and on-delta (not (str/blank? content)))
+    (emit-delta! system session-id request-id on-delta content)))
+
+(defn- fallback-complete!
+  [system messages session-id prompt request-id error on-delta]
   (try
-    (let [content (telemetry/complete-with-telemetry! (:telemetry system)
-                                                      (:llm-provider system)
-                                                      messages
-                                                      {}
-                                                      {:agent-id "chat"
-                                                       :model (get-in system [:config :llm :model])})]
+    (let [content (if on-delta
+                    (stream-llm-response! system session-id request-id messages on-delta)
+                    (telemetry/complete-with-telemetry! (:telemetry system)
+                                                        (:llm-provider system)
+                                                        messages
+                                                        {}
+                                                        {:agent-id "chat"
+                                                         :model (get-in system [:config :llm :model])}))]
+      (clear-streaming! session-id)
       (emit! system {:event-type :chat.fallback_completion
                      :entity-type :session
                      :entity-id session-id
@@ -238,6 +292,7 @@
        :request-id request-id
        :fallback? true})
     (catch Exception fallback-error
+      (clear-streaming! session-id)
       (let [content (error-content fallback-error)
             assistant-message (persist-completion! system session-id prompt content request-id)]
         (emit! system {:event-type :chat.failed
@@ -251,85 +306,12 @@
          :request-id request-id
          :error? true}))))
 
-(defn- stream-delta-text [value]
-  (cond
-    (string? value) value
-    (= :error (:type value)) (throw (ex-info (or (:error value) "LLM stream failed")
-                                             {:type :llm-stream-error}))
-    (map? value) (or (:content value)
-                     (get-in value [:delta :content])
-                     (get-in value [:message :content])
-                     "")
-    (nil? value) ""
-    :else (str value)))
-
-(defn stream!
-  [system {:keys [messages session-id on-delta]}]
-  (let [request-id (request-id)
-        prompt (latest-user-prompt messages)
-        user-message (persist-user-turn! system session-id messages)
-        history (if session-id (session-messages system session-id) messages)
-        recall (recall-memory system session-id prompt)
-        stream-messages (into [(memory-message recall)] history)
-        emit-delta! (fn [delta]
-                      (swap! streaming-state update session-id (fnil str "") delta)
-                      (broadcast-delta! system session-id request-id delta)
-                      (when on-delta (on-delta delta)))
-        clear-streaming! (fn [] (swap! streaming-state dissoc session-id))]
-    (emit! system {:event-type :chat.started
-                   :entity-type :session
-                   :entity-id session-id
-                   :request-id request-id
-                   :payload {:message-count (count history)
-                             :stream true}})
-    (emit! system {:event-type :chat.memory.recalled
-                   :entity-type :session
-                   :entity-id session-id
-                   :request-id request-id
-                   :payload {:query prompt
-                             :message-count (count (get-in recall [:search :messages]))
-                             :event-count (count (get-in recall [:search :events]))
-                             :fact-count (count (get-in recall [:search :facts]))
-                             :prompt-document-count (count (get-in recall [:prompt :documents]))}})
-    (try
-      (let [ch (llm-core/stream (:llm-provider system)
-                                stream-messages
-                                {:model (get-in system [:config :llm :model])})
-            content (loop [acc ""]
-                      (if-let [value (async/<!! ch)]
-                        (let [delta (stream-delta-text value)]
-                          (when-not (str/blank? delta)
-                            (emit-delta! delta))
-                          (recur (str acc delta)))
-                        acc))
-            _ (clear-streaming!)
-            assistant-message (persist-completion! system session-id prompt content request-id)]
-        (extract-turn-memory! system session-id user-message assistant-message request-id)
-        (emit! system {:event-type :chat.completed
-                       :entity-type :session
-                       :entity-id session-id
-                       :request-id request-id
-                       :payload {:stream true}})
-        {:content content
-         :request-id request-id
-         :stream? true})
-      (catch Exception e
-        (clear-streaming!)
-        (let [content (error-content e)
-              assistant-message (persist-completion! system session-id prompt content request-id)]
-          (emit! system {:event-type :chat.failed
-                         :entity-type :session
-                         :entity-id session-id
-                         :request-id request-id
-                         :payload {:message (.getMessage e)
-                                   :type (some-> e ex-data :type)
-                                   :stream true}})
-          {:content (:content assistant-message)
-           :request-id request-id
-           :error? true})))))
-
 (defn run!
-  [system {:keys [messages session-id max-steps context]
+  "Run a chat turn for `session-id`. With `:on-delta`, the user-visible response
+   streams token-by-token through that callback. The agentic planner loop runs
+   the same way regardless; streaming only governs how the terminal answer is
+   produced."
+  [system {:keys [messages session-id max-steps context on-delta]
            :or {max-steps default-max-steps}}]
   (let [request-id (request-id)
         prompt (latest-user-prompt messages)
@@ -339,17 +321,20 @@
         initial-messages (into [(memory-message recall)] history)
         ops (->ChatKernelOps system session-id request-id context)
         finish! (fn [content trace extra]
+                  (clear-streaming! session-id)
                   (let [assistant-message (persist-completion! system session-id prompt content request-id)]
                     (extract-turn-memory! system session-id user-message assistant-message request-id))
                   (merge {:content content
                           :request-id request-id
-                          :trace trace}
+                          :trace trace
+                          :stream? (some? on-delta)}
                          extra))]
     (emit! system {:event-type :chat.started
                    :entity-type :session
                    :entity-id session-id
                    :request-id request-id
-                   :payload {:message-count (count history)}})
+                   :payload {:message-count (count history)
+                             :stream (some? on-delta)}})
     (emit! system {:event-type :chat.memory.recalled
                    :entity-type :session
                    :entity-id session-id
@@ -365,7 +350,9 @@
              planner-messages initial-messages
              trace []]
         (if (>= step-no max-steps)
-          (finish! "Stopped: max chat tool steps reached." trace {})
+          (let [content "Stopped: max chat tool steps reached."]
+            (emit-content-as-delta! system session-id request-id on-delta content)
+            (finish! content trace {}))
           (let [step (planner/plan-step! (:llm-provider system)
                                          {:messages planner-messages
                                           :state state
@@ -392,17 +379,24 @@
                                      :directives (:directives step)
                                      :receipts receipts}})
             (if-let [receipt (complete-receipt receipts)]
-              (let [content (result-text (:result receipt))]
+              (let [planner-text (result-text (:result receipt))
+                    content (if on-delta
+                              (stream-llm-response! system session-id request-id
+                                                    planner-messages on-delta)
+                              planner-text)
+                    content (if (str/blank? content) planner-text content)]
                 (emit! system {:event-type :chat.completed
                                :entity-type :session
                                :entity-id session-id
                                :request-id request-id
-                               :payload {:steps (inc step-no)}})
+                               :payload {:steps (inc step-no)
+                                         :stream (some? on-delta)}})
                 (finish! content trace* {}))
               (let [approval-needed (vec (approval-receipts receipts))]
                 (if (seq approval-needed)
                   (let [approvals (mapv #(request-approval! system session-id %) approval-needed)
                         content (approval-message approvals)]
+                    (emit-content-as-delta! system session-id request-id on-delta content)
                     (finish! content trace* {:approvals approvals}))
                   (recur (inc step-no)
                          (merge state (:state executed))
@@ -415,4 +409,4 @@
                        :request-id request-id
                        :payload {:message (.getMessage e)
                                  :type (some-> e ex-data :type)}})
-        (fallback-complete! system initial-messages session-id prompt request-id e)))))
+        (fallback-complete! system initial-messages session-id prompt request-id e on-delta)))))

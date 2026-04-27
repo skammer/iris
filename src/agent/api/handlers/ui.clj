@@ -111,13 +111,13 @@
                          (streaming/send-datastar-patch!
                           channel
                           (ui/session-messages-fragment system session_id)))]
-             (chat/stream! system
-                           {:messages [{:role "user" :content prompt}]
-                            :session-id session_id
-                            :on-delta (fn [_] (push!))})
+             (chat/run! system
+                        {:messages [{:role "user" :content prompt}]
+                         :session-id session_id
+                         :on-delta (fn [_] (push!))})
              (push!))
            (catch Throwable t
-             (println "chat/stream! failed:" (.getMessage t)))
+             (println "chat/run! failed:" (.getMessage t)))
            (finally
              (http-kit/close channel)))))
      (fn [_ _] nil))))

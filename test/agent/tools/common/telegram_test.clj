@@ -31,7 +31,8 @@
                  :method "sendPhoto"
                  :body {:chat_id 100
                         :photo "https://example.com/a.png"
-                        :caption "hi"}}]
+                        :caption "hi"
+                        :parse_mode "HTML"}}]
                @calls))))))
 
 (deftest send-document-tool-calls-api

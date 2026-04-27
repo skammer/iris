@@ -694,7 +694,7 @@
         (is (str/includes? (:body session-detail) "/ui/session/live?session_id="))
         (is (= 200 (:status completion)))
         (is (= 200 (:status ui-chat)))
-        ;; /ui/chat streams via chat/stream! → final patch frame contains "hello world".
+        ;; /ui/chat streams via chat/run! fallback → final patch frame contains "hello world".
         (is (str/includes? (:body ui-chat) "hello world"))
         (is (= 200 (:status streamed)))
         (is (str/includes? (first streamed-lines) "\"role\":\"assistant\""))
