@@ -1,0 +1,59 @@
+# Telegram setup
+
+The Telegram adapter (`src/agent/telegram.clj`) long-polls the Bot API and routes each chat into the same session/message tables as the web UI. Each Telegram chat shows up in the **Sessions** sidebar with the title `Telegram: <name>`. Same `chat.id` reuses its session; DMs and groups are distinct sessions.
+
+## 1. Create a bot
+
+1. Message [@BotFather](https://t.me/BotFather) → `/newbot` → follow prompts.
+2. Copy the token: `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11`.
+
+## 2. Find your numeric IDs
+
+Empty allowlist denies everyone. Get IDs with [@userinfobot](https://t.me/userinfobot) (DM it; it replies with your `user-id`). For group chats, add the bot, send a message, then read the `chat.id` from `getUpdates`.
+
+## 3. Configure
+
+### Option A — env vars (recommended for Docker / deploys)
+
+```bash
+export AGENT_TELEGRAM_ENABLED=true
+export AGENT_TELEGRAM_BOT_TOKEN="123456:ABC-DEF…"
+export AGENT_TELEGRAM_ALLOWED_USER_IDS="111222333"          # CSV
+# export AGENT_TELEGRAM_ALLOWED_CHAT_IDS="-1001234567890"   # for groups
+# export AGENT_TELEGRAM_ALLOW_ALL=true                      # open bot, no allowlist
+```
+
+### Option B — EDN (in `config/default.edn` or a `-Dconfig` overlay)
+
+```edn
+:channel-adapters {:telegram {:enabled true
+                              :bot-token "123456:ABC-DEF…"
+                              :poll-timeout-seconds 30
+                              :poll-limit 100
+                              :allowlist {:allow-all? false
+                                          :user-ids ["111222333"]
+                                          :chat-ids ["-1001234567890"]}}}
+```
+
+Env vars merge on top of EDN (`agent.config/load-config`). Both paths require `:enabled true` **and** a non-nil `:bot-token` for the adapter to start.
+
+## 4. Run
+
+```bash
+clojure -M:run
+```
+
+The adapter starts automatically when `:enabled` is truthy and the token is set. Send a DM to your bot — you should get a reply, and the chat will appear under **Sessions** as `Telegram: <your name>`.
+
+## Sessions integration
+
+- One session per `chat.id`, stored in `sessions` table; mapping in `channel_session_mappings` (`source = :telegram`).
+- Messages stored in the same `messages` table as web chat — agent context, tool calls, memory, all shared.
+- Listed by `sqlite/list-sessions` on the Sessions page (no separate Telegram view).
+- Reuse verified by `test/agent/telegram_test.clj` (`telegram-reuses-session-per-chat`).
+
+## Troubleshooting
+
+- **No reply, no session**: token wrong, `:enabled` not truthy, or sender not in allowlist. Check merged config: `(agent.config/load-config)` in REPL.
+- **Long messages cut**: Telegram caps at 4096 chars; adapter chunks automatically (`telegram.clj:52`).
+- **Multiple instances**: only one process can `getUpdates` per token — Telegram returns 409 to the loser.
