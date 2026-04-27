@@ -691,7 +691,7 @@
         (is (= 200 (:status session-detail)))
         (is (str/includes? (:body session-detail) session-id))
         (is (= 200 (:status session-messages)))
-        (is (str/includes? (:body session-detail) "/ui/session-messages?session_id="))
+        (is (str/includes? (:body session-detail) "/ui/session/live?session_id="))
         (is (= 200 (:status completion)))
         (is (= 200 (:status ui-chat)))
         (is (str/includes? (:body ui-chat) "test-response"))
