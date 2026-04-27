@@ -1,8 +1,6 @@
 (ns agent.api.responses
-  (:require [cheshire.core :as json]
-            [clojure.string :as str])
+  (:require [cheshire.core :as json])
   (:import
-   (com.sun.net.httpserver Headers)
    (java.io ByteArrayOutputStream OutputStream)
    (java.nio.charset StandardCharsets)
    (java.util.concurrent LinkedBlockingQueue)))
@@ -31,15 +29,37 @@
     :headers (merge {"Content-Type" content-type} headers)
     :body bytes}))
 
+(defn- coercion-error-message [data]
+  (let [in (:in data)
+        humanized (:humanized data)]
+    (cond
+      (and humanized (map? humanized))
+      (let [[path msg] (first humanized)]
+        (str (or (some-> path first name) "request") " " (if (sequential? msg) (first msg) msg)))
+      (sequential? humanized) (str (first humanized))
+      humanized (str humanized)
+      :else (str "Invalid " (or (some-> in first name) "request")))))
+
 (defn error-response
   [error]
-  (let [{:keys [type status details]
-         error-code :error} (ex-data error)]
-    (if (and status error-code)
+  (let [data (ex-data error)
+        {:keys [type status details]
+         error-code :error} data]
+    (cond
+      (and status error-code)
       (json-response status
                      (cond-> {:error error-code
                               :message (.getMessage error)}
                        details (assoc :details details)))
+
+      (= :reitit.coercion/request-coercion type)
+      (json-response 400
+                     {:error "bad_request"
+                      :message (coercion-error-message data)
+                      :details {:in (:in data)
+                                :errors (:humanized data)}})
+
+      :else
       (json-response 500
                      {:error "internal_error"
                       :message (.getMessage error)}))))
@@ -47,16 +67,6 @@
 (defn not-found-response
   []
   (json-response 404 {:error "not_found"}))
-
-(defn headers->map
-  [^Headers headers]
-  (reduce-kv
-   (fn [acc k values]
-     (assoc acc k (if (= 1 (count values))
-                    (first values)
-                    (str/join ", " values))))
-   {}
-   headers))
 
 (defn stream-response
   [headers writer-fn]
