@@ -91,7 +91,7 @@
         (responses/json-response 401
                                  {:error "unauthorized"
                                   :message "Invalid or missing API key"}
-                                 {"WWW-Authenticate" "Basic realm=\"clj-agent\""})
+                                 {"WWW-Authenticate" "Basic realm=\"iris\""})
         (handler request)))))
 
 (defn wrap-defaults

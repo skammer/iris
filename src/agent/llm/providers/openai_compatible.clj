@@ -373,7 +373,7 @@
   [{:keys [base-url api-key default-model model site-url app-name extra-headers config]
     :as opts
     :or {base-url "https://api.openai.com/v1"
-         app-name "clj-agent"}}]
+         app-name "iris"}}]
   (->OpenAICompatibleProvider base-url
                               api-key
                               (or default-model model "gpt-4o-mini")
@@ -393,7 +393,7 @@
   [{:keys [api-key base-url model site-url app-name config]
     :as opts
     :or {base-url "https://openrouter.ai/api/v1"
-         app-name "clj-agent"}}]
+         app-name "iris"}}]
   (create-openai-compatible-provider
    (merge (select-keys opts
                        [:prompt-cache?

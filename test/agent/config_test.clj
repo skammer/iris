@@ -37,17 +37,17 @@
                         :chat-ids []}}
            (get-in cfg [:channel-adapters :telegram])))
     (is (false? (get-in cfg [:logging :enabled])))
-    (is (= "logs/clj-agent.log" (get-in cfg [:logging :file :path])))
+    (is (= "logs/iris.log" (get-in cfg [:logging :file :path])))
     (is (= 10485760 (get-in cfg [:logging :file :max-bytes])))
     (is (= "65532:65532" (get-in cfg [:runners :docker :user])))))
 
 (deftest load-config-explicit-file-test
   (let [cfg (config/load-config "config/default.edn")]
     (is (= :ollama (get-in cfg [:llm :provider])))
-    (is (= "clj-agent" (get-in cfg [:llm :app-name])))))
+    (is (= "iris" (get-in cfg [:llm :app-name])))))
 
 (deftest load-config-explicit-file-overrides-default-provider-test
-  (let [file (java.io.File/createTempFile "clj-agent-config-" ".edn")]
+  (let [file (java.io.File/createTempFile "iris-config-" ".edn")]
     (spit file "{:llm {:provider :openai-compatible\n       :model \"deepseek-chat\"\n       :openai-compatible {:base-url \"https://api.deepseek.com/v1\"\n                           :api-key \"test-key\"}}}")
     (try
       (let [cfg (config/load-config (.getAbsolutePath file))]

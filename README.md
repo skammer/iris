@@ -1,4 +1,4 @@
-# clj-agent
+# iris: Isolated Reasoning & Intelligence Substrate
 
 Current canonical runtime is rewritten slice:
 
@@ -52,7 +52,7 @@ Notes:
 
 - OpenRouter + Ollama are first-class providers in rewritten path.
 - SQLite session/message/completion persistence is in rewritten path.
-- Default logs go to `logs/clj-agent.log`.
+- Default logs go to `logs/iris.log`.
 - Logging env vars:
   - `AGENT_LOG_FILE`
   - `AGENT_LOG_ENABLED`
@@ -98,7 +98,7 @@ clojure -M -m agent.core --config config/deepseek.local.edn serve
 Build:
 
 ```bash
-docker build -t clj-agent:0.1 .
+docker build -t iris:0.1 .
 ```
 
 Run:
@@ -106,7 +106,7 @@ Run:
 ```bash
 docker run --rm \
   -p 8080:8080 \
-  -v clj-agent-data:/app/data \
+  -v iris-data:/app/data \
   -e AGENT_API_KEY=change-me \
   -e AGENT_API_HOST=0.0.0.0 \
   -e AGENT_SQLITE_PATH=/app/data/agent.db \
@@ -121,7 +121,7 @@ docker run --rm \
   -e AGENT_MEMORY_PROMPT_PATHS=/app/data/MEMORY.md \
   -e AGENT_MEMORY_GRAPH_ENABLED=false \
   -e AGENT_MEMORY_GRAPH_PATH=/app/data/memory-graph \
-  clj-agent:0.1
+  iris:0.1
 ```
 
 OpenRouter/OpenAI-compatible example:
@@ -129,14 +129,14 @@ OpenRouter/OpenAI-compatible example:
 ```bash
 docker run --rm \
   -p 8080:8080 \
-  -v clj-agent-data:/app/data \
+  -v iris-data:/app/data \
   -e AGENT_API_KEY=change-me \
   -e AGENT_API_HOST=0.0.0.0 \
   -e AGENT_SQLITE_PATH=/app/data/agent.db \
   -e AGENT_LLM_PROVIDER=openrouter \
   -e AGENT_LLM_MODEL=openai/gpt-4.1-mini \
   -e OPENROUTER_API_KEY="$OPENROUTER_API_KEY" \
-  clj-agent:0.1
+  iris:0.1
 ```
 
 Health:

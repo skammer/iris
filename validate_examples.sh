@@ -1,12 +1,12 @@
 #!/bin/bash
 # Script to validate example files structure
 
-echo "=== Clojure AI Agent Examples Validation ==="
+echo "=== Iris Examples Validation ==="
 echo "Date: $(date)"
 echo ""
 
-EXAMPLES_DIR="/home/skammer/projects/clj-agent/examples"
-TEST_DIR="/home/skammer/projects/clj-agent/test/examples"
+EXAMPLES_DIR="/home/skammer/projects/iris/examples"
+TEST_DIR="/home/skammer/projects/iris/test/examples"
 
 echo "1. Checking example files..."
 for file in "$EXAMPLES_DIR"/*.clj; do

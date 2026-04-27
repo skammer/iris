@@ -38,7 +38,7 @@
         (is (= "not_found" (:error payload)))))))
 
 (deftest memory-vault-roundtrip-smoke
-  (let [vault-dir (java.io.File/createTempFile "clj-agent-vault-" "")]
+  (let [vault-dir (java.io.File/createTempFile "iris-vault-" "")]
     (.delete vault-dir)
     (.mkdirs vault-dir)
     (try

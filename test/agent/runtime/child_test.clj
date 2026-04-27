@@ -7,7 +7,7 @@
    [clojure.test :refer :all]))
 
 (defn temp-db-path []
-  (.getAbsolutePath (java.io.File/createTempFile "clj-agent-child-" ".db")))
+  (.getAbsolutePath (java.io.File/createTempFile "iris-child-" ".db")))
 
 (defn wait-until
   [f timeout-ms]

@@ -6,7 +6,7 @@
    [clojure.test :refer :all]))
 
 (defn temp-db-path []
-  (.getAbsolutePath (java.io.File/createTempFile "clj-agent-telegram-" ".db")))
+  (.getAbsolutePath (java.io.File/createTempFile "iris-telegram-" ".db")))
 
 (defn update-for
   [update-id chat-id user-id text]

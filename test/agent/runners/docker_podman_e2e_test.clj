@@ -12,7 +12,7 @@
   (let [dir (io/file "tmp")]
     (.mkdirs dir)
     (.getAbsolutePath
-     (java.io.File/createTempFile "clj-agent-docker-e2e-" ".db" dir))))
+     (java.io.File/createTempFile "iris-docker-e2e-" ".db" dir))))
 
 (defn wait-until
   ([f timeout-ms] (wait-until f timeout-ms 1000))
@@ -55,7 +55,7 @@
                                                  :journal-mode "DELETE"}}
                               :runners {(keyword engine) {:image "clojure:temurin-21-alpine"
                                                           :container-working-dir "/workspace"
-                                                          :container-data-dir "/tmp/clj-agent"
+                                                          :container-data-dir "/tmp/iris"
                                                           :container-home-dir "/root"
                                                           :host-working-dir "."
                                                           :share-network? true}}}

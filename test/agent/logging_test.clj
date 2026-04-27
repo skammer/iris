@@ -7,14 +7,14 @@
 
 (deftest start-and-write-log-file
   (let [dir (io/file (System/getProperty "java.io.tmpdir")
-                     (str "clj-agent-logging-" (System/nanoTime)))
+                     (str "iris-logging-" (System/nanoTime)))
         file (io/file dir "agent.log")]
     (.mkdirs dir)
     (try
       (logging/stop!)
       (logging/start! {:enabled true
                        :file {:path (.getAbsolutePath file)}
-                       :context {:service-name "clj-agent-test"}})
+                       :context {:service-name "iris-test"}})
       (logging/log! :agent.logging/test-event {:value 42})
       (Thread/sleep 250)
       (logging/stop!)
@@ -28,7 +28,7 @@
 
 (deftest masks-sensitive-log-fields
   (let [dir (io/file (System/getProperty "java.io.tmpdir")
-                     (str "clj-agent-logging-mask-" (System/nanoTime)))
+                     (str "iris-logging-mask-" (System/nanoTime)))
         file (io/file dir "agent.log")]
     (.mkdirs dir)
     (try
@@ -55,7 +55,7 @@
 
 (deftest rotates-existing-log-file-on-start
   (let [dir (io/file (System/getProperty "java.io.tmpdir")
-                     (str "clj-agent-logging-rotate-" (System/nanoTime)))
+                     (str "iris-logging-rotate-" (System/nanoTime)))
         file (io/file dir "agent.log")
         rotated (io/file dir "agent.log.1")]
     (.mkdirs dir)

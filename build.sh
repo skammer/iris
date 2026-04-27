@@ -1,12 +1,12 @@
 #!/bin/bash
-# Build script for Clojure AI Agent
+# Build script for Iris
 # Usage: ./build.sh [clean|compile|test|package|all]
 
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION="1.0.0"
-JAR_NAME="clj-agent-${VERSION}.jar"
+JAR_NAME="iris-${VERSION}.jar"
 
 # Colors for output
 RED='\033[0;31m'
@@ -62,8 +62,8 @@ package() {
     
     # Create Docker image
     if command -v docker &> /dev/null; then
-        docker build -t clj-agent:${VERSION} -f Dockerfile .
-        log_success "Docker image created: clj-agent:${VERSION}"
+        docker build -t iris:${VERSION} -f Dockerfile .
+        log_success "Docker image created: iris:${VERSION}"
     else
         log_warning "Docker not found, skipping Docker image creation"
     fi
@@ -127,13 +127,13 @@ deploy_docker() {
     
     # Push image to registry
     if [[ -n "$DOCKER_REGISTRY" ]]; then
-        docker tag clj-agent:${VERSION} ${DOCKER_REGISTRY}/clj-agent:${VERSION}
-        docker push ${DOCKER_REGISTRY}/clj-agent:${VERSION}
+        docker tag iris:${VERSION} ${DOCKER_REGISTRY}/iris:${VERSION}
+        docker push ${DOCKER_REGISTRY}/iris:${VERSION}
     fi
     
     # Deploy to Docker Swarm or standalone
     if [[ "$DEPLOY_MODE" == "swarm" ]]; then
-        docker stack deploy -c docker-compose.prod.yml clj-agent
+        docker stack deploy -c docker-compose.prod.yml iris
     else
         docker-compose -f docker-compose.prod.yml up -d
     fi
@@ -152,7 +152,7 @@ deploy_kubernetes() {
     kubectl apply -f k8s/ingress.yaml
     
     # Wait for deployment to be ready
-    kubectl rollout status deployment/clj-agent -n clj-agent
+    kubectl rollout status deployment/iris -n iris
     
     log_success "Kubernetes deployment completed"
 }
@@ -229,7 +229,7 @@ rollback() {
             docker-compose -f docker-compose.prod.yml up -d --scale agent=1
             ;;
         "kubernetes")
-            kubectl rollout undo deployment/clj-agent -n clj-agent
+            kubectl rollout undo deployment/iris -n iris
             ;;
         "aws")
             # Rollback ECS service

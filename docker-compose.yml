@@ -1,7 +1,7 @@
 services:
   agent:
     build: .
-    image: clj-agent:0.1
+    image: iris:0.1
     ports:
       - "8080:8080"
     environment:
@@ -21,7 +21,7 @@ services:
       AGENT_MEMORY_GRAPH_PATH: /app/data/memory-graph
       AGENT_MEMORY_PROMPT_PATHS: ${AGENT_MEMORY_PROMPT_PATHS:-/app/data/MEMORY.md}
     volumes:
-      - clj-agent-data:/app/data
+      - iris-data:/app/data
 
 volumes:
-  clj-agent-data:
+  iris-data:

@@ -6,7 +6,7 @@
 
 (defn temp-dir []
   (.toFile (java.nio.file.Files/createTempDirectory
-            "clj-agent-shell-"
+            "iris-shell-"
             (make-array java.nio.file.attribute.FileAttribute 0))))
 
 (deftest shell-tool-executes-command-test

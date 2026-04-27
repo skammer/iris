@@ -11,7 +11,7 @@
    "AGENT_SQLITE_JOURNAL_MODE" (or (get-in system [:config :storage :sqlite :journal-mode])
                                    "WAL")
    "AGENT_LOG_FILE" (-> (or (get-in system [:config :logging :file :path])
-                            "logs/clj-agent.log")
+                            "logs/iris.log")
                         io/file
                         .getAbsolutePath)})
 
@@ -54,16 +54,16 @@
                                   "/workspace")
         container-data-dir (or (:container-data-dir runner-options)
                                (:container-data-dir runner-cfg)
-                               "/tmp/clj-agent")
+                               "/tmp/iris")
         user* (or (:user runner-options)
                   (:user runner-cfg)
                   docker-podman/default-container-user)
         requested-home-dir (or (:container-home-dir runner-options)
                                (:container-home-dir runner-cfg)
-                               "/tmp/clj-agent/home")
+                               "/tmp/iris/home")
         container-home-dir (if (and (= "/root" requested-home-dir)
                                     (not (root-user? user*)))
-                             "/tmp/clj-agent/home"
+                             "/tmp/iris/home"
                              requested-home-dir)
         host-m2-dir (absolute-path (str (System/getProperty "user.home") "/.m2"))
         control-url (container-control-url system substrate runner-cfg runner-options)

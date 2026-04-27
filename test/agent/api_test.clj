@@ -40,7 +40,7 @@
   (get-metrics [_] {:provider :test}))
 
 (defn temp-db-path []
-  (.getAbsolutePath (java.io.File/createTempFile "clj-agent-api-" ".db")))
+  (.getAbsolutePath (java.io.File/createTempFile "iris-api-" ".db")))
 
 (defn free-port []
   (with-open [socket (java.net.ServerSocket. 0)]
@@ -272,7 +272,7 @@
                                           {:agent_id "docker-agent"
                                            :name "docker-run"
                                            :substrate "docker"
-                                           :runner_options {:image "clj-agent:test"
+                                           :runner_options {:image "iris:test"
                                                             :working-dir "."
                                                             :share-network? true}})
             created-docker-run-body (json/parse-string (:body created-docker-run) true)
@@ -529,7 +529,7 @@
         (is (= 400 (:status bad-chat)))
         (is (= 201 (:status created-docker-run)))
         (is (= "docker" (get-in created-docker-run-body [:data :substrate])))
-        (is (= "clj-agent:test" (get-in created-docker-run-body [:data :runner_options :image])))
+        (is (= "iris:test" (get-in created-docker-run-body [:data :runner_options :image])))
         (is (= true (get-in created-docker-run-body [:data :runner_options :share-network?])))
         (is (= "mounted-dev" (get-in fetched-docker-run-body [:data :container_contract :image-mode])))
         (is (= 201 (:status created-run)))

@@ -27,11 +27,11 @@
     (llm-core/invoke this (assoc opts :messages messages))))
 
 (defn temp-db-path []
-  (.getAbsolutePath (java.io.File/createTempFile "clj-agent-memory-" ".db")))
+  (.getAbsolutePath (java.io.File/createTempFile "iris-memory-" ".db")))
 
 (defn temp-dir []
   (.toFile (java.nio.file.Files/createTempDirectory
-            "clj-agent-memory-"
+            "iris-memory-"
             (make-array java.nio.file.attribute.FileAttribute 0))))
 
 (deftest memory-service-exposes-surfaces-and-search-test

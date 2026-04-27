@@ -186,8 +186,8 @@
   [{:keys [sqlite-path run-id bootstrap-spec control-url control-token child-sqlite-path]}]
   (logging/start! {:enabled true
                    :file {:path (or (System/getenv "AGENT_LOG_FILE")
-                                    "logs/clj-agent.log")}
-                   :context {:service-name "clj-agent-child"
+                                    "logs/iris.log")}
+                   :context {:service-name "iris-child"
                              :run-id run-id}})
   (let [control (create-control {:sqlite-path sqlite-path
                                  :control-url control-url

@@ -8,7 +8,7 @@
    [clojure.test :refer :all]))
 
 (defn temp-db-path []
-  (.getAbsolutePath (java.io.File/createTempFile "clj-agent-runtime-" ".db")))
+  (.getAbsolutePath (java.io.File/createTempFile "iris-runtime-" ".db")))
 
 (deftest runtime-service-persists-run-lifecycle-test
   (let [path (temp-db-path)

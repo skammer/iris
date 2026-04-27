@@ -1,4 +1,4 @@
-# Project Summary: Clojure AI Agent
+# Project Summary: Iris
 
 > Legacy archive: this file summarizes archived pre-rewrite work now quarantined under `legacy_src/`. It does not reflect current rewritten runtime status.
 
@@ -126,7 +126,7 @@ All planned tasks for the reference implementation have been successfully comple
 ## Project Structure
 
 ```
-clj-agent/
+iris/
 ├── src/agent/                    # Core implementation
 │   ├── llm.clj                  # LLM integration
 │   ├── knowledge_graph.clj      # Knowledge graph
@@ -202,7 +202,7 @@ While Phase 3 is complete, here are potential directions for future work:
 
 ## Conclusion
 
-The Clojure AI Agent project has successfully delivered a fully functional, extensible agent system that combines:
+The Iris project has successfully delivered a fully functional, extensible agent system that combines:
 
 - **Modern AI capabilities** with LLM integration
 - **Structured reasoning** through knowledge graphs

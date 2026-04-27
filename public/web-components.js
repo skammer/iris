@@ -1,5 +1,5 @@
 const AUTOSCROLL_THRESHOLD_PX = 300;
-const THEME_STORAGE_KEY = "clj-agent-theme";
+const THEME_STORAGE_KEY = "iris-theme";
 
 const storedTheme = () => {
   try {

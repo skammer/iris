@@ -7,7 +7,7 @@
    [clojure.test :refer :all]))
 
 (defn- temp-db-path []
-  (.getAbsolutePath (java.io.File/createTempFile "clj-agent-ui-" ".db")))
+  (.getAbsolutePath (java.io.File/createTempFile "iris-ui-" ".db")))
 
 (deftest index-page-uses-datastar-and-web-components
   (let [html (ui/index-page)]
