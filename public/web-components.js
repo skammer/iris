@@ -117,6 +117,10 @@ class AutoGrowTextarea extends HTMLElement {
       ? Math.min(textarea.scrollHeight, maxHeight)
       : textarea.scrollHeight;
     textarea.style.height = `${next}px`;
+    textarea.style.overflowY =
+      Number.isFinite(maxHeight) && textarea.scrollHeight > maxHeight
+        ? "auto"
+        : "hidden";
   }
 }
 

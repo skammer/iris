@@ -629,7 +629,7 @@ textarea {
   min-height: 0;
   max-height: 220px;
   resize: none;
-  overflow-y: auto;
+  overflow-y: hidden;
   padding: 9px 10px;
   border: 1px solid var(--border-visible);
   background: var(--surface-raised);
