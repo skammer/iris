@@ -11,6 +11,7 @@
 
 (def ^:private telegram-api "https://api.telegram.org")
 (def ^:private max-message-chars 4096)
+(def ^:private stream-flush-ms 600)
 
 (defn- parse-body [body]
   (cond
@@ -66,6 +67,39 @@
                                             :text %})
         (chunks text)))
 
+(defn send-message-draft!
+  "Streams a partial message via Telegram Bot API 9.5 sendMessageDraft.
+   `draft-id` is a non-zero int; same id animates updates. Private chats only.
+   Returns true on success. Truncates text to 4096 chars."
+  [token chat-id draft-id text]
+  (let [s (str text)
+        truncated (if (> (count s) max-message-chars)
+                    (subs s 0 max-message-chars)
+                    s)]
+    (api-request! token "sendMessageDraft"
+                  {:chat_id chat-id
+                   :draft_id draft-id
+                   :text truncated})))
+
+(defn- attachment-payload
+  "Builds a sendPhoto/sendDocument JSON payload from a URL or file_id string."
+  [chat-id media-key media caption]
+  (cond-> {:chat_id chat-id
+           media-key media}
+    (not (str/blank? caption)) (assoc :caption caption)))
+
+(defn send-photo!
+  "Sends a photo by URL or file_id. Caption is optional."
+  ([token chat-id photo] (send-photo! token chat-id photo nil))
+  ([token chat-id photo caption]
+   (api-request! token "sendPhoto" (attachment-payload chat-id :photo photo caption))))
+
+(defn send-document!
+  "Sends a document by URL or file_id. Caption is optional."
+  ([token chat-id document] (send-document! token chat-id document nil))
+  ([token chat-id document caption]
+   (api-request! token "sendDocument" (attachment-payload chat-id :document document caption))))
+
 (defn- id-set [ids]
   (set (map str (or ids []))))
 
@@ -118,6 +152,17 @@
   (str "OK. Session: " session-id
        ". Tools: " (count (:tools (tools/registry-health (:tool-registry system))))))
 
+(defn- parse-command-args [text]
+  (let [parts (str/split text #"\s+" 2)]
+    {:command (str/lower-case (first parts))
+     :rest (or (second parts) "")}))
+
+(defn- split-caption [s]
+  (let [parts (str/split s #"\s+" 2)
+        url (first parts)
+        caption (some-> (second parts) str/trim)]
+    [url (when-not (str/blank? caption) caption)]))
+
 (defn command-response
   [system chat command]
   (when (str/starts-with? command "/")
@@ -126,7 +171,7 @@
           command* (-> command str/lower-case (str/split #"\s+") first)]
       (case command*
         "/start" "Ready. Send message to chat."
-        "/help" "/start /help /reset /memory /status"
+        "/help" "/start /help /reset /memory /status /photo <url> [caption] /file <url> [caption]"
         "/reset" (do
                    (reset-session! (:store system) chat)
                    "Session reset.")
@@ -134,8 +179,72 @@
         "/status" (status-text system session-id)
         nil))))
 
+(defn- handle-media-command!
+  "Handles /photo and /file slash commands. Returns true if handled, nil otherwise."
+  [{:keys [bot-token]} {:keys [send-photo-fn send-document-fn send-message-fn]} chat-id text]
+  (let [{:keys [command rest]} (parse-command-args text)
+        send-message! (or send-message-fn #(send-message! bot-token %1 %2))]
+    (case command
+      "/photo"
+      (let [[url caption] (split-caption rest)]
+        (if (str/blank? url)
+          (send-message! chat-id "Usage: /photo <url> [caption]")
+          (try
+            ((or send-photo-fn #(send-photo! bot-token %1 %2 %3)) chat-id url caption)
+            (catch Exception e
+              (send-message! chat-id (str "Photo send failed: " (.getMessage e))))))
+        true)
+
+      "/file"
+      (let [[url caption] (split-caption rest)]
+        (if (str/blank? url)
+          (send-message! chat-id "Usage: /file <url> [caption]")
+          (try
+            ((or send-document-fn #(send-document! bot-token %1 %2 %3)) chat-id url caption)
+            (catch Exception e
+              (send-message! chat-id (str "Document send failed: " (.getMessage e))))))
+        true)
+
+      nil)))
+
+(defn- private-chat? [chat]
+  (= "private" (:type chat)))
+
+(defn- run-streaming-chat!
+  "Streams an LLM reply via sendMessageDraft for private chats. Finalizes
+   with sendMessage. Returns the final assistant content as a string."
+  [system config {:keys [stream-chat-fn send-message-draft-fn send-message-fn]}
+   chat-id session-id user-text]
+  (let [token (:bot-token config)
+        draft-id (inc (mod (System/currentTimeMillis) 2147483647))
+        accumulator (atom "")
+        last-flush (atom 0)
+        send-draft! (or send-message-draft-fn
+                        (fn [cid did text] (send-message-draft! token cid did text)))
+        send! (or send-message-fn (fn [cid text] (send-message! token cid text)))
+        flush! (fn []
+                 (let [now (System/currentTimeMillis)
+                       text @accumulator]
+                   (when (and (not (str/blank? text))
+                              (>= (- now @last-flush) stream-flush-ms))
+                     (reset! last-flush now)
+                     (try
+                       (send-draft! chat-id draft-id text)
+                       (catch Exception _ nil)))))
+        on-delta (fn [delta]
+                   (swap! accumulator str delta)
+                   (flush!))
+        result ((or stream-chat-fn chat/stream!)
+                system
+                {:session-id session-id
+                 :messages [{:role "user" :content user-text}]
+                 :on-delta on-delta})
+        final (or (:content result) "")]
+    (send! chat-id (if (str/blank? final) "(no response)" final))
+    final))
+
 (defn process-update!
-  [system config {:keys [send-message-fn run-chat-fn]} update]
+  [system config {:keys [send-message-fn run-chat-fn] :as opts} update]
   (let [message (:message update)
         chat (:chat message)
         chat-id (:id chat)
@@ -149,17 +258,32 @@
                                  :payload {:chat-id chat-id
                                            :user-id (get-in message [:from :id])}})
           :blocked)
-        (let [send! (or send-message-fn #(send-message! (:bot-token config) %1 %2))
-              response (or (command-response system chat text)
-                           (let [mapping (session-mapping! (:store system) chat)
-                                 result ((or run-chat-fn chat/run!)
-                                         system
-                                         {:session-id (:session-id mapping)
-                                          :messages [{:role "user"
-                                                      :content text}]})]
-                             (:content result)))]
-          (send! chat-id response)
-          :processed)))))
+        (let [send! (or send-message-fn #(send-message! (:bot-token config) %1 %2))]
+          (cond
+            (handle-media-command! config opts chat-id text)
+            :processed
+
+            :else
+            (let [builtin-reply (command-response system chat text)]
+              (cond
+                builtin-reply
+                (do (send! chat-id builtin-reply) :processed)
+
+                (and (private-chat? chat) (nil? run-chat-fn))
+                (let [mapping (session-mapping! (:store system) chat)]
+                  (run-streaming-chat! system config opts chat-id
+                                       (:session-id mapping) text)
+                  :processed)
+
+                :else
+                (let [mapping (session-mapping! (:store system) chat)
+                      result ((or run-chat-fn chat/run!)
+                              system
+                              {:session-id (:session-id mapping)
+                               :messages [{:role "user" :content text}]
+                               :context {:telegram-chat-id chat-id}})]
+                  (send! chat-id (or (:content result) "(no response)"))
+                  :processed)))))))))
 
 (declare start! stop! health-check)
 

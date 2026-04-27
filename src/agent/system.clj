@@ -32,6 +32,7 @@
    [agent.tools.common.http :as http-tool]
    [agent.tools.common.memory :as memory-tool]
    [agent.tools.common.shell :as shell-tool]
+   [agent.tools.common.telegram :as telegram-tool]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [clojure.set :as set]))
@@ -230,13 +231,16 @@
 
 (defn create-tool-registry
   ([cfg event-sink store]
-   (create-tool-registry cfg event-sink store nil nil))
+   (create-tool-registry cfg event-sink store nil nil nil))
   ([cfg event-sink store telemetry-collector]
-   (create-tool-registry cfg event-sink store telemetry-collector nil))
+   (create-tool-registry cfg event-sink store telemetry-collector nil nil))
   ([cfg event-sink store telemetry-collector memory-service]
+   (create-tool-registry cfg event-sink store telemetry-collector memory-service nil))
+  ([cfg event-sink store telemetry-collector memory-service channel-adapters-cfg]
    (let [http-cfg (get cfg :http)
          fs-cfg (get cfg :fs)
          shell-cfg (get cfg :shell)
+         telegram-cfg (get channel-adapters-cfg :telegram)
          policy-hook (create-tool-policy-hook cfg)
          registry (tools/create-registry
                    {:event-sink event-sink
@@ -267,7 +271,11 @@
        (tools/register-tool (memory-tool/create-memory-tool memory-service))
 
        (not= false (:enabled shell-cfg))
-       (tools/register-tool (shell-tool/create-shell-tool shell-cfg))))))
+       (tools/register-tool (shell-tool/create-shell-tool shell-cfg))
+
+       (telegram-tool/enabled? telegram-cfg)
+       (-> (tools/register-tool (telegram-tool/create-send-photo-tool telegram-cfg))
+           (tools/register-tool (telegram-tool/create-send-document-tool telegram-cfg)))))))
 
 (defn create-orchestrator
   ([_cfg event-sink]
@@ -406,7 +414,7 @@
                    :broker broker-instance
                    :event-sink event-sink
                    :recorded-event-sink recorded-event-sink
-                   :tool-registry (create-tool-registry (:tools cfg) event-sink store telemetry-collector memory-service)
+                   :tool-registry (create-tool-registry (:tools cfg) event-sink store telemetry-collector memory-service (:channel-adapters cfg))
                    :skills-registry (create-skills-registry (:skills cfg))
                    :memory-service memory-service
                    :runtime-service runtime-service

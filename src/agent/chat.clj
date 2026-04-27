@@ -107,7 +107,7 @@
 (defn- all-tool-names [system]
   (set (map :name (tools/list-tools (:tool-registry system)))))
 
-(defrecord ChatKernelOps [system session-id request-id]
+(defrecord ChatKernelOps [system session-id request-id extra-context]
   kernel-ops/KernelOps
   (spawn-task-worker! [_ _]
     (throw (ex-info "Chat loop cannot spawn workers yet"
@@ -116,7 +116,8 @@
     (tools/execute-tool (:tool-registry system)
                         tool-name
                         input
-                        (merge context
+                        (merge (or extra-context {})
+                               context
                                {:user (or session-id "chat")
                                 :session-id session-id
                                 :request-id request-id
@@ -328,7 +329,7 @@
            :error? true})))))
 
 (defn run!
-  [system {:keys [messages session-id max-steps]
+  [system {:keys [messages session-id max-steps context]
            :or {max-steps default-max-steps}}]
   (let [request-id (request-id)
         prompt (latest-user-prompt messages)
@@ -336,7 +337,7 @@
         history (if session-id (session-messages system session-id) messages)
         recall (recall-memory system session-id prompt)
         initial-messages (into [(memory-message recall)] history)
-        ops (->ChatKernelOps system session-id request-id)
+        ops (->ChatKernelOps system session-id request-id context)
         finish! (fn [content trace extra]
                   (let [assistant-message (persist-completion! system session-id prompt content request-id)]
                     (extract-turn-memory! system session-id user-message assistant-message request-id))
