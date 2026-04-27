@@ -30,7 +30,8 @@
    [reitit.coercion.malli :as malli-coercion]
    [reitit.ring :as ring]
    [reitit.ring.coercion :as ring-coercion]
-   [reitit.ring.middleware.muuntaja :as muuntaja]))
+   [reitit.ring.middleware.muuntaja :as muuntaja]
+   [reitit.ring.middleware.parameters :as parameters]))
 
 (defn- path-param [request k]
   (get-in request [:path-params k]))
@@ -164,7 +165,8 @@
                  {:conflicts nil
                   :data {:muuntaja m/instance
                          :coercion malli-coercion/coercion
-                         :middleware [muuntaja/format-negotiate-middleware
+                         :middleware [parameters/parameters-middleware
+                                      muuntaja/format-negotiate-middleware
                                       muuntaja/format-request-middleware
                                       ring-coercion/coerce-request-middleware]}})
     (fn [_] (responses/not-found-response)))

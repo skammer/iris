@@ -16,7 +16,7 @@
   (responses/json-response 200
                            {:data (mapv ser/approval->response
                                         (tool-approvals/list-requests (:store system)
-                                                                      {:status (:status (h/query-params request))
+                                                                      {:status (-> request :parameters :query :status)
                                                                        :limit 100}))}))
 
 (defn create [system request]

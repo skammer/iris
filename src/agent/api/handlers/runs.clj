@@ -91,26 +91,16 @@
     signal-result))
 
 (defn- normalize-run-request [body]
-  (let [capabilities (:capabilities body)
-        runner-options (:runner_options body)
-        network-identity (:network_identity body)]
-    (when (and (some? capabilities)
-               (not (and (vector? capabilities) (every? string? capabilities))))
-      (throw (errors/api-error 400 "bad_request" "capabilities must be a vector of strings")))
-    (when (and (some? runner-options) (not (map? runner-options)))
-      (throw (errors/api-error 400 "bad_request" "runner_options must be an object")))
-    (when (and (some? network-identity) (not (map? network-identity)))
-      (throw (errors/api-error 400 "bad_request" "network_identity must be an object")))
-    {:agent-id (:agent_id body)
-     :parent-run-id (:parent_run_id body)
-     :idempotency-key (:idempotency_key body)
-     :name (:name body)
-     :substrate (or (some-> (:substrate body) keyword) :local-unsandboxed)
-     :capabilities (or capabilities [])
-     :network-identity network-identity
-     :runner-options runner-options
-     :requested-by (or (:requested_by body) "api")
-     :auto-launch? (true? (:auto_launch body))}))
+  {:agent-id (:agent_id body)
+   :parent-run-id (:parent_run_id body)
+   :idempotency-key (:idempotency_key body)
+   :name (:name body)
+   :substrate (or (some-> (:substrate body) keyword) :local-unsandboxed)
+   :capabilities (or (:capabilities body) [])
+   :network-identity (:network_identity body)
+   :runner-options (:runner_options body)
+   :requested-by (or (:requested_by body) "api")
+   :auto-launch? (true? (:auto_launch body))})
 
 (defn list-runs [system _request]
   (responses/json-response 200 {:data (mapv ser/run->response (list-runs* system))}))
@@ -145,38 +135,31 @@
                              {:data (signal-run! system run-id {:command-type command_type})})))
 
 (defn heartbeats [system request run-id]
-  (let [params (h/query-params request)
-        limit (h/parse-int-param (:limit params) "limit")
-        since-sequence (h/parse-int-param (:since_sequence params) "since_sequence")]
+  (let [{:keys [limit since_sequence]} (-> request :parameters :query)]
     (responses/json-response 200
                              {:data (mapv ser/heartbeat->response
                                           (runtime/list-heartbeats (:runtime-service system) run-id
                                                                    (cond-> {}
                                                                      limit (assoc :limit limit)
-                                                                     since-sequence (assoc :since-sequence since-sequence))))})))
+                                                                     since_sequence (assoc :since-sequence since_sequence))))})))
 
 (defn checkpoints [system request run-id]
-  (let [params (h/query-params request)
-        limit (h/parse-int-param (:limit params) "limit")
-        since-sequence (h/parse-int-param (:since_sequence params) "since_sequence")]
+  (let [{:keys [limit since_sequence]} (-> request :parameters :query)]
     (responses/json-response 200
                              {:data (mapv ser/checkpoint->response
                                           (runtime/list-checkpoints (:runtime-service system) run-id
                                                                     (cond-> {}
                                                                       limit (assoc :limit limit)
-                                                                      since-sequence (assoc :since-sequence since-sequence))))})))
+                                                                      since_sequence (assoc :since-sequence since_sequence))))})))
 
 (defn commands [system request run-id]
-  (let [params (h/query-params request)
-        limit (h/parse-int-param (:limit params) "limit")
-        status (:status params)
-        request-id (:request_id params)]
+  (let [{:keys [limit status request_id]} (-> request :parameters :query)]
     (responses/json-response 200
                              {:data (mapv ser/run-command->response
                                           (runtime/list-commands (:runtime-service system) run-id
                                                                  (cond-> {}
                                                                    limit (assoc :limit limit)
-                                                                   request-id (assoc :request-id request-id)
+                                                                   request_id (assoc :request-id request_id)
                                                                    status (assoc :status status))))})))
 
 (defn- ensure-run-control! [system request run-id]
@@ -254,15 +237,13 @@
     (responses/json-response 200 {:data (ser/run->response run)})))
 
 (defn run-events [system request run-id]
-  (let [params (h/query-params request)
-        limit (h/parse-int-param (:limit params) "limit")
-        after-id (h/parse-int-param (:after_id params) "after_id")]
+  (let [{:keys [limit after_id]} (-> request :parameters :query)]
     (responses/json-response 200
                              {:data (mapv ser/event->response
                                           (sqlite/list-events (:store system)
                                                               (cond-> {:entity-type :agent_run
                                                                        :entity-id run-id}
-                                                                after-id (assoc :after-id after-id)
+                                                                after_id (assoc :after-id after_id)
                                                                 limit (assoc :limit limit))))})))
 
 (defn- relevant-run-event? [event run-id]
@@ -271,13 +252,12 @@
 
 (defn events-stream-response
   [system run-id request]
-  (let [params (h/query-params request)
+  (let [{:keys [after_id replay_limit]} (-> request :parameters :query)
         broker-instance (or (:event-bus system) (:broker system))
-        after-id (h/parse-int-param (:after_id params) "after_id")
-        replay-limit (or (h/parse-int-param (:replay_limit params) "replay_limit") 100)
+        replay-limit (or replay_limit 100)
         replay-messages (broker/replay! broker-instance
                                         (broker/run-events-subject run-id)
-                                        {:after-id after-id
+                                        {:after-id after_id
                                          :limit replay-limit})
         subscription (broker/subscribe! broker-instance (broker/all-runs-subject))
         ch (:channel subscription)
@@ -311,9 +291,9 @@
        (broker/unsubscribe! broker-instance subscription)))))
 
 (defn wait [system request run-id]
-  (let [params (h/query-params request)
-        timeout-ms (or (h/parse-int-param (:timeout_ms params) "timeout_ms") 15000)
-        interval-ms (or (h/parse-int-param (:interval_ms params) "interval_ms") 250)]
+  (let [{:keys [timeout_ms interval_ms]} (-> request :parameters :query)
+        timeout-ms (or timeout_ms 15000)
+        interval-ms (or interval_ms 250)]
     (if-let [run (runtime/wait-for-run! (:runtime-service system) run-id
                                         {:timeout-ms timeout-ms
                                          :interval-ms interval-ms})]

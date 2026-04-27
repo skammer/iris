@@ -26,7 +26,7 @@
 
 (defn shell [system request]
   (responses/html-response 200
-                           (ui/shell-fragment system (keyword (:tab (h/query-params request))))))
+                           (ui/shell-fragment system (some-> request :parameters :query :tab keyword))))
 
 (defn dashboard [system _request]
   (responses/html-response 200 (ui/dashboard-fragment system)))
@@ -53,14 +53,13 @@
                                   (ui/dashboard-fragment system)))))
 
 (defn session-detail [system request]
-  (let [session-id (:session_id (h/query-params request))]
+  (let [session-id (-> request :parameters :query :session_id)]
     (responses/html-response 200
                              (str (ui/sessions-fragment system session-id)
                                   (ui/session-detail-fragment system session-id)))))
 
 (defn session-messages [system request]
-  (let [session-id (:session_id (h/query-params request))]
-    (v/ensure-string! :session_id session-id)
+  (let [session-id (-> request :parameters :query :session_id)]
     (v/ensure-session-exists! system session-id)
     (responses/html-response 200
                              (ui/session-messages-fragment system session-id))))
@@ -74,12 +73,11 @@
 
 (defn session-live-response
   [system request]
-  (let [session-id (:session_id (h/query-params request))
+  (let [session-id (-> request :parameters :query :session_id)
         broker-instance (or (:event-bus system) (:broker system))
         subscription (broker/subscribe! broker-instance (broker/all-events-subject))
         ch (:channel subscription)
         open? (atom true)]
-    (v/ensure-string! :session_id session-id)
     (v/ensure-session-exists! system session-id)
     (streaming/sse-response
      request
@@ -101,17 +99,13 @@
        (broker/unsubscribe! broker-instance subscription)))))
 
 (defn chat-action [system request]
-  (let [body (h/read-form-body request)
-        session-id (:session_id body)
-        prompt (:prompt body)]
-    (v/ensure-string! :session_id session-id)
-    (v/ensure-string! :prompt prompt)
-    (v/ensure-session-exists! system session-id)
-    (chat/run! system {:messages [{:role "user" :content prompt}] :session-id session-id})
+  (let [{:keys [session_id prompt]} (h/read-form-body request)]
+    (v/ensure-session-exists! system session_id)
+    (chat/run! system {:messages [{:role "user" :content prompt}] :session-id session_id})
     (responses/html-response 200
                              (str (ui/dashboard-fragment system)
-                                  (ui/session-detail-fragment system session-id)
-                                  (ui/sessions-fragment system session-id)))))
+                                  (ui/session-detail-fragment system session_id)
+                                  (ui/sessions-fragment system session_id)))))
 
 (defn events [system _request]
   (responses/html-response 200 (ui/events-fragment system)))
@@ -122,12 +116,11 @@
 
 (defn run-detail-live-response
   [system request]
-  (let [run-id (:run_id (h/query-params request))
+  (let [run-id (-> request :parameters :query :run_id)
         broker-instance (or (:event-bus system) (:broker system))
         subscription (broker/subscribe! broker-instance (broker/all-events-subject))
         ch (:channel subscription)
         open? (atom true)]
-    (v/ensure-string! :run_id run-id)
     (streaming/sse-response
      request
      (fn [channel]
@@ -179,9 +172,7 @@
   (responses/html-response 200 (ui/memory-prompt-fragment system)))
 
 (defn memory-search [system request]
-  (let [body (h/read-form-body request)
-        query (:query body)]
-    (v/ensure-string! :query query)
+  (let [{:keys [query]} (h/read-form-body request)]
     (responses/html-response 200
                              (ui/memory-search-results-fragment
                               (memory/search-memory (:memory-service system) query)))))
@@ -191,11 +182,11 @@
 
 (defn run-detail [system request]
   (responses/html-response 200
-                           (ui/run-detail-fragment system (:run_id (h/query-params request)))))
+                           (ui/run-detail-fragment system (-> request :parameters :query :run_id))))
 
 (defn run-detail-body [system request]
   (responses/html-response 200
-                           (ui/run-detail-body system (:run_id (h/query-params request)))))
+                           (ui/run-detail-body system (-> request :parameters :query :run_id))))
 
 (defn create-run [system request]
   (let [body (h/read-form-body request)

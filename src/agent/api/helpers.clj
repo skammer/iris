@@ -59,14 +59,14 @@
           (json/parse-string raw true)))))
 
 (defn read-form-body
-  "Parse the request body as application/x-www-form-urlencoded."
+  "Return the parsed form body for `request`. Prefers `:form-params` (set by
+   reitit's parameters-middleware, which wraps ring's wrap-params) and falls
+   back to slurping/parsing the raw body when middleware isn't in front. Always
+   returns a keyword-keyed map."
   [request]
-  (parse-urlencoded (body-string request)))
-
-(defn query-params
-  "Parse the request's query string into a keyword-keyed map."
-  [request]
-  (parse-urlencoded (:query-string request)))
+  (if-let [form-params (:form-params request)]
+    (reduce-kv (fn [acc k v] (assoc acc (keyword k) v)) {} form-params)
+    (parse-urlencoded (body-string request))))
 
 (defn header
   "Look up a request header (case-insensitive on standard ring lower-cased keys)."
@@ -75,17 +75,6 @@
         lower (str/lower-case name)]
     (or (get headers lower)
         (get headers name))))
-
-(defn parse-int-param [value field]
-  (when (some? value)
-    (try
-      (Integer/parseInt (str value))
-      (catch Exception _
-        (throw (ex-info (str field " must be an integer")
-                        {:type :agent.api.errors/api-error
-                         :status 400
-                         :error "bad_request"
-                         :details nil}))))))
 
 (defn body-value [body & ks]
   (some #(get body %) ks))
