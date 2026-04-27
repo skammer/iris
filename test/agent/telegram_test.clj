@@ -33,7 +33,7 @@
         opts {:send-message-fn (fn [chat-id text]
                                  (swap! sent conj {:chat-id chat-id
                                                    :text text}))
-              :run-chat-fn (fn [_ {:keys [session-id messages]}]
+              :chat-fn (fn [_ {:keys [session-id messages]}]
                              (swap! calls conj {:session-id session-id
                                                 :messages messages})
                              {:content "pong"})}]
@@ -143,7 +143,7 @@
                                     (swap! polls conj offset)
                                     (if (< (count @polls) 3) [update] []))
                   :send-message-fn (fn [_ _] nil)
-                  :run-chat-fn (fn [_ _]
+                  :chat-fn (fn [_ _]
                                  (if (= 1 (swap! attempts inc))
                                    (throw (ex-info "boom" {}))
                                    {:content "ok"}))})]
@@ -177,7 +177,7 @@
                                        (swap! drafts conj {:chat-id chat-id
                                                            :draft-id draft-id
                                                            :text text}))
-              :stream-chat-fn (fn [_ {:keys [session-id on-delta]}]
+              :chat-fn (fn [_ {:keys [session-id on-delta]}]
                                 (doseq [d deltas]
                                   (Thread/sleep 700) ;; force flush throttle
                                   (on-delta d))

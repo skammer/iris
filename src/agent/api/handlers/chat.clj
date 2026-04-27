@@ -20,7 +20,9 @@
                     "chat.memory.recalled"
                     "chat.planner.step"
                     "chat.tool.approval_required"
-                    "chat.fallback_completion"}
+                    "chat.fallback_completion"
+                    "tool.execution.succeeded"
+                    "tool.execution.failed"}
                   (:event-type event))))
 
 (defn- openai-style-completion [system session-id content]
@@ -62,10 +64,10 @@
            (future
              (try
                (async/>!! result-ch
-                          {:result (chat/stream! system
-                                                 {:messages messages
-                                                  :session-id session-id
-                                                  :on-delta #(async/>!! delta-ch %)})})
+                          {:result (chat/run! system
+                                              {:messages messages
+                                               :session-id session-id
+                                               :on-delta #(async/>!! delta-ch %)})})
                (catch Exception e
                  (async/>!! result-ch {:error e}))))
            (loop []
