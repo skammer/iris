@@ -1,7 +1,7 @@
 #!/bin/bash
-# Test Runner Script for Clojure AI Agent
+# Test Runner Script for Iris
 
-echo "=== Clojure AI Agent Test Runner ==="
+echo "=== Iris Test Runner ==="
 echo "Date: $(date)"
 echo ""
 

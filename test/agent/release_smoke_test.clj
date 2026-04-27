@@ -8,7 +8,7 @@
    (java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers HttpResponse$BodyHandlers)
    (java.util UUID)))
 
-(def image-tag "clj-agent:release-smoke")
+(def image-tag "iris:release-smoke")
 (def api-key "release-smoke-secret")
 
 (defn- free-port []
@@ -71,7 +71,7 @@
       (when-not (docker-available?)
         (throw (ex-info "Docker unavailable" {})))
       (let [port (free-port)
-            container-name (str "clj-agent-release-smoke-" (UUID/randomUUID))
+            container-name (str "iris-release-smoke-" (UUID/randomUUID))
             base-url (str "http://127.0.0.1:" port)
             auth {"X-Api-Key" api-key}]
         (try

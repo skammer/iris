@@ -19,7 +19,7 @@
                {:api-key "or-key"
                 :model "openai/gpt-4o-mini"
                 :site-url "https://example.com"
-                :app-name "clj-agent-test"})]
+                :app-name "iris-test"})]
       (is (= "openrouter-ok"
              (llm-core/complete llm [{:role "user" :content "hi"}] {}))))))
 

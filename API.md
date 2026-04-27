@@ -1,10 +1,10 @@
-# Clojure AI Agent - API Documentation
+# Iris - API Documentation
 
 > Legacy archive: this document describes pre-rewrite namespaces now quarantined under `legacy_src/`. Current canonical runtime is `agent.core` + `agent.api`.
 
 ## Overview
 
-The Clojure AI Agent is a modular, extensible agent system built with Clojure. It features:
+The Iris is a modular, extensible agent system built with Clojure. It features:
 
 - **Flow-based processing** using core.async.flow
 - **Protocol-based architecture** for extensibility
@@ -327,7 +327,7 @@ export AGENT_LOG_LEVEL="info"
 ### Project Structure
 
 ```
-clj-agent/
+iris/
 ├── src/agent/
 │   ├── llm.clj              # LLM integration
 │   ├── knowledge_graph.clj  # Knowledge graph

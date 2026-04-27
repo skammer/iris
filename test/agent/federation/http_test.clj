@@ -8,7 +8,7 @@
    [clojure.test :refer :all]))
 
 (defn temp-db-path []
-  (.getAbsolutePath (java.io.File/createTempFile "clj-agent-federation-" ".db")))
+  (.getAbsolutePath (java.io.File/createTempFile "iris-federation-" ".db")))
 
 (defn temp-store []
   (sqlite/create-store {:path (temp-db-path)

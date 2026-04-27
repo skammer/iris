@@ -7,7 +7,7 @@
 
 (defn temp-dir []
   (.toFile (java.nio.file.Files/createTempDirectory
-            "clj-agent-fs-"
+            "iris-fs-"
             (make-array java.nio.file.attribute.FileAttribute 0))))
 
 (deftest fs-tool-read-write-list-test

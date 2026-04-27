@@ -8,7 +8,7 @@ COPY resources ./resources
 COPY build.clj ./
 
 RUN clojure -P
-RUN clojure -T:uberjar uberjar :jar '"target/clj-agent.jar"'
+RUN clojure -T:uberjar uberjar :jar '"target/iris.jar"'
 
 FROM eclipse-temurin:21-jre-alpine
 
@@ -21,7 +21,7 @@ RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 WORKDIR /app
 
-COPY --from=builder /app/target/clj-agent.jar ./clj-agent.jar
+COPY --from=builder /app/target/iris.jar ./iris.jar
 
 COPY config ./config
 COPY resources ./resources
@@ -41,11 +41,11 @@ EXPOSE 8080
 VOLUME ["/app/data"]
 
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["java", "-jar", "clj-agent.jar", "serve"]
+CMD ["java", "-jar", "iris.jar", "serve"]
 
 # Labels
-LABEL org.opencontainers.image.title="Clojure AI Agent"
-LABEL org.opencontainers.image.description="AI Agent system built with Clojure"
+LABEL org.opencontainers.image.title="Iris"
+LABEL org.opencontainers.image.description="Isolated Reasoning & Intelligence Substrate built with Clojure"
 LABEL org.opencontainers.image.version="0.1.0"
-LABEL org.opencontainers.image.authors="Clojure AI Agent Team"
+LABEL org.opencontainers.image.authors="Iris Team"
 LABEL org.opencontainers.image.licenses="MIT"

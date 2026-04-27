@@ -17,7 +17,7 @@
 (defn create-http-client
   [{:keys [endpoint-url headers protocol-version client-info capabilities timeout-ms telemetry]
     :or {protocol-version default-protocol-version
-         client-info {:name "clj-agent" :version "0.1.0"}
+         client-info {:name "iris" :version "0.1.0"}
          capabilities {}
          timeout-ms 30000}}]
   {:transport :streamable-http

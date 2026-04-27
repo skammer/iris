@@ -7,7 +7,7 @@
    (java.sql DriverManager)))
 
 (defn temp-db-path []
-  (.getAbsolutePath (java.io.File/createTempFile "clj-agent-" ".db")))
+  (.getAbsolutePath (java.io.File/createTempFile "iris-" ".db")))
 
 (deftest sqlite-session-flow-test
   (let [path (temp-db-path)

@@ -15,7 +15,7 @@
          :stream-structured-output? true
          :timeout-ms 60000
          :site-url nil
-         :app-name "clj-agent"
+         :app-name "iris"
          :openrouter {:base-url "https://openrouter.ai/api/v1"
                       :api-key nil}
          :ollama {:base-url "http://localhost:11434"
@@ -31,7 +31,7 @@
                   :max-response-bytes 1048576
                   :allow-private? false
                   :max-redirects 3
-                  :default-headers {"User-Agent" "clj-agent/0.1"}}
+                  :default-headers {"User-Agent" "iris/0.1"}}
            :yolo? false
            :permissions {:api [:filesystem-read :filesystem-write :http-request]
                          :ui [:filesystem-read :filesystem-write :http-request]
@@ -81,8 +81,8 @@
                       :image-mode :mounted-dev
                       :pull-policy :missing
                       :container-working-dir "/workspace"
-                      :container-data-dir "/tmp/clj-agent"
-                      :container-home-dir "/tmp/clj-agent/home"
+                      :container-data-dir "/tmp/iris"
+                      :container-home-dir "/tmp/iris/home"
                       :user "65532:65532"
                       :host-working-dir "."
                       :share-network? true}
@@ -90,8 +90,8 @@
                       :image-mode :mounted-dev
                       :pull-policy :missing
                       :container-working-dir "/workspace"
-                      :container-data-dir "/tmp/clj-agent"
-                      :container-home-dir "/tmp/clj-agent/home"
+                      :container-data-dir "/tmp/iris"
+                      :container-home-dir "/tmp/iris/home"
                       :user "65532:65532"
                       :host-working-dir "."
                       :share-network? true}}
@@ -99,7 +99,7 @@
    :telemetry {:enabled true
                :max-latency-samples 1000}
    :logging {:enabled false
-             :file {:path "logs/clj-agent.log"
+             :file {:path "logs/iris.log"
                     :max-bytes 10485760
                     :max-files 5}
              :otel {:enabled false

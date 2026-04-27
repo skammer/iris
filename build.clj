@@ -1,7 +1,7 @@
 (ns build
   (:require [clojure.tools.build.api :as b]))
 
-(def lib 'clj-agent/clj-agent)
+(def lib 'iris/iris)
 (def class-dir "target/classes")
 (def basis (delay (b/create-basis {:project "deps.edn"})))
 (def version "0.1.0")
@@ -11,7 +11,7 @@
 
 (defn uberjar
   [{:keys [jar]
-    :or {jar (format "target/clj-agent-%s.jar" version)}}]
+    :or {jar (format "target/iris-%s.jar" version)}}]
   (clean nil)
   (b/copy-dir {:src-dirs ["src" "resources"]
                :target-dir class-dir})

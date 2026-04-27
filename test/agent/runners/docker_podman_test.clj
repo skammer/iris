@@ -9,7 +9,7 @@
   (let [argv (docker-podman/build-container-argv
               {:engine-binary "docker"
                :run-id "Run-123"
-               :image "clj-agent:test"
+               :image "iris:test"
                :working-dir "/workspace"
                :mounts [{:source "/tmp/work" :target "/workspace" :mode :rw}
                         {:source "/tmp/cache" :target "/cache" :mode :ro}]
@@ -22,7 +22,7 @@
     (is (some #{"none"} argv))
     (is (some #{"--user"} argv))
     (is (some #{"1000:1000"} argv))
-    (is (some #{"clj-agent:test"} argv))
+    (is (some #{"iris:test"} argv))
     (is (some #{"-v"} argv))
     (is (some #{"A=1"} argv))
     (is (= ["clojure" "-M" "-m" "agent.runtime.child"] (subvec argv (- (count argv) 4))))))
@@ -69,7 +69,7 @@
                    :agent-id "agent-1"
                    :bootstrap-token "token-1"
                    :bootstrap-spec {:run-id "run-1"}
-                   :runner-options {:image "clj-agent:test"
+                   :runner-options {:image "iris:test"
                                     :command ["clojure" "-M" "-m" "agent.runtime.child"]}})]
     (runners/launch runner run-spec)
     (let [argv (get-in @captured [:runner-options :command])]

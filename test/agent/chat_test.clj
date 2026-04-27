@@ -48,7 +48,7 @@
     (llm-core/invoke this (assoc opts :messages messages))))
 
 (defn- temp-db-path []
-  (.getAbsolutePath (java.io.File/createTempFile "clj-agent-chat-" ".db")))
+  (.getAbsolutePath (java.io.File/createTempFile "iris-chat-" ".db")))
 
 (defn- step-json [directives]
   (json/generate-string {:schema-version "agent.step.v1"

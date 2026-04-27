@@ -90,7 +90,7 @@
 
 (defn create-http-tool
   [opts]
-  (let [config (merge {:default-headers {"User-Agent" "clj-agent/0.1"}
+  (let [config (merge {:default-headers {"User-Agent" "iris/0.1"}
                        :timeout-ms 30000
                        :max-timeout-ms 30000
                        :max-response-bytes 1048576

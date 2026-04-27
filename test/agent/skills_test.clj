@@ -5,7 +5,7 @@
    [clojure.test :refer :all]))
 
 (defn temp-dir []
-  (let [dir (java.nio.file.Files/createTempDirectory "clj-agent-skills-" (make-array java.nio.file.attribute.FileAttribute 0))]
+  (let [dir (java.nio.file.Files/createTempDirectory "iris-skills-" (make-array java.nio.file.attribute.FileAttribute 0))]
     (.toFile dir)))
 
 (deftest loads-skills-from-dir-test

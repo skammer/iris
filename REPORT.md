@@ -1,4 +1,4 @@
-# Clojure AI Agent Review Report
+# Iris Review Report
 
 Date: 2026-04-15
 
@@ -215,7 +215,7 @@ Problems:
 
 - `build.sh` calls nonexistent test runner namespace `agent.test-runner`
 - `build.sh` and CI use nonexistent `:uberjar` alias
-- `test_runner.sh` hard-codes `/home/example/projects/clj-agent`
+- `test_runner.sh` hard-codes `/home/example/projects/iris`
 
 Files:
 

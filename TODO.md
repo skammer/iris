@@ -447,7 +447,7 @@ Status below is stale. Active work follows rewritten runtime in `src/agent/core.
 
 ### Completed Work Summary
 
-The Clojure AI Agent project now includes:
+The Iris project now includes:
 
 1. **Complete implementation** of all core agent features
 2. **Comprehensive documentation** including API reference and usage guide
@@ -515,8 +515,8 @@ Key files created:
 - Task 11 completed: Documented best practices and architectural patterns (2 documents)
 - Task 12 completed: Created decision logs and issue tracking (2 documents)
 - Task 13 completed: Designed agent core architecture (detailed design document)
-- All analysis saved to /home/example/projects/clj-agent/log/
-- Obsidian vault fully populated at /home/example/projects/clj-agent/obsidian/
+- All analysis saved to /home/example/projects/iris/log/
+- Obsidian vault fully populated at /home/example/projects/iris/obsidian/
 - **Phase 2 completed**: Obsidian vault setup finished
 - **Phase 3 started**: Reference implementation in progress
 - Next task: Implement basic LLM integration (Phase 3, Task 14)
@@ -534,10 +534,10 @@ Key files created:
 - 2026-04-15: Completed rewrite pass 3 - added API request validation, typed API errors, and SSE chat streaming with persisted streamed completions
 - 2026-04-15: Created TODO.md with initial task breakdown
 - 2026-04-15: Completed Task 1 - core.async.flow analysis
-- 2026-04-15: Created log directory and documentation at /tmp/clj-agent/log/
+- 2026-04-15: Created log directory and documentation at /tmp/iris/log/
 - 2026-04-15: Completed Task 2 - litellm-clj research and LLM integration analysis
 - 2026-04-15: Completed Task 3 - claw0 repository study (structural analysis)
-- 2026-04-15: Migrated all logs to /home/example/projects/clj-agent/log/
+- 2026-04-15: Migrated all logs to /home/example/projects/iris/log/
 - 2026-04-15: Completed Task 4 - pi-mono analysis (monorepo patterns, Pi AI architecture)
 - 2026-04-15: Completed Task 5 - moltis architecture analysis (security-first design, modular crates)
 - 2026-04-15: Completed Task 6 - ironclaw analysis (multi-agent coordination, WASM sandboxing)

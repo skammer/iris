@@ -6,7 +6,7 @@
    [com.brunobonacci.mulog :as mulog]
    [com.brunobonacci.mulog.core :as mulog-core]))
 
-(def ^:private default-path "logs/clj-agent.log")
+(def ^:private default-path "logs/iris.log")
 (def ^:private default-max-bytes (* 10 1024 1024))
 (def ^:private default-max-files 5)
 (def ^:private sensitive-key-fragments
@@ -32,8 +32,8 @@
         max-bytes (long (or (get-in cfg [:file :max-bytes]) default-max-bytes))
         max-files (long (or (get-in cfg [:file :max-files]) default-max-files))
         otel-send (normalize-send (get-in cfg [:otel :send]))
-        context (merge {:service-name "clj-agent"
-                        :app-name "clj-agent"
+        context (merge {:service-name "iris"
+                        :app-name "iris"
                         :environment "local"}
                        (:context cfg))]
     {:enabled (or file-enabled? otel-enabled?)

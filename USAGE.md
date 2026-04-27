@@ -1,4 +1,4 @@
-# Clojure AI Agent - Usage Guide
+# Iris - Usage Guide
 
 > Legacy archive: examples below target pre-rewrite namespaces now quarantined under `legacy_src/`. Current canonical entrypoint is `agent.core`.
 
@@ -71,7 +71,7 @@
 1. **Clone the repository** (or copy the project structure)
 2. **Install dependencies**:
    ```bash
-   cd clj-agent
+   cd iris
    clojure -P  # Download dependencies
    ```
 3. **Set up environment variables**:
@@ -314,7 +314,7 @@ Shows sophisticated coordination patterns:
 
 1. **Navigate to project directory**:
    ```bash
-   cd ~/projects/clj-agent
+   cd ~/projects/iris
    ```
 
 2. **Start a REPL**:

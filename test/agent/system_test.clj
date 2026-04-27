@@ -10,7 +10,7 @@
    [clojure.test :refer :all]))
 
 (defn temp-db-path []
-  (.getAbsolutePath (java.io.File/createTempFile "clj-agent-system-" ".db")))
+  (.getAbsolutePath (java.io.File/createTempFile "iris-system-" ".db")))
 
 (deftest create-llm-provider-selects-ollama
   (let [provider (system/create-llm-provider (:llm (config/load-config)))]
@@ -21,7 +21,7 @@
                   {:provider :openrouter
                    :model "openai/gpt-4o-mini"
                    :site-url "https://example.com"
-                   :app-name "clj-agent-test"
+                   :app-name "iris-test"
                    :openrouter {:base-url "https://openrouter.ai/api/v1"
                                 :api-key "or-key"}})]
     (is (instance? agent.llm.providers.openai_compatible.OpenAICompatibleProvider provider))))
@@ -156,11 +156,11 @@
     (is (= "clojure:temurin-21-alpine" (:image prepared)))
     (is (= ["clojure" "-M" "-m" "agent.runtime.child"] (:command prepared)))
     (is (= "/workspace" (:container-working-dir prepared)))
-    (is (= "/tmp/clj-agent/home" (:container-home-dir prepared)))
+    (is (= "/tmp/iris/home" (:container-home-dir prepared)))
     (is (= "65532:65532" (:user prepared)))
     (is (= "http://host.docker.internal:8689" (get (:env prepared) "AGENT_CONTROL_URL")))
     (is (= "/agent-data/child.db" (get (:env prepared) "AGENT_CHILD_SQLITE_PATH")))
-    (is (= "/tmp/clj-agent/home" (get (:env prepared) "HOME")))
+    (is (= "/tmp/iris/home" (get (:env prepared) "HOME")))
     (is (<= 1 (count (:mounts prepared))))
     (is (every? #{:rw :ro} (map :mode (:mounts prepared))))
     (is (contains? (set (map :target (:mounts prepared))) "/workspace"))

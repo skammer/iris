@@ -81,7 +81,7 @@
   (ensure-parent-dir! path)
   (let [config (doto (HikariConfig.)
                  (.setJdbcUrl (jdbc-url path))
-                 (.setPoolName (or pool-name (str "clj-agent-sqlite-" (Math/abs (hash path)))))
+                 (.setPoolName (or pool-name (str "iris-sqlite-" (Math/abs (hash path)))))
                  (.setMaximumPoolSize (int maximum-pool-size))
                  (.setMinimumIdle (int minimum-idle))
                  (.setConnectionTimeout (long connection-timeout-ms))
