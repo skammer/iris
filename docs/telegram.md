@@ -45,6 +45,29 @@ clojure -M:run
 
 The adapter starts automatically when `:enabled` is truthy and the token is set. Send a DM to your bot — you should get a reply, and the chat will appear under **Sessions** as `Telegram: <your name>`.
 
+## Bot capabilities
+
+### Streaming replies (private chats)
+
+Private-chat replies stream via Bot API 9.5 `sendMessageDraft`: as the LLM produces tokens, the bot updates a single animated draft, then commits the final text via `sendMessage`. Throttled at one update per ~600ms. Group/supergroup chats fall back to non-streamed `chat/run!` (tool-capable; see below).
+
+### Slash commands
+
+- `/start`, `/help`, `/reset`, `/memory`, `/status` — built-in.
+- `/photo <url> [caption]` — sends a photo by URL or `file_id`.
+- `/file <url> [caption]` — sends a document by URL or `file_id`.
+
+### Agent tools
+
+When a bot token is configured, two tools auto-register:
+
+- `telegram_send_photo` `{:photo <url-or-file_id> :caption <opt>}`
+- `telegram_send_document` `{:document <url-or-file_id> :caption <opt>}`
+
+Both pull the destination `chat_id` from the active Telegram session via the agent's tool-execution context. They're available in any `chat/run!` path — group chats, the API, or the web UI when a Telegram session is current.
+
+**Caveat**: tools are not invoked in the private-chat streaming path (`chat/stream!` doesn't run the planner). For agent-driven media sends in private chats, either disable streaming or use a group chat.
+
 ## Sessions integration
 
 - One session per `chat.id`, stored in `sessions` table; mapping in `channel_session_mappings` (`source = :telegram`).

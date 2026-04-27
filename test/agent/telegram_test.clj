@@ -160,6 +160,91 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest telegram-streams-private-chat-replies
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        events (atom [])
+        sent (atom [])
+        drafts (atom [])
+        deltas ["hello" " " "world" "!"]
+        system {:store store
+                :event-sink #(swap! events conj %)}
+        config {:bot-token "token"
+                :allowlist {:allow-all? true}}
+        opts {:send-message-fn (fn [chat-id text]
+                                 (swap! sent conj {:chat-id chat-id :text text}))
+              :send-message-draft-fn (fn [chat-id draft-id text]
+                                       (swap! drafts conj {:chat-id chat-id
+                                                           :draft-id draft-id
+                                                           :text text}))
+              :stream-chat-fn (fn [_ {:keys [session-id on-delta]}]
+                                (doseq [d deltas]
+                                  (Thread/sleep 700) ;; force flush throttle
+                                  (on-delta d))
+                                {:content (apply str deltas)
+                                 :session-id session-id
+                                 :stream? true})}]
+    (try
+      (is (= :processed
+             (telegram/process-update! system config opts (update-for 1 100 7 "hi"))))
+      (is (= [{:chat-id 100 :text "hello world!"}] @sent))
+      (is (pos? (count @drafts)))
+      (is (every? #(= 100 (:chat-id %)) @drafts))
+      (let [draft-ids (set (map :draft-id @drafts))]
+        (is (= 1 (count draft-ids))
+            "all draft chunks should share one draft_id"))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-photo-command-sends-photo
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        sent (atom [])
+        photos (atom [])
+        system {:store store :event-sink (fn [_] nil)}
+        config {:bot-token "token"
+                :allowlist {:allow-all? true}}
+        opts {:send-message-fn (fn [chat-id text]
+                                 (swap! sent conj {:chat-id chat-id :text text}))
+              :send-photo-fn (fn [chat-id url caption]
+                               (swap! photos conj {:chat-id chat-id
+                                                   :url url
+                                                   :caption caption}))}]
+    (try
+      (is (= :processed
+             (telegram/process-update! system config opts
+                                       (update-for 1 100 7 "/photo https://example.com/a.png nice cat"))))
+      (is (= [{:chat-id 100 :url "https://example.com/a.png" :caption "nice cat"}] @photos))
+      (is (= :processed
+             (telegram/process-update! system config opts
+                                       (update-for 2 100 7 "/photo"))))
+      (is (= "Usage: /photo <url> [caption]" (:text (last @sent))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-file-command-sends-document
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        docs (atom [])
+        system {:store store :event-sink (fn [_] nil)}
+        config {:bot-token "token"
+                :allowlist {:allow-all? true}}
+        opts {:send-message-fn (fn [_ _] nil)
+              :send-document-fn (fn [chat-id url caption]
+                                  (swap! docs conj {:chat-id chat-id
+                                                    :url url
+                                                    :caption caption}))}]
+    (try
+      (is (= :processed
+             (telegram/process-update! system config opts
+                                       (update-for 1 100 7 "/file https://example.com/a.pdf"))))
+      (is (= [{:chat-id 100 :url "https://example.com/a.pdf" :caption nil}] @docs))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest telegram-session-ensure-is-concurrency-stable
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path :evict-on-close? true})
