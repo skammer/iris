@@ -37,6 +37,7 @@
             {:directive (:type directive)
              :status :ok
              :tool-name tool-name
+             :tool-call-id (:provider-tool-call-id context*)
              :result result})
           (catch Exception e
             (let [error-type (:type (ex-data e))]
@@ -45,6 +46,7 @@
                 {:directive (:type directive)
                  :status :approval-required
                  :tool-name tool-name
+                 :tool-call-id (:provider-tool-call-id context*)
                  :input input
                  :reason (.getMessage e)}
 
@@ -52,6 +54,7 @@
                 {:directive (:type directive)
                  :status :denied
                  :tool-name tool-name
+                 :tool-call-id (:provider-tool-call-id context*)
                  :input input
                  :reason (.getMessage e)
                  :error-type error-type}

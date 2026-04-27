@@ -1,99 +1,70 @@
 (ns agent.planner
-  "Schema-constrained planner facade."
+  "Native tool-calling planner facade."
   (:require
    [agent.kernel.schema :as kernel-schema]
    [agent.llm.core :as llm]
-   [agent.telemetry :as telemetry]
-   [cheshire.core :as json]))
+   [agent.telemetry :as telemetry]))
 
 (defn- duration-ms [start-ns]
   (/ (double (- (System/nanoTime) start-ns)) 1000000.0))
 
-(defn- parse-content [content]
-  (cond
-    (map? content) content
-    (string? content) (json/parse-string content true)
-    :else (throw (ex-info "Planner returned unsupported content"
-                          {:type :validation-failed
-                           :content content}))))
-
 (defn planner-system-prompt []
-  (str "Return one JSON object matching supplied schema. "
-       "Set schema-version to " kernel-schema/current-step-schema-version ". "
-       "Use directives array for batch executor work. "
-       "Never call tools directly; emit tool-call directives instead. "
-       "No prose."))
+  (str "You drive a tool-calling loop. "
+       "When a listed tool can satisfy the user's request, call it via the function-calling protocol. "
+       "After receiving tool results, decide whether to call more tools or produce a final answer. "
+       "Reply with a natural-language final answer only when no more tool calls are needed. "
+       "Never claim a listed tool is unavailable."))
 
-(defn- tool-inventory-message [tools]
-  (when (seq tools)
-    {:role "system"
-     :content (str "Available tools JSON. To use one, emit a tool-call directive: "
-                   (json/generate-string tools))}))
+(defn- native-tool-definition
+  [{tool-name :name description :description input-schema :input-schema}]
+  {:type "function"
+   :function {:name (name tool-name)
+              :description description
+              :parameters input-schema}})
+
+(defn- native-tool-definitions [tools]
+  (mapv native-tool-definition (or tools [])))
 
 (defn- build-llm-request [{:keys [messages state tools model] :as request}]
-  (let [messages* (vec (concat [{:role "system" :content (planner-system-prompt)}]
-                               (when-let [tool-message (tool-inventory-message tools)]
-                                 [tool-message])
+  (let [tool-defs (native-tool-definitions tools)
+        messages* (vec (concat [{:role "system" :content (planner-system-prompt)}]
                                (or messages [])))]
-    (merge
-     (select-keys request [:temperature :max-tokens :top-p :cache-control])
-     {:model model
-      :messages messages*
-      :structured-output {:name "agent_planner_step"
-                          :strict? true
-                          :schema (kernel-schema/planner-json-schema)}
-      :metadata {:planner true
-                 :state state}})))
+    (cond-> (merge
+             (select-keys request [:temperature :max-tokens :top-p :cache-control])
+             {:model model
+              :messages messages*
+              :metadata {:planner true
+                         :state state}})
+      (seq tool-defs) (assoc :tools tool-defs))))
 
 (defn- response->step [response]
-  (if (seq (:tool-calls response))
+  (if-let [tool-calls (seq (:tool-calls response))]
     {:schema-version kernel-schema/current-step-schema-version
      :state {}
-     :directives (llm/tool-calls->directives (:tool-calls response))
+     :directives (vec (llm/tool-calls->directives tool-calls))
      :receipts []}
-    (parse-content (:content response))))
-
-(defn- repair-messages [messages response error]
-  (conj messages
-        {:role "assistant" :content (or (:content response) "")}
-        {:role "user"
-         :content (str "Previous output failed validation. Return only corrected JSON for schema "
-                       kernel-schema/current-step-schema-version
-                       ". Error: "
-                       (.getMessage ^Throwable error))}))
+    {:schema-version kernel-schema/current-step-schema-version
+     :state {}
+     :directives [{:type :complete
+                   :payload {:result (or (:content response) "")}}]
+     :receipts []}))
 
 (defn plan-step!
-  [provider {:keys [messages state tools telemetry agent-id model] :as request}]
+  [provider {:keys [telemetry agent-id] :as request}]
   (let [start-ns (System/nanoTime)
-        repair-attempts (long (or (:repair-attempts request) 1))
         llm-request (build-llm-request request)]
     (try
-      (loop [attempt 0
-             request* llm-request
-             last-error nil]
-        (let [response (llm/invoke provider request*)]
-          (let [result (try
-                         {:step (-> response
-                                    response->step
-                                    kernel-schema/normalize-step
-                                    kernel-schema/validate-step!)}
-                         (catch Exception e
-                           {:error e}))]
-            (if-let [step (:step result)]
-              (do
-                (telemetry/record-planner! telemetry
-                                           {:agent-id agent-id
-                                            :duration-ms (duration-ms start-ns)
-                                            :success? true
-                                            :directive-count (count (:directives step))})
-                (cond-> (assoc step :llm-response response)
-                  last-error (assoc :repair-error last-error)))
-              (let [error (:error result)]
-                (if (< attempt repair-attempts)
-                  (recur (inc attempt)
-                         (assoc request* :messages (repair-messages (:messages request*) response error))
-                         error)
-                  (throw error)))))))
+      (let [response (llm/invoke provider llm-request)
+            step (-> response
+                     response->step
+                     kernel-schema/normalize-step
+                     kernel-schema/validate-step!)]
+        (telemetry/record-planner! telemetry
+                                   {:agent-id agent-id
+                                    :duration-ms (duration-ms start-ns)
+                                    :success? true
+                                    :directive-count (count (:directives step))})
+        (assoc step :llm-response response))
       (catch Exception e
         (telemetry/record-planner! telemetry
                                    {:agent-id agent-id
