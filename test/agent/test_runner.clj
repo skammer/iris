@@ -9,6 +9,7 @@
    [agent.config-test]
    [agent.federation.http-test]
    [agent.system-test]
+   [agent.telegram.format-test]
    [agent.telegram-test]
    [agent.telemetry-test]
    [agent.kernel-test]
@@ -32,7 +33,8 @@
    [agent.llm.core-test]
    [agent.llm.providers.openai-compatible-test]
    [agent.tools.common.http-test]
-    [agent.tools.common.shell-test]
+   [agent.tools.common.telegram-test]
+   [agent.tools.common.shell-test]
    [agent.tools.core-test]))
 
 (def rewritten-test-namespaces
@@ -44,6 +46,7 @@
     agent.config-test
     agent.federation.http-test
     agent.system-test
+    agent.telegram.format-test
     agent.telegram-test
     agent.telemetry-test
     agent.kernel-test
@@ -67,6 +70,7 @@
     agent.llm.core-test
     agent.llm.providers.openai-compatible-test
     agent.tools.common.http-test
+    agent.tools.common.telegram-test
     agent.tools.common.shell-test
     agent.tools.core-test])
 

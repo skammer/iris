@@ -32,7 +32,7 @@
                  :body {:chat_id 100
                         :photo "https://example.com/a.png"
                         :caption "hi"
-                        :parse_mode "HTML"}}]
+                        :parse_mode "MarkdownV2"}}]
                @calls))))))
 
 (deftest send-document-tool-calls-api
