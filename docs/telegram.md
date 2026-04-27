@@ -79,4 +79,5 @@ Both pull the destination `chat_id` from the active Telegram session via the age
 
 - **No reply, no session**: token wrong, `:enabled` not truthy, or sender not in allowlist. Check merged config: `(agent.config/load-config)` in REPL.
 - **Long messages cut**: Telegram caps at 4096 chars; adapter chunks automatically (`telegram.clj:52`).
+- **Formatting parse errors**: replies are rendered as Telegram `MarkdownV2`; reserved punctuation is escaped by `agent.telegram.format`.
 - **Multiple instances**: only one process can `getUpdates` per token — Telegram returns 409 to the loser.

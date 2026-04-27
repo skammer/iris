@@ -12,8 +12,8 @@
 
 (def ^:private telegram-api "https://api.telegram.org")
 (def ^:private max-message-chars 4096)
-;; Markdown source cap kept below the 4096 hard limit so that HTML expansion
-;; (escaping, tag wrapping) doesn't push a chunk over the wire-level cap.
+;; Markdown source cap kept below the 4096 hard limit so MarkdownV2 escaping
+;; doesn't push a chunk over the wire-level cap.
 (def ^:private max-source-chars 3400)
 ;; Telegram per-chat send rate is ~1/sec; staying above this floor keeps
 ;; draft updates in order and avoids 429s on slow connections.
@@ -58,13 +58,13 @@
 
 (defn- text-payload
   "Builds the {:text :parse_mode} portion of a Telegram payload.
-   Renders markdown→HTML when possible; falls back to truncated raw text
-   without parse_mode if conversion fails or the rendered HTML is too long."
+   Renders markdown→MarkdownV2 when possible; falls back to truncated raw text
+   without parse_mode if conversion fails or the rendered text is too long."
   [text]
   (let [s (str text)
-        html (fmt/safe-md->html s)]
-    (if (and html (<= (count html) max-message-chars))
-      {:text html :parse_mode "HTML"}
+        md (fmt/safe-md->markdown-v2 s)]
+    (if (and md (<= (count md) max-message-chars))
+      {:text md :parse_mode "MarkdownV2"}
       {:text (if (> (count s) max-message-chars)
                (subs s 0 max-message-chars)
                s)})))
@@ -79,7 +79,7 @@
 (defn send-message-draft!
   "Streams a partial message via Telegram Bot API 9.5 sendMessageDraft.
    `draft-id` is a non-zero int; same id animates updates. Private chats only.
-   Returns true on success. Source is clamped to leave headroom for HTML
+   Returns true on success. Source is clamped to leave headroom for MarkdownV2
    expansion within Telegram's 4096-char limit."
   [token chat-id draft-id text]
   (let [s (str text)
