@@ -123,10 +123,10 @@
      [:div#shell-fragment.workspace-stack
       [:header.shell-header
        [:div.status-bar
-        [:div.status-block
+        [:div.status-block.status-block--accent
          [:span.status-label "provider"]
          [:span.status-value provider]]
-        [:div.status-block
+        [:div.status-block.status-block--warning
          [:span.status-label "port"]
          [:span.status-value (str port)]]
         [:div.status-block
@@ -135,7 +135,7 @@
         [:div.status-block
          [:span.status-label "runs"]
          [:span.status-value (str (:run-count runtime-health))]]
-        [:div.status-block
+        [:div.status-block.status-block--success
          [:span.status-label "events"]
          [:span.status-value (str event-count)]]]
        [:theme-toggle
@@ -190,25 +190,24 @@
         adapter-health (channel-adapters/registry-health (:channel-adapter-registry system))
         agent-health (orchestrator/health-check (:orchestrator system))
         federated-peers (orchestrator/list-federated-peers (:orchestrator system))
-        detailed-runs (map #(runtime/get-run (:runtime-service system) (:id %))
-                           (runtime/list-runs (:runtime-service system) {:limit 100}))
-        recent-runs (take 6 detailed-runs)
+        runs (runtime/list-runs (:runtime-service system) {:limit 50})
+        recent-runs (take 6 runs)
         pending-approvals (count (tool-approvals/list-requests (:store system) {:status "pending" :limit 100}))
         status-counts (reduce (fn [acc run]
                                 (update acc (:status run) (fnil inc 0)))
                               {}
-                              detailed-runs)
-        stale-runs (filter stale-run? detailed-runs)
+                              runs)
+        stale-runs (filter stale-run? runs)
         attention-runs (->> recent-runs
                             (filter #(or (contains? #{"failed" "cancelled"} (:status %))
                                          (stale-run? %)))
                             (take 4))]
     (render
      [:section#dashboard-summary.panel
-      {"data-on-interval__duration.5s.leading" "@get('/ui/dashboard')"}
+      {"data-on-interval__duration.10s.leading" "@get('/ui/dashboard')"}
       [:h2 "Runtime Snapshot"]
       [:div.stats
-       [:div.stat [:span.label "provider"] [:span.value.provider-value (name (get-in system [:config :llm :provider]))]]
+       [:div.stat.stat--wide [:span.label "provider"] [:span.value.provider-value (name (get-in system [:config :llm :provider]))]]
        [:div.stat [:span.label "sessions"] [:span.value (get-in storage [:details :session-count] 0)]]
        [:div.stat [:span.label "events"] [:span.value (get-in storage [:details :event-count] 0)]]
        [:div.stat [:span.label "tools"] [:span.value (:count tools-health)]]
@@ -257,18 +256,18 @@
        ]])))
 
 (defn operator-board-fragment [system]
-  (let [runs (map #(runtime/get-run (:runtime-service system) (:id %))
-                  (runtime/list-runs (:runtime-service system) {:limit 100}))
+  (let [runs (runtime/list-runs (:runtime-service system) {:limit 50})
         agents (orchestrator/list-agents (:orchestrator system))
         active-runs (filter #(contains? #{"requested" "running"} (:status %)) runs)
         stale-runs (filter stale-run? runs)
         failed-runs (filter #(contains? #{"failed" "cancelled"} (:status %)) runs)
         approvals (tool-approvals/list-requests (:store system) {:status "pending" :limit 8})
-        events (sqlite/list-events (:store system) {:limit 8})
+        recent-events-pool (sqlite/list-events (:store system) {:limit 40})
+        events (take 8 recent-events-pool)
         interop-events (filter #(str/starts-with? (str (:event-type %)) "agent.interop")
-                               (sqlite/list-events (:store system) {:limit 20}))
+                               recent-events-pool)
         kernel-events (filter #(= "agent.kernel.step.executed" (:event-type %))
-                              (sqlite/list-events (:store system) {:limit 20}))
+                              recent-events-pool)
         federated-peers (orchestrator/list-federated-peers (:orchestrator system))
         interop-policies (->> agents
                               (map (fn [agent]
@@ -278,7 +277,7 @@
                               (take 6))]
     (render
      [:section#operator-board.panel
-      {"data-on-interval__duration.5s.leading" "@get('/ui/operator-board')"}
+      {"data-on-interval__duration.10s.leading" "@get('/ui/operator-board')"}
       [:h2 "Operator Board"]
       [:div.stack
        [:div.result
@@ -373,29 +372,34 @@
                    " | " created-at)])]
           [:div.meta "none"])]]])))
 
-(defn sessions-fragment [system]
-  (let [sessions (sqlite/list-sessions (:store system))]
-    (render
-     [:aside#sessions-panel.panel.sessions-sidebar
-      {"data-on-interval__duration.5s.leading" "@get('/ui/sessions')"}
-      [:form#create-session-form.create-session-form
-       {"data-on:submit" "@post('/ui/sessions', {contentType: 'form'})"
-        "data-indicator:createSessionLoading" true}
-       [:div.compact-form-row
-        [:input {:type "text" :name "title" :placeholder "new session title"}]
-        [:button {:type "submit"
-                  "data-attr:disabled" "$createSessionLoading"}
-         "New"]]]
-      [:h2 "Sessions"]
-      (if (seq sessions)
-        [:div.session-list
-         (for [{:keys [id title created-at]} sessions]
-           [:button.session-link
-            {:type "button"
-             "data-on:click" (str "@get('/ui/session-detail?session_id=" id "')")}
-            [:strong (or title "Untitled session")]
-            [:div.session-meta created-at]])]
-        [:div.empty "No sessions yet."])])))
+(defn sessions-fragment
+  ([system] (sessions-fragment system nil))
+  ([system active-session-id]
+   (let [sessions (sqlite/list-sessions (:store system))
+         active-id (or active-session-id
+                       (some-> sessions first :id))]
+     (render
+      [:aside#sessions-panel.panel.sessions-sidebar
+       {"data-on-interval__duration.15s.leading" "@get('/ui/sessions')"}
+       [:form#create-session-form.create-session-form
+        {"data-on:submit" "@post('/ui/sessions', {contentType: 'form'})"
+         "data-indicator" "createSessionLoading"}
+        [:div.compact-form-row
+         [:input {:type "text" :name "title" :placeholder "new session title"}]
+         [:button {:type "submit"
+                   "data-attr:disabled" "$createSessionLoading"}
+          "New"]]]
+       [:h2 "Sessions"]
+       (if (seq sessions)
+         [:div.session-list
+          (for [{:keys [id title created-at]} sessions]
+            [:button.session-link
+             {:type "button"
+              :class (when (= id active-id) "session-link--active")
+              "data-on:click" (str "@get('/ui/session-detail?session_id=" id "')")}
+             [:strong (or title "Untitled session")]
+             [:div.session-meta created-at]])]
+         [:div.empty "No sessions yet."])]))))
 
 (defn session-detail-fragment [system session-id]
   (let [sessions (sqlite/list-sessions (:store system))
@@ -407,16 +411,20 @@
         [:h2 "Transcript"]
         [:div.empty "Create session to start chatting."]]
        [:agent-chat-panel#session-detail-panel.panel
-        {:data-session-id (:id session)}
+        {:data-session-id (:id session)
+         "data-init" (str "@get('/ui/session/live?session_id=" (:id session) "', {openWhenHidden: true})")}
         [:div.chat-titlebar
          [:h2 (or (:title session) "Untitled session")]
          [:span.meta.code (:id session)]]
         (trusted-fragment (session-messages-fragment system (:id session)))
         [:form#chat-form
          {"data-on:submit" "@post('/ui/chat', {contentType: 'form'})"
-          "data-indicator:chatLoading" true
+          "data-indicator" "chatLoading"
           "data-class:is-loading" "$chatLoading"}
-         [:input {:type "hidden" :name "session_id" :value (:id session)}]
+         [:input {:id (str "chat-session-id-" (:id session))
+                  :type "hidden"
+                  :name "session_id"
+                  :value (:id session)}]
          [:auto-grow-textarea {:submit-on-enter true}
           [:textarea.chat-input {:name "prompt"
                                  :rows 1
@@ -431,12 +439,12 @@
 
 (defn session-messages-fragment [system session-id]
   (render
-   [:scroll-bottom#session-messages-panel
-    {"data-on-interval__duration.3s" (str "@get('/ui/session-messages?session_id=" session-id "')")}
+   [:chat-stream#session-messages-panel
     (if-let [messages (seq (sqlite/list-messages (:store system) session-id))]
-      [:div.messages
+      (list*
+       [:div.chat-stream__filler]
        (for [message messages]
-         (render-message message))]
+         (render-message message)))
       [:div.empty "No messages yet."])]))
 
 (defn events-fragment [system]
@@ -571,7 +579,7 @@
   (let [runs (runtime/list-runs (:runtime-service system) {:limit 50})]
     (render
      [:section#runs-panel.panel
-      {"data-on-interval__duration.5s.leading" "@get('/ui/runs')"}
+      {"data-on-interval__duration.10s.leading" "@get('/ui/runs')"}
       [:h2 "Runs"]
       (if (seq runs)
         [:div.stack
@@ -740,6 +748,7 @@
         [:div.empty "No runs yet."]]
        [:agent-run-panel#run-detail-panel.panel
         {:data-run-id (:id run)
-         :data-live-state "poll"
-         "data-on-interval__duration.5s.leading" (str "@get('/ui/run-detail?run_id=" (:id run) "')")}
-        (trusted-fragment (run-detail-body system (:id run)))]))))
+         :data-live-state "live"
+         "data-init" (str "@get('/ui/run-detail/live?run_id=" (:id run) "', {openWhenHidden: true})")}
+        [:div#run-detail-body
+         (trusted-fragment (run-detail-body system (:id run)))]]))))

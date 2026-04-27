@@ -22,6 +22,7 @@
                 :post {:handler/id :ui-create-run}}]
    ["/ui/run-detail" {:get {:handler/id :ui-run-detail}}]
    ["/ui/run-detail-body" {:get {:handler/id :ui-run-detail-body}}]
+   ["/ui/run-detail/live" {:get {:handler/id :ui-run-detail-live}}]
    ["/ui/runs/:run-id/launch" {:post {:handler/id :ui-run-launch}}]
    ["/ui/runs/:run-id/signal" {:post {:handler/id :ui-run-signal}}]
    ["/ui/tools" {:get {:handler/id :ui-tools}}]

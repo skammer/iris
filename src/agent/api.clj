@@ -528,17 +528,16 @@
 (defn- write-sse-done! [stream]
   (write-sse-bytes! stream "data: [DONE]\n\n"))
 
-(defn- compact-html [html]
-  (-> html
-      (str/replace #"\s+" " ")
-      str/trim))
+(defn- datastar-patch-frame [html]
+  (let [lines (str/split (str html) #"\n" -1)]
+    (str "event: datastar-patch-elements\n"
+         (->> lines
+              (map #(str "data: elements " %))
+              (str/join "\n"))
+         "\n\n")))
 
 (defn- write-datastar-patch! [stream html]
-  (write-sse-bytes! stream
-                    (str "event: datastar-patch-elements\n"
-                         "data: elements "
-                         (compact-html html)
-                         "\n\n")))
+  (write-sse-bytes! stream (datastar-patch-frame html)))
 
 (defn- sse-response
   ([request on-open on-close]
@@ -569,11 +568,7 @@
   (send-sse-text! channel "data: [DONE]\n\n"))
 
 (defn- send-datastar-patch! [channel html]
-  (send-sse-text! channel
-                  (str "event: datastar-patch-elements\n"
-                       "data: elements "
-                       (compact-html html)
-                       "\n\n")))
+  (send-sse-text! channel (datastar-patch-frame html)))
 
 (defn- chat-completions-stream-response
   [system request messages session-id]
@@ -746,12 +741,48 @@
      (fn [channel]
        (future
          (try
-           (send-datastar-patch! channel (ui/session-detail-fragment system session-id))
+           (send-datastar-patch! channel (ui/session-messages-fragment system session-id))
            (loop []
              (when @open?
                (when-let [event (some-> (async/<!! ch) :payload)]
                  (when (relevant-session-event? event session-id)
-                   (send-datastar-patch! channel (ui/session-detail-fragment system session-id)))
+                   (send-datastar-patch! channel (ui/session-messages-fragment system session-id)))
+                 (recur))))
+           (finally
+             (broker/unsubscribe! broker-instance subscription)))))
+     (fn [_ _]
+       (reset! open? false)
+       (broker/unsubscribe! broker-instance subscription)))))
+
+(defn- relevant-run-detail-event? [event run-id]
+  (and (= "agent_run" (:entity-type event))
+       (= run-id (:entity-id event))))
+
+(defn- ui-run-detail-live-response
+  [system request]
+  (let [run-id (:run_id (request-query-params request))
+        broker-instance (or (:event-bus system) (:broker system))
+        subscription (broker/subscribe! broker-instance (broker/all-events-subject))
+        ch (:channel subscription)
+        open? (atom true)]
+    (ensure-string! :run_id run-id)
+    (sse-response
+     request
+     (fn [channel]
+       (future
+         (try
+           (send-datastar-patch! channel
+                                 (str "<div id=\"run-detail-body\">"
+                                      (ui/run-detail-body system run-id)
+                                      "</div>"))
+           (loop []
+             (when @open?
+               (when-let [event (some-> (async/<!! ch) :payload)]
+                 (when (relevant-run-detail-event? event run-id)
+                   (send-datastar-patch! channel
+                                         (str "<div id=\"run-detail-body\">"
+                                              (ui/run-detail-body system run-id)
+                                              "</div>")))
                  (recur))))
            (finally
              (broker/unsubscribe! broker-instance subscription)))))
@@ -1990,13 +2021,15 @@
                          :payload {:title (not-empty title)
                                    :source :ui}})
     (write-html! exchange 201
-                 (str (ui/sessions-fragment system)
+                 (str (ui/sessions-fragment system (:id session))
                       (ui/session-detail-fragment system (:id session))
                       (ui/dashboard-fragment system)))))
 
 (defn- handle-ui-session-detail [system exchange]
-  (write-html! exchange 200
-               (ui/session-detail-fragment system (:session_id (query-params exchange)))))
+  (let [session-id (:session_id (query-params exchange))]
+    (write-html! exchange 200
+                 (str (ui/sessions-fragment system session-id)
+                      (ui/session-detail-fragment system session-id)))))
 
 (defn- handle-ui-session-messages [system exchange]
   (let [session-id (:session_id (query-params exchange))]
@@ -2043,7 +2076,7 @@
     (write-html! exchange 200
                  (str (ui/dashboard-fragment system)
                       (ui/session-detail-fragment system session-id)
-                      (ui/sessions-fragment system)))))
+                      (ui/sessions-fragment system session-id)))))
 
 (defn- handle-ui-events [system exchange]
   (write-html! exchange 200 (ui/events-fragment system)))
@@ -2377,6 +2410,7 @@
     :events-stream (fn [request] (events-stream-response system request))
     :run-events-stream (fn [request] (run-events-stream-response system (get-in request [:path-params :run-id]) request))
     :ui-session-live (fn [request] (ui-session-live-response system request))
+    :ui-run-detail-live (fn [request] (ui-run-detail-live-response system request))
     :ui-events-live (fn [request] (ui-events-live-response system request))}))
 
 (defn- bind-route-handlers

@@ -96,7 +96,11 @@ class AutoGrowTextarea extends HTMLElement {
     const textarea = this.textarea;
     if (!textarea) return;
     textarea.style.height = "auto";
-    textarea.style.height = `${textarea.scrollHeight}px`;
+    const maxHeight = parseFloat(getComputedStyle(textarea).maxHeight);
+    const next = Number.isFinite(maxHeight)
+      ? Math.min(textarea.scrollHeight, maxHeight)
+      : textarea.scrollHeight;
+    textarea.style.height = `${next}px`;
   }
 }
 
@@ -118,7 +122,7 @@ class ScrollBottom extends HTMLElement {
   }
 
   get target() {
-    const node = this.querySelector(".messages, [data-run-output-tail]");
+    const node = this.querySelector("[data-run-output-tail]");
     return node instanceof HTMLElement ? node : this;
   }
 
@@ -151,6 +155,37 @@ class ScrollBottom extends HTMLElement {
   }
 }
 
+class AgentChatPanel extends HTMLElement {}
+
+class ChatStream extends HTMLElement {
+  #stick = true;
+  #observer = new MutationObserver(() => this.afterChange());
+
+  connectedCallback() {
+    this.addEventListener("scroll", this, { passive: true });
+    this.#observer.observe(this, { childList: true, subtree: true, characterData: true });
+    requestAnimationFrame(() => this.scrollToBottom(true));
+  }
+
+  disconnectedCallback() {
+    this.removeEventListener("scroll", this);
+    this.#observer.disconnect();
+  }
+
+  handleEvent() {
+    this.#stick = this.scrollHeight - this.clientHeight - this.scrollTop <= AUTOSCROLL_THRESHOLD_PX;
+  }
+
+  afterChange() {
+    if (this.#stick) requestAnimationFrame(() => this.scrollToBottom(false));
+  }
+
+  scrollToBottom(force) {
+    if (!force && !this.#stick) return;
+    this.scrollTop = this.scrollHeight;
+  }
+}
+
 class AgentRunPanel extends ScrollBottom {
   connectedCallback() {
     super.connectedCallback();
@@ -169,4 +204,6 @@ class AgentRunPanel extends ScrollBottom {
 if (!customElements.get("theme-toggle")) customElements.define("theme-toggle", ThemeToggle);
 if (!customElements.get("auto-grow-textarea")) customElements.define("auto-grow-textarea", AutoGrowTextarea);
 if (!customElements.get("scroll-bottom")) customElements.define("scroll-bottom", ScrollBottom);
+if (!customElements.get("chat-stream")) customElements.define("chat-stream", ChatStream);
+if (!customElements.get("agent-chat-panel")) customElements.define("agent-chat-panel", AgentChatPanel);
 if (!customElements.get("agent-run-panel")) customElements.define("agent-run-panel", AgentRunPanel);
