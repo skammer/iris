@@ -143,9 +143,54 @@
 (defn- complete-receipt [receipts]
   (some #(when (= :completed (keyword (:status %))) %) receipts))
 
-(defn- tool-result-message [receipts]
-  {:role "system"
-   :content (str "Tool receipts JSON: " (compact-json receipts))})
+(defn- tool-call-id [request-id idx tool-call]
+  (or (:id tool-call)
+      (:call_id tool-call)
+      (str "call_" request-id "_" idx)))
+
+(defn- normalize-tool-call-for-chat [request-id idx tool-call]
+  (let [function (or (:function tool-call)
+                     (:function_call tool-call)
+                     tool-call)
+        arguments (or (:arguments function)
+                      (:input tool-call)
+                      (:args tool-call)
+                      {})
+        arguments* (cond
+                     (string? arguments) arguments
+                     (nil? arguments) "{}"
+                     :else (json/generate-string arguments))]
+    {:id (tool-call-id request-id idx tool-call)
+     :type (or (:type tool-call) "function")
+     :function {:name (or (:name function)
+                          (:tool-name tool-call)
+                          (:tool_name tool-call)
+                          (:name tool-call))
+                :arguments arguments*}}))
+
+(defn- assistant-tool-call-message [request-id content tool-calls]
+  {:role "assistant"
+   :content (or content "")
+   :tool_calls (mapv (fn [[idx tool-call]]
+                       (normalize-tool-call-for-chat request-id idx tool-call))
+                     (map-indexed vector tool-calls))})
+
+(defn- tool-output-content [receipt]
+  (compact-json
+   (select-keys receipt
+                [:status :tool-name :result :reason :error-type :input])))
+
+(defn- tool-output-message [tool-call receipt]
+  {:role "tool"
+   :tool_call_id (:id tool-call)
+   :content (tool-output-content receipt)})
+
+(defn- tool-protocol-messages [request-id content tool-calls receipts]
+  (let [tool-calls* (mapv (fn [[idx tool-call]]
+                            (normalize-tool-call-for-chat request-id idx tool-call))
+                          (map-indexed vector tool-calls))]
+    (into [(assistant-tool-call-message request-id content tool-calls)]
+          (map tool-output-message tool-calls* receipts))))
 
 (defn- request-approval! [system session-id receipt]
   (let [tool-name (keyword (:tool-name receipt))
@@ -379,12 +424,8 @@
                                      :directives (:directives step)
                                      :receipts receipts}})
             (if-let [receipt (complete-receipt receipts)]
-              (let [planner-text (result-text (:result receipt))
-                    content (if on-delta
-                              (stream-llm-response! system session-id request-id
-                                                    planner-messages on-delta)
-                              planner-text)
-                    content (if (str/blank? content) planner-text content)]
+              (let [content (result-text (:result receipt))]
+                (emit-content-as-delta! system session-id request-id on-delta content)
                 (emit! system {:event-type :chat.completed
                                :entity-type :session
                                :entity-id session-id
@@ -398,10 +439,17 @@
                         content (approval-message approvals)]
                     (emit-content-as-delta! system session-id request-id on-delta content)
                     (finish! content trace* {:approvals approvals}))
-                  (recur (inc step-no)
-                         (merge state (:state executed))
-                         (conj planner-messages (tool-result-message receipts))
-                         trace*)))))))
+                  (let [llm-response (:llm-response step)
+                        provider-tool-calls (seq (:tool-calls llm-response))
+                        next-messages (into planner-messages
+                                            (tool-protocol-messages request-id
+                                                                    (:content llm-response)
+                                                                    provider-tool-calls
+                                                                    receipts))]
+                    (recur (inc step-no)
+                           (merge state (:state executed))
+                           next-messages
+                           trace*))))))))
       (catch Exception e
         (emit! system {:event-type :chat.error
                        :entity-type :session

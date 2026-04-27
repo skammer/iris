@@ -24,11 +24,15 @@
   llm-core/ILLMProviderInvoke
   (invoke [_ request]
     (swap! requests conj {:mode :invoke :request request})
-    {:role "assistant"
-     :content (or (first (first (swap-vals! responses rest))) "")
-     :tool-calls []
-     :usage nil
-     :raw nil})
+    (let [response (first (first (swap-vals! responses rest)))]
+      (merge {:role "assistant"
+              :content ""
+              :tool-calls []
+              :usage nil
+              :raw nil}
+             (if (map? response)
+               response
+               {:content (or response "")}))))
   (generate [this messages opts]
     (llm-core/invoke this (assoc opts :messages messages))))
 
@@ -50,11 +54,13 @@
 (defn- temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-chat-" ".db")))
 
-(defn- step-json [directives]
-  (json/generate-string {:schema-version "agent.step.v1"
-                         :state {}
-                         :directives directives
-                         :receipts []}))
+(defn- tool-call-response
+  ([tool-name args] (tool-call-response (str "call_" (name tool-name)) tool-name args))
+  ([id tool-name args]
+   {:tool-calls [{:id id
+                  :type "function"
+                  :function {:name (name tool-name)
+                             :arguments (json/generate-string args)}}]}))
 
 (defn- test-system [path provider config-fn]
   (let [base (system/create-system)
@@ -73,8 +79,7 @@
 
 (deftest chat-loop-persists-final-answer-and-trace-test
   (let [path (temp-db-path)
-        responses (atom [(step-json [{:type "complete"
-                                      :payload {:result "done"}}])])
+        responses (atom ["done"])
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider identity)
@@ -98,8 +103,7 @@
 
 (deftest chat-loop-persists-only-new-user-turn-for-session-test
   (let [path (temp-db-path)
-        responses (atom [(step-json [{:type "complete"
-                                      :payload {:result "second answer"}}])])
+        responses (atom ["second answer"])
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider identity)
@@ -122,14 +126,10 @@
       (finally
         (io/delete-file path true)))))
 
-(deftest chat-loop-executes-safe-tool-via-directive-runtime-test
+(deftest chat-loop-executes-safe-tool-via-native-tool-call-test
   (let [path (temp-db-path)
-        responses (atom [(step-json [{:type "tool-call"
-                                      :payload {:tool-name "fs"
-                                                :input {:action "list"
-                                                        :path "."}}}])
-                         (step-json [{:type "complete"
-                                      :payload {:result "listed"}}])])
+        responses (atom [(tool-call-response :fs {:action "list" :path "."})
+                         "listed"])
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider identity)
@@ -137,24 +137,52 @@
     (try
       (let [result (chat/run! system {:session-id (:id session)
                                       :messages [{:role "user" :content "list files"}]})
-            events (sqlite/list-events (:store system) {:limit 50})]
+            events (sqlite/list-events (:store system) {:limit 50})
+            first-request (:request (first @requests))
+            native-tool-names (set (map #(get-in % [:function :name]) (:tools first-request)))]
         (is (= "listed" (:content result)))
+        (is (contains? native-tool-names "fs"))
         (is (some #{"tool.execution.succeeded"} (map :event-type events)))
         (is (some (fn [{:keys [request]}]
-                    (some #(str/starts-with? (:content %) "Tool receipts JSON: ")
-                          (:messages request)))
+                    (some #(= "tool" (:role %)) (:messages request)))
                   (rest @requests))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-uses-chat-completions-tool-result-protocol-test
+  (let [path (temp-db-path)
+        responses (atom [{:tool-calls [{:id "call_fs_1"
+                                        :type "function"
+                                        :function {:name "fs"
+                                                   :arguments "{\"action\":\"list\",\"path\":\".\"}"}}]}
+                         "listed"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider identity)
+        session (system/create-session! system "native-tools")]
+    (try
+      (let [result (chat/run! system {:session-id (:id session)
+                                      :messages [{:role "user" :content "list files"}]})
+            request-with-tool-output (some (fn [{:keys [request]}]
+                                             (when (some #(= "tool" (:role %))
+                                                         (:messages request))
+                                               request))
+                                           @requests)
+            messages (:messages request-with-tool-output)
+            assistant-tool-call (some #(when (:tool_calls %) %) messages)
+            tool-message (some #(when (= "tool" (:role %)) %) messages)]
+        (is (= "listed" (:content result)))
+        (is (= "call_fs_1" (-> assistant-tool-call :tool_calls first :id)))
+        (is (= "call_fs_1" (:tool_call_id tool-message)))
+        (is (not-any? #(str/starts-with? (or (:content %) "") "Tool receipts JSON: ")
+                      messages)))
       (finally
         (io/delete-file path true)))))
 
 (deftest chat-loop-denies-blocked-tool-and-continues-test
   (let [path (temp-db-path)
-        responses (atom [(step-json [{:type "tool-call"
-                                      :payload {:tool-name "fs"
-                                                :input {:action "list"
-                                                        :path "."}}}])
-                         (step-json [{:type "complete"
-                                      :payload {:result "cannot use fs"}}])])
+        responses (atom [(tool-call-response :fs {:action "list" :path "."})
+                         "cannot use fs"])
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path
@@ -178,9 +206,7 @@
 
 (deftest chat-loop-creates-approval-for-sensitive-tool-test
   (let [path (temp-db-path)
-        responses (atom [(step-json [{:type "tool-call"
-                                      :payload {:tool-name "shell"
-                                                :input {:argv ["printf" "hi"]}}}])])
+        responses (atom [(tool-call-response :shell {:argv ["printf" "hi"]})])
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path
@@ -203,8 +229,7 @@
 
 (deftest chat-loop-auto-extracts-scoped-facts-test
   (let [path (temp-db-path)
-        responses (atom [(step-json [{:type "complete"
-                                      :payload {:result "noted"}}])
+        responses (atom ["noted"
                          (json/generate-string
                           {:facts [{:subject "user"
                                     :predicate "prefers"

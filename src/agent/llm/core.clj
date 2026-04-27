@@ -227,7 +227,7 @@
                 [:model :temperature :max-tokens :top-p :frequency-penalty
                  :presence-penalty :tools :tool-choice :structured-output
                  :response-format :cache-control :cache_control :modalities
-                 :metadata :extra-body])))
+                 :metadata :extra-body :stream-structured-output?])))
 
 (defn normalize-llm-response
   [response opts]
