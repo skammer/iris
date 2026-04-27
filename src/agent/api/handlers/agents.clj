@@ -29,16 +29,6 @@
         trusted-peers (or (:trusted_peers body) [])
         trust-policies (v/normalize-trust-policies-body (:trust_policies body))
         rate-limit-per-minute (:rate_limit_per_minute body)]
-    (when kind (v/ensure-string! :kind kind))
-    (when parent-id (v/ensure-string! :parent_id parent-id))
-    (when system-prompt (v/ensure-string! :system_prompt system-prompt))
-    (when task
-      (when-not (map? task)
-        (throw (errors/api-error 400 "bad_request" "task must be an object"))))
-    (v/ensure-string-vec! :capabilities capabilities)
-    (v/ensure-string-vec! :tool_access tool-access)
-    (v/ensure-string-vec! :memory_scopes memory-scopes)
-    (v/ensure-string-vec! :trusted_peers trusted-peers)
     (responses/json-response 201
                              (ser/agent->response
                               (orchestrator/spawn-agent! (:orchestrator system)
@@ -128,13 +118,6 @@
         memory-scopes (or (:memory_scopes body) [])
         budgets (or (:budgets body) {})
         system-prompt (:system_prompt body)]
-    (when name (v/ensure-string! :name name))
-    (when role (v/ensure-string! :role role))
-    (when-not (map? task)
-      (throw (errors/api-error 400 "bad_request" "task must be an object")))
-    (v/ensure-string-vec! :capabilities capabilities)
-    (v/ensure-string-vec! :tool_access tool-access)
-    (v/ensure-string-vec! :memory_scopes memory-scopes)
     (try
       (let [agent (orchestrator/get-agent (:orchestrator system) agent-id)]
         (when-not agent
@@ -183,18 +166,13 @@
           (throw e))))))
 
 (defn- normalize-step-body [body]
-  (let [directives (or (:directives body) [])]
-    (when-not (vector? directives)
-      (throw (errors/api-error 400 "bad_request" "directives must be a vector")))
-    {:schema-version (or (:schema-version body) (:schema_version body))
-     :state (or (:state body) {})
-     :directives (mapv (fn [directive]
-                         (when-not (map? directive)
-                           (throw (errors/api-error 400 "bad_request" "directive must be an object")))
-                         (kernel/directive (keyword (:type directive))
-                                           (or (:payload directive) {})))
-                       directives)
-     :receipts (vec (or (:receipts body) []))}))
+  {:schema-version (or (:schema-version body) (:schema_version body))
+   :state (or (:state body) {})
+   :directives (mapv (fn [directive]
+                       (kernel/directive (keyword (:type directive))
+                                         (or (:payload directive) {})))
+                     (or (:directives body) []))
+   :receipts (vec (or (:receipts body) []))})
 
 (defrecord ApiKernelOps [system]
   kernel-ops/KernelOps
@@ -283,10 +261,6 @@
         trusted-peers (or (:trusted_peers body) [])
         trust-policies (v/normalize-trust-policies-body (:trust_policies body))
         rate-limit-per-minute (:rate_limit_per_minute body)]
-    (v/ensure-string-vec! :capabilities capabilities)
-    (v/ensure-string-vec! :tool_access tool-access)
-    (v/ensure-string-vec! :memory_scopes memory-scopes)
-    (v/ensure-string-vec! :trusted_peers trusted-peers)
     (try
       (responses/json-response
        200
@@ -335,9 +309,8 @@
           (throw e))))))
 
 (defn interop-messages-list [system request agent-id]
-  (let [params (h/query-params request)
-        direction (some-> (:direction params) str/lower-case keyword)
-        status (:status params)]
+  (let [{:keys [direction status]} (-> request :parameters :query)
+        direction (some-> direction str/lower-case keyword)]
     (try
       (responses/json-response 200
                                {:data (mapv ser/interop->response

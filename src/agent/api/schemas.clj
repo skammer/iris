@@ -19,3 +19,25 @@
   [:map
    [:type {:optional true} :string]
    [:id {:optional true} :string]])
+
+(def TrustPolicy
+  [:map
+   [:message_types {:optional true} StringVec]
+   [:routes {:optional true} StringVec]
+   [:required_capabilities {:optional true} StringVec]])
+
+(def TrustPolicies
+  [:map-of :string TrustPolicy])
+
+(def ChatRole
+  [:enum "system" "user" "assistant" "tool"])
+
+(def ChatMessage
+  [:map
+   [:role ChatRole]
+   [:content NonBlankString]])
+
+(def Directive
+  [:map
+   [:type :string]
+   [:payload {:optional true} :map]])

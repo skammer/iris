@@ -7,12 +7,72 @@
 
 (def ^:private chat-completions-body
   [:map
-   [:messages {:optional true} [:vector [:map
-                                         [:role :string]
-                                         [:content :string]]]]
+   [:messages {:optional true} [:vector {:min 1} schemas/ChatMessage]]
    [:prompt {:optional true} :string]
    [:session_id {:optional true} :string]
    [:stream {:optional true} :boolean]])
+
+(def ^:private create-run-body
+  [:map
+   [:agent_id {:optional true} :string]
+   [:parent_run_id {:optional true} :string]
+   [:idempotency_key {:optional true} :string]
+   [:name {:optional true} :string]
+   [:substrate {:optional true} :string]
+   [:capabilities {:optional true} schemas/StringVec]
+   [:network_identity {:optional true} :map]
+   [:runner_options {:optional true} :map]
+   [:requested_by {:optional true} :string]
+   [:auto_launch {:optional true} :boolean]])
+
+(def ^:private create-agent-body
+  [:map
+   [:name {:optional true} :string]
+   [:kind {:optional true} schemas/NonBlankString]
+   [:role {:optional true} :string]
+   [:parent_id {:optional true} schemas/NonBlankString]
+   [:system_prompt {:optional true} schemas/NonBlankString]
+   [:capabilities {:optional true} schemas/StringVec]
+   [:tool_access {:optional true} schemas/StringVec]
+   [:memory_scopes {:optional true} schemas/StringVec]
+   [:budgets {:optional true} :map]
+   [:task {:optional true} :map]
+   [:allow_direct {:optional true} :boolean]
+   [:trusted_peers {:optional true} schemas/StringVec]
+   [:trust_policies {:optional true} schemas/TrustPolicies]
+   [:rate_limit_per_minute {:optional true} :int]])
+
+(def ^:private interop-capabilities-body
+  [:map
+   [:capabilities {:optional true} schemas/StringVec]
+   [:tool_access {:optional true} schemas/StringVec]
+   [:memory_scopes {:optional true} schemas/StringVec]
+   [:budgets {:optional true} :map]
+   [:allow_direct {:optional true} :boolean]
+   [:trusted_peers {:optional true} schemas/StringVec]
+   [:trust_policies {:optional true} schemas/TrustPolicies]
+   [:rate_limit_per_minute {:optional true} :int]])
+
+(def ^:private orchestrator-spawn-worker-body
+  [:map
+   [:name {:optional true} schemas/NonBlankString]
+   [:role {:optional true} schemas/NonBlankString]
+   [:task :map]
+   [:capabilities {:optional true} schemas/StringVec]
+   [:tool_access {:optional true} schemas/StringVec]
+   [:memory_scopes {:optional true} schemas/StringVec]
+   [:budgets {:optional true} :map]
+   [:system_prompt {:optional true} :string]])
+
+(def ^:private agent-step-execute-body
+  [:map
+   [:directives {:optional true} [:vector schemas/Directive]]
+   [:schema-version {:optional true} :any]
+   [:schema_version {:optional true} :any]
+   [:state {:optional true} :map]
+   [:receipts {:optional true} [:vector :any]]
+   [:yolo {:optional true} :boolean]
+   [:yolo? {:optional true} :boolean]])
 
 (def ^:private memory-search-body
   [:map
@@ -135,53 +195,152 @@
 (def ^:private interop-ack-body
   [:map [:ack_type {:optional true} :string]])
 
+(def ^:private ui-create-session-form
+  [:map [:title {:optional true} :string]])
+
+(def ^:private ui-chat-form
+  [:map
+   [:session_id schemas/NonBlankString]
+   [:prompt schemas/NonBlankString]])
+
+(def ^:private ui-memory-search-form
+  [:map [:query schemas/NonBlankString]])
+
+(def ^:private ui-create-run-form
+  [:map
+   [:agent_id {:optional true} :string]
+   [:name {:optional true} :string]
+   [:substrate {:optional true} :string]
+   [:command {:optional true} :string]
+   [:working_dir {:optional true} :string]
+   [:image {:optional true} :string]
+   [:share_network {:optional true} :string]])
+
+(def ^:private ui-tool-approval-request-form
+  [:map
+   [:tool schemas/NonBlankString]
+   [:reason {:optional true} :string]
+   [:path {:optional true} :string]
+   [:action {:optional true} :string]
+   [:content {:optional true} :string]
+   [:argv {:optional true} :string]
+   [:command {:optional true} :string]
+   [:working_dir {:optional true} :string]])
+
+(def ^:private ui-tool-approval-decision-form
+  [:map
+   [:actor {:optional true} :string]
+   [:reason {:optional true} :string]])
+
+(def ^:private since-limit-query
+  [:map
+   [:limit {:optional true} :int]
+   [:since_sequence {:optional true} :int]])
+
+(def ^:private commands-query
+  [:map
+   [:limit {:optional true} :int]
+   [:status {:optional true} :string]
+   [:request_id {:optional true} :string]])
+
+(def ^:private events-query
+  [:map
+   [:limit {:optional true} :int]
+   [:after_id {:optional true} :int]])
+
+(def ^:private wait-query
+  [:map
+   [:timeout_ms {:optional true} :int]
+   [:interval_ms {:optional true} :int]])
+
+(def ^:private stream-query
+  [:map
+   [:after_id {:optional true} :int]
+   [:replay_limit {:optional true} :int]])
+
+(def ^:private interop-list-query
+  [:map
+   [:direction {:optional true} :string]
+   [:status {:optional true} :string]])
+
+(def ^:private status-query
+  [:map [:status {:optional true} :string]])
+
+(def ^:private shell-query
+  [:map [:tab {:optional true} :string]])
+
+(def ^:private session-id-query
+  [:map [:session_id schemas/NonBlankString]])
+
+(def ^:private run-id-query
+  [:map [:run_id schemas/NonBlankString]])
+
 (def routes
   [["/" {:get {:handler/id :ui-index}}]
    ["/health" {:get {:handler/id :health}}]
    ["/public/*" {:get {:handler/id :public-file}}]
 
-   ["/ui/shell" {:get {:handler/id :ui-shell}}]
+   ["/ui/shell" {:get {:handler/id :ui-shell
+                       :parameters {:query shell-query}}}]
    ["/ui/dashboard" {:get {:handler/id :ui-dashboard}}]
    ["/ui/operator-board" {:get {:handler/id :ui-operator-board}}]
    ["/ui/sessions" {:get {:handler/id :ui-sessions}
-                    :post {:handler/id :ui-create-session}}]
-   ["/ui/session-detail" {:get {:handler/id :ui-session-detail}}]
-   ["/ui/session-messages" {:get {:handler/id :ui-session-messages}}]
-   ["/ui/session/live" {:get {:handler/id :ui-session-live}}]
-   ["/ui/chat" {:post {:handler/id :ui-chat}}]
+                    :post {:handler/id :ui-create-session
+                           :parameters {:form ui-create-session-form}}}]
+   ["/ui/session-detail" {:get {:handler/id :ui-session-detail
+                                :parameters {:query session-id-query}}}]
+   ["/ui/session-messages" {:get {:handler/id :ui-session-messages
+                                  :parameters {:query session-id-query}}}]
+   ["/ui/session/live" {:get {:handler/id :ui-session-live
+                              :parameters {:query session-id-query}}}]
+   ["/ui/chat" {:post {:handler/id :ui-chat
+                       :parameters {:form ui-chat-form}}}]
    ["/ui/events" {:get {:handler/id :ui-events}}]
    ["/ui/events/live" {:get {:handler/id :ui-events-live}}]
    ["/ui/memory/prompt" {:get {:handler/id :ui-memory-prompt}}]
-   ["/ui/memory/search" {:post {:handler/id :ui-memory-search}}]
+   ["/ui/memory/search" {:post {:handler/id :ui-memory-search
+                                :parameters {:form ui-memory-search-form}}}]
    ["/ui/runs" {:get {:handler/id :ui-runs}
-                :post {:handler/id :ui-create-run}}]
-   ["/ui/run-detail" {:get {:handler/id :ui-run-detail}}]
-   ["/ui/run-detail-body" {:get {:handler/id :ui-run-detail-body}}]
-   ["/ui/run-detail/live" {:get {:handler/id :ui-run-detail-live}}]
+                :post {:handler/id :ui-create-run
+                       :parameters {:form ui-create-run-form}}}]
+   ["/ui/run-detail" {:get {:handler/id :ui-run-detail
+                            :parameters {:query run-id-query}}}]
+   ["/ui/run-detail-body" {:get {:handler/id :ui-run-detail-body
+                                 :parameters {:query run-id-query}}}]
+   ["/ui/run-detail/live" {:get {:handler/id :ui-run-detail-live
+                                 :parameters {:query run-id-query}}}]
    ["/ui/runs/:run-id/launch" {:post {:handler/id :ui-run-launch}}]
    ["/ui/runs/:run-id/signal" {:post {:handler/id :ui-run-signal}}]
    ["/ui/tools" {:get {:handler/id :ui-tools}}]
    ["/ui/tool-approvals" {:get {:handler/id :ui-tool-approvals}}]
-   ["/ui/tool-approvals/request" {:post {:handler/id :ui-tool-approval-request}}]
-   ["/ui/tool-approvals/:approval-id/approve" {:post {:handler/id :ui-tool-approval-approve}}]
-   ["/ui/tool-approvals/:approval-id/deny" {:post {:handler/id :ui-tool-approval-deny}}]
+   ["/ui/tool-approvals/request" {:post {:handler/id :ui-tool-approval-request
+                                         :parameters {:form ui-tool-approval-request-form}}}]
+   ["/ui/tool-approvals/:approval-id/approve" {:post {:handler/id :ui-tool-approval-approve
+                                                      :parameters {:form ui-tool-approval-decision-form}}}]
+   ["/ui/tool-approvals/:approval-id/deny" {:post {:handler/id :ui-tool-approval-deny
+                                                   :parameters {:form ui-tool-approval-decision-form}}}]
    ["/ui/tool-approvals/:approval-id/run" {:post {:handler/id :ui-tool-approval-run}}]
 
    ["/v1/sessions" {:get {:handler/id :list-sessions}
                     :post {:handler/id :create-session
                            :parameters {:body create-session-body}}}]
    ["/v1/sessions/:session-id/messages" {:get {:handler/id :list-session-messages}}]
-   ["/v1/chat/completions" {:post {:handler/id :chat-completions}}]
+   ["/v1/chat/completions" {:post {:handler/id :chat-completions
+                                    :parameters {:body chat-completions-body}}}]
    ["/v1/runs" {:get {:handler/id :list-runs}
-                :post {:handler/id :create-run}}]
+                :post {:handler/id :create-run
+                       :parameters {:body create-run-body}}}]
    ["/v1/runs/reclaim-stale" {:post {:handler/id :reclaim-stale-runs}}]
    ["/v1/runs/:run-id" {:get {:handler/id :get-run}}]
    ["/v1/runs/:run-id/launch" {:post {:handler/id :launch-run}}]
    ["/v1/runs/:run-id/signal" {:post {:handler/id :signal-run
                                       :parameters {:body signal-body}}}]
-   ["/v1/runs/:run-id/heartbeats" {:get {:handler/id :run-heartbeats}}]
-   ["/v1/runs/:run-id/checkpoints" {:get {:handler/id :run-checkpoints}}]
-   ["/v1/runs/:run-id/commands" {:get {:handler/id :run-commands}}]
+   ["/v1/runs/:run-id/heartbeats" {:get {:handler/id :run-heartbeats
+                                         :parameters {:query since-limit-query}}}]
+   ["/v1/runs/:run-id/checkpoints" {:get {:handler/id :run-checkpoints
+                                          :parameters {:query since-limit-query}}}]
+   ["/v1/runs/:run-id/commands" {:get {:handler/id :run-commands
+                                       :parameters {:query commands-query}}}]
    ["/v1/runs/:run-id/control/register" {:post {:handler/id :run-control-register}}]
    ["/v1/runs/:run-id/control/heartbeat" {:post {:handler/id :run-control-heartbeat}}]
    ["/v1/runs/:run-id/control/checkpoint" {:post {:handler/id :run-control-checkpoint}}]
@@ -189,15 +348,19 @@
    ["/v1/runs/:run-id/control/commands/:command-id/ack" {:post {:handler/id :run-control-command-ack}}]
    ["/v1/runs/:run-id/control/commands/:command-id/complete" {:post {:handler/id :run-control-command-complete}}]
    ["/v1/runs/:run-id/control/transition" {:post {:handler/id :run-control-transition}}]
-   ["/v1/runs/:run-id/events" {:get {:handler/id :run-events}}]
-   ["/v1/runs/:run-id/stream" {:get {:handler/id :run-events-stream}}]
-   ["/v1/runs/:run-id/wait" {:get {:handler/id :run-wait}}]
+   ["/v1/runs/:run-id/events" {:get {:handler/id :run-events
+                                     :parameters {:query events-query}}}]
+   ["/v1/runs/:run-id/stream" {:get {:handler/id :run-events-stream
+                                     :parameters {:query stream-query}}}]
+   ["/v1/runs/:run-id/wait" {:get {:handler/id :run-wait
+                                   :parameters {:query wait-query}}}]
    ["/v1/runs/:run-id/recover" {:post {:handler/id :run-recover}}]
 
    ["/v1/tools" {:get {:handler/id :list-tools}}]
    ["/v1/tools/:tool-name/execute" {:post {:handler/id :execute-tool
                                            :parameters {:body tool-execute-body}}}]
-   ["/v1/tool-approvals" {:get {:handler/id :list-tool-approvals}
+   ["/v1/tool-approvals" {:get {:handler/id :list-tool-approvals
+                                :parameters {:query status-query}}
                           :post {:handler/id :create-tool-approval
                                  :parameters {:body tool-approval-create-body}}}]
    ["/v1/tool-approvals/:approval-id/approve" {:post {:handler/id :approve-tool-approval
@@ -227,18 +390,23 @@
                                      :parameters {:body memory-graph-query-body}}}]
 
    ["/v1/agents" {:get {:handler/id :list-agents}
-                  :post {:handler/id :create-agent}}]
+                  :post {:handler/id :create-agent
+                         :parameters {:body create-agent-body}}}]
    ["/v1/agents/:agent-id/messages" {:get {:handler/id :agent-messages}
                                      :post {:handler/id :agent-message
                                             :parameters {:body agent-message-body}}}]
    ["/v1/agents/:agent-id/tools/:tool-name/execute" {:post {:handler/id :agent-tool-execute
                                                             :parameters {:body agent-tool-execute-body}}}]
-   ["/v1/agents/:agent-id/spawn-worker" {:post {:handler/id :orchestrator-spawn-worker}}]
-   ["/v1/agents/:agent-id/steps" {:post {:handler/id :agent-step-execute}}]
+   ["/v1/agents/:agent-id/spawn-worker" {:post {:handler/id :orchestrator-spawn-worker
+                                                :parameters {:body orchestrator-spawn-worker-body}}}]
+   ["/v1/agents/:agent-id/steps" {:post {:handler/id :agent-step-execute
+                                         :parameters {:body agent-step-execute-body}}}]
    ["/v1/agents/:agent-id/inbox/consume" {:post {:handler/id :consume-agent-inbox}}]
    ["/v1/agents/:agent-id/interop" {:get {:handler/id :agent-interop}}]
-   ["/v1/agents/:agent-id/interop/capabilities" {:post {:handler/id :agent-interop-capabilities}}]
-   ["/v1/agents/:agent-id/interop/messages" {:get {:handler/id :agent-interop-messages}
+   ["/v1/agents/:agent-id/interop/capabilities" {:post {:handler/id :agent-interop-capabilities
+                                                        :parameters {:body interop-capabilities-body}}}]
+   ["/v1/agents/:agent-id/interop/messages" {:get {:handler/id :agent-interop-messages
+                                                   :parameters {:query interop-list-query}}
                                              :post {:handler/id :agent-interop-message
                                                     :parameters {:body interop-message-post-body}}}]
    ["/v1/agents/:agent-id/interop/messages/:message-id/ack" {:post {:handler/id :agent-interop-ack
