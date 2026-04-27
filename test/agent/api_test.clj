@@ -694,7 +694,8 @@
         (is (str/includes? (:body session-detail) "/ui/session/live?session_id="))
         (is (= 200 (:status completion)))
         (is (= 200 (:status ui-chat)))
-        (is (str/includes? (:body ui-chat) "test-response"))
+        ;; /ui/chat streams via chat/stream! → final patch frame contains "hello world".
+        (is (str/includes? (:body ui-chat) "hello world"))
         (is (= 200 (:status streamed)))
         (is (str/includes? (first streamed-lines) "\"role\":\"assistant\""))
         (is (some #(str/includes? % "\"event_type\":\"chat.started\"") streamed-lines))
@@ -709,14 +710,14 @@
         (is (= 6 (count (:data messages-body))))
         (is (= "test-response" (get-in messages-body [:data 1 :content])))
         (is (= "hello ui" (get-in messages-body [:data 2 :content])))
-        (is (= "test-response" (get-in messages-body [:data 3 :content])))
+        (is (= "hello world" (get-in messages-body [:data 3 :content])))
         (is (= "hello" (get-in messages-body [:data 4 :content])))
         (is (= "hello world" (get-in messages-body [:data 5 :content])))
         (is (= ["system" "user" "assistant" "user" "assistant" "user"]
                (mapv :role @messages*)))
         (is (str/starts-with? (first (mapv :content @messages*))
                               "Relevant memory JSON: "))
-        (is (= ["hello" "test-response" "hello ui" "test-response" "hello"]
+        (is (= ["hello" "test-response" "hello ui" "hello world" "hello"]
                (vec (rest (mapv :content @messages*))))))
       (finally
         (api/stop-server! server)

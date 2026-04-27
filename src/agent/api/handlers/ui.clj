@@ -16,7 +16,8 @@
    [agent.tools.core :as tools]
    [agent.ui :as ui]
    [clojure.core.async :as async]
-   [clojure.string :as str]))
+   [clojure.string :as str]
+   [org.httpkit.server :as http-kit]))
 
 (defn- form-bool [value]
   (contains? #{"1" "true" "yes" "on"} (str/lower-case (str value))))
@@ -101,11 +102,25 @@
 (defn chat-action [system request]
   (let [{:keys [session_id prompt]} (h/read-form-body request)]
     (v/ensure-session-exists! system session_id)
-    (chat/run! system {:messages [{:role "user" :content prompt}] :session-id session_id})
-    (responses/html-response 200
-                             (str (ui/dashboard-fragment system)
-                                  (ui/session-detail-fragment system session_id)
-                                  (ui/sessions-fragment system session_id)))))
+    (streaming/sse-response
+     request
+     (fn [channel]
+       (future
+         (try
+           (let [push! (fn []
+                         (streaming/send-datastar-patch!
+                          channel
+                          (ui/session-messages-fragment system session_id)))]
+             (chat/stream! system
+                           {:messages [{:role "user" :content prompt}]
+                            :session-id session_id
+                            :on-delta (fn [_] (push!))})
+             (push!))
+           (catch Throwable t
+             (println "chat/stream! failed:" (.getMessage t)))
+           (finally
+             (http-kit/close channel)))))
+     (fn [_ _] nil))))
 
 (defn events [system _request]
   (responses/html-response 200 (ui/events-fragment system)))

@@ -2,6 +2,7 @@
   "Server-rendered Datastar UI."
   (:require
    [agent.channels.core :as channel-adapters]
+   [agent.chat :as chat]
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
@@ -437,15 +438,26 @@
            "data-show" "$chatLoading"}
           "thinking..."]]]))))
 
+(defn- streaming-message [content]
+  [:article.message.message--streaming
+   [:div.message-role {:class "assistant"} "assistant"]
+   (render-message-content content)
+   [:div.meta "streaming…"]])
+
 (defn session-messages-fragment [system session-id]
-  (render
-   [:chat-stream#session-messages-panel
-    (if-let [messages (seq (sqlite/list-messages (:store system) session-id))]
-      (list*
-       [:div.chat-stream__filler]
-       (for [message messages]
-         (render-message message)))
-      [:div.empty "No messages yet."])]))
+  (let [messages (sqlite/list-messages (:store system) session-id)
+        streaming (chat/streaming-content session-id)]
+    (render
+     [:chat-stream#session-messages-panel
+      (if (or (seq messages) streaming)
+        (list*
+         [:div.chat-stream__filler]
+         (concat
+          (for [message messages]
+            (render-message message))
+          (when streaming
+            [(streaming-message streaming)])))
+        [:div.empty "No messages yet."])])))
 
 (defn events-fragment [system]
   (render
