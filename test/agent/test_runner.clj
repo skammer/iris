@@ -1,6 +1,7 @@
 (ns agent.test-runner
   (:require
    [agent.api-test]
+   [agent.api-smoke-test]
    [agent.broker.local-test]
    [agent.channels.core-test]
    [agent.chat-test]
@@ -36,6 +37,7 @@
 
 (def rewritten-test-namespaces
   '[agent.api-test
+    agent.api-smoke-test
     agent.broker.local-test
     agent.channels.core-test
     agent.chat-test
