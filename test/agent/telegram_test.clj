@@ -197,6 +197,45 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest telegram-sends-typing-while-chat-running
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        actions (atom [])
+        typing-seen (promise)
+        system {:store store
+                :event-sink (fn [_] nil)}
+        config {:bot-token "token"
+                :allowlist {:allow-all? true}}
+        opts {:send-message-fn (fn [_ _] nil)
+              :send-chat-action-fn (fn [chat-id action]
+                                     (swap! actions conj {:chat-id chat-id
+                                                          :action action})
+                                     (deliver typing-seen true))
+              :chat-fn (fn [_ _]
+                         (is (true? (deref typing-seen 1000 false)))
+                         {:content "pong"})}]
+    (try
+      (is (= :processed
+             (telegram/process-update! system config opts (update-for 1 100 7 "hi"))))
+      (is (some #(= {:chat-id 100 :action "typing"} %) @actions))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-send-chat-action-calls-api
+  (let [calls (atom [])]
+    (with-redefs [telegram/api-request! (fn [token method body]
+                                          (swap! calls conj {:token token
+                                                             :method method
+                                                             :body body})
+                                          {:ok true})]
+      (telegram/send-chat-action! "token" 100 "typing")
+      (is (= [{:token "token"
+               :method "sendChatAction"
+               :body {:chat_id 100
+                      :action "typing"}}]
+             @calls)))))
+
 (deftest telegram-photo-command-sends-photo
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path :evict-on-close? true})

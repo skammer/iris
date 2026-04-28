@@ -49,7 +49,9 @@ The adapter starts automatically when `:enabled` is truthy and the token is set.
 
 ### Streaming replies (private chats)
 
-Private-chat replies stream via Bot API 9.5 `sendMessageDraft`: as the LLM produces tokens, the bot updates a single animated draft, then commits the final text via `sendMessage`. Throttled at one update per ~600ms. Group/supergroup chats fall back to non-streamed `chat/run!` (tool-capable; see below).
+Private-chat replies stream via Bot API 9.5 `sendMessageDraft`: as the LLM produces tokens, the bot updates a single animated draft, then commits the final text via `sendMessage`. Throttled at one update per ~1.2s. Group/supergroup chats fall back to regular `sendMessage` updates.
+
+While a chat turn is running, the adapter sends Telegram `typing` chat actions every ~4s. This covers model thinking time, tool work, response waiting, and streaming.
 
 ### Slash commands
 
