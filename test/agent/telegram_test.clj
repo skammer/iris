@@ -236,6 +236,21 @@
                       :action "typing"}}]
              @calls)))))
 
+(deftest telegram-send-html-message-uses-html-parse-mode
+  (let [calls (atom [])]
+    (with-redefs [telegram/api-request! (fn [token method body]
+                                          (swap! calls conj {:token token
+                                                             :method method
+                                                             :body body})
+                                          {:ok true})]
+      (telegram/send-html-message! "token" 100 "<blockquote expandable>x</blockquote>")
+      (is (= [{:token "token"
+               :method "sendMessage"
+               :body {:chat_id 100
+                      :text "<blockquote expandable>x</blockquote>"
+                      :parse_mode "HTML"}}]
+             @calls)))))
+
 (deftest telegram-photo-command-sends-photo
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path :evict-on-close? true})

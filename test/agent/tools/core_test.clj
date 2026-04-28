@@ -12,10 +12,17 @@
                :status :ok
                :input {:q "clojure"}
                :result {:answer "done"}})]
-    (is (str/includes? text "> 🔧 web ok"))
-    (is (str/includes? text ">   \"q\" : \"clojure\""))
-    (is (str/includes? text "> ```json"))
-    (is (str/includes? text ">   \"answer\" : \"done\""))))
+    (is (str/includes? text "🔧 web ok"))
+    (is (str/includes? text "<blockquote expandable>"))
+    (is (str/includes? text "  \"q\" : \"clojure\""))
+    (is (str/includes? text "  \"answer\" : \"done\""))))
+
+(deftest display-telegram-summary-escapes-html-test
+  (let [text (display/telegram-summary
+              {}
+              {:tool-name "web"
+               :input {:q "<tag>&x"}})]
+    (is (str/includes? text "&lt;tag&gt;&amp;x"))))
 
 (deftest registry-register-list-and-execute-test
   (let [events (atom [])
