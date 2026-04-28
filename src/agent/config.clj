@@ -147,6 +147,75 @@
            (map keyword)
            vec))
 
+(def ^:dynamic *env* #(System/getenv %))
+(def ^:dynamic *user-home* #(System/getProperty "user.home"))
+(def ^:dynamic *cwd* #(System/getProperty "user.dir"))
+
+(def config-file-name "config.edn")
+(def markdown-file-names
+  ["SOUL.md" "AGENTS.md" "USER.md" "TOOLS.md" "BOOT.md" "HEARTBEAT.md"])
+(def context-file-names (into [config-file-name] markdown-file-names))
+(def app-config-keys
+  [:llm :storage :tools :skills :memory :channel-adapters :runners
+   :orchestrator :telemetry :logging :api])
+
+(def default-config-edn
+  {:iris/config-version 1
+   :iris/context-files markdown-file-names})
+
+(def default-markdown-content
+  {"SOUL.md" "# SOUL\n\n"
+   "AGENTS.md" "# AGENTS\n\n"
+   "USER.md" "# USER\n\n"
+   "TOOLS.md" "# TOOLS\n\n"
+   "BOOT.md" "# BOOT\n\n"
+   "HEARTBEAT.md" "# HEARTBEAT\n\n"})
+
+(defn- getenv [name]
+  (*env* name))
+
+(defn- nonblank [value]
+  (when (some? value)
+    (let [value* (str/trim (str value))]
+      (when-not (str/blank? value*) value*))))
+
+(defn global-config-dir
+  []
+  (io/file
+   (or (nonblank (getenv "IRIS_CONFIG_DIR"))
+       (some-> (nonblank (getenv "XDG_CONFIG_HOME"))
+               (io/file "iris")
+               str)
+       (str (io/file (*user-home*) ".config" "iris")))))
+
+(defn local-config-dir
+  []
+  (io/file (*cwd*) ".iris"))
+
+(defn- default-file-content [name]
+  (if (= config-file-name name)
+    (str (binding [*print-namespace-maps* false]
+           (pr-str default-config-edn))
+         "\n")
+    (get default-markdown-content name "")))
+
+(defn- warn!
+  [message attrs]
+  (binding [*out* *err*]
+    (println (str "WARNING " message " " (pr-str attrs)))))
+
+(defn bootstrap-global-config!
+  []
+  (let [dir (global-config-dir)]
+    (.mkdirs dir)
+    (doseq [name context-file-names
+            :let [file (io/file dir name)]]
+      (when-not (.exists file)
+        (warn! "iris config file missing; writing default"
+               {:path (.getPath file)})
+        (spit file (default-file-content name))))
+    dir))
+
 (defn- deep-merge
   [& maps]
   (apply merge-with
@@ -166,75 +235,121 @@
     (with-open [reader (java.io.PushbackReader. (io/reader file))]
       (edn/read reader))))
 
+(defn- load-optional-edn
+  [file]
+  (when (.exists file)
+    (load-edn-file (.getPath file))))
+
+(defn- normalize-iris-namespaced-config
+  [cfg]
+  (reduce (fn [acc k]
+            (let [iris-k (keyword "iris" (name k))]
+              (if (and (contains? acc iris-k)
+                       (not (contains? acc k)))
+                (assoc acc k (get acc iris-k))
+                acc)))
+          cfg
+          app-config-keys))
+
+(defn- read-context-file
+  [file name required?]
+  (if (.exists file)
+    (slurp file)
+    (do
+      (when required?
+        (warn! "iris context file missing; using default"
+               {:path (.getPath file)}))
+      (when required?
+        (default-file-content name)))))
+
+(defn- load-context-files
+  [global-dir local-dir]
+  (let [local-exists? (.exists local-dir)]
+    (into {}
+          (map (fn [name]
+                 (let [global-content (read-context-file (io/file global-dir name) name true)
+                       local-content (when local-exists?
+                                       (read-context-file (io/file local-dir name) name false))]
+                   [name (str global-content local-content)])))
+          markdown-file-names)))
+
+(defn- iris-runtime-config
+  [global-dir local-dir contexts]
+  {:iris {:config-dir (.getPath global-dir)
+          :local-config-dir (.getPath local-dir)
+          :context-files markdown-file-names
+          :contexts contexts
+          :context (str/join "\n" (map contexts markdown-file-names))}})
+
 (defn- keyword-env [name]
-  (some-> (System/getenv name) str/lower-case not-empty keyword))
+  (some-> (getenv name) str/lower-case not-empty keyword))
 
 (defn env-config
   []
   (let [provider (keyword-env "AGENT_LLM_PROVIDER")
-        model (or (System/getenv "AGENT_LLM_MODEL")
-                  (System/getenv "OPENROUTER_MODEL")
-                  (System/getenv "OLLAMA_MODEL"))
-        timeout-ms (parse-long* (System/getenv "AGENT_LLM_TIMEOUT_MS"))
-        temperature (some-> (System/getenv "AGENT_LLM_TEMPERATURE")
+        model (or (getenv "AGENT_LLM_MODEL")
+                  (getenv "OPENROUTER_MODEL")
+                  (getenv "OLLAMA_MODEL"))
+        timeout-ms (parse-long* (getenv "AGENT_LLM_TIMEOUT_MS"))
+        temperature (some-> (getenv "AGENT_LLM_TEMPERATURE")
                             Double/parseDouble)
-        max-tokens (parse-long* (System/getenv "AGENT_LLM_MAX_TOKENS"))
-        stream? (parse-bool (System/getenv "AGENT_LLM_STREAM"))
-        prompt-cache? (parse-bool (System/getenv "AGENT_LLM_PROMPT_CACHE"))
-        stream-structured-output? (parse-bool (System/getenv "AGENT_LLM_STREAM_STRUCTURED_OUTPUT"))
-        stream-content? (parse-bool (System/getenv "AGENT_LLM_STREAM_CONTENT"))
-        site-url (System/getenv "OPENROUTER_SITE_URL")
-        app-name (or (System/getenv "OPENROUTER_APP_NAME")
-                     (System/getenv "AGENT_APP_NAME"))
-        openrouter-base-url (System/getenv "OPENROUTER_BASE_URL")
-        ollama-base-url (System/getenv "OLLAMA_BASE_URL")
-        keep-alive (System/getenv "OLLAMA_KEEP_ALIVE")
-        embedding-model (System/getenv "OLLAMA_EMBEDDING_MODEL")
-        openai-base-url (System/getenv "OPENAI_BASE_URL")
-        sqlite-path (System/getenv "AGENT_SQLITE_PATH")
-        memory-prompt-paths (parse-csv (System/getenv "AGENT_MEMORY_PROMPT_PATHS"))
-        memory-search-limit (parse-long* (System/getenv "AGENT_MEMORY_SEARCH_DEFAULT_LIMIT"))
-        memory-vault-paths (parse-csv (System/getenv "AGENT_MEMORY_VAULT_PATHS"))
-        memory-vault-writable? (parse-bool (System/getenv "AGENT_MEMORY_VAULT_WRITABLE"))
-        fact-extractor-enabled (parse-bool (System/getenv "AGENT_FACT_EXTRACTOR_ENABLED"))
+        max-tokens (parse-long* (getenv "AGENT_LLM_MAX_TOKENS"))
+        stream? (parse-bool (getenv "AGENT_LLM_STREAM"))
+        prompt-cache? (parse-bool (getenv "AGENT_LLM_PROMPT_CACHE"))
+        stream-structured-output? (parse-bool (getenv "AGENT_LLM_STREAM_STRUCTURED_OUTPUT"))
+        stream-content? (parse-bool (getenv "AGENT_LLM_STREAM_CONTENT"))
+        site-url (getenv "OPENROUTER_SITE_URL")
+        app-name (or (getenv "OPENROUTER_APP_NAME")
+                     (getenv "AGENT_APP_NAME"))
+        openrouter-base-url (getenv "OPENROUTER_BASE_URL")
+        ollama-base-url (getenv "OLLAMA_BASE_URL")
+        keep-alive (getenv "OLLAMA_KEEP_ALIVE")
+        embedding-model (getenv "OLLAMA_EMBEDDING_MODEL")
+        openai-base-url (getenv "OPENAI_BASE_URL")
+        sqlite-path (getenv "AGENT_SQLITE_PATH")
+        memory-prompt-paths (parse-csv (getenv "AGENT_MEMORY_PROMPT_PATHS"))
+        memory-search-limit (parse-long* (getenv "AGENT_MEMORY_SEARCH_DEFAULT_LIMIT"))
+        memory-vault-paths (parse-csv (getenv "AGENT_MEMORY_VAULT_PATHS"))
+        memory-vault-writable? (parse-bool (getenv "AGENT_MEMORY_VAULT_WRITABLE"))
+        fact-extractor-enabled (parse-bool (getenv "AGENT_FACT_EXTRACTOR_ENABLED"))
         fact-extractor-provider (keyword-env "AGENT_FACT_EXTRACTOR_PROVIDER")
-        fact-extractor-model (System/getenv "AGENT_FACT_EXTRACTOR_MODEL")
-        fact-dedup-similarity-threshold (some-> (System/getenv "AGENT_FACT_DEDUP_SIMILARITY_THRESHOLD")
+        fact-extractor-model (getenv "AGENT_FACT_EXTRACTOR_MODEL")
+        fact-dedup-similarity-threshold (some-> (getenv "AGENT_FACT_DEDUP_SIMILARITY_THRESHOLD")
                                                 Double/parseDouble)
-        memory-graph-enabled (parse-bool (System/getenv "AGENT_MEMORY_GRAPH_ENABLED"))
-        memory-graph-path (System/getenv "AGENT_MEMORY_GRAPH_PATH")
-        telegram-enabled (parse-bool (System/getenv "AGENT_TELEGRAM_ENABLED"))
-        telegram-bot-token (System/getenv "AGENT_TELEGRAM_BOT_TOKEN")
-        telegram-allow-all? (parse-bool (System/getenv "AGENT_TELEGRAM_ALLOW_ALL"))
-        telegram-user-ids (parse-csv (System/getenv "AGENT_TELEGRAM_ALLOWED_USER_IDS"))
-        telegram-chat-ids (parse-csv (System/getenv "AGENT_TELEGRAM_ALLOWED_CHAT_IDS"))
-        log-file (System/getenv "AGENT_LOG_FILE")
-        log-enabled (parse-bool (System/getenv "AGENT_LOG_ENABLED"))
-        telemetry-enabled (parse-bool (System/getenv "AGENT_TELEMETRY_ENABLED"))
-        telemetry-max-latency-samples (parse-long* (System/getenv "AGENT_TELEMETRY_MAX_LATENCY_SAMPLES"))
-        otel-enabled (parse-bool (or (System/getenv "AGENT_OTEL_ENABLED")
-                                     (System/getenv "OTEL_ENABLED")))
-        otel-url (or (System/getenv "AGENT_OTEL_URL")
-                     (System/getenv "OTEL_EXPORTER_OTLP_ENDPOINT"))
-        otel-send (some-> (System/getenv "AGENT_OTEL_SEND")
+        memory-graph-enabled (parse-bool (getenv "AGENT_MEMORY_GRAPH_ENABLED"))
+        memory-graph-path (getenv "AGENT_MEMORY_GRAPH_PATH")
+        telegram-enabled (parse-bool (getenv "AGENT_TELEGRAM_ENABLED"))
+        telegram-bot-token (getenv "AGENT_TELEGRAM_BOT_TOKEN")
+        telegram-allow-all? (parse-bool (getenv "AGENT_TELEGRAM_ALLOW_ALL"))
+        telegram-user-ids (parse-csv (getenv "AGENT_TELEGRAM_ALLOWED_USER_IDS"))
+        telegram-chat-ids (parse-csv (getenv "AGENT_TELEGRAM_ALLOWED_CHAT_IDS"))
+        log-file (getenv "AGENT_LOG_FILE")
+        log-enabled (parse-bool (getenv "AGENT_LOG_ENABLED"))
+        telemetry-enabled (parse-bool (getenv "AGENT_TELEMETRY_ENABLED"))
+        telemetry-max-latency-samples (parse-long* (getenv "AGENT_TELEMETRY_MAX_LATENCY_SAMPLES"))
+        otel-enabled (parse-bool (or (getenv "AGENT_OTEL_ENABLED")
+                                     (getenv "OTEL_ENABLED")))
+        otel-url (or (getenv "AGENT_OTEL_URL")
+                     (getenv "OTEL_EXPORTER_OTLP_ENDPOINT"))
+        otel-send (some-> (getenv "AGENT_OTEL_SEND")
                           (str/split #",")
                           (->> (map str/trim)
                                (remove str/blank?)
                                (map keyword)
                                vec))
-        otel-publish-delay (parse-long* (System/getenv "AGENT_OTEL_PUBLISH_DELAY_MS"))
-        otel-max-items (parse-long* (System/getenv "AGENT_OTEL_MAX_ITEMS"))
-        tools-yolo? (parse-bool (System/getenv "AGENT_TOOLS_YOLO"))
-        tool-allowlist (parse-keyword-csv (System/getenv "AGENT_TOOL_ALLOWLIST"))
-        tool-blocklist (parse-keyword-csv (System/getenv "AGENT_TOOL_BLOCKLIST"))
-        approval-ttl-seconds (parse-long* (System/getenv "AGENT_TOOL_APPROVAL_TTL_SECONDS"))
-        api-tool-permissions (parse-keyword-csv (System/getenv "AGENT_API_TOOL_PERMISSIONS"))
-        ui-tool-permissions (parse-keyword-csv (System/getenv "AGENT_UI_TOOL_PERMISSIONS"))
-        agent-tool-permissions (parse-keyword-csv (System/getenv "AGENT_AGENT_TOOL_PERMISSIONS"))
-        chat-tool-permissions (parse-keyword-csv (System/getenv "AGENT_CHAT_TOOL_PERMISSIONS"))
-        api-host (System/getenv "AGENT_API_HOST")
-        api-key (System/getenv "AGENT_API_KEY")
-        api-port (parse-long* (System/getenv "AGENT_API_PORT"))
+        otel-publish-delay (parse-long* (getenv "AGENT_OTEL_PUBLISH_DELAY_MS"))
+        otel-max-items (parse-long* (getenv "AGENT_OTEL_MAX_ITEMS"))
+        tools-yolo? (parse-bool (getenv "AGENT_TOOLS_YOLO"))
+        tool-allowlist (parse-keyword-csv (getenv "AGENT_TOOL_ALLOWLIST"))
+        tool-blocklist (parse-keyword-csv (getenv "AGENT_TOOL_BLOCKLIST"))
+        approval-ttl-seconds (parse-long* (getenv "AGENT_TOOL_APPROVAL_TTL_SECONDS"))
+        api-tool-permissions (parse-keyword-csv (getenv "AGENT_API_TOOL_PERMISSIONS"))
+        ui-tool-permissions (parse-keyword-csv (getenv "AGENT_UI_TOOL_PERMISSIONS"))
+        agent-tool-permissions (parse-keyword-csv (getenv "AGENT_AGENT_TOOL_PERMISSIONS"))
+        chat-tool-permissions (parse-keyword-csv (getenv "AGENT_CHAT_TOOL_PERMISSIONS"))
+        api-host (getenv "AGENT_API_HOST")
+        api-key (getenv "AGENT_API_KEY")
+        api-port (parse-long* (getenv "AGENT_API_PORT"))
         memory-config (cond-> {}
                         memory-prompt-paths (assoc :prompt {:paths memory-prompt-paths})
                         (some? memory-search-limit) (assoc :search {:default-limit memory-search-limit})
@@ -281,22 +396,22 @@
             (some? stream-content?) (assoc :stream-content? stream-content?)
             site-url (assoc :site-url site-url)
             app-name (assoc :app-name app-name)
-            (or openrouter-base-url (System/getenv "OPENROUTER_API_KEY"))
+            (or openrouter-base-url (getenv "OPENROUTER_API_KEY"))
             (assoc :openrouter (cond-> {}
                                  openrouter-base-url (assoc :base-url openrouter-base-url)
-                                 (System/getenv "OPENROUTER_API_KEY")
-                                 (assoc :api-key (System/getenv "OPENROUTER_API_KEY"))))
+                                 (getenv "OPENROUTER_API_KEY")
+                                 (assoc :api-key (getenv "OPENROUTER_API_KEY"))))
             (or ollama-base-url keep-alive embedding-model)
             (assoc :ollama (cond-> {}
                              ollama-base-url (assoc :base-url ollama-base-url)
                              keep-alive (assoc :keep-alive keep-alive)
                              embedding-model (assoc :embedding-model embedding-model)))
-            (or openai-base-url (System/getenv "OPENAI_API_KEY"))
+            (or openai-base-url (getenv "OPENAI_API_KEY"))
             (assoc :openai-compatible
                    (cond-> {}
                      openai-base-url (assoc :base-url openai-base-url)
-                     (System/getenv "OPENAI_API_KEY")
-                     (assoc :api-key (System/getenv "OPENAI_API_KEY")))))
+                     (getenv "OPENAI_API_KEY")
+                     (assoc :api-key (getenv "OPENAI_API_KEY")))))
      :storage (cond-> {}
                 sqlite-path (assoc :sqlite {:path sqlite-path}))
      :memory memory-config
@@ -337,15 +452,23 @@
 (defn load-config
   ([] (load-config nil))
   ([path]
-   (let [resource-config (when-let [resource (io/resource "config/default.edn")]
+   (let [global-dir (bootstrap-global-config!)
+         local-dir (local-config-dir)
+         contexts (load-context-files global-dir local-dir)
+         resource-config (when-let [resource (io/resource "config/default.edn")]
                            (with-open [reader (java.io.PushbackReader. (io/reader resource))]
                              (edn/read reader)))
          project-config (load-edn-file "config/default.edn")
+         global-config (load-optional-edn (io/file global-dir config-file-name))
+         local-config (load-optional-edn (io/file local-dir config-file-name))
          explicit-config (when path (load-edn-file path))]
      (deep-merge default-config
                  resource-config
                  project-config
-                 explicit-config
+                 (some-> global-config normalize-iris-namespaced-config)
+                 (some-> local-config normalize-iris-namespaced-config)
+                 (iris-runtime-config global-dir local-dir contexts)
+                 (some-> explicit-config normalize-iris-namespaced-config)
                  (env-config)))))
 
 (defn llm-config
