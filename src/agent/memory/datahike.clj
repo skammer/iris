@@ -292,6 +292,39 @@
                       (:edge/episodes edge))
      :tags (vec (:edge/tags edge))}))
 
+(defn- edge-target-id [node-id edge]
+  (let [source-id (get-in edge [:edge/source :entity/id])
+        target-id (get-in edge [:edge/target :entity/id])]
+    (cond
+      (= node-id source-id) target-id
+      (= node-id target-id) source-id
+      :else nil)))
+
+(defn- node-label [edge node-id]
+  (cond
+    (= node-id (get-in edge [:edge/source :entity/id])) (get-in edge [:edge/source :entity/label])
+    (= node-id (get-in edge [:edge/target :entity/id])) (get-in edge [:edge/target :entity/label])
+    :else nil))
+
+(defn- path-node-label [edges start-id start-label node-id]
+  (or (some #(node-label % node-id) edges)
+      (when (= node-id start-id) start-label)
+      (some #(node-label % node-id) edges)
+      node-id))
+
+(defn- path->result [path]
+  (let [edges (:edges path)
+        start-id (:start-id path)
+        node-ids (:node-ids path)
+        nodes (mapv (fn [node-id]
+                      {:id node-id
+                       :label (path-node-label edges start-id (:start-label path) node-id)})
+                    node-ids)]
+    {:type "path"
+     :depth (count edges)
+     :nodes nodes
+     :edges (mapv edge->result edges)}))
+
 (defn- text-match? [needle result]
   (if (str/blank? needle)
     true
@@ -339,6 +372,47 @@
                  (set/union seen next-frontier)
                  (inc level)
                  (into results edges)))))))
+
+(defn- path-search [db from to max-depth limit as-of include-historical?]
+  (let [from-id (canonical-entity-id db from)
+        to-id (canonical-entity-id db to)
+        max-depth* (max 1 (or max-depth 4))
+        limit* (or limit 20)
+        active-edges (->> (query-edges db)
+                          (filter #(active-at? as-of include-historical? %))
+                          vec)]
+    (loop [queue [{:node-id from-id
+                   :node-ids [from-id]
+                   :start-id from-id
+                   :start-label from
+                   :edges []
+                   :seen #{from-id}}]
+           results []]
+      (cond
+        (or (empty? queue) (>= (count results) limit*)) results
+        :else
+        (let [{:keys [node-id edges seen] :as path} (first queue)
+              queue* (subvec (vec queue) 1)]
+          (if (and (= node-id to-id) (seq edges))
+            (recur queue* (conj results path))
+            (let [next-paths (if (>= (count edges) max-depth*)
+                               []
+                               (->> active-edges
+                                    (keep (fn [edge]
+                                            (when-let [next-id (edge-target-id node-id edge)]
+                                              (when-not (contains? seen next-id)
+                                                (assoc path
+                                                       :node-id next-id
+                                                       :node-ids (conj (:node-ids path) next-id)
+                                                       :edges (conj edges edge)
+                                                       :seen (conj seen next-id))))))))]
+              (recur (into queue* next-paths) results))))))))
+
+(defn- query-mode [opts]
+  (keyword (or (:mode opts)
+               (when (and (:from opts) (:to opts)) :paths)
+               (when (:entity opts) :neighbors)
+               :facts)))
 
 (defn- invalidation-tx [db fact new-edge-id observed-at]
   (let [subject-id (canonical-entity-id db (:subject fact))
@@ -424,18 +498,32 @@
     (let [limit (or (:limit opts) 20)
           db @conn
           needle (some-> query str/lower-case)
-          edges (if-let [entity (:entity opts)]
-                  (entity-neighborhood db entity (:depth opts) (:as-of opts) (:include-historical? opts))
-                  (query-edges db))]
-      (->> edges
-           (distinct-by* :edge/id)
-           (filter #(active-at? (:as-of opts) (:include-historical? opts) %))
-           (map edge->result)
-           (filter #(text-match? needle %))
-           (sort-by #(or (:observed-at %) ""))
-           reverse
-           (take limit)
-           vec)))
+          mode (query-mode opts)]
+      (case mode
+        :paths
+        (->> (path-search db (:from opts) (:to opts) (:max-depth opts) limit (:as-of opts) (:include-historical? opts))
+             (map path->result)
+             vec)
+        (:neighbors :facts-by-entity)
+        (->> (entity-neighborhood db (:entity opts) (:depth opts) (:as-of opts) (:include-historical? opts))
+             (distinct-by* :edge/id)
+             (map edge->result)
+             (filter #(text-match? needle %))
+             (sort-by #(or (:observed-at %) ""))
+             reverse
+             (take limit)
+             vec)
+        (:facts :facts-at-time)
+        (->> (query-edges db)
+             (distinct-by* :edge/id)
+             (filter #(active-at? (:as-of opts) (:include-historical? opts) %))
+             (map edge->result)
+             (filter #(text-match? needle %))
+             (sort-by #(or (:observed-at %) ""))
+             reverse
+             (take limit)
+             vec)
+        (throw (ex-info "Unsupported graph query mode" {:mode mode})))))
   (backend-health-check [_]
     (try
       {:healthy true

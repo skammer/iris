@@ -126,10 +126,14 @@
 
 (def ^:private memory-graph-query-body
   [:map
+   [:mode {:optional true} :string]
    [:query {:optional true} :string]
    [:limit {:optional true} :int]
    [:entity {:optional true} :string]
    [:depth {:optional true} :int]
+   [:from {:optional true} :string]
+   [:to {:optional true} :string]
+   [:max_depth {:optional true} :int]
    [:as_of {:optional true} :string]
    [:include_historical {:optional true} :boolean]])
 
