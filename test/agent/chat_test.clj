@@ -24,15 +24,20 @@
   llm-core/ILLMProviderInvoke
   (invoke [_ request]
     (swap! requests conj {:mode :invoke :request request})
-    (let [response (first (first (swap-vals! responses rest)))]
-      (merge {:role "assistant"
-              :content ""
-              :tool-calls []
-              :usage nil
-              :raw nil}
-             (if (map? response)
-               response
-               {:content (or response "")}))))
+    (let [response (first (first (swap-vals! responses rest)))
+          response* (merge {:role "assistant"
+                            :content ""
+                            :tool-calls []
+                            :usage nil
+                            :raw nil}
+                           (if (map? response)
+                             response
+                             {:content (or response "")}))]
+      (when-let [on-content-delta (:on-content-delta request)]
+        (when-let [chunks (:stream-chunks response*)]
+          (doseq [chunk chunks]
+            (on-content-delta chunk))))
+      (dissoc response* :stream-chunks)))
   (generate [this messages opts]
     (llm-core/invoke this (assoc opts :messages messages))))
 
@@ -149,6 +154,57 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest chat-loop-persists-tool-turns-to-messages-table-test
+  (let [path (temp-db-path)
+        responses (atom [(tool-call-response "call_fs_1" :fs {:action "list" :path "."})
+                         "listed"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider identity)
+        session (system/create-session! system "tool-history")]
+    (try
+      (chat/run! system {:session-id (:id session)
+                         :messages [{:role "user" :content "list files"}]})
+      (let [messages (sqlite/list-messages (:store system) (:id session))
+            roles (mapv :role messages)
+            assistant-tool-call (some #(when (seq (:tool-calls %)) %) messages)
+            tool-msg (some #(when (= "tool" (:role %)) %) messages)]
+        (is (= ["user" "assistant" "tool" "assistant"] roles))
+        (is (= "fs" (get-in (first (:tool-calls assistant-tool-call)) [:function :name])))
+        (is (= "call_fs_1" (get-in (first (:tool-calls assistant-tool-call)) [:id])))
+        (is (= "call_fs_1" (:tool-call-id tool-msg)))
+        (is (= "listed" (:content (last messages)))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-reloads-tool-turns-as-openai-history-test
+  (let [path (temp-db-path)
+        responses (atom ["follow-up answer"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider identity)
+        session (system/create-session! system "tool-reload")]
+    (try
+      (sqlite/append-message! (:store system) (:id session) "user" "list files")
+      (sqlite/append-message! (:store system) (:id session) "assistant" ""
+                              {:tool-calls [{:id "call_fs_9"
+                                             :type "function"
+                                             :function {:name "fs"
+                                                        :arguments "{\"action\":\"list\"}"}}]})
+      (sqlite/append-message! (:store system) (:id session) "tool"
+                              "{\"status\":\"ok\"}"
+                              {:tool-call-id "call_fs_9"})
+      (chat/run! system {:session-id (:id session)
+                         :messages [{:role "user" :content "anything else?"}]})
+      (let [planner-messages (get-in (first @requests) [:request :messages])
+            assistant-with-tools (some #(when (:tool_calls %) %) planner-messages)
+            tool-msg (some #(when (= "tool" (:role %)) %) planner-messages)]
+        (is (some? assistant-with-tools))
+        (is (= "call_fs_9" (-> assistant-with-tools :tool_calls first :id)))
+        (is (= "call_fs_9" (:tool_call_id tool-msg))))
+      (finally
+        (io/delete-file path true)))))
+
 (deftest chat-loop-uses-chat-completions-tool-result-protocol-test
   (let [path (temp-db-path)
         responses (atom [{:tool-calls [{:id "call_fs_1"
@@ -252,6 +308,48 @@
         (is (= 1 (count facts)))
         (is (= "prefers" (:predicate (first facts))))
         (is (empty? other-session)))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-streams-content-tokens-during-plan-step-test
+  (let [path (temp-db-path)
+        responses (atom [{:content "Hello world"
+                          :stream-chunks ["Hello" " " "world"]}])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider identity)
+        session (system/create-session! system "stream-content")
+        deltas (atom [])]
+    (try
+      (let [result (chat/run! system {:session-id (:id session)
+                                      :messages [{:role "user" :content "hi"}]
+                                      :on-delta #(swap! deltas conj %)})
+            invoked-with-callback? (some? (get-in (first @requests) [:request :on-content-delta]))]
+        (is (= "Hello world" (:content result)))
+        (is invoked-with-callback?)
+        (is (= ["Hello" " " "world"] @deltas)))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-emits-single-delta-when-streaming-disabled-test
+  (let [path (temp-db-path)
+        responses (atom [{:content "final"
+                          :stream-chunks ["should" " not" " stream"]}])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path
+                            provider
+                            #(assoc-in % [:llm :stream-content?] false))
+        session (system/create-session! system "stream-disabled")
+        deltas (atom [])]
+    (try
+      (let [result (chat/run! system {:session-id (:id session)
+                                      :messages [{:role "user" :content "hi"}]
+                                      :on-delta #(swap! deltas conj %)})
+            invoked-with-callback? (some? (get-in (first @requests) [:request :on-content-delta]))]
+        (is (= "final" (:content result)))
+        (is (not invoked-with-callback?))
+        (is (= ["final"] @deltas)))
       (finally
         (io/delete-file path true)))))
 

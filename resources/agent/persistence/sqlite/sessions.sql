@@ -14,11 +14,11 @@ where id = :id
 limit 1
 
 -- :name insert-message :! :n
-insert into messages (session_id, role, content, created_at)
-values (:session_id, :role, :content, :created_at)
+insert into messages (session_id, role, content, tool_calls, tool_call_id, created_at)
+values (:session_id, :role, :content, :tool_calls, :tool_call_id, :created_at)
 
 -- :name list-messages :? :*
-select id, role, content, created_at
+select id, role, content, tool_calls, tool_call_id, created_at
 from messages
 where session_id = :session_id
 order by id asc

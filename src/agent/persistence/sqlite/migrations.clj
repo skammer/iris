@@ -5,7 +5,7 @@
    [ragtime.protocols :as ragtime-protocols]
    [ragtime.strategy :as ragtime-strategy]))
 
-(def latest-schema-version 14)
+(def latest-schema-version 15)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -418,7 +418,14 @@
             PRIMARY KEY(source, update_id)
           );"
          "CREATE INDEX IF NOT EXISTS idx_channel_inbox_status_updated
-          ON channel_inbox(source, status, updated_at DESC);"]}])
+          ON channel_inbox(source, status, updated_at DESC);"]}
+   {:version 15
+    :id "15"
+    :name "messages-tool-calls"
+    :checksum "a7c4f9b2e1d83056"
+    :irreversible? true
+    :up ["ALTER TABLE messages ADD COLUMN tool_calls TEXT;"
+         "ALTER TABLE messages ADD COLUMN tool_call_id TEXT;"]}])
 
 (defn descriptor-by-version [version]
   (some #(when (= version (:version %)) %) migration-descriptors))

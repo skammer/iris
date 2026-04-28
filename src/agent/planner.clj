@@ -30,7 +30,8 @@
         messages* (vec (concat [{:role "system" :content (planner-system-prompt)}]
                                (or messages [])))]
     (cond-> (merge
-             (select-keys request [:temperature :max-tokens :top-p :cache-control])
+             (select-keys request [:temperature :max-tokens :top-p :cache-control
+                                   :on-content-delta])
              {:model model
               :messages messages*
               :metadata {:planner true
