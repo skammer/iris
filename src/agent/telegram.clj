@@ -6,6 +6,7 @@
    [agent.persistence.sqlite :as sqlite]
    [agent.telegram.format :as fmt]
    [agent.tools.core :as tools]
+   [agent.tools.display :as tool-display]
    [cheshire.core :as json]
    [clj-http.client :as http]
    [clojure.string :as str]))
@@ -246,18 +247,37 @@
         (swap! accumulator str delta)
         (flush!)))))
 
+(defn- build-on-tool-call
+  "Builds an on-tool-call callback that sends a compact summary message per
+   tool turn. Returns nil when the channel disables tool-call display."
+  [system opts chat-id]
+  (let [cfg (tool-display/channel-config system :telegram nil)]
+    (when (true? (:show-tool-calls? cfg))
+      (let [send! (or (:send-message-fn opts)
+                      (fn [cid text]
+                        (send-message! (get-in system [:config :channel-adapters :telegram :bot-token])
+                                       cid text)))]
+        (fn [{:keys [receipt]}]
+          (try
+            (let [text (tool-display/telegram-summary system receipt)]
+              (when-not (str/blank? text)
+                (send! chat-id text)))
+            (catch Exception _ nil)))))))
+
 (defn- run-chat!
   [system config opts chat chat-id session-id user-text]
   (let [token (:bot-token config)
         send! (or (:send-message-fn opts)
                   (fn [cid text] (send-message! token cid text)))
         on-delta (build-stream-on-delta config opts chat chat-id)
+        on-tool-call (build-on-tool-call system opts chat-id)
         result ((or (:chat-fn opts) chat/run!)
                 system
                 (cond-> {:session-id session-id
                          :messages [{:role "user" :content user-text}]
                          :context {:telegram-chat-id chat-id}}
-                  on-delta (assoc :on-delta on-delta)))
+                  on-delta (assoc :on-delta on-delta)
+                  on-tool-call (assoc :on-tool-call on-tool-call)))
         final (or (:content result) "")]
     (send! chat-id (if (str/blank? final) "(no response)" final))
     final))

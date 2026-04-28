@@ -34,31 +34,44 @@
     (fn [conn]
       (boolean (common/select-one conn (session-exists-sqlvec {:id session-id}) identity)))))
 
-(defn append-message! [store session-id role content]
-  (let [message {:session_id session-id
-                 :role role
-                 :content content
-                 :created_at (common/now-str)}]
-    (let [id (common/with-transaction
-      store
-      (fn [conn]
-              (common/execute! conn (insert-message-sqlvec message))
-              (:id (common/select-one conn (last-insert-row-id-sqlvec) identity))))]
-      {:id id
-       :session-id session-id
-     :role role
-     :content content
-       :created-at (:created_at message)})))
+(defn append-message!
+  ([store session-id role content]
+   (append-message! store session-id role content nil))
+  ([store session-id role content {:keys [tool-calls tool-call-id]}]
+   (let [tool-calls-json (when (seq tool-calls) (common/json-string tool-calls))
+         message {:session_id session-id
+                  :role role
+                  :content content
+                  :tool_calls tool-calls-json
+                  :tool_call_id tool-call-id
+                  :created_at (common/now-str)}
+         id (common/with-transaction
+              store
+              (fn [conn]
+                (common/execute! conn (insert-message-sqlvec message))
+                (:id (common/select-one conn (last-insert-row-id-sqlvec) identity))))]
+     (cond-> {:id id
+              :session-id session-id
+              :role role
+              :content content
+              :created-at (:created_at message)}
+       tool-calls (assoc :tool-calls tool-calls)
+       tool-call-id (assoc :tool-call-id tool-call-id)))))
+
+(defn- row->message
+  [{:keys [id role content tool_calls tool_call_id created_at]}]
+  (cond-> {:id id
+           :role role
+           :content content
+           :created-at created_at}
+    (seq tool_calls) (assoc :tool-calls (common/parse-json-string tool_calls))
+    tool_call_id (assoc :tool-call-id tool_call_id)))
 
 (defn list-messages [store session-id]
   (common/with-connection
     store
     (fn [conn]
-      (mapv (fn [{:keys [id role content created_at]}]
-              {:id id
-               :role role
-               :content content
-               :created-at created_at})
+      (mapv row->message
             (common/select-many conn (list-messages-sqlvec {:session_id session-id}) identity)))))
 
 (defn search-messages

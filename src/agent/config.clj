@@ -13,6 +13,7 @@
          :stream? false
          :prompt-cache? true
          :stream-structured-output? true
+         :stream-content? true
          :timeout-ms 60000
          :site-url nil
          :app-name "iris"
@@ -53,7 +54,19 @@
                    :deny-by-default? true
                    :allowed-commands ["printf" "pwd" "ls" "echo" "cat" "rg" "git"]
                    :blocked-commands []
-                   :max-output-bytes 65536}}
+                   :max-output-bytes 65536}
+           :display {:web {:show-tool-calls? true
+                           :collapsed? true
+                           :preview-chars 120
+                           :max-result-height-px 320
+                           :per-tool {}}
+                     :telegram {:show-tool-calls? true
+                                :preview-chars 240
+                                :args-preview-chars 120
+                                :per-tool {}}
+                     :api {:show-tool-calls? true
+                           :full? true
+                           :per-tool {}}}}
    :skills {:dirs ["skills"]}
    :memory {:prompt {:paths ["MEMORY.md"]}
             :search {:default-limit 20}
@@ -168,6 +181,7 @@
         stream? (parse-bool (System/getenv "AGENT_LLM_STREAM"))
         prompt-cache? (parse-bool (System/getenv "AGENT_LLM_PROMPT_CACHE"))
         stream-structured-output? (parse-bool (System/getenv "AGENT_LLM_STREAM_STRUCTURED_OUTPUT"))
+        stream-content? (parse-bool (System/getenv "AGENT_LLM_STREAM_CONTENT"))
         site-url (System/getenv "OPENROUTER_SITE_URL")
         app-name (or (System/getenv "OPENROUTER_APP_NAME")
                      (System/getenv "AGENT_APP_NAME"))
@@ -263,6 +277,7 @@
             (some? stream?) (assoc :stream? stream?)
             (some? prompt-cache?) (assoc :prompt-cache? prompt-cache?)
             (some? stream-structured-output?) (assoc :stream-structured-output? stream-structured-output?)
+            (some? stream-content?) (assoc :stream-content? stream-content?)
             site-url (assoc :site-url site-url)
             app-name (assoc :app-name app-name)
             (or openrouter-base-url (System/getenv "OPENROUTER_API_KEY"))

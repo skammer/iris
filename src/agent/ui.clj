@@ -11,6 +11,7 @@
    [agent.runtime.core :as runtime]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
+   [agent.tools.display :as tool-display]
    [cheshire.core :as json]
    [clojure.string :as str]
    [hiccup2.core :as h])
@@ -31,11 +32,78 @@
   ;; Markdown intentionally disabled; Hiccup escapes LLM/user text here.
   [:div.code (str content)])
 
-(defn- render-message [{:keys [role content created-at]}]
-  [:article.message
-   [:div.message-role {:class role} role]
-   (render-message-content content)
-   [:div.meta created-at]])
+(defn- pretty-json [value]
+  (try
+    (json/generate-string (if (string? value)
+                            (json/parse-string value true)
+                            value)
+                          {:pretty true})
+    (catch Exception _ (str value))))
+
+(defn- render-tool-call [{:keys [id function]}]
+  (let [{:keys [name arguments]} function]
+    [:div.tool-call
+     [:div.tool-call__header
+      [:span.tool-call__name (str "→ " name)]
+      (when id [:span.tool-call__id.meta id])]
+     [:pre.tool-call__args.code (pretty-json arguments)]]))
+
+(defn- parse-tool-content [content]
+  (try
+    (when (string? content)
+      (json/parse-string content true))
+    (catch Exception _ nil)))
+
+(defn- tool-result-summary
+  "Builds the collapsed-summary line for a tool result: name · status · args preview."
+  [system parsed tool-call-id]
+  (let [tool-name (or (:tool-name parsed) "tool")
+        status (some-> (:status parsed) name)
+        cfg (tool-display/channel-config system :web tool-name)
+        args (tool-display/args-preview (:input parsed) (:preview-chars cfg 120))]
+    [:span.tool-result__summary
+     [:span.tool-result__name tool-name]
+     (when status [:span.tool-result__status {:class (str "status--" status)} status])
+     (when-not (str/blank? args)
+       [:span.tool-result__args.code args])
+     (when tool-call-id [:span.tool-result__id.meta tool-call-id])]))
+
+(defn- render-tool-message [system {:keys [content created-at tool-call-id]}]
+  (let [parsed (parse-tool-content content)
+        cfg (tool-display/channel-config system :web (:tool-name parsed))
+        height-px (:max-result-height-px cfg 320)
+        body (if parsed
+               (pretty-json (dissoc parsed :tool-name :status))
+               (pretty-json content))]
+    [:article.message.message--tool
+     [:details.tool-result
+      (when-not (:collapsed? cfg true) {:open true})
+      [:summary.tool-result__head
+       (tool-result-summary system parsed tool-call-id)]
+      [:div.tool-result__body
+       {:style (str "max-height:" height-px "px;overflow:auto;")}
+       [:pre.tool-result.code body]]]
+     [:div.meta created-at]]))
+
+(defn- render-message
+  ([msg] (render-message nil msg))
+  ([system {:keys [role content created-at tool-calls] :as msg}]
+   (cond
+     (= role "tool")
+     (render-tool-message system msg)
+
+     (seq tool-calls)
+     [:article.message.message--tool-calls
+      [:div.message-role {:class role} role]
+      (when (seq (str content)) (render-message-content content))
+      [:div.tool-calls (for [tc tool-calls] (render-tool-call tc))]
+      [:div.meta created-at]]
+
+     :else
+     [:article.message
+      [:div.message-role {:class role} role]
+      (render-message-content content)
+      [:div.meta created-at]])))
 
 (defn- now-ms []
   (.toEpochMilli (Instant/now)))
@@ -454,7 +522,7 @@
          [:div.chat-stream__filler]
          (concat
           (for [message messages]
-            (render-message message))
+            (render-message system message))
           (when streaming
             [(streaming-message streaming)])))
         [:div.empty "No messages yet."])])))

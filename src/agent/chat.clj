@@ -33,6 +33,10 @@
   [session-id]
   (when session-id (get @streaming-state session-id)))
 
+(defn- clear-streaming! [session-id]
+  (when session-id
+    (swap! streaming-state dissoc session-id)))
+
 (defn- broadcast-delta! [system session-id request-id delta]
   (when-let [bus (or (:event-bus system) (:broker system))]
     (let [event {:event-type "chat.delta"
@@ -48,23 +52,32 @@
     (sink event)
     (sqlite/log-event! (:store system) event)))
 
-(defn- append-message! [system session-id role content]
-  (let [message (sqlite/append-message! (:store system) session-id role content)]
-    (emit! system {:event-type :message.appended
-                   :entity-type :session
-                   :entity-id session-id
-                   :payload {:role role
-                             :content content}})
-    message))
+(defn- append-message!
+  ([system session-id role content]
+   (append-message! system session-id role content nil))
+  ([system session-id role content extra]
+   (let [message (sqlite/append-message! (:store system) session-id role content extra)
+         payload (cond-> {:role role :content content}
+                   (:tool-calls extra) (assoc :tool-calls (:tool-calls extra))
+                   (:tool-call-id extra) (assoc :tool-call-id (:tool-call-id extra)))]
+     (emit! system {:event-type :message.appended
+                    :entity-type :session
+                    :entity-id session-id
+                    :payload payload})
+     message)))
 
 (defn- latest-user-prompt [messages]
   (:content (last (filter #(= "user" (:role %)) messages))))
 
+(defn- db-message->openai
+  [{:keys [role content tool-calls tool-call-id]}]
+  (cond-> {:role role :content (or content "")}
+    (seq tool-calls) (assoc :tool_calls tool-calls)
+    tool-call-id (assoc :tool_call_id tool-call-id)))
+
 (defn- session-messages [system session-id]
   (if session-id
-    (mapv (fn [{:keys [role content]}]
-            {:role role :content content})
-          (sqlite/list-messages (:store system) session-id))
+    (mapv db-message->openai (sqlite/list-messages (:store system) session-id))
     []))
 
 (defn- persist-user-turn! [system session-id messages]
@@ -72,7 +85,10 @@
     (when-not (str/blank? content)
       (append-message! system session-id "user" content))))
 
-(defn- compact-json [value]
+(defn- compact-memory-json
+  "Serializes recalled memory to JSON, capped at memory-max-chars to keep
+   recall payloads bounded. Tool outputs use full JSON — see tool-output-content."
+  [value]
   (let [text (json/generate-string value)]
     (if (> (count text) memory-max-chars)
       (subs text 0 memory-max-chars)
@@ -94,7 +110,7 @@
 (defn- memory-message [recall]
   {:role "system"
    :content (str "Relevant memory JSON: "
-                 (compact-json recall))})
+                 (compact-memory-json recall))})
 
 (defn- approval-expires-at [system]
   (str (.plusSeconds (Instant/now)
@@ -176,7 +192,7 @@
                      (map-indexed vector tool-calls))})
 
 (defn- tool-output-content [receipt]
-  (compact-json
+  (json/generate-string
    (select-keys receipt
                 [:status :tool-name :result :reason :error-type :input])))
 
@@ -191,6 +207,16 @@
                           (map-indexed vector tool-calls))]
     (into [(assistant-tool-call-message request-id content tool-calls)]
           (map tool-output-message tool-calls* receipts))))
+
+(defn- persist-tool-turn!
+  [system session-id assistant-msg tool-msgs]
+  (when session-id
+    (append-message! system session-id "assistant" (:content assistant-msg)
+                     {:tool-calls (:tool_calls assistant-msg)})
+    (clear-streaming! session-id)
+    (doseq [tm tool-msgs]
+      (append-message! system session-id "tool" (:content tm)
+                       {:tool-call-id (:tool_call_id tm)}))))
 
 (defn- request-approval! [system session-id receipt]
   (let [tool-name (keyword (:tool-name receipt))
@@ -273,15 +299,11 @@
 
 (defn- emit-delta!
   [system session-id request-id on-delta delta]
-  (when-not (str/blank? delta)
+  (when (and (string? delta) (not= "" delta))
     (when session-id
       (swap! streaming-state update session-id (fnil str "") delta))
     (broadcast-delta! system session-id request-id delta)
     (when on-delta (on-delta delta))))
-
-(defn- clear-streaming! [session-id]
-  (when session-id
-    (swap! streaming-state dissoc session-id)))
 
 (defn- consume-llm-stream!
   "Drains an LLM stream channel, dispatching deltas. Returns accumulated text."
@@ -353,10 +375,11 @@
 
 (defn run!
   "Run a chat turn for `session-id`. With `:on-delta`, the user-visible response
-   streams token-by-token through that callback. The agentic planner loop runs
-   the same way regardless; streaming only governs how the terminal answer is
-   produced."
-  [system {:keys [messages session-id max-steps context on-delta]
+   streams token-by-token through that callback. With `:on-tool-call`, channels
+   that surface tool activity inline (e.g. Telegram) receive one call per tool
+   turn with `{:tool-call ... :receipt ...}`. The agentic planner loop runs the
+   same way regardless of either callback."
+  [system {:keys [messages session-id max-steps context on-delta on-tool-call]
            :or {max-steps default-max-steps}}]
   (let [request-id (request-id)
         prompt (latest-user-prompt messages)
@@ -365,6 +388,11 @@
         recall (recall-memory system session-id prompt)
         initial-messages (into [(memory-message recall)] history)
         ops (->ChatKernelOps system session-id request-id context)
+        stream-content? (and on-delta
+                             (not (false? (get-in system [:config :llm :stream-content?] true))))
+        on-content-delta (when stream-content?
+                           (fn [chunk]
+                             (emit-delta! system session-id request-id on-delta chunk)))
         finish! (fn [content trace extra]
                   (clear-streaming! session-id)
                   (let [assistant-message (persist-completion! system session-id prompt content request-id)]
@@ -404,7 +432,8 @@
                                           :tools (tools/list-tools (:tool-registry system))
                                           :telemetry (:telemetry system)
                                           :agent-id (or session-id "chat")
-                                          :model (get-in system [:config :llm :model])})
+                                          :model (get-in system [:config :llm :model])
+                                          :on-content-delta on-content-delta})
                 executable-step (select-keys step [:schema-version :state :directives :receipts])
                 executed (kernel-runtime/execute-step!
                           ops
@@ -423,32 +452,42 @@
                            :payload {:step step-no
                                      :directives (:directives step)
                                      :receipts receipts}})
-            (if-let [receipt (complete-receipt receipts)]
-              (let [content (result-text (:result receipt))]
-                (emit-content-as-delta! system session-id request-id on-delta content)
-                (emit! system {:event-type :chat.completed
-                               :entity-type :session
-                               :entity-id session-id
-                               :request-id request-id
-                               :payload {:steps (inc step-no)
-                                         :stream (some? on-delta)}})
-                (finish! content trace* {}))
-              (let [approval-needed (vec (approval-receipts receipts))]
-                (if (seq approval-needed)
-                  (let [approvals (mapv #(request-approval! system session-id %) approval-needed)
-                        content (approval-message approvals)]
-                    (emit-content-as-delta! system session-id request-id on-delta content)
-                    (finish! content trace* {:approvals approvals}))
-                  (let [llm-response (:llm-response step)
-                        provider-tool-calls (seq (:tool-calls llm-response))
-                        next-messages (into planner-messages
-                                            (tool-protocol-messages request-id
-                                                                    (:content llm-response)
-                                                                    provider-tool-calls
-                                                                    receipts))]
+            (let [llm-response (:llm-response step)
+                  provider-tool-calls (seq (:tool-calls llm-response))
+                  protocol-messages (when provider-tool-calls
+                                      (tool-protocol-messages request-id
+                                                               (:content llm-response)
+                                                               provider-tool-calls
+                                                               receipts))]
+              (when protocol-messages
+                (persist-tool-turn! system session-id
+                                    (first protocol-messages)
+                                    (rest protocol-messages))
+                (when on-tool-call
+                  (doseq [[tool-call receipt] (map vector provider-tool-calls receipts)]
+                    (try
+                      (on-tool-call {:tool-call tool-call :receipt receipt})
+                      (catch Exception _ nil)))))
+              (if-let [receipt (complete-receipt receipts)]
+                (let [content (result-text (:result receipt))]
+                  (when-not stream-content?
+                    (emit-content-as-delta! system session-id request-id on-delta content))
+                  (emit! system {:event-type :chat.completed
+                                 :entity-type :session
+                                 :entity-id session-id
+                                 :request-id request-id
+                                 :payload {:steps (inc step-no)
+                                           :stream (some? on-delta)}})
+                  (finish! content trace* {}))
+                (let [approval-needed (vec (approval-receipts receipts))]
+                  (if (seq approval-needed)
+                    (let [approvals (mapv #(request-approval! system session-id %) approval-needed)
+                          content (approval-message approvals)]
+                      (emit-content-as-delta! system session-id request-id on-delta content)
+                      (finish! content trace* {:approvals approvals}))
                     (recur (inc step-no)
                            (merge state (:state executed))
-                           next-messages
+                           (into planner-messages protocol-messages)
                            trace*))))))))
       (catch Exception e
         (emit! system {:event-type :chat.error

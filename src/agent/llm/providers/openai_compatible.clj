@@ -144,34 +144,62 @@
      :usage (usage->estimate body)
      :raw message}))
 
-(defn- stream->turn [body-stream]
-  (with-open [reader (io/reader body-stream)]
-    (loop [content []
-           tool-calls []
-           usage nil
-           raw []]
-      (if-let [line (.readLine reader)]
-        (if-let [event (parse-sse-line line)]
-          (let [delta (-> event :choices first :delta)]
-            (recur (cond-> content
-                     (:content delta) (conj (:content delta)))
-                   (cond-> tool-calls
-                     (:tool_calls delta) (into (:tool_calls delta)))
-                   (or (:usage event) usage)
-                   (conj raw event)))
-          (recur content tool-calls usage raw))
-        {:role "assistant"
-         :content (apply str content)
-         :tool-calls (vec tool-calls)
-         :usage (usage->estimate {:usage usage})
-         :raw raw}))))
+(defn- merge-tool-call-deltas [tool-calls deltas]
+  ;; OpenAI streams tool_calls as partial deltas keyed by :index. Each delta may
+  ;; carry id/type/function.name once and successive function.arguments fragments
+  ;; that must be string-concatenated into a complete JSON payload.
+  (reduce (fn [acc tc]
+            (let [idx (or (:index tc) (count acc))
+                  tc-name (get-in tc [:function :name])
+                  tc-args (get-in tc [:function :arguments])]
+              (update acc idx
+                      (fn [existing]
+                        (cond-> (or existing {})
+                          (:id tc) (assoc :id (:id tc))
+                          (:type tc) (assoc :type (:type tc))
+                          tc-name (assoc-in [:function :name] tc-name)
+                          tc-args (update-in [:function :arguments]
+                                             (fnil str "") tc-args))))))
+          tool-calls
+          deltas))
 
-(defn- post-stream-turn [url request]
-  (stream->turn
-   (:body (checked-response
-           (http/post url (assoc request
-                                 :throw-exceptions false
-                                 :as :stream))))))
+(defn- stream->turn
+  ([body-stream] (stream->turn body-stream nil))
+  ([body-stream on-content-delta]
+   (with-open [reader (io/reader body-stream)]
+     (loop [content []
+            tool-calls (sorted-map)
+            usage nil
+            raw []]
+       (if-let [line (.readLine reader)]
+         (if-let [event (parse-sse-line line)]
+           (let [delta (-> event :choices first :delta)
+                 chunk (:content delta)]
+             (when (and on-content-delta (string? chunk) (not= "" chunk))
+               (on-content-delta chunk))
+             (recur (cond-> content
+                      chunk (conj chunk))
+                    (if-let [tc-deltas (:tool_calls delta)]
+                      (merge-tool-call-deltas tool-calls tc-deltas)
+                      tool-calls)
+                    (or (:usage event) usage)
+                    (conj raw event)))
+           (recur content tool-calls usage raw))
+         {:role "assistant"
+          :content (apply str content)
+          :tool-calls (vec (vals tool-calls))
+          :usage (usage->estimate {:usage usage})
+          :raw raw})))))
+
+(defn- post-stream-turn
+  ([url request] (post-stream-turn url request nil))
+  ([url request on-content-delta]
+   (stream->turn
+    (:body (checked-response
+            (http/post url (assoc request
+                                  :throw-exceptions false
+                                  :as :stream))))
+    on-content-delta)))
 
 (defrecord OpenAICompatibleProvider [base-url api-key default-model site-url app-name extra-headers config]
   llm-core/ILLMProvider
@@ -289,11 +317,25 @@
   llm-core/ILLMProviderInvoke
   (invoke [this request]
     (let [opts (llm-core/request->completion-opts request)
+          on-content-delta (:on-content-delta opts)
           request* {:headers (bearer-headers {:api-key (:api-key this)
                                               :site-url (:site-url this)
                                               :app-name (:app-name this)
                                               :extra-headers (:extra-headers this)})}
-          response (if (stream-structured-output? (:config this) opts)
+          response (cond
+                     on-content-delta
+                     (post-stream-turn
+                      (chat-url (:base-url this))
+                      (assoc request*
+                             :body (json/generate-string
+                                    (stream-body (:base-url this)
+                                                 (:default-model this)
+                                                 (:config this)
+                                                 (:messages request)
+                                                 opts)))
+                      on-content-delta)
+
+                     (stream-structured-output? (:config this) opts)
                      (post-stream-turn
                       (chat-url (:base-url this))
                       (assoc request*
@@ -303,6 +345,8 @@
                                                  (:config this)
                                                  (:messages request)
                                                  opts))))
+
+                     :else
                      (let [response* (post-json
                                       (chat-url (:base-url this))
                                       (assoc request*

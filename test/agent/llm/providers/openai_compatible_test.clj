@@ -62,6 +62,52 @@
                      acc))]
       (is (= ["hello" " world"] chunks)))))
 
+(deftest invoke-streams-content-via-on-content-delta-callback-test
+  (let [body* (atom nil)]
+    (with-redefs [http/post (fn [_ request]
+                              (reset! body* (json/parse-string (:body request) true))
+                              {:status 200
+                               :headers {"Content-Type" "text/event-stream"}
+                               :body (byte-stream
+                                      (str "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"Hello\"}}]}\n\n"
+                                           "data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n"
+                                           "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+                                           "data: [DONE]\n\n"))})]
+      (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})
+            chunks (atom [])
+            response (llm-core/invoke
+                      llm
+                      {:messages [{:role "user" :content "hi"}]
+                       :on-content-delta #(swap! chunks conj %)})]
+        (is (true? (:stream @body*)))
+        (is (= ["Hello" " world"] @chunks))
+        (is (= "Hello world" (:content response)))
+        (is (empty? (:tool-calls response)))))))
+
+(deftest invoke-merges-streamed-tool-call-arg-fragments-test
+  (with-redefs [http/post (fn [_ _]
+                            {:status 200
+                             :headers {"Content-Type" "text/event-stream"}
+                             :body (byte-stream
+                                    (str "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"fs\",\"arguments\":\"\"}}]}}]}\n\n"
+                                         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"act\"}}]}}]}\n\n"
+                                         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"ion\\\":\\\"list\\\",\"}}]}}]}\n\n"
+                                         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"path\\\":\\\".\\\"}\"}}]}}]}\n\n"
+                                         "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n"
+                                         "data: [DONE]\n\n"))})]
+    (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})
+          chunks (atom [])
+          response (llm-core/invoke
+                    llm
+                    {:messages [{:role "user" :content "list files"}]
+                     :on-content-delta #(swap! chunks conj %)})
+          tc (first (:tool-calls response))]
+      (is (empty? @chunks))
+      (is (= 1 (count (:tool-calls response))))
+      (is (= "call_1" (:id tc)))
+      (is (= "fs" (get-in tc [:function :name])))
+      (is (= "{\"action\":\"list\",\"path\":\".\"}" (get-in tc [:function :arguments]))))))
+
 (deftest structured-output-invoke-streams-by-default-test
   (let [body* (atom nil)
         as* (atom nil)]

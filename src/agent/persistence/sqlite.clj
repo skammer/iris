@@ -52,8 +52,11 @@
 (defn session-exists? [store session-id]
   (sessions/session-exists? store session-id))
 
-(defn append-message! [store session-id role content]
-  (sessions/append-message! store session-id role content))
+(defn append-message!
+  ([store session-id role content]
+   (sessions/append-message! store session-id role content))
+  ([store session-id role content extra]
+   (sessions/append-message! store session-id role content extra)))
 
 (defn list-messages [store session-id]
   (sessions/list-messages store session-id))

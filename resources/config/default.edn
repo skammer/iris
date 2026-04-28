@@ -34,7 +34,23 @@
                  :timeout-ms 30000
                  :deny-by-default? true
                  :allowed-commands ["printf" "pwd" "ls" "echo" "cat" "rg" "git"]
-                 :max-output-bytes 65536}}
+                 :max-output-bytes 65536}
+         ;; Per-channel rendering of tool calls and results.
+         ;; preview-chars caps inline summary length; max-result-height-px caps
+         ;; expanded result container height in the web UI; full? disables any
+         ;; preview for that channel (used for API responses).
+         :display {:web {:show-tool-calls? true
+                         :collapsed? true
+                         :preview-chars 120
+                         :max-result-height-px 320
+                         :per-tool {}}
+                   :telegram {:show-tool-calls? true
+                              :preview-chars 240
+                              :args-preview-chars 120
+                              :per-tool {}}
+                   :api {:show-tool-calls? true
+                         :full? true
+                         :per-tool {}}}}
  :skills {:dirs ["skills"]}
  :memory {:prompt {:paths ["MEMORY.md"]}
           :search {:default-limit 20}
