@@ -179,10 +179,12 @@ class AgentChatPanel extends HTMLElement {}
 
 class ChatStream extends HTMLElement {
   #stick = true;
+  #streaming = false;
   #observer = new MutationObserver(() => this.afterChange());
 
   connectedCallback() {
     this.addEventListener("scroll", this, { passive: true });
+    this.#streaming = this.isStreaming();
     this.#observer.observe(this, { childList: true, subtree: true, characterData: true });
     requestAnimationFrame(() => this.scrollToBottom(true));
   }
@@ -196,7 +198,18 @@ class ChatStream extends HTMLElement {
     this.#stick = this.scrollHeight - this.clientHeight - this.scrollTop <= AUTOSCROLL_THRESHOLD_PX;
   }
 
+  isStreaming() {
+    return this.querySelector(".message--streaming") !== null;
+  }
+
   afterChange() {
+    const streaming = this.isStreaming();
+    const completed = this.#streaming && !streaming;
+    this.#streaming = streaming;
+    if (completed) {
+      requestAnimationFrame(() => this.scrollToBottom(true));
+      return;
+    }
     if (this.#stick) requestAnimationFrame(() => this.scrollToBottom(false));
   }
 
