@@ -2,6 +2,7 @@
   "OpenAI-compatible provider, used for OpenRouter first and other compatible APIs."
   (:require
    [agent.llm.core :as llm-core]
+   [agent.llm.dsml :as dsml]
    [cheshire.core :as json]
    [clj-http.client :as http]
    [clojure.core.async :as async]
@@ -138,11 +139,12 @@
 
 (defn- message->turn [body]
   (let [message (-> body :choices first :message)]
-    {:role (:role message "assistant")
-     :content (:content message)
-     :tool-calls (vec (or (:tool_calls message) []))
-     :usage (usage->estimate body)
-     :raw message}))
+    (dsml/recover-tool-calls
+     {:role (:role message "assistant")
+      :content (:content message)
+      :tool-calls (vec (or (:tool_calls message) []))
+      :usage (usage->estimate body)
+      :raw message})))
 
 (defn- merge-tool-call-deltas [tool-calls deltas]
   ;; OpenAI streams tool_calls as partial deltas keyed by :index. Each delta may
@@ -185,11 +187,12 @@
                     (or (:usage event) usage)
                     (conj raw event)))
            (recur content tool-calls usage raw))
-         {:role "assistant"
-          :content (apply str content)
-          :tool-calls (vec (vals tool-calls))
-          :usage (usage->estimate {:usage usage})
-          :raw raw})))))
+         (dsml/recover-tool-calls
+          {:role "assistant"
+           :content (apply str content)
+           :tool-calls (vec (vals tool-calls))
+           :usage (usage->estimate {:usage usage})
+           :raw raw}))))))
 
 (defn- post-stream-turn
   ([url request] (post-stream-turn url request nil))

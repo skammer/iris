@@ -114,12 +114,24 @@
    [:type {:optional true} :string]
    [:source {:optional true} :string]
    [:session_id {:optional true} :string]
+   [:source_request_id {:optional true} :string]
+   [:episode_id {:optional true} :string]
+   [:episode_content {:optional true} :string]
+   [:confidence {:optional true} number?]
+   [:valid_from {:optional true} :string]
+   [:valid_to {:optional true} :string]
+   [:observed_at {:optional true} :string]
+   [:invalidated_by {:optional true} :string]
    [:tags {:optional true} schemas/StringVec]])
 
 (def ^:private memory-graph-query-body
   [:map
    [:query {:optional true} :string]
-   [:limit {:optional true} :int]])
+   [:limit {:optional true} :int]
+   [:entity {:optional true} :string]
+   [:depth {:optional true} :int]
+   [:as_of {:optional true} :string]
+   [:include_historical {:optional true} :boolean]])
 
 (def ^:private channel-create-body
   [:map

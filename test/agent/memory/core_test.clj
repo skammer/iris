@@ -214,9 +214,133 @@
                                        {:subject "alice"
                                         :predicate "likes"
                                         :object "clojure"
-                                        :tags ["lang"]})
-        queried (memory/query-graph-memory service "alice")]
+                                        :tags ["lang"]
+                                        :confidence 0.9
+                                        :valid-from "2026-01-01T00:00:00Z"
+                                        :observed-at "2026-01-02T00:00:00Z"
+                                        :episode-id "episode-1"
+                                        :episode-content "alice likes clojure"})
+        _ (memory/save-graph-fact! service
+                                   {:subject "clojure"
+                                    :predicate "runs-on"
+                                    :object "jvm"
+                                    :valid-from "2026-01-03T00:00:00Z"
+                                    :observed-at "2026-01-03T00:00:00Z"})
+        _ (memory/save-graph-fact! service
+                                   {:subject "alice"
+                                    :predicate "used"
+                                    :object "java"
+                                    :valid-from "2025-01-01T00:00:00Z"
+                                    :valid-to "2025-12-31T00:00:00Z"
+                                    :observed-at "2025-01-01T00:00:00Z"})
+        _ (memory/save-graph-fact! service
+                                   {:subject "alice"
+                                    :predicate "likes"
+                                    :object "rust"
+                                    :valid-from "2026-02-01T00:00:00Z"
+                                    :observed-at "2026-02-01T00:00:00Z"})
+        queried (memory/query-graph-memory service "likes")
+        neighborhood (memory/query-graph-memory service nil {:entity "alice" :depth 2 :include-historical? true})
+        current-neighborhood (memory/query-graph-memory service nil {:entity "alice" :depth 2})
+        old-like (memory/query-graph-memory service "likes" {:as-of "2026-01-15T00:00:00Z"})
+        historical (memory/query-graph-memory service "java" {:as-of "2025-06-01T00:00:00Z"})
+        current (memory/query-graph-memory service "java" {:as-of "2026-06-01T00:00:00Z"})
+        health (memory/health-check service)]
     (is (= "alice" (:subject saved)))
     (is (= 1 (count queried)))
     (is (= "likes" (:predicate (first queried))))
+    (is (= "rust" (:object (first queried))))
+    (is (= "entity:alice" (:source-entity-id (first queried))))
+    (is (= "episode-1" (get-in old-like [0 :episodes 0 :episode/id])))
+    (is (= #{"likes" "runs-on" "used"} (set (map :predicate neighborhood))))
+    (is (= ["likes"] (mapv :predicate current-neighborhood)))
+    (is (= "clojure" (:object (first old-like))))
+    (is (= 1 (count historical)))
+    (is (empty? current))
+    (is (= 4 (get-in health [:graph :details :edge-count])))
+    (is (= 5 (get-in health [:graph :details :entity-count])))
     (io/delete-file db-path true)))
+
+(deftest hybrid-memory-ranking-and-eval-test
+  (let [db-path (temp-db-path)
+        graph-root (temp-dir)
+        graph-path (.getAbsolutePath (io/file graph-root "graph-store"))
+        store (sqlite/create-store {:path db-path})
+        session (sqlite/create-session! store "hybrid")
+        service (memory/create-memory-service
+                 {:prompt {:paths []}
+                  :search {:default-limit 10}
+                  :graph {:enabled true
+                          :backend :datahike
+                          :datahike {:path graph-path
+                                     :keep-history? true}}}
+                 store)]
+    (try
+      (sqlite/append-message! store (:id session) "user" "Alice mentioned weekend hiking")
+      (memory/save-memory-fact! service
+                                {:subject "alice"
+                                 :predicate "prefers"
+                                 :object "rust"
+                                 :confidence 0.95}
+                                {:scope {:type :global}
+                                 :source-session-id (:id session)})
+      (memory/save-memory-fact! service
+                                {:subject "bob"
+                                 :predicate "prefers"
+                                 :object "python"
+                                 :confidence 0.9}
+                                {:scope {:type :global}
+                                 :source-session-id (:id session)})
+      (let [results (memory/search-memory service "alice rust" {:limit 5})
+            ranked (:ranked results)
+            eval (memory/evaluate-retrieval
+                  service
+                  [{:query "alice rust"
+                    :expected [{:surface :graph
+                                :subject "alice"
+                                :predicate "prefers"
+                                :object "rust"}]}]
+                  {:limit 5})]
+        (is (= :graph (:surface (first ranked))))
+        (is (= "rust" (get-in ranked [0 :item :object])))
+        (is (pos? (get-in ranked [0 :score])))
+        (is (= 1.0 (:recall eval)))
+        (is (= 1 (:passed-count eval))))
+      (finally
+        (io/delete-file db-path true)))))
+
+(deftest graph-entity-alias-resolution-and-merge-test
+  (let [db-path (temp-db-path)
+        graph-root (temp-dir)
+        graph-path (.getAbsolutePath (io/file graph-root "graph-store"))
+        store (sqlite/create-store {:path db-path})
+        service (memory/create-memory-service
+                 {:prompt {:paths []}
+                  :search {:default-limit 10}
+                  :graph {:enabled true
+                          :backend :datahike
+                          :datahike {:path graph-path
+                                     :keep-history? true}}}
+                 store)]
+    (try
+      (memory/save-graph-fact! service
+                               {:subject "Alice Smith"
+                                :predicate "works-on"
+                                :object "Graph Memory"
+                                :observed-at "2026-01-01T00:00:00Z"})
+      (memory/merge-graph-entities! service "Alice Smith" ["alice" "A. Smith"])
+      (memory/save-graph-fact! service
+                               {:subject "alice"
+                                :predicate "prefers"
+                                :object "Clojure"
+                                :observed-at "2026-01-02T00:00:00Z"})
+      (let [alias-neighborhood (memory/query-graph-memory service nil {:entity "A. Smith" :depth 1})
+            canonical-neighborhood (memory/query-graph-memory service nil {:entity "Alice Smith" :depth 1})
+            alias-fact (first (memory/query-graph-memory service "prefers"))]
+        (is (= #{"works-on" "prefers"} (set (map :predicate alias-neighborhood))))
+        (is (= (set (map :id canonical-neighborhood))
+               (set (map :id alias-neighborhood))))
+        (is (= "Alice Smith" (:subject alias-fact)))
+        (is (= "entity:alice smith" (:source-entity-id alias-fact))))
+      (finally
+        (io/delete-file db-path true)))))
