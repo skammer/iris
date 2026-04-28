@@ -75,6 +75,14 @@
     (:type body) (assoc :type (:type body))
     (:source body) (assoc :source (:source body))
     (:session_id body) (assoc :session-id (:session_id body))
+    (:source_request_id body) (assoc :source-request-id (:source_request_id body))
+    (:episode_id body) (assoc :episode-id (:episode_id body))
+    (:episode_content body) (assoc :episode-content (:episode_content body))
+    (:confidence body) (assoc :confidence (:confidence body))
+    (:valid_from body) (assoc :valid-from (:valid_from body))
+    (:valid_to body) (assoc :valid-to (:valid_to body))
+    (:observed_at body) (assoc :observed-at (:observed_at body))
+    (:invalidated_by body) (assoc :invalidated-by (:invalidated_by body))
     (:tags body) (assoc :tags (vec (:tags body)))))
 
 (defn graph-save [system request]
@@ -88,9 +96,13 @@
           (throw e))))))
 
 (defn graph-query [system request]
-  (let [{:keys [query limit]} (h/read-json-body request)]
+  (let [{:keys [query limit entity depth as_of include_historical]} (h/read-json-body request)]
     (responses/json-response 200
                              {:data (memory/query-graph-memory (:memory-service system)
                                                                query
                                                                (cond-> {}
-                                                                 limit (assoc :limit limit)))})))
+                                                                 limit (assoc :limit limit)
+                                                                 entity (assoc :entity entity)
+                                                                 depth (assoc :depth depth)
+                                                                 as_of (assoc :as-of as_of)
+                                                                 include_historical (assoc :include-historical? true)))})))

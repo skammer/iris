@@ -10,14 +10,17 @@
 
 (defprotocol IGraphMemoryBackend
   (save-fact! [this fact])
+  (merge-entities! [this canonical aliases])
   (query-facts [this query opts])
   (backend-health-check [this]))
 
-(declare save-graph-fact! query-graph-memory)
+(declare save-graph-fact! merge-graph-entities! query-graph-memory)
 
 (defrecord NullGraphMemoryBackend []
   IGraphMemoryBackend
   (save-fact! [_ _]
+    (throw (ex-info "Graph memory backend is disabled" {:type :graph-memory-disabled})))
+  (merge-entities! [_ _ _]
     (throw (ex-info "Graph memory backend is disabled" {:type :graph-memory-disabled})))
   (query-facts [_ _ _] [])
   (backend-health-check [_]
@@ -96,6 +99,63 @@
 (defn- fact-text [fact]
   (str (:subject fact) " " (:predicate fact) " " (:object fact)))
 
+(defn- contains-query-score [query text]
+  (let [query* (str/lower-case (str/trim (or query "")))
+        text* (str/lower-case (or text ""))]
+    (cond
+      (str/blank? query*) 0.0
+      (str/includes? text* query*) 1.0
+      :else 0.0)))
+
+(defn- confidence-score [value]
+  (if (number? value)
+    (max 0.0 (min 1.0 (double value)))
+    0.5))
+
+(defn- item-text [surface item]
+  (case surface
+    :message (:content item)
+    :event (json/generate-string (:payload item))
+    :fact (fact-text item)
+    :graph (fact-text item)
+    ""))
+
+(defn- score-memory-item [query surface item]
+  (let [text (item-text surface item)
+        lexical (jaccard query text)
+        exact (contains-query-score query text)
+        confidence (confidence-score (:confidence item))
+        surface-weight (case surface
+                         :graph 1.15
+                         :fact 1.1
+                         :message 1.0
+                         :event 0.8
+                         1.0)
+        score (* surface-weight
+                 (+ (* 0.65 lexical)
+                    (* 0.25 exact)
+                    (* 0.10 confidence)))]
+    {:surface surface
+     :score score
+     :score-breakdown {:lexical lexical
+                       :exact exact
+                       :confidence confidence
+                       :surface-weight surface-weight}
+     :item item}))
+
+(defn rank-memory-results
+  [query results opts]
+  (let [limit (or (:limit opts) 20)]
+    (->> (concat
+          (map #(score-memory-item query :message %) (:messages results))
+          (map #(score-memory-item query :event %) (:events results))
+          (map #(score-memory-item query :fact %) (:facts results))
+          (map #(score-memory-item query :graph %) (:graph results)))
+         (filter #(pos? (:score %)))
+         (sort-by :score >)
+         (take limit)
+         vec)))
+
 (defn- similar-duplicate [memory-service fact opts]
   (when-let [threshold (get-in memory-service [:config :facts :dedup :similarity-threshold])]
     (let [candidates (sqlite/search-memory-facts (:store memory-service)
@@ -164,14 +224,21 @@
          facts (sqlite/search-memory-facts (:store memory-service)
                                            query
                                            (merge {:limit limit} opts))
+         graph-limit (max limit (* 4 limit))
          graph (try
-                 (query-graph-memory memory-service query {:limit limit})
+                 (->> (query-graph-memory memory-service nil {:limit graph-limit})
+                      (map #(assoc % :score (:score (score-memory-item query :graph %))))
+                      (filter #(pos? (or (:score %) 0.0)))
+                      (sort-by :score >)
+                      (take limit)
+                      vec)
                  (catch Exception _ []))]
-     {:query query
-      :messages messages
-      :events events
-      :facts facts
-      :graph graph})))
+     (let [results {:query query
+                    :messages messages
+                    :events events
+                    :facts facts
+                    :graph graph}]
+       (assoc results :ranked (rank-memory-results query results {:limit limit}))))))
 
 (defn save-memory-fact!
   ([memory-service fact] (save-memory-fact! memory-service fact {}))
@@ -296,6 +363,7 @@
                     (save-memory-fact! memory-service
                                        (dissoc fact :scope)
                                        (merge opts
+                                              {:episode-content (json/generate-string exchange)}
                                               {:scope {:type scope-type
                                                        :id (case scope-type
                                                              "session" (:session-id opts)
@@ -315,10 +383,47 @@
   [memory-service fact]
   (save-fact! (:graph-backend memory-service) fact))
 
+(defn merge-graph-entities!
+  [memory-service canonical aliases]
+  (merge-entities! (:graph-backend memory-service) canonical aliases))
+
 (defn query-graph-memory
   ([memory-service query] (query-graph-memory memory-service query {}))
   ([memory-service query opts]
    (query-facts (:graph-backend memory-service) query opts)))
+
+(defn- expected-match? [expected ranked]
+  (let [item (:item ranked)]
+    (and (or (nil? (:surface expected))
+             (= (:surface expected) (:surface ranked)))
+         (every? (fn [[k v]] (= v (get item k)))
+                 (dissoc expected :surface)))))
+
+(defn evaluate-retrieval
+  [memory-service cases opts]
+  (let [limit (or (:limit opts) 5)
+        evaluated (mapv
+                   (fn [{:keys [query expected]}]
+                     (let [results (search-memory memory-service query {:limit limit})
+                           ranked (:ranked results)
+                           hits (mapv (fn [expected*]
+                                        (boolean (some #(expected-match? expected* %) ranked)))
+                                      expected)]
+                       {:query query
+                        :expected expected
+                        :hit-count (count (filter true? hits))
+                        :expected-count (count expected)
+                        :passed? (every? true? hits)
+                        :ranked ranked}))
+                   cases)
+        total-expected (reduce + (map :expected-count evaluated))
+        total-hits (reduce + (map :hit-count evaluated))]
+    {:cases evaluated
+     :case-count (count evaluated)
+     :passed-count (count (filter :passed? evaluated))
+     :recall (if (zero? total-expected)
+               1.0
+               (/ (double total-hits) total-expected))}))
 
 (defn health-check
   [memory-service]
