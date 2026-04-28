@@ -24,6 +24,10 @@
          :full? true
          :per-tool {}}})
 
+(def ^:private telegram-max-message-chars 4096)
+(def ^:private telegram-blockquote-open "<blockquote expandable>")
+(def ^:private telegram-blockquote-close "</blockquote>")
+
 (defn channel-config
   "Returns the display config for `channel`, merged with per-tool overrides for
    `tool-name` when present."
@@ -57,6 +61,25 @@
     (string? result) result
     :else (json/generate-string result)))
 
+(defn- escape-html-char [ch]
+  (case ch
+    \& "&amp;"
+    \< "&lt;"
+    \> "&gt;"
+    (str ch)))
+
+(defn- escape-html-truncated [s max-chars]
+  (loop [chars (seq (str s))
+         acc []
+         n 0]
+    (if-let [ch (first chars)]
+      (let [escaped (escape-html-char ch)
+            n* (+ n (count escaped))]
+        (if (<= n* max-chars)
+          (recur (next chars) (conj acc escaped) n*)
+          (apply str acc)))
+      (apply str acc))))
+
 (defn- pretty-value [value]
   (cond
     (nil? value) ""
@@ -79,9 +102,12 @@
   (-> value pretty-value (truncate max-chars)))
 
 (defn- blockquote [s]
-  (->> (str/split (str s) #"\n" -1)
-       (map #(str "> " %))
-       (str/join "\n")))
+  (let [max-body (- telegram-max-message-chars
+                    (count telegram-blockquote-open)
+                    (count telegram-blockquote-close))]
+    (str telegram-blockquote-open
+         (escape-html-truncated s max-body)
+         telegram-blockquote-close)))
 
 (defn telegram-summary
   "Compact one-message summary of a tool turn for Telegram."
@@ -94,8 +120,7 @@
         args-block (let [a (block-preview input args-cap)]
                      (when-not (str/blank? a) a))
         result-block (let [r (block-preview result result-cap)]
-                       (when-not (str/blank? r)
-                         (str "```json\n" r "\n```")))]
+                       (when-not (str/blank? r) r))]
     (blockquote
      (->> [head args-block result-block]
          (remove nil?)

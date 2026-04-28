@@ -79,6 +79,16 @@
                         (assoc (text-payload chunk) :chat_id chat-id)))
         (fmt/chunk-markdown (str text) max-source-chars)))
 
+(defn send-html-message!
+  [token chat-id text]
+  (let [s (str text)]
+    (api-request! token "sendMessage"
+                  {:chat_id chat-id
+                   :text (if (> (count s) max-message-chars)
+                           (subs s 0 max-message-chars)
+                           s)
+                   :parse_mode "HTML"})))
+
 (defn send-chat-action!
   [token chat-id action]
   (api-request! token "sendChatAction"
@@ -263,8 +273,8 @@
     (when (true? (:show-tool-calls? cfg))
       (let [send! (or (:send-message-fn opts)
                       (fn [cid text]
-                        (send-message! (get-in system [:config :channel-adapters :telegram :bot-token])
-                                       cid text)))]
+                        (send-html-message! (get-in system [:config :channel-adapters :telegram :bot-token])
+                                            cid text)))]
         (fn [{:keys [receipt]}]
           (try
             (let [text (tool-display/telegram-summary system receipt)]
