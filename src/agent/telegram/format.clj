@@ -118,10 +118,38 @@
     :else
     (render-inline line)))
 
+(defn- blockquote-parts [line]
+  (when-let [[_ body] (re-matches #"[ \t]*>[ \t]?(.*)" line)]
+    body))
+
+(defn- fence-marker [line]
+  (when-let [[_ lang] (re-matches #"[ \t]*(?:```|~~~)([^\n`~]*)[ \t]*" line)]
+    (-> (or lang "") str/trim (str/replace #"\s+" ""))))
+
+(defn- render-blockquote-fence-open [lang]
+  (str ">```" (escape-code lang)))
+
+(defn- render-blockquote-code-line [line]
+  (if-let [body (blockquote-parts line)]
+    (str ">" (escape-code body))
+    (escape-code line)))
+
 (defn- render-lines [s]
-  (->> (str/split (str s) #"\n" -1)
-       (map render-line)
-       (str/join "\n")))
+  (let [lines (str/split (str s) #"\n" -1)]
+    (loop [remaining lines
+           in-blockquote-code? false
+           acc []]
+      (if-let [line (first remaining)]
+        (if in-blockquote-code?
+          (let [body (blockquote-parts line)]
+            (if-let [_lang (and body (fence-marker body))]
+              (recur (rest remaining) false (conj acc ">```"))
+              (recur (rest remaining) true (conj acc (render-blockquote-code-line line)))))
+          (let [body (blockquote-parts line)]
+            (if-let [lang (and body (fence-marker body))]
+              (recur (rest remaining) true (conj acc (render-blockquote-fence-open lang)))
+              (recur (rest remaining) false (conj acc (render-line line))))))
+        (str/join "\n" acc)))))
 
 (defn- close-streaming-markers
   "Appends synthetic closers for trailing unclosed openers (code fence,

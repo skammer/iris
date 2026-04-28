@@ -46,3 +46,19 @@
     (is (not (str/includes? html "<script")))
     (is (not (str/includes? html "<img")))
     (is (not (str/includes? html "onerror=\"alert(1)\"")))))
+
+(deftest tool-message-summary-shows-arguments
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [session (sqlite/create-session! store "tools")
+            payload "{\"status\":\"ok\",\"tool-name\":\"web\",\"input\":{\"query\":\"clojure\"},\"result\":{\"answer\":\"done\"}}"]
+        (sqlite/append-message! store (:id session) "tool" payload {:tool-call-id "call_1"})
+        (let [html (ui/session-messages-fragment {:store store} (:id session))]
+          (is (str/includes? html "web"))
+          (is (str/includes? html "ok"))
+          (is (str/includes? html "query"))
+          (is (str/includes? html "clojure"))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))

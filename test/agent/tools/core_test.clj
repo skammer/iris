@@ -1,7 +1,21 @@
 (ns agent.tools.core-test
   (:require
+   [agent.tools.display :as display]
    [agent.tools.core :as tools]
+   [clojure.string :as str]
    [clojure.test :refer :all]))
+
+(deftest display-telegram-summary-includes-args-and-code-output-test
+  (let [text (display/telegram-summary
+              {}
+              {:tool-name "web"
+               :status :ok
+               :input {:q "clojure"}
+               :result {:answer "done"}})]
+    (is (str/includes? text "> 🔧 web ok"))
+    (is (str/includes? text ">   \"q\" : \"clojure\""))
+    (is (str/includes? text "> ```json"))
+    (is (str/includes? text ">   \"answer\" : \"done\""))))
 
 (deftest registry-register-list-and-execute-test
   (let [events (atom [])
