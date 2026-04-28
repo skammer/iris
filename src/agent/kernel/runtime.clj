@@ -38,6 +38,7 @@
              :status :ok
              :tool-name tool-name
              :tool-call-id (:provider-tool-call-id context*)
+             :input input
              :result result})
           (catch Exception e
             (let [error-type (:type (ex-data e))]

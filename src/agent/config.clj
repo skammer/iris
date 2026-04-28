@@ -57,12 +57,13 @@
                    :max-output-bytes 65536}
            :display {:web {:show-tool-calls? true
                            :collapsed? true
-                           :preview-chars 120
+                           :preview-chars 800
+                           :args-preview-chars 800
                            :max-result-height-px 320
                            :per-tool {}}
                      :telegram {:show-tool-calls? true
-                                :preview-chars 240
-                                :args-preview-chars 120
+                                :preview-chars 1600
+                                :args-preview-chars 1200
                                 :per-tool {}}
                      :api {:show-tool-calls? true
                            :full? true

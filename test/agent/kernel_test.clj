@@ -54,8 +54,9 @@
     (is (= :approval-required
            (:status (kernel-runtime/execute-directive! ops "agent-1" directive))))
     (is (empty? @executed))
-    (is (= :ok
-           (:status (kernel-runtime/execute-directive! ops "agent-1" directive {:yolo? true}))))
+    (let [receipt (kernel-runtime/execute-directive! ops "agent-1" directive {:yolo? true})]
+      (is (= :ok (:status receipt)))
+      (is (= {:url "https://example.com"} (:input receipt))))
     (is (= [{:agent-id "agent-1"
              :tool-name :http
              :input {:url "https://example.com"}

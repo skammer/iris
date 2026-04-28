@@ -60,10 +60,14 @@
   (let [tool-name (or (:tool-name parsed) "tool")
         status (some-> (:status parsed) name)
         cfg (tool-display/channel-config system :web tool-name)
-        args (tool-display/args-preview (:input parsed) (:preview-chars cfg 120))]
+        args (tool-display/block-preview (:input parsed)
+                                         (or (:args-preview-chars cfg)
+                                             (:preview-chars cfg)
+                                             800))]
     [:span.tool-result__summary
-     [:span.tool-result__name tool-name]
-     (when status [:span.tool-result__status {:class (str "status--" status)} status])
+     [:span.tool-result__summary-head
+      [:span.tool-result__name tool-name]
+      (when status [:span.tool-result__status {:class (str "status--" status)} status])]
      (when-not (str/blank? args)
        [:span.tool-result__args.code args])
      (when tool-call-id [:span.tool-result__id.meta tool-call-id])]))

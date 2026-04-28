@@ -12,12 +12,13 @@
 (def default-channel-config
   {:web {:show-tool-calls? true
          :collapsed? true
-         :preview-chars 120
+         :preview-chars 800
+         :args-preview-chars 800
          :max-result-height-px 320
          :per-tool {}}
    :telegram {:show-tool-calls? true
-              :preview-chars 240
-              :args-preview-chars 120
+              :preview-chars 1600
+              :args-preview-chars 1200
               :per-tool {}}
    :api {:show-tool-calls? true
          :full? true
@@ -36,7 +37,7 @@
 (defn- truncate [s n]
   (let [s (str s)]
     (if (and n (> (count s) n))
-      (str (subs s 0 n) "…")
+      (str (subs s 0 n) "...")
       s)))
 
 (defn- single-line [s]
@@ -56,6 +57,12 @@
     (string? result) result
     :else (json/generate-string result)))
 
+(defn- pretty-value [value]
+  (cond
+    (nil? value) ""
+    (string? value) value
+    :else (json/generate-string value {:pretty true})))
+
 (defn args-preview
   "Single-line, length-capped representation of tool arguments."
   [args max-chars]
@@ -66,18 +73,30 @@
   [result max-chars]
   (-> result result->string single-line (truncate max-chars)))
 
+(defn block-preview
+  "Multi-line, length-capped representation of a value."
+  [value max-chars]
+  (-> value pretty-value (truncate max-chars)))
+
+(defn- blockquote [s]
+  (->> (str/split (str s) #"\n" -1)
+       (map #(str "> " %))
+       (str/join "\n")))
+
 (defn telegram-summary
   "Compact one-message summary of a tool turn for Telegram."
   [system {:keys [tool-name status input result]}]
   (let [cfg (channel-config system :telegram tool-name)
-        args-cap (:args-preview-chars cfg 120)
-        result-cap (:preview-chars cfg 240)
+        args-cap (:args-preview-chars cfg 1200)
+        result-cap (:preview-chars cfg 1600)
         head (str "🔧 " (or tool-name "tool")
-                  (when status (str " · " (name (keyword status)))))
-        args-line (let [a (args-preview input args-cap)]
-                    (when-not (str/blank? a) (str "args: " a)))
-        result-line (let [r (result-preview result result-cap)]
-                      (when-not (str/blank? r) (str "→ " r)))]
-    (->> [head args-line result-line]
+                  (when status (str " " (name (keyword status)))))
+        args-block (let [a (block-preview input args-cap)]
+                     (when-not (str/blank? a) a))
+        result-block (let [r (block-preview result result-cap)]
+                       (when-not (str/blank? r)
+                         (str "```json\n" r "\n```")))]
+    (blockquote
+     (->> [head args-block result-block]
          (remove nil?)
-         (str/join "\n"))))
+         (str/join "\n")))))

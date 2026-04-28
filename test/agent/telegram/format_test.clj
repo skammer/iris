@@ -50,6 +50,10 @@
   (is (= ">line one\n>line two"
          (fmt/md->markdown-v2 "> line one\n> line two"))))
 
+(deftest md-markdown-v2-blockquote-code-block
+  (is (= ">title\n>```json\n>{\"ok\":true}\n>```"
+         (fmt/md->markdown-v2 "> title\n> ```json\n> {\"ok\":true}\n> ```"))))
+
 (deftest md-markdown-v2-link
   (is (= "[click](https://example.com)"
          (fmt/md->markdown-v2 "[click](https://example.com)"))))

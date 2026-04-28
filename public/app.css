@@ -856,11 +856,18 @@ textarea {
 }
 
 .tool-result__summary {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.tool-result__summary-head {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
-  font-size: 12px;
   min-width: 0;
 }
 
@@ -897,11 +904,10 @@ textarea {
 }
 
 .tool-result__args {
-  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: pre-wrap;
+  word-break: break-word;
   opacity: 0.8;
   font-size: 11px;
 }
