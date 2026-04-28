@@ -19,6 +19,8 @@
 ;; Telegram per-chat send rate is ~1/sec; staying above this floor keeps
 ;; draft updates in order and avoids 429s on slow connections.
 (def ^:private stream-flush-ms 1200)
+;; Telegram chat actions expire after ~5s; refresh below that window.
+(def ^:private typing-refresh-ms 4000)
 
 (defn- parse-body [body]
   (cond
@@ -76,6 +78,12 @@
           (api-request! token "sendMessage"
                         (assoc (text-payload chunk) :chat_id chat-id)))
         (fmt/chunk-markdown (str text) max-source-chars)))
+
+(defn send-chat-action!
+  [token chat-id action]
+  (api-request! token "sendChatAction"
+                {:chat_id chat-id
+                 :action action}))
 
 (defn send-message-draft!
   "Streams a partial message via Telegram Bot API 9.5 sendMessageDraft.
@@ -264,20 +272,40 @@
                 (send! chat-id text)))
             (catch Exception _ nil)))))))
 
+(defn- start-typing-indicator!
+  [config opts chat-id]
+  (let [token (:bot-token config)
+        running? (atom true)
+        send-action! (or (:send-chat-action-fn opts)
+                         (fn [cid action] (send-chat-action! token cid action)))
+        worker (future
+                 (while @running?
+                   (try
+                     (send-action! chat-id "typing")
+                     (catch Exception _ nil))
+                   (Thread/sleep typing-refresh-ms)))]
+    (fn []
+      (reset! running? false)
+      (future-cancel worker))))
+
 (defn- run-chat!
   [system config opts chat chat-id session-id user-text]
   (let [token (:bot-token config)
         send! (or (:send-message-fn opts)
                   (fn [cid text] (send-message! token cid text)))
+        stop-typing! (start-typing-indicator! config opts chat-id)
         on-delta (build-stream-on-delta config opts chat chat-id)
         on-tool-call (build-on-tool-call system opts chat-id)
-        result ((or (:chat-fn opts) chat/run!)
-                system
-                (cond-> {:session-id session-id
-                         :messages [{:role "user" :content user-text}]
-                         :context {:telegram-chat-id chat-id}}
-                  on-delta (assoc :on-delta on-delta)
-                  on-tool-call (assoc :on-tool-call on-tool-call)))
+        result (try
+                 ((or (:chat-fn opts) chat/run!)
+                  system
+                  (cond-> {:session-id session-id
+                           :messages [{:role "user" :content user-text}]
+                           :context {:telegram-chat-id chat-id}}
+                    on-delta (assoc :on-delta on-delta)
+                    on-tool-call (assoc :on-tool-call on-tool-call)))
+                 (finally
+                   (stop-typing!)))
         final (or (:content result) "")]
     (send! chat-id (if (str/blank? final) "(no response)" final))
     final))
