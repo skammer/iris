@@ -197,6 +197,63 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest telegram-finalizes-streamed-draft-before-tool-call-summary
+  ;; Regression: Telegram drafts are ephemeral — sending any regular message
+  ;; clears the in-flight draft. Streamed text emitted before a mid-turn tool
+  ;; call must be promoted to a real sendMessage before the tool-call summary
+  ;; is sent, otherwise it's lost from the chat history.
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        sent (atom [])
+        drafts (atom [])
+        system {:store store
+                :event-sink (fn [_] nil)
+                :config {:tools {:display {:telegram {:show-tool-calls? true
+                                                      :preview-chars 1600
+                                                      :args-preview-chars 1200
+                                                      :per-tool {}}}}}}
+        config {:bot-token "token"
+                :allowlist {:allow-all? true}}
+        step1-deltas ["cherry " "paragraph"]
+        step2-deltas ["final " "answer"]
+        opts {:send-message-fn (fn [chat-id text]
+                                 (swap! sent conj {:chat-id chat-id :text text}))
+              :send-message-draft-fn (fn [chat-id draft-id text]
+                                       (swap! drafts conj {:chat-id chat-id
+                                                           :draft-id draft-id
+                                                           :text text}))
+              :chat-fn (fn [_ {:keys [session-id on-delta on-tool-call]}]
+                         (doseq [d step1-deltas]
+                           (Thread/sleep 700)
+                           (on-delta d))
+                         (on-tool-call {:tool-call {:id "c1" :function {:name "list_dir"}}
+                                        :receipt {:status :completed
+                                                  :tool-name "list_dir"
+                                                  :input {:path "./obsidian"}
+                                                  :result {:files ["a.md"]}}})
+                         (doseq [d step2-deltas]
+                           (Thread/sleep 700)
+                           (on-delta d))
+                         {:content (apply str step2-deltas)
+                          :session-id session-id
+                          :stream? true})}]
+    (try
+      (is (= :processed
+             (telegram/process-update! system config opts (update-for 1 100 7 "hi"))))
+      (let [texts (mapv :text @sent)]
+        (is (some #(= "cherry paragraph" %) texts)
+            "streamed pre-tool-call text must be promoted to a real message")
+        (is (some #(= "final answer" %) texts)
+            "final answer must be sent as a real message")
+        (is (= "final answer" (last texts))
+            "final answer is the last message sent"))
+      (let [draft-ids (set (map :draft-id @drafts))]
+        (is (>= (count draft-ids) 2)
+            "draft id should rotate after finalize so step 2 streams onto a fresh draft slot"))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest telegram-sends-typing-while-chat-running
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path :evict-on-close? true})
