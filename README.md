@@ -36,6 +36,16 @@ Run rewritten API with explicit config and without SQLite native-access warning:
 clojure -J--enable-native-access=ALL-UNNAMED -M -m agent.core --config config/deepseek.local.edn serve
 ```
 
+Configuration:
+
+- `~/.config/iris/config.edn` uses the same shape as `config/default.edn`; partial overrides are expected.
+- If a generated file starts with `#:iris`, nested keys like `:api` read as `:iris/api`; current loader normalizes this, but prefer normal map syntax: `{:iris/config-version 1 :api {:port 9090}}`.
+- Config dir resolution: `IRIS_CONFIG_DIR`, then `$XDG_CONFIG_HOME/iris`, then `~/.config/iris`.
+- Project-local overlay dir: `./.iris/`.
+- Global files are created when missing: `config.edn`, `SOUL.md`, `AGENTS.md`, `USER.md`, `TOOLS.md`, `BOOT.md`, `HEARTBEAT.md`.
+- EDN merge order: built-in defaults → `resources/config/default.edn` → `./config/default.edn` → global `config.edn` → local `./.iris/config.edn` → explicit `--config` file → env vars.
+- Markdown context files merge by concatenating global then local in this order: `SOUL.md`, `AGENTS.md`, `USER.md`, `TOOLS.md`, `BOOT.md`, `HEARTBEAT.md`.
+
 Run rewritten tests:
 
 ```bash

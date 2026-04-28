@@ -1,5 +1,6 @@
 (ns agent.test-runner
   (:require
+   [agent.config :as config]
    [agent.api-test]
    [agent.api-smoke-test]
    [agent.broker.local-test]
@@ -35,7 +36,8 @@
    [agent.tools.common.http-test]
    [agent.tools.common.telegram-test]
    [agent.tools.common.shell-test]
-   [agent.tools.core-test]))
+   [agent.tools.core-test]
+   [clojure.java.io :as io]))
 
 (def rewritten-test-namespaces
   '[agent.api-test
@@ -76,7 +78,18 @@
 
 (defn run-all-tests
   []
-  (apply t/run-tests rewritten-test-namespaces))
+  (let [root (.toFile (java.nio.file.Files/createTempDirectory
+                       "iris-test-runner-"
+                       (make-array java.nio.file.attribute.FileAttribute 0)))]
+    (try
+      (.mkdirs (io/file root "home"))
+      (binding [config/*user-home* (fn [] (.getPath (io/file root "home")))
+                config/*env* (fn [k]
+                               (when-not (#{"IRIS_CONFIG_DIR" "XDG_CONFIG_HOME"} k)
+                                 (System/getenv k)))]
+        (apply t/run-tests rewritten-test-namespaces))
+      (finally
+        (io/delete-file root true)))))
 
 (defn -main
   [& _args]
