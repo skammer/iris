@@ -96,13 +96,17 @@
           (throw e))))))
 
 (defn graph-query [system request]
-  (let [{:keys [query limit entity depth as_of include_historical]} (h/read-json-body request)]
+  (let [{:keys [mode query limit entity depth from to max_depth as_of include_historical]} (h/read-json-body request)]
     (responses/json-response 200
                              {:data (memory/query-graph-memory (:memory-service system)
                                                                query
                                                                (cond-> {}
+                                                                 mode (assoc :mode (keyword mode))
                                                                  limit (assoc :limit limit)
                                                                  entity (assoc :entity entity)
                                                                  depth (assoc :depth depth)
+                                                                 from (assoc :from from)
+                                                                 to (assoc :to to)
+                                                                 max_depth (assoc :max-depth max_depth)
                                                                  as_of (assoc :as-of as_of)
                                                                  include_historical (assoc :include-historical? true)))})))

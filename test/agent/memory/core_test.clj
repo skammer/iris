@@ -344,3 +344,58 @@
         (is (= "entity:alice smith" (:source-entity-id alias-fact))))
       (finally
         (io/delete-file db-path true)))))
+
+(deftest graph-path-query-test
+  (let [db-path (temp-db-path)
+        graph-root (temp-dir)
+        graph-path (.getAbsolutePath (io/file graph-root "graph-store"))
+        store (sqlite/create-store {:path db-path})
+        service (memory/create-memory-service
+                 {:prompt {:paths []}
+                  :search {:default-limit 10}
+                  :graph {:enabled true
+                          :backend :datahike
+                          :datahike {:path graph-path
+                                     :keep-history? true}}}
+                 store)]
+    (try
+      (memory/save-graph-fact! service
+                               {:subject "Alice Smith"
+                                :predicate "likes"
+                                :object "Clojure"
+                                :observed-at "2026-01-01T00:00:00Z"})
+      (memory/save-graph-fact! service
+                               {:subject "Clojure"
+                                :predicate "runs-on"
+                                :object "JVM"
+                                :observed-at "2026-01-02T00:00:00Z"})
+      (memory/save-graph-fact! service
+                               {:subject "JVM"
+                                :predicate "uses"
+                                :object "bytecode"
+                                :valid-to "2026-01-15T00:00:00Z"
+                                :observed-at "2026-01-03T00:00:00Z"})
+      (memory/merge-graph-entities! service "Alice Smith" ["alice"])
+      (let [paths (memory/query-graph-memory service nil {:mode :paths
+                                                          :from "alice"
+                                                          :to "JVM"
+                                                          :max-depth 3})
+            inactive (memory/query-graph-memory service nil {:mode :paths
+                                                             :from "alice"
+                                                             :to "bytecode"
+                                                             :max-depth 4})
+            historical (memory/query-graph-memory service nil {:mode :paths
+                                                               :from "alice"
+                                                               :to "bytecode"
+                                                               :max-depth 4
+                                                               :as-of "2026-01-10T00:00:00Z"})]
+        (is (= 1 (count paths)))
+        (is (= ["Alice Smith" "Clojure" "JVM"]
+               (mapv :label (:nodes (first paths)))))
+        (is (= ["likes" "runs-on"]
+               (mapv :predicate (:edges (first paths)))))
+        (is (empty? inactive))
+        (is (= ["likes" "runs-on" "uses"]
+               (mapv :predicate (:edges (first historical))))))
+      (finally
+        (io/delete-file db-path true)))))
