@@ -241,17 +241,22 @@
 (defn- private-chat? [chat]
   (= "private" (:type chat)))
 
-(defn- build-stream-on-delta
-  "Returns an on-delta callback that animates a partial reply via sendMessageDraft.
-   Returns nil when the chat doesn't support live updates (groups, channels)."
+(defn- build-stream-controls
+  "Returns `{:on-delta f :finalize! f}` for animating a partial reply via
+   sendMessageDraft. `finalize!` promotes the accumulated draft to a real
+   sendMessage (drafts are ephemeral and get cleared by any subsequent regular
+   message), resets the accumulator, and rotates the draft id so the next step
+   streams onto a fresh draft slot. Returns nil for non-private chats."
   [config opts chat chat-id]
   (when (private-chat? chat)
     (let [token (:bot-token config)
-          draft-id (inc (mod (System/currentTimeMillis) 2147483647))
+          draft-id (atom (inc (mod (System/currentTimeMillis) 2147483647)))
           accumulator (atom "")
           last-flush (atom 0)
           send-draft! (or (:send-message-draft-fn opts)
                           (fn [cid did text] (send-message-draft! token cid did text)))
+          send-msg! (or (:send-message-fn opts)
+                        (fn [cid text] (send-message! token cid text)))
           flush! (fn []
                    (let [now (System/currentTimeMillis)
                          text @accumulator]
@@ -259,24 +264,38 @@
                                 (>= (- now @last-flush) stream-flush-ms))
                        (reset! last-flush now)
                        (try
-                         (send-draft! chat-id draft-id text)
-                         (catch Exception _ nil)))))]
-      (fn [delta]
-        (swap! accumulator str delta)
-        (flush!)))))
+                         (send-draft! chat-id @draft-id text)
+                         (catch Exception _ nil)))))
+          finalize! (fn []
+                      (let [text @accumulator]
+                        (reset! accumulator "")
+                        (reset! last-flush 0)
+                        (swap! draft-id #(inc (mod % 2147483647)))
+                        (when-not (str/blank? text)
+                          (try
+                            (send-msg! chat-id text)
+                            (catch Exception _ nil)))))]
+      {:on-delta (fn [delta]
+                   (swap! accumulator str delta)
+                   (flush!))
+       :finalize! finalize!})))
 
 (defn- build-on-tool-call
-  "Builds an on-tool-call callback that sends a compact summary message per
-   tool turn. Returns nil when the channel disables tool-call display."
-  [system opts chat-id]
+  "Builds an on-tool-call callback that finalizes any in-flight streamed
+   draft (so streamed text isn't lost when sending the tool-call message
+   clears the draft) and then sends a compact summary per tool turn. Returns
+   nil when the channel disables tool-call display."
+  [system opts chat-id stream-controls]
   (let [cfg (tool-display/channel-config system :telegram nil)]
     (when (true? (:show-tool-calls? cfg))
       (let [send! (or (:send-message-fn opts)
                       (fn [cid text]
                         (send-html-message! (get-in system [:config :channel-adapters :telegram :bot-token])
-                                            cid text)))]
+                                            cid text)))
+            finalize! (:finalize! stream-controls)]
         (fn [{:keys [receipt]}]
           (try
+            (when finalize! (finalize!))
             (let [text (tool-display/telegram-summary system receipt)]
               (when-not (str/blank? text)
                 (send! chat-id text)))
@@ -304,8 +323,9 @@
         send! (or (:send-message-fn opts)
                   (fn [cid text] (send-message! token cid text)))
         stop-typing! (start-typing-indicator! config opts chat-id)
-        on-delta (build-stream-on-delta config opts chat chat-id)
-        on-tool-call (build-on-tool-call system opts chat-id)
+        stream-controls (build-stream-controls config opts chat chat-id)
+        on-delta (:on-delta stream-controls)
+        on-tool-call (build-on-tool-call system opts chat-id stream-controls)
         result (try
                  ((or (:chat-fn opts) chat/run!)
                   system
