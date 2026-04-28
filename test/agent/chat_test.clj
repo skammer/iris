@@ -131,6 +131,27 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest chat-loop-injects-iris-context-before-memory-test
+  (let [path (temp-db-path)
+        responses (atom ["done"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider
+                            #(assoc-in % [:iris :context] "SOUL\nAGENTS"))
+        session (system/create-session! system "context")]
+    (try
+      (chat/run! system {:session-id (:id session)
+                         :messages [{:role "user" :content "hello"}]})
+      (let [planner-messages (get-in (first @requests) [:request :messages])]
+        (is (str/includes? (:content (first planner-messages))
+                           "tool-calling loop"))
+        (is (= "SOUL\nAGENTS" (:content (second planner-messages))))
+        (is (str/starts-with? (:content (nth planner-messages 2))
+                              "Relevant memory JSON: "))
+        (is (= "user" (:role (nth planner-messages 3)))))
+      (finally
+        (io/delete-file path true)))))
+
 (deftest chat-loop-executes-safe-tool-via-native-tool-call-test
   (let [path (temp-db-path)
         responses (atom [(tool-call-response :fs {:action "list" :path "."})

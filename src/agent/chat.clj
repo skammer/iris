@@ -112,6 +112,10 @@
    :content (str "Relevant memory JSON: "
                  (compact-memory-json recall))})
 
+(defn- iris-context-message [system]
+  (when-let [context (some-> (get-in system [:config :iris :context]) str/trim not-empty)]
+    {:role "system" :content context}))
+
 (defn- approval-expires-at [system]
   (str (.plusSeconds (Instant/now)
                      (long (get-in system [:config :tools :approvals :ttl-seconds] 900)))))
@@ -386,7 +390,11 @@
         user-message (persist-user-turn! system session-id messages)
         history (if session-id (session-messages system session-id) messages)
         recall (recall-memory system session-id prompt)
-        initial-messages (into [(memory-message recall)] history)
+        iris-context (iris-context-message system)
+        initial-messages (into (cond-> []
+                                 iris-context (conj iris-context)
+                                 true (conj (memory-message recall)))
+                               history)
         ops (->ChatKernelOps system session-id request-id context)
         stream-content? (and on-delta
                              (not (false? (get-in system [:config :llm :stream-content?] true))))
