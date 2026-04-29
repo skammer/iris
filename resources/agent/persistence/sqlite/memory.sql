@@ -37,7 +37,7 @@ set subject = :subject,
     updated_at = :updated_at
 where id = :id
 
--- :name search-facts-scoped :? :*
+-- :name search-facts-scoped-like :? :*
 select id, scope_type, scope_id, subject, predicate, object,
        normalized_subject, normalized_predicate, normalized_object,
        source_session_id, source_message_ids_json, source_request_id,
@@ -54,7 +54,22 @@ where status = 'active'
 order by updated_at desc
 limit :limit
 
--- :name search-facts-all :? :*
+-- :name search-facts-scoped-fts :? :*
+select f.id, f.scope_type, f.scope_id, f.subject, f.predicate, f.object,
+       f.normalized_subject, f.normalized_predicate, f.normalized_object,
+       f.source_session_id, f.source_message_ids_json, f.source_request_id,
+       f.confidence, f.status, f.metadata_json, f.created_at, f.updated_at,
+       bm25(memory_facts_fts) as retrieval_score
+from memory_facts_fts
+join memory_facts f on f.rowid = memory_facts_fts.rowid
+where memory_facts_fts match :query
+  and f.status = 'active'
+  and ((:include_global = 1 and f.scope_type = 'global')
+       or (f.scope_type = :scope_type and coalesce(f.scope_id, '') = coalesce(:scope_id, '')))
+order by retrieval_score asc, f.updated_at desc
+limit :limit
+
+-- :name search-facts-all-like :? :*
 select id, scope_type, scope_id, subject, predicate, object,
        normalized_subject, normalized_predicate, normalized_object,
        source_session_id, source_message_ids_json, source_request_id,
@@ -67,6 +82,19 @@ where status = 'active'
        or object like :needle
        or metadata_json like :needle)
 order by updated_at desc
+limit :limit
+
+-- :name search-facts-all-fts :? :*
+select f.id, f.scope_type, f.scope_id, f.subject, f.predicate, f.object,
+       f.normalized_subject, f.normalized_predicate, f.normalized_object,
+       f.source_session_id, f.source_message_ids_json, f.source_request_id,
+       f.confidence, f.status, f.metadata_json, f.created_at, f.updated_at,
+       bm25(memory_facts_fts) as retrieval_score
+from memory_facts_fts
+join memory_facts f on f.rowid = memory_facts_fts.rowid
+where memory_facts_fts match :query
+  and f.status = 'active'
+order by retrieval_score asc, f.updated_at desc
 limit :limit
 
 -- :name count-facts :? :1

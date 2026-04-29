@@ -5,7 +5,7 @@
    [ragtime.protocols :as ragtime-protocols]
    [ragtime.strategy :as ragtime-strategy]))
 
-(def latest-schema-version 15)
+(def latest-schema-version 16)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -425,7 +425,61 @@
     :checksum "a7c4f9b2e1d83056"
     :irreversible? true
     :up ["ALTER TABLE messages ADD COLUMN tool_calls TEXT;"
-         "ALTER TABLE messages ADD COLUMN tool_call_id TEXT;"]}])
+         "ALTER TABLE messages ADD COLUMN tool_call_id TEXT;"]}
+   {:version 16
+    :id "16"
+    :name "sqlite-fts-retrieval"
+    :checksum "4d0bd0466cdb7f19"
+    :irreversible? true
+    :up ["CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
+          USING fts5(content, content='messages', content_rowid='id');"
+         "INSERT INTO messages_fts(messages_fts) VALUES('rebuild');"
+         "CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+            INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+          END;"
+         "CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, content)
+            VALUES('delete', old.id, old.content);
+          END;"
+         "CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, content)
+            VALUES('delete', old.id, old.content);
+            INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+          END;"
+         "CREATE VIRTUAL TABLE IF NOT EXISTS agent_events_fts
+          USING fts5(event_type, entity_id, payload, content='agent_events', content_rowid='id');"
+         "INSERT INTO agent_events_fts(agent_events_fts) VALUES('rebuild');"
+         "CREATE TRIGGER IF NOT EXISTS agent_events_fts_ai AFTER INSERT ON agent_events BEGIN
+            INSERT INTO agent_events_fts(rowid, event_type, entity_id, payload)
+            VALUES (new.id, new.event_type, new.entity_id, new.payload);
+          END;"
+         "CREATE TRIGGER IF NOT EXISTS agent_events_fts_ad AFTER DELETE ON agent_events BEGIN
+            INSERT INTO agent_events_fts(agent_events_fts, rowid, event_type, entity_id, payload)
+            VALUES('delete', old.id, old.event_type, old.entity_id, old.payload);
+          END;"
+         "CREATE TRIGGER IF NOT EXISTS agent_events_fts_au AFTER UPDATE ON agent_events BEGIN
+            INSERT INTO agent_events_fts(agent_events_fts, rowid, event_type, entity_id, payload)
+            VALUES('delete', old.id, old.event_type, old.entity_id, old.payload);
+            INSERT INTO agent_events_fts(rowid, event_type, entity_id, payload)
+            VALUES (new.id, new.event_type, new.entity_id, new.payload);
+          END;"
+         "CREATE VIRTUAL TABLE IF NOT EXISTS memory_facts_fts
+          USING fts5(subject, predicate, object, metadata_json, content='memory_facts');"
+         "INSERT INTO memory_facts_fts(memory_facts_fts) VALUES('rebuild');"
+         "CREATE TRIGGER IF NOT EXISTS memory_facts_fts_ai AFTER INSERT ON memory_facts BEGIN
+            INSERT INTO memory_facts_fts(rowid, subject, predicate, object, metadata_json)
+            VALUES (new.rowid, new.subject, new.predicate, new.object, new.metadata_json);
+          END;"
+         "CREATE TRIGGER IF NOT EXISTS memory_facts_fts_ad AFTER DELETE ON memory_facts BEGIN
+            INSERT INTO memory_facts_fts(memory_facts_fts, rowid, subject, predicate, object, metadata_json)
+            VALUES('delete', old.rowid, old.subject, old.predicate, old.object, old.metadata_json);
+          END;"
+         "CREATE TRIGGER IF NOT EXISTS memory_facts_fts_au AFTER UPDATE ON memory_facts BEGIN
+            INSERT INTO memory_facts_fts(memory_facts_fts, rowid, subject, predicate, object, metadata_json)
+            VALUES('delete', old.rowid, old.subject, old.predicate, old.object, old.metadata_json);
+            INSERT INTO memory_facts_fts(rowid, subject, predicate, object, metadata_json)
+            VALUES (new.rowid, new.subject, new.predicate, new.object, new.metadata_json);
+          END;"]}])
 
 (defn descriptor-by-version [version]
   (some #(when (= version (:version %)) %) migration-descriptors))

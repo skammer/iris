@@ -82,3 +82,25 @@
       (is (true? (get-in health [:details :up-to-date?])))
       (is (string? (:id session))))
     (io/delete-file path true)))
+
+(deftest sqlite-memory-search-uses-fts-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        session (sqlite/create-session! store "fts")]
+    (try
+      (sqlite/append-message! store (:id session) "user" "alpha gap beta")
+      (sqlite/log-event! store {:event-type :memory.marker
+                                :entity-type :session
+                                :entity-id (:id session)
+                                :payload {:text "gamma gap delta"}})
+      (sqlite/save-memory-fact! store {:subject "epsilon"
+                                       :predicate "points-to"
+                                       :object "zeta marker"})
+      (is (= ["alpha gap beta"]
+             (mapv :content (sqlite/search-messages store "alpha beta"))))
+      (is (= ["memory.marker"]
+             (mapv :event-type (sqlite/search-events store "gamma delta"))))
+      (is (= ["zeta marker"]
+             (mapv :object (sqlite/search-memory-facts store "epsilon zeta"))))
+      (finally
+        (io/delete-file path true)))))
