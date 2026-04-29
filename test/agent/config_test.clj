@@ -59,6 +59,11 @@
       (is (false? (get-in cfg [:logging :enabled])))
       (is (= "logs/iris.log" (get-in cfg [:logging :file :path])))
       (is (= 10485760 (get-in cfg [:logging :file :max-bytes])))
+      (is (= {:enabled true
+              :bind "127.0.0.1"
+              :port 0
+              :port-file ".nrepl-port"}
+             (:nrepl cfg)))
       (is (= "65532:65532" (get-in cfg [:runners :docker :user]))))))
 
 (deftest load-config-explicit-file-test

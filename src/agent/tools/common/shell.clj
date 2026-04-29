@@ -23,13 +23,18 @@
                                 :roots roots})))
     candidate))
 
+(defn- split-command [command]
+  (vec (remove str/blank? (str/split (str/trim (or command "")) #"\s+"))))
+
 (defn- validate-input [input]
-  (when (contains? input :command)
-    (throw (tools/validation-error "command string is not supported; use argv"
-                                   {:input input})))
-  (when-not (and (vector? (:argv input)) (seq (:argv input)) (every? string? (:argv input)))
-    (throw (tools/validation-error "argv must be a non-empty vector of strings" {:input input})))
-  (assoc input :argv (vec (:argv input))))
+  (let [argv (or (:argv input)
+                 (when (contains? input :command)
+                   (split-command (:command input))))]
+    (when-not (and (vector? argv) (seq argv) (every? string? argv))
+      (throw (tools/validation-error "argv must be a non-empty vector of strings" {:input input})))
+    (-> input
+        (dissoc :command)
+        (assoc :argv (vec argv)))))
 
 (defn- wait-for [^Process process timeout-ms]
   (.waitFor process timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS))
@@ -69,7 +74,7 @@
                        :timeout-ms 30000
                        :max-timeout-ms 30000
                        :deny-by-default? true
-                       :allowed-commands ["printf" "pwd" "ls" "echo" "cat" "rg" "git"]
+                       :allowed-commands ["printf" "pwd" "ls" "echo" "cat" "rg" "git" "df"]
                        :blocked-commands []
                        :max-output-bytes 65536}
                       opts)

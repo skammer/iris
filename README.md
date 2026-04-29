@@ -166,3 +166,4 @@ Required/important env:
 - Telegram: see [docs/telegram.md](docs/telegram.md) for setup. Env: `AGENT_TELEGRAM_ENABLED`, `AGENT_TELEGRAM_BOT_TOKEN`, `AGENT_TELEGRAM_ALLOWED_USER_IDS`, `AGENT_TELEGRAM_ALLOWED_CHAT_IDS`, `AGENT_TELEGRAM_ALLOW_ALL`. Empty allowlist denies by default. Telegram chats appear in the Sessions sidebar as `Telegram: <name>`.
 - Memory: `AGENT_MEMORY_PROMPT_PATHS`, `AGENT_MEMORY_SEARCH_DEFAULT_LIMIT`, `AGENT_MEMORY_GRAPH_ENABLED`, `AGENT_MEMORY_GRAPH_PATH`.
 - Fact extraction: `AGENT_FACT_EXTRACTOR_ENABLED`, `AGENT_FACT_EXTRACTOR_PROVIDER`, `AGENT_FACT_EXTRACTOR_MODEL`.
+- nREPL: `AGENT_NREPL_ENABLED`, `AGENT_NREPL_BIND`, `AGENT_NREPL_PORT`, `AGENT_NREPL_PORT_FILE`. `serve` writes the selected port to `.nrepl-port`.
