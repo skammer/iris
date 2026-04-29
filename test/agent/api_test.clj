@@ -35,6 +35,20 @@
   (estimate-cost [_ _ _] {:tokens 1 :cost-usd 0.0}))
 
 (extend-type TestProvider
+  llm-core/ILLMProviderInvoke
+  (invoke [provider {:keys [messages on-content-delta] :as request}]
+    (reset! (:messages* provider) messages)
+    (llm-core/normalize-llm-response
+     (if on-content-delta
+       (do
+         (on-content-delta "hello")
+         (on-content-delta " world")
+         "hello world")
+       "test-response")
+     request))
+  (generate [provider messages opts]
+    (llm-core/invoke provider (assoc opts :messages messages)))
+
   llm-core/ILLMProviderWithHealth
   (health-check [_] {:healthy true})
   (get-metrics [_] {:provider :test}))
@@ -713,12 +727,16 @@
         (is (= "hello world" (get-in messages-body [:data 3 :content])))
         (is (= "hello" (get-in messages-body [:data 4 :content])))
         (is (= "hello world" (get-in messages-body [:data 5 :content])))
-        (is (= ["system" "user" "assistant" "user" "assistant" "user"]
+        (is (= ["system" "system" "system" "user" "assistant" "user" "assistant" "user"]
                (mapv :role @messages*)))
         (is (str/starts-with? (first (mapv :content @messages*))
+                              "You drive a tool-calling loop."))
+        (is (str/includes? (second (mapv :content @messages*))
+                           "# SOUL"))
+        (is (str/starts-with? (nth (mapv :content @messages*) 2)
                               "Relevant memory JSON: "))
         (is (= ["hello" "test-response" "hello ui" "hello world" "hello"]
-               (vec (rest (mapv :content @messages*))))))
+               (subvec (mapv :content @messages*) 3))))
       (finally
         (api/stop-server! server)
         (io/delete-file path true)))))
