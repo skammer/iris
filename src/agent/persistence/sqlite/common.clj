@@ -1,7 +1,8 @@
 (ns agent.persistence.sqlite.common
   (:require
    [cheshire.core :as json]
-   [clojure.java.io :as io])
+   [clojure.java.io :as io]
+   [clojure.string :as str])
   (:import
    (com.zaxxer.hikari HikariConfig HikariDataSource)
    (java.sql Connection PreparedStatement ResultSet)
@@ -41,6 +42,13 @@
 (defn parse-json-string [value]
   (when value
     (json/parse-string value true)))
+
+(defn fts5-query [value]
+  (let [tokens (->> (re-seq #"[\p{L}\p{N}_]+" (str/lower-case (or value "")))
+                    (remove str/blank?)
+                    distinct)]
+    (when (seq tokens)
+      (str/join " OR " (map #(str "\"" % "\"") tokens)))))
 
 (defn execute-ddl! [^Connection conn sql]
   (with-open [stmt (.createStatement conn)]

@@ -74,23 +74,31 @@
       (mapv row->message
             (common/select-many conn (list-messages-sqlvec {:session_id session-id}) identity)))))
 
+(defn- row->search-message
+  [{:keys [id session_id role content created_at]}]
+  {:id id
+   :session-id session_id
+   :role role
+   :content content
+   :created-at created_at})
+
 (defn search-messages
   ([store query] (search-messages store query {}))
   ([store query {:keys [limit session-id] :or {limit 20}}]
-   (common/with-connection
-     store
-     (fn [conn]
-       (mapv (fn [{:keys [id session_id role content created_at]}]
-               {:id id
-                :session-id session_id
-                :role role
-                :content content
-                :created-at created_at})
-             (common/select-many conn
-                                 (search-messages-sqlvec {:needle (str "%" (or query "") "%")
-                                                          :session_id session-id
-                                                          :limit limit})
-                                 identity))))))
+   (let [fts-query (common/fts5-query query)]
+     (common/with-connection
+       store
+       (fn [conn]
+         (mapv row->search-message
+               (common/select-many conn
+                                   (if fts-query
+                                     (search-messages-fts-sqlvec {:query fts-query
+                                                                   :session_id session-id
+                                                                   :limit limit})
+                                     (search-messages-like-sqlvec {:needle (str "%" (or query "") "%")
+                                                                    :session_id session-id
+                                                                    :limit limit}))
+                                   identity)))))))
 
 (defn log-completion! [store {:keys [session-id provider model prompt response]}]
   (let [completion {:session_id session-id

@@ -23,12 +23,22 @@ from messages
 where session_id = :session_id
 order by id asc
 
--- :name search-messages :? :*
+-- :name search-messages-like :? :*
 select id, session_id, role, content, created_at
 from messages
 where content like :needle
   and (:session_id is null or session_id = :session_id)
 order by id desc
+limit :limit
+
+-- :name search-messages-fts :? :*
+select m.id, m.session_id, m.role, m.content, m.created_at,
+       bm25(messages_fts) as retrieval_score
+from messages_fts
+join messages m on m.id = messages_fts.rowid
+where messages_fts match :query
+  and (:session_id is null or m.session_id = :session_id)
+order by retrieval_score asc, m.id desc
 limit :limit
 
 -- :name last-insert-row-id :? :1

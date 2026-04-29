@@ -115,9 +115,11 @@
 (defn search-facts
   ([store query] (search-facts store query {}))
   ([store query {:keys [limit include-global?] :or {limit 20 include-global? true} :as opts}]
-   (let [{:keys [scope-type scope-id]} (normalize-scope opts)
+   (let [fts-query (common/fts5-query query)
+         {:keys [scope-type scope-id]} (normalize-scope opts)
          params {:needle (when-not (str/blank? (or query ""))
                            (str "%" query "%"))
+                 :query fts-query
                  :limit limit
                  :include_global (if include-global? 1 0)
                  :scope_type scope-type
@@ -128,8 +130,12 @@
          (mapv row->fact
                (common/select-many conn
                                    (if (:all-scopes? opts)
-                                     (search-facts-all-sqlvec params)
-                                     (search-facts-scoped-sqlvec params))
+                                     (if fts-query
+                                       (search-facts-all-fts-sqlvec params)
+                                       (search-facts-all-like-sqlvec params))
+                                     (if fts-query
+                                       (search-facts-scoped-fts-sqlvec params)
+                                       (search-facts-scoped-like-sqlvec params)))
                                    identity)))))))
 
 (defn count-facts [store]
