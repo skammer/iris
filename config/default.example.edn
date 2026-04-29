@@ -30,7 +30,7 @@
                  :working-dir "."
                  :timeout-ms 30000
                  :deny-by-default? true
-                 :allowed-commands ["printf" "pwd" "ls" "echo" "cat" "rg" "git"]
+                 :allowed-commands ["printf" "pwd" "ls" "echo" "cat" "rg" "git" "df"]
                  :max-output-bytes 65536}}
  :skills {:dirs ["skills"]}
  :memory {:prompt {:paths ["MEMORY.md"]}
@@ -45,6 +45,7 @@
           :graph {:enabled false
                   :backend :datahike
                   :datahike {:path "data/memory-graph"
+                             :scope "iris"
                              :keep-history? true}}}
  ;; Telegram setup: see docs/telegram.md.
  ;; Example (replace the live :channel-adapters below):
@@ -89,6 +90,10 @@
                     :user "65532:65532"
                     :host-working-dir "."
                     :share-network? true}}
+ :nrepl {:enabled true
+         :bind "127.0.0.1"
+         :port 0
+         :port-file ".nrepl-port"}
  :orchestrator {:enabled true
                 :federation {:timeout-ms 10000
                              :inbox-path "/v1/federation/inbox"

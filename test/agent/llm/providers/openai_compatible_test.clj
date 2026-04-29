@@ -108,6 +108,32 @@
       (is (= "fs" (get-in tc [:function :name])))
       (is (= "{\"action\":\"list\",\"path\":\".\"}" (get-in tc [:function :arguments]))))))
 
+(deftest invoke-suppresses-streamed-dsml-when-tools-present-test
+  (with-redefs [http/post (fn [_ _]
+                            {:status 200
+                             :headers {"Content-Type" "text/event-stream"}
+                             :body (byte-stream
+                                    (str "data: {\"choices\":[{\"delta\":{\"content\":\"<｜DSML｜tool_calls>\"}}]}\n\n"
+                                         "data: {\"choices\":[{\"delta\":{\"content\":\"<｜DSML｜invoke name=\\\"shell\\\">\"}}]}\n\n"
+                                         "data: {\"choices\":[{\"delta\":{\"content\":\"<｜DSML｜parameter name=\\\"command\\\" string=\\\"true\\\">df -h</｜DSML｜parameter>\"}}]}\n\n"
+                                         "data: {\"choices\":[{\"delta\":{\"content\":\"</｜DSML｜invoke></｜DSML｜tool_calls>\"}}]}\n\n"
+                                         "data: [DONE]\n\n"))})]
+    (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})
+          chunks (atom [])
+          response (llm-core/invoke
+                    llm
+                    {:messages [{:role "user" :content "run df"}]
+                     :tools [{:type "function"
+                              :function {:name "shell"
+                                         :description "Local shell"
+                                         :parameters {:type "object"}}}]
+                     :on-content-delta #(swap! chunks conj %)})
+          tc (first (:tool-calls response))]
+      (is (empty? @chunks))
+      (is (= "" (:content response)))
+      (is (= "shell" (get-in tc [:function :name])))
+      (is (= "{\"command\":\"df -h\"}" (get-in tc [:function :arguments]))))))
+
 (deftest structured-output-invoke-streams-by-default-test
   (let [body* (atom nil)
         as* (atom nil)]

@@ -77,10 +77,13 @@
     (case backend
       :datahike
       ((requiring-resolve 'agent.memory.datahike/create-backend)
-       {:store {:backend :file
-                :path (:path datahike)}
-        :keep-history? (not= false (:keep-history? datahike))
-        :schema-flexibility :write})
+       (merge {:store {:backend :file
+                       :path (:path datahike)
+                       :scope (or (:scope datahike) "iris")}}
+              (select-keys datahike [:allow-unsafe-config])
+              (select-keys datahike [:store])
+              {:keep-history? (not= false (:keep-history? datahike))
+               :schema-flexibility :write}))
       (throw (ex-info "Unsupported graph memory backend" {:backend backend})))))
 
 (defn- token-set [value]

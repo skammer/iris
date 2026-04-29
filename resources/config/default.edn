@@ -33,7 +33,7 @@
                  :working-dir "."
                  :timeout-ms 30000
                  :deny-by-default? true
-                 :allowed-commands ["printf" "pwd" "ls" "echo" "cat" "rg" "git"]
+                 :allowed-commands ["printf" "pwd" "ls" "echo" "cat" "rg" "git" "df"]
                  :max-output-bytes 65536}
          ;; Per-channel rendering of tool calls and results.
          ;; preview-chars caps inline summary length; max-result-height-px caps
@@ -65,6 +65,7 @@
           :graph {:enabled false
                   :backend :datahike
                   :datahike {:path "data/memory-graph"
+                             :scope "iris"
                              :keep-history? true}}}
  :channel-adapters {:telegram {:enabled false}
                     :discord {:enabled false}
@@ -98,6 +99,10 @@
                     :user "65532:65532"
                     :host-working-dir "."
                     :share-network? true}}
+ :nrepl {:enabled true
+         :bind "127.0.0.1"
+         :port 0
+         :port-file ".nrepl-port"}
  :orchestrator {:enabled true
                 :federation {:timeout-ms 10000
                              :inbox-path "/v1/federation/inbox"

@@ -320,13 +320,15 @@
   llm-core/ILLMProviderInvoke
   (invoke [this request]
     (let [opts (llm-core/request->completion-opts request)
-          on-content-delta (:on-content-delta opts)
+          stream-with-delta? (some? (:on-content-delta opts))
+          on-content-delta (when-not (seq (:tools opts))
+                             (:on-content-delta opts))
           request* {:headers (bearer-headers {:api-key (:api-key this)
                                               :site-url (:site-url this)
                                               :app-name (:app-name this)
                                               :extra-headers (:extra-headers this)})}
           response (cond
-                     on-content-delta
+                     stream-with-delta?
                      (post-stream-turn
                       (chat-url (:base-url this))
                       (assoc request*

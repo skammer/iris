@@ -52,7 +52,7 @@
                    :timeout-ms 30000
                    :max-timeout-ms 30000
                    :deny-by-default? true
-                   :allowed-commands ["printf" "pwd" "ls" "echo" "cat" "rg" "git"]
+                   :allowed-commands ["printf" "pwd" "ls" "echo" "cat" "rg" "git" "df"]
                    :blocked-commands []
                    :max-output-bytes 65536}
            :display {:web {:show-tool-calls? true
@@ -81,6 +81,7 @@
             :graph {:enabled false
                     :backend :datahike
                     :datahike {:path "data/memory-graph"
+                               :scope "iris"
                                :keep-history? true}}}
    :channel-adapters {:telegram {:enabled false
                                   :bot-token nil
@@ -110,6 +111,10 @@
                       :host-working-dir "."
                       :share-network? true}}
    :orchestrator {:enabled true}
+   :nrepl {:enabled true
+           :bind "127.0.0.1"
+           :port 0
+           :port-file ".nrepl-port"}
    :telemetry {:enabled true
                :max-latency-samples 1000}
    :logging {:enabled false
@@ -350,6 +355,10 @@
         api-host (getenv "AGENT_API_HOST")
         api-key (getenv "AGENT_API_KEY")
         api-port (parse-long* (getenv "AGENT_API_PORT"))
+        nrepl-enabled (parse-bool (getenv "AGENT_NREPL_ENABLED"))
+        nrepl-bind (getenv "AGENT_NREPL_BIND")
+        nrepl-port (parse-long* (getenv "AGENT_NREPL_PORT"))
+        nrepl-port-file (getenv "AGENT_NREPL_PORT_FILE")
         memory-config (cond-> {}
                         memory-prompt-paths (assoc :prompt {:paths memory-prompt-paths})
                         (some? memory-search-limit) (assoc :search {:default-limit memory-search-limit})
@@ -414,6 +423,11 @@
                      (assoc :api-key (getenv "OPENAI_API_KEY")))))
      :storage (cond-> {}
                 sqlite-path (assoc :sqlite {:path sqlite-path}))
+     :nrepl (cond-> {}
+              (some? nrepl-enabled) (assoc :enabled nrepl-enabled)
+              nrepl-bind (assoc :bind nrepl-bind)
+              (some? nrepl-port) (assoc :port nrepl-port)
+              nrepl-port-file (assoc :port-file nrepl-port-file))
      :memory memory-config
      :channel-adapters channel-adapters-config
      :tools (cond-> {}

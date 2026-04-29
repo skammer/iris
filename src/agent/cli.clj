@@ -2,6 +2,7 @@
   "Command-line parsing and dispatch."
   (:require
    [agent.logging :as logging]
+   [agent.nrepl :as nrepl]
    [agent.system :as system]
    [clojure.string :as str]))
 
@@ -26,9 +27,13 @@
     (cond
       (= "serve" command)
       (let [system (system/start-api! (system/create-system config-path))
+            nrepl-server (nrepl/start! system (:nrepl (:config system)))
             {:keys [host port]} (:api (:config system))]
         (logging/log! :agent.cli/serve {:host host :port port})
         (println (str "API listening on http://" host ":" port))
+        (when nrepl-server
+          (println (str "nREPL listening on " (:bind nrepl-server) ":" (:port nrepl-server)
+                        " (" (:port-file nrepl-server) ")")))
         @(promise))
 
       (str/blank? prompt)

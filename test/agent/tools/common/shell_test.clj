@@ -51,15 +51,16 @@
                                               {:permissions #{:shell-exec}})))
     (.delete root)))
 
-(deftest shell-tool-rejects-command-string-test
+(deftest shell-tool-normalizes-command-string-test
   (let [root (temp-dir)
         tool (shell-tool/create-shell-tool {:roots [(.getAbsolutePath root)]
                                             :working-dir (.getAbsolutePath root)
                                             :timeout-ms 5000})
         registry (-> (tools/create-registry {:approval-check (fn [_] nil)})
                      (tools/register-tool tool))]
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"command string is not supported"
-                          (tools/execute-tool registry :shell {:command "printf hello; rm -rf /"}
-                                              {:permissions #{:shell-exec}})))
+    (let [result (tools/execute-tool registry :shell {:command "printf hello"}
+                                     {:permissions #{:shell-exec}})]
+      (is (= ["printf" "hello"] (:argv result)))
+      (is (= 0 (:exit result)))
+      (is (= "hello" (:stdout result))))
     (.delete root)))
