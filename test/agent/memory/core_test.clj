@@ -305,6 +305,9 @@
         (is (= "rust" (get-in ranked [0 :item :object])))
         (is (pos? (get-in ranked [0 :score])))
         (is (= 1.0 (:recall eval)))
+        (is (= 1.0 (:recall-at-k eval)))
+        (is (= 1.0 (:mrr eval)))
+        (is (= [1] (get-in eval [:cases 0 :ranks])))
         (is (= 1 (:passed-count eval))))
       (finally
         (io/delete-file db-path true)))))
@@ -397,5 +400,105 @@
         (is (empty? inactive))
         (is (= ["likes" "runs-on" "uses"]
                (mapv :predicate (:edges (first historical))))))
+      (finally
+        (io/delete-file db-path true)))))
+
+(deftest cross-session-memory-eval-recall-and-rank-test
+  (let [db-path (temp-db-path)
+        graph-root (temp-dir)
+        graph-path (.getAbsolutePath (io/file graph-root "graph-store"))
+        config {:prompt {:paths []}
+                :search {:default-limit 10}
+                :graph {:enabled true
+                        :backend :datahike
+                        :datahike {:path graph-path
+                                   :keep-history? true}}}
+        store (sqlite/create-store {:path db-path})
+        session-a (sqlite/create-session! store "source")
+        session-b (sqlite/create-session! store "recall")
+        service (memory/create-memory-service config store)]
+    (try
+      (sqlite/append-message! store (:id session-a) "user" "I prefer concise answers.")
+      (memory/save-memory-fact! service
+                                {:subject "user"
+                                 :predicate "prefers"
+                                 :object "concise answers"
+                                 :confidence 0.95}
+                                {:scope {:type :global}
+                                 :source-session-id (:id session-a)})
+      (memory/save-memory-fact! service
+                                {:subject "session-a"
+                                 :predicate "private-project"
+                                 :object "redwood"
+                                 :confidence 0.9}
+                                {:scope {:type :session :id (:id session-a)}
+                                 :source-session-id (:id session-a)})
+      (memory/save-graph-fact! service
+                               {:subject "Sam"
+                                :predicate "prefers-language"
+                                :object "Python"
+                                :observed-at "2026-01-01T00:00:00Z"})
+      (memory/save-graph-fact! service
+                               {:subject "Sam"
+                                :predicate "prefers-language"
+                                :object "Rust"
+                                :observed-at "2026-02-01T00:00:00Z"})
+      (memory/save-graph-fact! service
+                               {:subject "Sam"
+                                :predicate "works-on"
+                                :object "Agent Runtime"
+                                :observed-at "2026-02-02T00:00:00Z"})
+      (memory/save-graph-fact! service
+                               {:subject "Agent Runtime"
+                                :predicate "uses"
+                                :object "Datahike"
+                                :observed-at "2026-02-03T00:00:00Z"})
+      (sqlite/close-store! store)
+      (let [restarted-store (sqlite/create-store {:path db-path})
+            restarted-service (memory/create-memory-service config restarted-store)
+            eval (memory/evaluate-retrieval
+                  restarted-service
+                  [{:query "concise answers preference"
+                    :search-opts {:session-id (:id session-b)
+                                  :scope {:type :session :id (:id session-b)}}
+                    :expected [{:surface :fact
+                                :subject "user"
+                                :predicate "prefers"
+                                :object "concise answers"}]}
+                   {:query "prefers-language"
+                    :graph-opts {:mode :facts}
+                    :expected [{:surface :graph
+                                :subject "Sam"
+                                :predicate "prefers-language"
+                                :object "Rust"}]}
+                   {:query ""
+                    :graph-opts {:mode :paths
+                                 :from "sam"
+                                 :to "Datahike"
+                                 :max-depth 3}
+                    :expected [{:surface :graph
+                                :type "path"
+                                :path-labels ["Sam" "Agent Runtime" "Datahike"]
+                                :path-predicates ["works-on" "uses"]}]}]
+                  {:limit 5})
+            current-language (memory/query-graph-memory restarted-service
+                                                        "prefers-language"
+                                                        {:mode :facts})
+            historical-language (memory/query-graph-memory restarted-service
+                                                           "prefers-language"
+                                                           {:mode :facts
+                                                            :as-of "2026-01-15T00:00:00Z"})
+            leaked-session-facts (memory/search-facts restarted-service
+                                                      "redwood"
+                                                      {:scope {:type :session :id (:id session-b)}
+                                                       :include-global? false})]
+        (is (= 3 (:passed-count eval)))
+        (is (= 1.0 (:recall-at-k eval)))
+        (is (= (/ 2.5 3.0) (:mrr eval)))
+        (is (= [[2] [1] [1]] (mapv :ranks (:cases eval))))
+        (is (= ["Rust"] (mapv :object current-language)))
+        (is (= ["Python"] (mapv :object historical-language)))
+        (is (empty? leaked-session-facts))
+        (sqlite/close-store! restarted-store))
       (finally
         (io/delete-file db-path true)))))

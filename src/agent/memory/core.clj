@@ -399,34 +399,96 @@
   (let [item (:item ranked)]
     (and (or (nil? (:surface expected))
              (= (:surface expected) (:surface ranked)))
+         (or (nil? (:type expected))
+             (= (:type expected) (:type item)))
+         (or (nil? (:path-labels expected))
+             (= (:path-labels expected)
+                (mapv :label (:nodes item))))
+         (or (nil? (:path-predicates expected))
+             (= (:path-predicates expected)
+                (mapv :predicate (:edges item))))
          (every? (fn [[k v]] (= v (get item k)))
-                 (dissoc expected :surface)))))
+                 (dissoc expected :surface :type :path-labels :path-predicates)))))
+
+(defn- first-rank
+  [expected ranked]
+  (some (fn [[idx item]]
+          (when (expected-match? expected item)
+            (inc idx)))
+        (map-indexed vector ranked)))
+
+(defn- graph-ranked-results
+  [memory-service case* limit]
+  (->> (query-graph-memory memory-service
+                           (:query case*)
+                           (merge {:limit limit}
+                                  (:graph-opts case*)))
+       (mapv (fn [item]
+               {:surface :graph
+                :score (:score (score-memory-item (:query case*) :graph item))
+                :item item}))))
+
+(defn- case-ranked-results
+  [memory-service case* limit]
+  (if (:graph-opts case*)
+    (graph-ranked-results memory-service case* limit)
+    (:ranked (search-memory memory-service
+                            (:query case*)
+                            (merge {:limit limit}
+                                   (:search-opts case*))))))
 
 (defn evaluate-retrieval
   [memory-service cases opts]
   (let [limit (or (:limit opts) 5)
         evaluated (mapv
-                   (fn [{:keys [query expected]}]
-                     (let [results (search-memory memory-service query {:limit limit})
-                           ranked (:ranked results)
-                           hits (mapv (fn [expected*]
-                                        (boolean (some #(expected-match? expected* %) ranked)))
-                                      expected)]
+                   (fn [{:keys [query expected] :as case*}]
+                     (let [case* (if (contains? case* :query)
+                                   case*
+                                   (assoc case* :query query))
+                           ranked (case-ranked-results memory-service case* limit)
+                           ranks (mapv #(first-rank % ranked) expected)
+                           hits (mapv some? ranks)
+                           reciprocal-ranks (mapv #(if % (/ 1.0 %) 0.0) ranks)
+                           expected-count (count expected)
+                           hit-count (count (filter true? hits))]
                        {:query query
                         :expected expected
-                        :hit-count (count (filter true? hits))
-                        :expected-count (count expected)
+                        :hit-count hit-count
+                        :expected-count expected-count
+                        :recall-at-k (if (zero? expected-count)
+                                       1.0
+                                       (/ (double hit-count) expected-count))
+                        :ranks ranks
+                        :mean-rank (when (seq (keep identity ranks))
+                                     (/ (double (reduce + (keep identity ranks)))
+                                        (count (keep identity ranks))))
+                        :mrr (if (zero? expected-count)
+                               1.0
+                               (/ (double (reduce + reciprocal-ranks))
+                                  expected-count))
                         :passed? (every? true? hits)
                         :ranked ranked}))
                    cases)
         total-expected (reduce + (map :expected-count evaluated))
-        total-hits (reduce + (map :hit-count evaluated))]
+        total-hits (reduce + (map :hit-count evaluated))
+        reciprocal-ranks (mapcat (fn [{:keys [ranks]}]
+                                   (map #(if % (/ 1.0 %) 0.0) ranks))
+                                 evaluated)
+        hit-ranks (keep identity (mapcat :ranks evaluated))]
     {:cases evaluated
      :case-count (count evaluated)
      :passed-count (count (filter :passed? evaluated))
+     :recall-at-k (if (zero? total-expected)
+                    1.0
+                    (/ (double total-hits) total-expected))
      :recall (if (zero? total-expected)
                1.0
-               (/ (double total-hits) total-expected))}))
+               (/ (double total-hits) total-expected))
+     :mrr (if (zero? total-expected)
+            1.0
+            (/ (double (reduce + reciprocal-ranks)) total-expected))
+     :mean-rank (when (seq hit-ranks)
+                  (/ (double (reduce + hit-ranks)) (count hit-ranks)))}))
 
 (defn health-check
   [memory-service]
