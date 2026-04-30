@@ -100,9 +100,11 @@
   (with-isolated-config [root {}]
     (let [cfg (config/load-config)
           dir (io/file (get-in cfg [:iris :config-dir]))]
-      (doseq [name config/context-file-names]
+      (doseq [name config/template-file-names]
         (is (.exists (io/file dir name))))
       (is (.exists (io/file dir "HEARTBEAT.md")))
+      (is (re-find #"Durable prompt memory"
+                   (slurp (io/file dir "MEMORY.md"))))
       (is (not (.exists (io/file dir "HEARBEAT.md"))))
       (is (re-find #":iris/config-version"
                    (slurp (io/file dir "config.edn"))))
@@ -123,6 +125,35 @@
         (is (= "global-model" (get-in cfg [:llm :model])))
         (is (= 0.7 (get-in cfg [:llm :temperature])))
         (is (= 9 (get-in cfg [:memory :search :default-limit])))))))
+
+(deftest config-load-order-ignores-default-files-test
+  (with-isolated-config [root {}]
+    (let [global-dir (io/file root "home" ".config" "iris")
+          project-dir (io/file root "work" "config")]
+      (.mkdirs global-dir)
+      (.mkdirs project-dir)
+      (spit (io/file global-dir "config.edn")
+            "{:llm {:provider :openai-compatible}\n :api {:port 1001}}")
+      (spit (io/file project-dir "default.edn")
+            "{:llm {:provider :ollama :model \"project-model\"}\n :api {:port 2002}}")
+      (let [cfg (config/load-config)]
+        (is (= :openai-compatible (get-in cfg [:llm :provider])))
+        (is (nil? (get-in cfg [:llm :model])))
+        (is (= 1001 (get-in cfg [:api :port])))))))
+
+(deftest env-overrides-explicit-config-test
+  (with-isolated-config [root {"AGENT_LLM_PROVIDER" "ollama"
+                               "AGENT_LLM_MODEL" "env-model"}]
+    (let [global-dir (io/file root "home" ".config" "iris")
+          explicit-file (io/file root "explicit.edn")]
+      (.mkdirs global-dir)
+      (spit (io/file global-dir "config.edn")
+            "{:llm {:provider :openai-compatible :model \"global-model\"}}")
+      (spit explicit-file
+            "{:llm {:provider :openrouter :model \"explicit-model\"}}")
+      (let [cfg (config/load-config (.getPath explicit-file))]
+        (is (= :ollama (get-in cfg [:llm :provider])))
+        (is (= "env-model" (get-in cfg [:llm :model])))))))
 
 (deftest namespaced-map-config-normalization-test
   (with-isolated-config [root {}]
