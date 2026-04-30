@@ -38,19 +38,28 @@ clojure -J--enable-native-access=ALL-UNNAMED -M -m agent.core --config config/de
 
 Configuration:
 
-- `~/.config/iris/config.edn` uses the same shape as `config/default.edn`; partial overrides are expected.
+- `~/.config/iris/config.edn` uses the same shape as `resources/config/default.edn`, which is copied only when the global config is missing.
 - If a generated file starts with `#:iris`, nested keys like `:api` read as `:iris/api`; current loader normalizes this, but prefer normal map syntax: `{:iris/config-version 1 :api {:port 9090}}`.
 - Config dir resolution: `IRIS_CONFIG_DIR`, then `$XDG_CONFIG_HOME/iris`, then `~/.config/iris`.
 - Project-local overlay dir: `./.iris/`.
-- Global files are created when missing: `config.edn`, `SOUL.md`, `AGENTS.md`, `USER.md`, `TOOLS.md`, `BOOT.md`, `HEARTBEAT.md`.
-- EDN merge order: built-in defaults → `resources/config/default.edn` → `./config/default.edn` → global `config.edn` → local `./.iris/config.edn` → explicit `--config` file → env vars.
+- Global files are created from `resources/` templates when missing: `config.edn`, `SOUL.md`, `AGENTS.md`, `USER.md`, `TOOLS.md`, `BOOT.md`, `HEARTBEAT.md`, `MEMORY.md`.
+- EDN merge order: global `config.edn` → local `./.iris/config.edn` → explicit `--config` file → env vars.
 - Markdown context files merge by concatenating global then local in this order: `SOUL.md`, `AGENTS.md`, `USER.md`, `TOOLS.md`, `BOOT.md`, `HEARTBEAT.md`.
+- `:memory {:prompt {:paths ["MEMORY.md"]}}` uses paths relative to process cwd unless absolute paths are configured.
 
 Run rewritten tests:
 
 ```bash
 clojure -M:test -e "(require 'agent.test-runner) (agent.test-runner/run-all-tests)"
 ```
+
+Build and upload the standalone JAR:
+
+```bash
+./scripts/deploy-jar.sh
+```
+
+Required: `IRIS_DEPLOY_HOST`. Optional: `IRIS_DEPLOY_USER`, `IRIS_DEPLOY_DIR`, `IRIS_DEPLOY_PORT`, `IRIS_DEPLOY_JAR`, `IRIS_DEPLOY_SSH_OPTS`.
 
 Load legacy namespaces intentionally:
 

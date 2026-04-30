@@ -15,6 +15,8 @@
   (clean nil)
   (b/copy-dir {:src-dirs ["src" "resources"]
                :target-dir class-dir})
+  (b/copy-dir {:src-dirs ["public"]
+               :target-dir (str class-dir "/public")})
   (b/compile-clj {:basis @basis
                   :src-dirs ["src"]
                   :ns-compile '[agent.core]

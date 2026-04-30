@@ -159,7 +159,9 @@
 (def config-file-name "config.edn")
 (def markdown-file-names
   ["SOUL.md" "AGENTS.md" "USER.md" "TOOLS.md" "BOOT.md" "HEARTBEAT.md"])
+(def memory-file-name "MEMORY.md")
 (def context-file-names (into [config-file-name] markdown-file-names))
+(def template-file-names (conj context-file-names memory-file-name))
 (def app-config-keys
   [:llm :storage :tools :skills :memory :channel-adapters :runners
    :orchestrator :telemetry :logging :api])
@@ -197,12 +199,19 @@
   []
   (io/file (*cwd*) ".iris"))
 
+(defn- resource-template-content [name]
+  (when-let [resource (io/resource (if (= config-file-name name)
+                                     "config/default.edn"
+                                     name))]
+    (slurp resource)))
+
 (defn- default-file-content [name]
-  (if (= config-file-name name)
-    (str (binding [*print-namespace-maps* false]
-           (pr-str default-config-edn))
-         "\n")
-    (get default-markdown-content name "")))
+  (or (resource-template-content name)
+      (if (= config-file-name name)
+        (str (binding [*print-namespace-maps* false]
+               (pr-str default-config-edn))
+             "\n")
+        (get default-markdown-content name ""))))
 
 (defn- warn!
   [message attrs]
@@ -213,7 +222,7 @@
   []
   (let [dir (global-config-dir)]
     (.mkdirs dir)
-    (doseq [name context-file-names
+    (doseq [name template-file-names
             :let [file (io/file dir name)]]
       (when-not (.exists file)
         (warn! "iris config file missing; writing default"
@@ -469,17 +478,10 @@
    (let [global-dir (bootstrap-global-config!)
          local-dir (local-config-dir)
          contexts (load-context-files global-dir local-dir)
-         resource-config (when-let [resource (io/resource "config/default.edn")]
-                           (with-open [reader (java.io.PushbackReader. (io/reader resource))]
-                             (edn/read reader)))
-         project-config (load-edn-file "config/default.edn")
          global-config (load-optional-edn (io/file global-dir config-file-name))
          local-config (load-optional-edn (io/file local-dir config-file-name))
          explicit-config (when path (load-edn-file path))]
-     (deep-merge default-config
-                 resource-config
-                 project-config
-                 (some-> global-config normalize-iris-namespaced-config)
+     (deep-merge (some-> global-config normalize-iris-namespaced-config)
                  (some-> local-config normalize-iris-namespaced-config)
                  (iris-runtime-config global-dir local-dir contexts)
                  (some-> explicit-config normalize-iris-namespaced-config)

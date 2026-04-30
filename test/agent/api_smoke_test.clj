@@ -21,6 +21,16 @@
         (api/stop-server! server)
         (io/delete-file path true)))))
 
+(defn- http-url-response [url]
+  (let [conn (.openConnection (java.net.URL. url))
+        status (.getResponseCode conn)
+        stream (if (>= status 400)
+                 (.getErrorStream conn)
+                 (.getInputStream conn))]
+    {:status status
+     :content-type (.getHeaderField conn "Content-Type")
+     :body (if stream (slurp stream) "")}))
+
 (deftest telemetry-smoke
   (with-server nil
     (fn [{:keys [base-url]}]
@@ -36,6 +46,18 @@
             payload (json/parse-string body true)]
         (is (= 404 status))
         (is (= "not_found" (:error payload)))))))
+
+(deftest public-static-assets-smoke
+  (with-server nil
+    (fn [{:keys [base-url]}]
+      (let [css (http-url-response (str base-url "/public/app.css"))
+            js (http-url-response (str base-url "/public/web-components.js"))]
+        (is (= 200 (:status css)))
+        (is (= "text/css; charset=utf-8" (:content-type css)))
+        (is (str/includes? (:body css) "font-family"))
+        (is (= 200 (:status js)))
+        (is (= "application/javascript; charset=utf-8" (:content-type js)))
+        (is (str/includes? (:body js) "customElements"))))))
 
 (deftest memory-vault-roundtrip-smoke
   (let [vault-dir (java.io.File/createTempFile "iris-vault-" "")]
