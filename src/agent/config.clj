@@ -266,6 +266,11 @@
   (binding [*out* *err*]
     (println (str "WARNING " message " " (pr-str attrs)))))
 
+(defn- error!
+  [message attrs]
+  (binding [*out* *err*]
+    (println (str "ERROR " message " " (pr-str attrs)))))
+
 (defn bootstrap-global-config!
   []
   (let [dir (global-config-dir)]
@@ -336,6 +341,63 @@
   [cfg]
   (cond-> cfg
     (contains? cfg :llm) (update :llm normalize-llm-config)))
+
+(def ^:private provider-required-keys
+  {:ollama [:base-url :model]
+   :openrouter [:base-url :model :api-key]
+   :openai-compatible [:base-url :model :api-key]})
+
+(defn- present-config-value? [value]
+  (if (string? value)
+    (not (str/blank? value))
+    (some? value)))
+
+(defn- missing-provider-keys [provider provider-cfg]
+  (let [type (:type provider-cfg)]
+    (cond
+      (nil? provider-cfg)
+      [{:path [:llm :providers provider]
+        :message (str "active LLM provider " provider " is not configured")}]
+
+      (nil? type)
+      [{:path [:llm :providers provider :type]
+        :message (str "active LLM provider " provider " missing required key :type")}]
+
+      (nil? (provider-required-keys type))
+      [{:path [:llm :providers provider :type]
+        :message (str "unsupported active LLM provider type " type)}]
+
+      :else
+      (vec
+       (for [k (provider-required-keys type)
+             :when (not (present-config-value? (get provider-cfg k)))]
+         {:path [:llm :providers provider k]
+          :message (str "active LLM provider " provider " missing required key " k)})))))
+
+(defn- config-validation-errors [cfg]
+  (let [llm-cfg (normalize-llm-config (:llm cfg))
+        provider (:active-provider llm-cfg)
+        provider-cfg (get-in llm-cfg [:providers provider])]
+    (cond-> []
+      (nil? (:llm cfg))
+      (conj {:path [:llm]
+             :message "missing required key :llm"})
+
+      (nil? provider)
+      (conj {:path [:llm :active-provider]
+             :message "missing required key :llm/:active-provider"})
+
+      provider
+      (into (missing-provider-keys provider provider-cfg)))))
+
+(defn- validate-config! [cfg]
+  (let [errors (config-validation-errors cfg)]
+    (when (seq errors)
+      (doseq [error errors]
+        (error! "iris config invalid" error))
+      (throw (ex-info "Invalid iris config" {:type :config-invalid
+                                             :errors errors}))))
+  cfg)
 
 (defn- existing-file [path]
   (let [file (io/file path)]
@@ -591,13 +653,15 @@
          global-config (load-optional-edn (io/file global-dir config-file-name))
          local-config (load-optional-edn (io/file local-dir config-file-name))
          explicit-config (when path (load-edn-file path))]
-     (let [file-config (deep-merge (some-> global-config normalize-iris-namespaced-config normalize-config)
+     (let [file-config (deep-merge default-config
+                                   (some-> global-config normalize-iris-namespaced-config normalize-config)
                                    (some-> local-config normalize-iris-namespaced-config normalize-config)
                                    (iris-runtime-config global-dir local-dir contexts)
                                    (some-> explicit-config normalize-iris-namespaced-config normalize-config))]
-       (finalize-data-paths
-        (normalize-config (deep-merge file-config (env-config)))
-        global-dir)))))
+       (-> (deep-merge file-config (env-config))
+           normalize-config
+           (finalize-data-paths global-dir)
+           validate-config!)))))
 
 (defn llm-config
   [config]
