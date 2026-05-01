@@ -617,7 +617,7 @@ textarea {
 #chat-form {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: end;
   gap: 8px;
   padding: 12px 14px;

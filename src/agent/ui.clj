@@ -275,7 +275,9 @@
         attention-runs (->> recent-runs
                             (filter #(or (contains? #{"failed" "cancelled"} (:status %))
                                          (stale-run? %)))
-                            (take 4))]
+                            (take 4))
+        reload-status (or (some-> system :reload-state deref)
+                          {:status :idle})]
     (render
      [:section#dashboard-summary.panel
       {"data-on-interval__duration.10s.leading" "@get('/ui/dashboard')"}
@@ -293,6 +295,18 @@
             " | federated peers: " (count federated-peers)
             " | sqlite schema: " (get-in storage [:details :schema-version] "?")
             " | approvals: " (get-in storage [:details :tool-approval-count] 0))]
+      [:form#system-reload-form
+       {:method "post"
+        "data-on:submit" "@post('/ui/system/reload', {contentType: 'form', selector: '#system-reload-form'})"}
+       [:input {:type "hidden" :name "mode" :value "soft"}]
+       [:div.actions
+        [:button {:type "submit"} "Reload config"]
+        [:span.meta
+         (str "reload: " (name (:status reload-status))
+              (when-let [mode (:mode reload-status)]
+                (str " | " (name mode)))
+              (when-let [message (:message reload-status)]
+                (str " | " message)))]]]
       [:div.run-grid
        [:div.result
         [:strong "Pending approvals"]
@@ -503,6 +517,9 @@
           [:textarea.chat-input {:name "prompt"
                                  :rows 1
                                  :placeholder "Ask model something concrete"}]]
+         [:button {:type "button"
+                   "data-on:click" "@post('/ui/chat/stop', {contentType: 'form', selector: '#chat-form'})"}
+          "Stop"]
          [:button {:type "submit"
                    "data-attr:disabled" "$chatLoading"}
           "Send"]
