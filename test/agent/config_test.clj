@@ -26,12 +26,15 @@
 (deftest load-config-defaults-test
   (with-isolated-config [root {}]
     (let [cfg (config/load-config)]
-      (is (= :ollama (get-in cfg [:llm :provider])))
-      (is (= "llama3.2:3b" (get-in cfg [:llm :model])))
-      (is (true? (get-in cfg [:llm :prompt-cache?])))
-      (is (true? (get-in cfg [:llm :stream-structured-output?])))
-      (is (= "http://localhost:11434" (get-in cfg [:llm :ollama :base-url])))
+      (is (= :ollama (config/active-provider-key (:llm cfg))))
+      (is (= "llama3.2:3b" (config/active-model (:llm cfg))))
+      (is (nil? (get-in cfg [:llm :provider])))
+      (is (nil? (get-in cfg [:llm :model])))
+      (is (true? (get-in cfg [:llm :providers :ollama :prompt-cache?])))
+      (is (true? (get-in cfg [:llm :providers :ollama :stream-structured-output?])))
+      (is (= "http://localhost:11434" (get-in cfg [:llm :providers :ollama :base-url])))
       (is (true? (get-in cfg [:tools :http :enabled])))
+      (is (= 6 (get-in cfg [:chat :max-steps])))
       (is (false? (get-in cfg [:tools :yolo?])))
       (is (= [:filesystem-read :filesystem-write :http-request]
              (get-in cfg [:tools :permissions :api])))
@@ -66,21 +69,50 @@
              (:nrepl cfg)))
       (is (= "65532:65532" (get-in cfg [:runners :docker :user]))))))
 
+(deftest default-data-paths-use-global-data-dir-test
+  (with-isolated-config [root {}]
+    (let [cfg (config/load-config)
+          data-dir (str (io/file root "home" ".config" "iris" "data"))]
+      (is (= data-dir (get-in cfg [:iris :data-dir])))
+      (is (= (str (io/file data-dir "agent.db"))
+             (get-in cfg [:storage :sqlite :path])))
+      (is (= (str (io/file data-dir "memory-graph"))
+             (get-in cfg [:memory :graph :datahike :path]))))))
+
+(deftest data-dir-env-overrides-default-data-paths-test
+  (with-isolated-config [root {"IRIS_DATA_DIR" "~/iris-data"}]
+    (let [cfg (config/load-config)
+          data-dir (str (io/file root "home" "iris-data"))]
+      (is (= data-dir (get-in cfg [:iris :data-dir])))
+      (is (= (str (io/file data-dir "agent.db"))
+             (get-in cfg [:storage :sqlite :path])))
+      (is (= (str (io/file data-dir "memory-graph"))
+             (get-in cfg [:memory :graph :datahike :path]))))))
+
+(deftest explicit-data-paths-are-preserved-test
+  (with-isolated-config [root {"AGENT_SQLITE_PATH" "~/db/agent.sqlite"
+                               "AGENT_MEMORY_GRAPH_PATH" "/tmp/iris-graph"}]
+    (let [cfg (config/load-config)]
+      (is (= (str (io/file root "home" "db" "agent.sqlite"))
+             (get-in cfg [:storage :sqlite :path])))
+      (is (= "/tmp/iris-graph"
+             (get-in cfg [:memory :graph :datahike :path]))))))
+
 (deftest load-config-explicit-file-test
   (with-isolated-config [root {}]
     (let [cfg (config/load-config "config/default.edn")]
-      (is (= :ollama (get-in cfg [:llm :provider])))
-      (is (= "iris" (get-in cfg [:llm :app-name]))))))
+      (is (= :ollama (config/active-provider-key (:llm cfg))))
+      (is (= "iris" (get-in cfg [:llm :providers :ollama :app-name]))))))
 
 (deftest load-config-explicit-file-overrides-default-provider-test
   (with-isolated-config [root {}]
     (let [file (java.io.File/createTempFile "iris-config-" ".edn")]
-      (spit file "{:llm {:provider :openai-compatible\n       :model \"deepseek-chat\"\n       :openai-compatible {:base-url \"https://api.deepseek.com/v1\"\n                           :api-key \"test-key\"}}}")
+      (spit file "{:llm {:active-provider :deepseek\n       :providers {:deepseek {:type :openai-compatible\n                              :base-url \"https://api.deepseek.com/v1\"\n                              :api-key \"test-key\"\n                              :model \"deepseek-chat\"}}}}")
       (try
         (let [cfg (config/load-config (.getAbsolutePath file))]
-          (is (= :openai-compatible (get-in cfg [:llm :provider])))
-          (is (= "deepseek-chat" (get-in cfg [:llm :model])))
-          (is (= "https://api.deepseek.com/v1" (get-in cfg [:llm :openai-compatible :base-url]))))
+          (is (= :deepseek (config/active-provider-key (:llm cfg))))
+          (is (= "deepseek-chat" (config/active-model (:llm cfg))))
+          (is (= "https://api.deepseek.com/v1" (get-in cfg [:llm :providers :deepseek :base-url]))))
         (finally
           (io/delete-file file true))))))
 
@@ -122,8 +154,8 @@
       (spit (io/file local-dir "config.edn")
             "{:llm {:temperature 0.7}\n :memory {:search {:default-limit 9}}}")
       (let [cfg (config/load-config)]
-        (is (= "global-model" (get-in cfg [:llm :model])))
-        (is (= 0.7 (get-in cfg [:llm :temperature])))
+        (is (= "global-model" (config/active-model (:llm cfg))))
+        (is (= 0.7 (get-in cfg [:llm :providers :ollama :temperature])))
         (is (= 9 (get-in cfg [:memory :search :default-limit])))))))
 
 (deftest config-load-order-ignores-default-files-test
@@ -137,13 +169,14 @@
       (spit (io/file project-dir "default.edn")
             "{:llm {:provider :ollama :model \"project-model\"}\n :api {:port 2002}}")
       (let [cfg (config/load-config)]
-        (is (= :openai-compatible (get-in cfg [:llm :provider])))
-        (is (nil? (get-in cfg [:llm :model])))
+        (is (= :openai-compatible (config/active-provider-key (:llm cfg))))
+        (is (nil? (config/active-model (:llm cfg))))
         (is (= 1001 (get-in cfg [:api :port])))))))
 
 (deftest env-overrides-explicit-config-test
   (with-isolated-config [root {"AGENT_LLM_PROVIDER" "ollama"
-                               "AGENT_LLM_MODEL" "env-model"}]
+                               "AGENT_LLM_MODEL" "env-model"
+                               "AGENT_CHAT_MAX_STEPS" "12"}]
     (let [global-dir (io/file root "home" ".config" "iris")
           explicit-file (io/file root "explicit.edn")]
       (.mkdirs global-dir)
@@ -152,8 +185,9 @@
       (spit explicit-file
             "{:llm {:provider :openrouter :model \"explicit-model\"}}")
       (let [cfg (config/load-config (.getPath explicit-file))]
-        (is (= :ollama (get-in cfg [:llm :provider])))
-        (is (= "env-model" (get-in cfg [:llm :model])))))))
+        (is (= :ollama (config/active-provider-key (:llm cfg))))
+        (is (= "env-model" (config/active-model (:llm cfg))))
+        (is (= 12 (get-in cfg [:chat :max-steps])))))))
 
 (deftest namespaced-map-config-normalization-test
   (with-isolated-config [root {}]
@@ -163,7 +197,7 @@
             "#:iris{:config-version 1\n        :api {:port 9090}\n        :llm {:model \"namespaced-model\"}}")
       (let [cfg (config/load-config)]
         (is (= 9090 (get-in cfg [:api :port])))
-        (is (= "namespaced-model" (get-in cfg [:llm :model])))))))
+        (is (= "namespaced-model" (config/active-model (:llm cfg))))))))
 
 (deftest markdown-context-concat-test
   (with-isolated-config [root {}]

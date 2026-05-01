@@ -41,21 +41,22 @@
 
 (defn create-llm-provider
   [cfg]
-  (let [{:keys [provider model site-url app-name openrouter ollama openai-compatible
-                prompt-cache? stream-structured-output?]} cfg]
-    (case provider
+  (let [{:keys [provider type model base-url api-key site-url app-name prompt-cache?
+                stream-structured-output? embedding-model keep-alive]}
+        (config/active-provider-config cfg)]
+    (case type
       :ollama
       (ollama/create-ollama-provider
-       {:base-url (get ollama :base-url)
+       {:base-url base-url
         :default-model model
-        :embedding-model (get ollama :embedding-model)
-        :keep-alive (get ollama :keep-alive)
+        :embedding-model embedding-model
+        :keep-alive keep-alive
         :stream-structured-output? stream-structured-output?})
 
       :openrouter
       (openai-compatible/create-openrouter-provider
-       {:api-key (get openrouter :api-key)
-        :base-url (get openrouter :base-url)
+       {:api-key api-key
+        :base-url base-url
         :model model
         :site-url site-url
         :app-name app-name
@@ -64,16 +65,17 @@
 
       :openai-compatible
       (openai-compatible/create-openai-compatible-provider
-       {:api-key (get openai-compatible :api-key)
-        :base-url (get openai-compatible :base-url)
+       {:api-key api-key
+        :base-url base-url
         :default-model model
         :site-url site-url
         :app-name app-name
         :prompt-cache? prompt-cache?
         :stream-structured-output? stream-structured-output?})
 
-      (throw (ex-info (str "Unsupported provider: " provider)
-                      {:provider provider})))))
+      (throw (ex-info (str "Unsupported provider type: " type)
+                      {:provider provider
+                       :type type})))))
 
 (defn create-fact-llm-provider
   [cfg]
@@ -82,8 +84,8 @@
         model (:model extractor)]
     (when (or provider model)
       (create-llm-provider (cond-> (:llm cfg)
-                             provider (assoc :provider provider)
-                             model (assoc :model model))))))
+                             provider (assoc :active-provider provider)
+                             model (assoc-in [:providers (or provider (config/active-provider-key (:llm cfg))) :model] model))))))
 
 (defn create-store
   [cfg]
@@ -403,7 +405,7 @@
          memory-service (create-memory-service (:memory cfg) (:tools cfg) store)]
      (logging/log! :agent.system/created
                    {:config-path config-path
-                    :provider (name (get-in cfg [:llm :provider]))
+                    :provider (name (config/active-provider-key (:llm cfg)))
                     :sqlite-path (get-in cfg [:storage :sqlite :path])
                     :log-path (get-in cfg [:logging :file :path])})
      (let [base-system {:config cfg
@@ -436,7 +438,7 @@
                                        opts
                                        {:agent-id "system"
                                         :model (or (:model opts)
-                                                   (get-in system [:config :llm :model]))})))
+                                                   (config/active-model (get-in system [:config :llm])))})))
 
 (defn stream
   ([system prompt]
@@ -461,7 +463,7 @@
    :runtime (runtime/runtime-health (:runtime-service system))
    :channel-adapters (channel-adapters/registry-health (:channel-adapter-registry system))
    :orchestrator (orchestrator/health-check (:orchestrator system))
-   :provider (get-in system [:config :llm :provider])})
+   :provider (config/active-provider-key (get-in system [:config :llm]))})
 
 (defn log-event!
   [system event]

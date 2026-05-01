@@ -3,17 +3,14 @@
   (:require
    [agent.kernel.schema :as kernel-schema]
    [agent.llm.core :as llm]
+   [agent.prompts :as prompts]
    [agent.telemetry :as telemetry]))
 
 (defn- duration-ms [start-ns]
   (/ (double (- (System/nanoTime) start-ns)) 1000000.0))
 
 (defn planner-system-prompt []
-  (str "You drive a tool-calling loop. "
-       "When a listed tool can satisfy the user's request, call it via the function-calling protocol. "
-       "After receiving tool results, decide whether to call more tools or produce a final answer. "
-       "Reply with a natural-language final answer only when no more tool calls are needed. "
-       "Never claim a listed tool is unavailable."))
+  (prompts/load-prompt "planner-system"))
 
 (defn- native-tool-definition
   [{tool-name :name description :description input-schema :input-schema}]

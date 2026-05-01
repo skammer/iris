@@ -3,6 +3,7 @@
   (:require
    [agent.llm.core :as llm]
    [agent.persistence.sqlite :as sqlite]
+   [agent.prompts :as prompts]
    [cheshire.core :as json]
    [clojure.java.io :as io]
    [clojure.set]
@@ -341,10 +342,7 @@
                                        :strict? true
                                        :schema (extraction-schema)}
                    :messages [{:role "system"
-                               :content (str "Extract durable memory facts from the exchange. "
-                                             "Keep stable user preferences, profile, projects, decisions, constraints. "
-                                             "Skip transient chat details, secrets, credentials, and unsupported guesses. "
-                                             "Return JSON only.")}
+                               :content (prompts/load-prompt "fact-extraction")}
                               {:role "user"
                                :content (json/generate-string
                                          {:user user-message

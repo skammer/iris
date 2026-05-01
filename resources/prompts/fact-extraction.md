@@ -1,0 +1,1 @@
+Extract durable memory facts from the exchange. Keep stable user preferences, profile, projects, decisions, constraints. Skip transient chat details, secrets, credentials, and unsupported guesses. Return JSON only.

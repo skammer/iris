@@ -3,6 +3,7 @@
   (:require
    [agent.channels.core :as channel-adapters]
    [agent.chat :as chat]
+   [agent.config :as config]
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
@@ -188,7 +189,7 @@
   (let [active-tab (normalize-tab active-tab)
         storage (sqlite/health-check (:store system))
         runtime-health (runtime/runtime-health (:runtime-service system))
-        provider (name (get-in system [:config :llm :provider]))
+        provider (name (config/active-provider-key (get-in system [:config :llm])))
         session-count (get-in storage [:details :session-count] 0)
         event-count (get-in storage [:details :event-count] 0)
         port (get-in system [:config :api :port])]
@@ -280,7 +281,7 @@
       {"data-on-interval__duration.10s.leading" "@get('/ui/dashboard')"}
       [:h2 "Runtime Snapshot"]
       [:div.stats
-       [:div.stat.stat--wide [:span.label "provider"] [:span.value.provider-value (name (get-in system [:config :llm :provider]))]]
+       [:div.stat.stat--wide [:span.label "provider"] [:span.value.provider-value (name (config/active-provider-key (get-in system [:config :llm])))]]
        [:div.stat [:span.label "sessions"] [:span.value (get-in storage [:details :session-count] 0)]]
        [:div.stat [:span.label "events"] [:span.value (get-in storage [:details :event-count] 0)]]
        [:div.stat [:span.label "tools"] [:span.value (:count tools-health)]]
