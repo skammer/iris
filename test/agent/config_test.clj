@@ -165,13 +165,43 @@
       (.mkdirs global-dir)
       (.mkdirs project-dir)
       (spit (io/file global-dir "config.edn")
-            "{:llm {:provider :openai-compatible}\n :api {:port 1001}}")
+            "{:llm {:provider :openai-compatible\n       :providers {:openai-compatible {:type :openai-compatible\n                                         :base-url \"https://api.example.test/v1\"\n                                         :model \"global-model\"\n                                         :api-key \"test-key\"}}}\n :api {:port 1001}}")
       (spit (io/file project-dir "default.edn")
             "{:llm {:provider :ollama :model \"project-model\"}\n :api {:port 2002}}")
       (let [cfg (config/load-config)]
         (is (= :openai-compatible (config/active-provider-key (:llm cfg))))
-        (is (nil? (config/active-model (:llm cfg))))
+        (is (= "global-model" (config/active-model (:llm cfg))))
         (is (= 1001 (get-in cfg [:api :port])))))))
+
+(deftest active-provider-requires-model-test
+  (with-isolated-config [root {}]
+    (let [file (java.io.File/createTempFile "iris-config-" ".edn")
+          err (java.io.StringWriter.)]
+      (spit file "{:llm {:active-provider :deepseek\n       :providers {:deepseek {:type :openai-compatible\n                              :base-url \"https://api.deepseek.com/v1\"\n                              :api-key \"test-key\"}}}}")
+      (try
+        (binding [*err* err]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                                #"Invalid iris config"
+                                (config/load-config (.getAbsolutePath file)))))
+        (is (re-find #"ERROR iris config invalid" (str err)))
+        (is (re-find #":model" (str err)))
+        (finally
+          (io/delete-file file true))))))
+
+(deftest active-provider-requires-api-key-test
+  (with-isolated-config [root {}]
+    (let [file (java.io.File/createTempFile "iris-config-" ".edn")
+          err (java.io.StringWriter.)]
+      (spit file "{:llm {:active-provider :openrouter\n       :providers {:openrouter {:type :openrouter\n                                :base-url \"https://openrouter.ai/api/v1\"\n                                :model \"openai/gpt-4o-mini\"}}}}")
+      (try
+        (binding [*err* err]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                                #"Invalid iris config"
+                                (config/load-config (.getAbsolutePath file)))))
+        (is (re-find #"ERROR iris config invalid" (str err)))
+        (is (re-find #":api-key" (str err)))
+        (finally
+          (io/delete-file file true))))))
 
 (deftest env-overrides-explicit-config-test
   (with-isolated-config [root {"AGENT_LLM_PROVIDER" "ollama"
