@@ -39,6 +39,7 @@ clojure -J--enable-native-access=ALL-UNNAMED -M -m agent.core --config config/de
 Configuration:
 
 - `~/.config/iris/config.edn` uses the same shape as `resources/config/default.edn`, which is copied only when the global config is missing.
+- LLM model settings live under provider entries: `{:llm {:active-provider :ollama :providers {:ollama {:type :ollama :base-url "http://localhost:11434" :model "llama3.2:3b"} :deepseek {:type :openai-compatible :base-url "https://api.deepseek.com/v1" :api-key "..." :model "deepseek-chat"}}}}`.
 - If a generated file starts with `#:iris`, nested keys like `:api` read as `:iris/api`; current loader normalizes this, but prefer normal map syntax: `{:iris/config-version 1 :api {:port 9090}}`.
 - Config dir resolution: `IRIS_CONFIG_DIR`, then `$XDG_CONFIG_HOME/iris`, then `~/.config/iris`.
 - Project-local overlay dir: `./.iris/`.
@@ -168,6 +169,7 @@ Required/important env:
 
 - `AGENT_API_KEY`: required for 0.1 API auth work; set now for deploy parity.
 - `AGENT_API_HOST=0.0.0.0`: required inside container.
+- `IRIS_DATA_DIR=~/.config/iris/data`: default host data dir. `AGENT_SQLITE_PATH` and `AGENT_MEMORY_GRAPH_PATH` override individual stores.
 - `AGENT_SQLITE_PATH=/app/data/agent.db`: persisted SQLite path.
 - `JAVA_TOOL_OPTIONS=--enable-native-access=ALL-UNNAMED`: suppresses sqlite-jdbc native access warning.
 - Tool permissions/policy: `AGENT_API_TOOL_PERMISSIONS`, `AGENT_UI_TOOL_PERMISSIONS`, `AGENT_AGENT_TOOL_PERMISSIONS`, `AGENT_TOOL_ALLOWLIST`, `AGENT_TOOL_BLOCKLIST`, `AGENT_TOOL_APPROVAL_TTL_SECONDS`, `AGENT_TOOLS_YOLO`.

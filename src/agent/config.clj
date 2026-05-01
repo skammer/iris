@@ -6,26 +6,47 @@
    [clojure.string :as str]))
 
 (def default-config
-  {:llm {:provider :ollama
-         :model "llama3.2:3b"
-         :temperature 0.2
-         :max-tokens 1024
-         :stream? false
-         :prompt-cache? true
-         :stream-structured-output? true
+  {:llm {:active-provider :ollama
          :stream-content? true
-         :timeout-ms 60000
-         :site-url nil
-         :app-name "iris"
-         :openrouter {:base-url "https://openrouter.ai/api/v1"
-                      :api-key nil}
-         :ollama {:base-url "http://localhost:11434"
-                  :keep-alive "5m"
-                  :embedding-model "nomic-embed-text"}
-         :openai-compatible {:base-url "https://api.openai.com/v1"
-                             :api-key nil}}
+         :providers {:ollama {:type :ollama
+                              :base-url "http://localhost:11434"
+                              :model "llama3.2:3b"
+                              :temperature 0.2
+                              :max-tokens 1024
+                              :stream? false
+                              :prompt-cache? true
+                              :stream-structured-output? true
+                              :timeout-ms 60000
+                              :app-name "iris"
+                              :keep-alive "5m"
+                              :embedding-model "nomic-embed-text"}
+                     :openrouter {:type :openrouter
+                                  :base-url "https://openrouter.ai/api/v1"
+                                  :model "openai/gpt-4o-mini"
+                                  :temperature 0.2
+                                  :max-tokens 1024
+                                  :stream? false
+                                  :prompt-cache? true
+                                  :stream-structured-output? true
+                                  :timeout-ms 60000
+                                  :site-url nil
+                                  :app-name "iris"
+                                  :api-key nil}
+                     :openai-compatible {:type :openai-compatible
+                                         :base-url "https://api.openai.com/v1"
+                                         :model "gpt-4o-mini"
+                                         :temperature 0.2
+                                         :max-tokens 1024
+                                         :stream? false
+                                         :prompt-cache? true
+                                         :stream-structured-output? true
+                                         :timeout-ms 60000
+                                         :site-url nil
+                                         :app-name "iris"
+                                         :api-key nil}}}
    :storage {:sqlite {:path "data/agent.db"
                       :journal-mode "WAL"}}
+   :chat {:max-steps 6}
    :tools {:http {:enabled true
                   :timeout-ms 30000
                   :max-timeout-ms 30000
@@ -164,7 +185,7 @@
 (def template-file-names (conj context-file-names memory-file-name))
 (def app-config-keys
   [:llm :storage :tools :skills :memory :channel-adapters :runners
-   :orchestrator :telemetry :logging :api])
+   :orchestrator :telemetry :logging :api :chat])
 
 (def default-config-edn
   {:iris/config-version 1
@@ -198,6 +219,33 @@
 (defn local-config-dir
   []
   (io/file (*cwd*) ".iris"))
+
+(defn- expand-home-path [path]
+  (when (some? path)
+    (let [path* (str path)]
+      (cond
+        (= "~" path*) (*user-home*)
+        (str/starts-with? path* (str "~" java.io.File/separator))
+        (str (io/file (*user-home*) (subs path* 2)))
+        (str/starts-with? path* "~/")
+        (str (io/file (*user-home*) (subs path* 2)))
+        :else path*))))
+
+(defn data-dir
+  [global-dir]
+  (io/file
+   (expand-home-path
+    (or (nonblank (getenv "IRIS_DATA_DIR"))
+        (str (io/file global-dir "data"))))))
+
+(defn- legacy-default-path? [path filename]
+  (contains? #{(str "data/" filename) (str "data\\" filename)}
+             (str path)))
+
+(defn- resolve-data-path [path data-dir filename]
+  (if (or (nil? path) (legacy-default-path? path filename))
+    (str (io/file data-dir filename))
+    (expand-home-path path)))
 
 (defn- resource-template-content [name]
   (when-let [resource (io/resource (if (= config-file-name name)
@@ -238,6 +286,56 @@
              (deep-merge left right)
              right))
          maps))
+
+(def ^:private provider-keys
+  #{:ollama :openrouter :openai-compatible})
+
+(def ^:private provider-default-types
+  {:ollama :ollama
+   :openrouter :openrouter
+   :openai-compatible :openai-compatible})
+
+(def ^:private legacy-llm-provider-option-keys
+  [:model :temperature :max-tokens :stream? :prompt-cache?
+   :stream-structured-output? :timeout-ms :site-url :app-name])
+
+(defn- normalize-provider-config
+  [provider-key provider-cfg]
+  (assoc provider-cfg :type (or (:type provider-cfg)
+                                (provider-default-types provider-key)
+                                provider-key)))
+
+(defn- normalize-llm-config
+  [llm-cfg]
+  (let [active-provider (or (:provider llm-cfg)
+                            (:active-provider llm-cfg)
+                            (:default-provider llm-cfg)
+                            (ffirst (:providers llm-cfg))
+                            :ollama)
+        legacy-provider-configs (into {}
+                                      (keep (fn [provider-key]
+                                              (when-let [provider-cfg (get llm-cfg provider-key)]
+                                                [provider-key provider-cfg])))
+                                      provider-keys)
+        provider-configs (deep-merge legacy-provider-configs
+                                     (:providers llm-cfg))
+        legacy-provider-options (select-keys llm-cfg legacy-llm-provider-option-keys)
+        provider-configs* (if (seq legacy-provider-options)
+                            (update provider-configs active-provider deep-merge legacy-provider-options)
+                            provider-configs)
+        provider-configs** (into {}
+                                 (map (fn [[provider-key provider-cfg]]
+                                        [provider-key (normalize-provider-config provider-key provider-cfg)]))
+                                 provider-configs*)]
+    (assoc (apply dissoc llm-cfg :provider :default-provider
+                  (concat legacy-llm-provider-option-keys provider-keys))
+           :active-provider active-provider
+           :providers provider-configs**)))
+
+(defn- normalize-config
+  [cfg]
+  (cond-> cfg
+    (contains? cfg :llm) (update :llm normalize-llm-config)))
 
 (defn- existing-file [path]
   (let [file (io/file path)]
@@ -291,9 +389,18 @@
   [global-dir local-dir contexts]
   {:iris {:config-dir (.getPath global-dir)
           :local-config-dir (.getPath local-dir)
+          :data-dir (.getPath (data-dir global-dir))
           :context-files markdown-file-names
           :contexts contexts
           :context (str/join "\n" (map contexts markdown-file-names))}})
+
+(defn- finalize-data-paths
+  [cfg global-dir]
+  (let [data-dir* (data-dir global-dir)]
+    (-> cfg
+        (assoc-in [:iris :data-dir] (.getPath data-dir*))
+        (update-in [:storage :sqlite :path] resolve-data-path data-dir* "agent.db")
+        (update-in [:memory :graph :datahike :path] resolve-data-path data-dir* "memory-graph"))))
 
 (defn- keyword-env [name]
   (some-> (getenv name) str/lower-case not-empty keyword))
@@ -321,6 +428,7 @@
         embedding-model (getenv "OLLAMA_EMBEDDING_MODEL")
         openai-base-url (getenv "OPENAI_BASE_URL")
         sqlite-path (getenv "AGENT_SQLITE_PATH")
+        chat-max-steps (parse-long* (getenv "AGENT_CHAT_MAX_STEPS"))
         memory-prompt-paths (parse-csv (getenv "AGENT_MEMORY_PROMPT_PATHS"))
         memory-search-limit (parse-long* (getenv "AGENT_MEMORY_SEARCH_DEFAULT_LIMIT"))
         memory-vault-paths (parse-csv (getenv "AGENT_MEMORY_VAULT_PATHS"))
@@ -432,6 +540,8 @@
                      (assoc :api-key (getenv "OPENAI_API_KEY")))))
      :storage (cond-> {}
                 sqlite-path (assoc :sqlite {:path sqlite-path}))
+     :chat (cond-> {}
+             (some? chat-max-steps) (assoc :max-steps chat-max-steps))
      :nrepl (cond-> {}
               (some? nrepl-enabled) (assoc :enabled nrepl-enabled)
               nrepl-bind (assoc :bind nrepl-bind)
@@ -481,12 +591,28 @@
          global-config (load-optional-edn (io/file global-dir config-file-name))
          local-config (load-optional-edn (io/file local-dir config-file-name))
          explicit-config (when path (load-edn-file path))]
-     (deep-merge (some-> global-config normalize-iris-namespaced-config)
-                 (some-> local-config normalize-iris-namespaced-config)
-                 (iris-runtime-config global-dir local-dir contexts)
-                 (some-> explicit-config normalize-iris-namespaced-config)
-                 (env-config)))))
+     (let [file-config (deep-merge (some-> global-config normalize-iris-namespaced-config normalize-config)
+                                   (some-> local-config normalize-iris-namespaced-config normalize-config)
+                                   (iris-runtime-config global-dir local-dir contexts)
+                                   (some-> explicit-config normalize-iris-namespaced-config normalize-config))]
+       (finalize-data-paths
+        (normalize-config (deep-merge file-config (env-config)))
+        global-dir)))))
 
 (defn llm-config
   [config]
   (:llm config))
+
+(defn active-provider-key
+  [llm-cfg]
+  (:active-provider (normalize-llm-config llm-cfg)))
+
+(defn active-provider-config
+  [llm-cfg]
+  (let [llm-cfg* (normalize-llm-config llm-cfg)
+        provider (active-provider-key llm-cfg*)]
+    (assoc (get-in llm-cfg* [:providers provider]) :provider provider)))
+
+(defn active-model
+  [llm-cfg]
+  (:model (active-provider-config llm-cfg)))

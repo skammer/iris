@@ -175,6 +175,24 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest chat-loop-uses-configured-max-steps-test
+  (let [path (temp-db-path)
+        responses (atom [(tool-call-response :fs {:action "list" :path "."})
+                         "listed"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider #(-> %
+                                               (assoc-in [:chat :max-steps] 1)
+                                               (assoc-in [:memory :facts :extractor :enabled] false)))
+        session (system/create-session! system "max-steps")]
+    (try
+      (let [result (chat/run! system {:session-id (:id session)
+                                      :messages [{:role "user" :content "list files"}]})]
+        (is (= "Stopped: max chat tool steps reached." (:content result)))
+        (is (= 1 (count @requests))))
+      (finally
+        (io/delete-file path true)))))
+
 (deftest chat-loop-persists-tool-turns-to-messages-table-test
   (let [path (temp-db-path)
         responses (atom [(tool-call-response "call_fs_1" :fs {:action "list" :path "."})

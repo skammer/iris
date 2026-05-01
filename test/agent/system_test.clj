@@ -18,12 +18,13 @@
 
 (deftest create-llm-provider-selects-openrouter
   (let [provider (system/create-llm-provider
-                  {:provider :openrouter
-                   :model "openai/gpt-4o-mini"
-                   :site-url "https://example.com"
-                   :app-name "iris-test"
-                   :openrouter {:base-url "https://openrouter.ai/api/v1"
-                                :api-key "or-key"}})]
+                  {:active-provider :openrouter
+                   :providers {:openrouter {:type :openrouter
+                                            :model "openai/gpt-4o-mini"
+                                            :site-url "https://example.com"
+                                            :app-name "iris-test"
+                                            :base-url "https://openrouter.ai/api/v1"
+                                            :api-key "or-key"}}})]
     (is (instance? agent.llm.providers.openai_compatible.OpenAICompatibleProvider provider))))
 
 (deftest create-system-registers-default-tools

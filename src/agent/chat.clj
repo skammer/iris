@@ -3,12 +3,14 @@
   (:refer-clojure :exclude [run!])
   (:require
    [agent.broker.core :as broker]
+   [agent.config :as config]
    [agent.kernel.ops :as kernel-ops]
    [agent.kernel.runtime :as kernel-runtime]
    [agent.llm.core :as llm-core]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.planner :as planner]
+   [agent.prompts :as prompts]
    [agent.telemetry :as telemetry]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
@@ -27,6 +29,10 @@
   (str (UUID/randomUUID)))
 
 (defonce ^:private streaming-state (atom {}))
+
+(defn- active-llm
+  [system]
+  (config/active-provider-config (get-in system [:config :llm])))
 
 (defn streaming-content
   "Returns in-progress assistant text accumulated for `session-id`, or nil."
@@ -109,8 +115,8 @@
 
 (defn- memory-message [recall]
   {:role "system"
-   :content (str "Relevant memory JSON: "
-                 (compact-memory-json recall))})
+   :content (prompts/render "memory-context"
+                            {:memory_json (compact-memory-json recall)})})
 
 (defn- iris-context-message [system]
   (when-let [context (some-> (get-in system [:config :iris :context]) str/trim not-empty)]
@@ -249,20 +255,21 @@
                       approvals))))
 
 (defn- persist-completion! [system session-id prompt content request-id]
-  (let [assistant-message (when session-id
+  (let [llm (active-llm system)
+        assistant-message (when session-id
                             (append-message! system session-id "assistant" content))]
     (sqlite/log-completion! (:store system)
                             {:session-id session-id
-                             :provider (get-in system [:config :llm :provider])
-                             :model (get-in system [:config :llm :model])
+                             :provider (:provider llm)
+                             :model (:model llm)
                              :prompt prompt
                              :response content})
     (emit! system {:event-type :completion.completed
                    :entity-type :session
                    :entity-id session-id
                    :request-id request-id
-                   :payload {:provider (name (get-in system [:config :llm :provider]))
-                             :model (get-in system [:config :llm :model])}})
+                   :payload {:provider (name (:provider llm))
+                             :model (:model llm)}})
     assistant-message))
 
 (defn- extract-turn-memory! [system session-id user-message assistant-message request-id]
@@ -277,7 +284,7 @@
         :source-session-id session-id
         :source-message-ids [(:id user-message) (:id assistant-message)]
         :source-request-id request-id
-        :model (get-in system [:config :llm :model])})
+        :model (config/active-model (get-in system [:config :llm]))})
       (catch Exception e
         (emit! system {:event-type :chat.memory.extract_failed
                        :entity-type :session
@@ -324,7 +331,7 @@
   [system session-id request-id messages on-delta]
   (let [ch (llm-core/stream (:llm-provider system)
                             messages
-                            {:model (get-in system [:config :llm :model])})]
+                            {:model (config/active-model (get-in system [:config :llm]))})]
     (consume-llm-stream! ch system session-id request-id on-delta)))
 
 (defn- emit-content-as-delta!
@@ -345,7 +352,7 @@
                                                         messages
                                                         {}
                                                         {:agent-id "chat"
-                                                         :model (get-in system [:config :llm :model])}))]
+                                                         :model (config/active-model (get-in system [:config :llm]))}))]
       (clear-streaming! session-id)
       (emit! system {:event-type :chat.fallback_completion
                      :entity-type :session
@@ -383,9 +390,11 @@
    that surface tool activity inline (e.g. Telegram) receive one call per tool
    turn with `{:tool-call ... :receipt ...}`. The agentic planner loop runs the
    same way regardless of either callback."
-  [system {:keys [messages session-id max-steps context on-delta on-tool-call]
-           :or {max-steps default-max-steps}}]
-  (let [request-id (request-id)
+  [system {:keys [messages session-id max-steps context on-delta on-tool-call]}]
+  (let [max-steps (long (or max-steps
+                            (get-in system [:config :chat :max-steps])
+                            default-max-steps))
+        request-id (request-id)
         prompt (latest-user-prompt messages)
         user-message (persist-user-turn! system session-id messages)
         history (if session-id (session-messages system session-id) messages)
@@ -440,7 +449,7 @@
                                           :tools (tools/list-tools (:tool-registry system))
                                           :telemetry (:telemetry system)
                                           :agent-id (or session-id "chat")
-                                          :model (get-in system [:config :llm :model])
+                                          :model (config/active-model (get-in system [:config :llm]))
                                           :on-content-delta on-content-delta})
                 executable-step (select-keys step [:schema-version :state :directives :receipts])
                 executed (kernel-runtime/execute-step!

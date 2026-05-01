@@ -7,6 +7,7 @@
    [agent.api.validation :as v]
    [agent.broker.core :as broker]
    [agent.chat :as chat]
+   [agent.config :as config]
    [clojure.core.async :as async]
    [org.httpkit.server :as http-kit]))
 
@@ -26,21 +27,23 @@
                   (:event-type event))))
 
 (defn- openai-style-completion [system session-id content]
-  {:id (str "chatcmpl-" (System/currentTimeMillis))
-   :object "chat.completion"
-   :session_id session-id
-   :provider (name (get-in system [:config :llm :provider]))
-   :model (get-in system [:config :llm :model])
-   :choices [{:index 0
-              :finish_reason "stop"
-              :message {:role "assistant"
-                        :content content}}]})
+  (let [llm (config/active-provider-config (get-in system [:config :llm]))]
+    {:id (str "chatcmpl-" (System/currentTimeMillis))
+     :object "chat.completion"
+     :session_id session-id
+     :provider (name (:provider llm))
+     :model (:model llm)
+     :choices [{:index 0
+                :finish_reason "stop"
+                :message {:role "assistant"
+                          :content content}}]}))
 
 (defn- stream-response
   [system request messages session-id]
   (let [stream-id (str "chatcmpl-" (System/currentTimeMillis))
-        provider (name (get-in system [:config :llm :provider]))
-        model (get-in system [:config :llm :model])
+        llm (config/active-provider-config (get-in system [:config :llm]))
+        provider (name (:provider llm))
+        model (:model llm)
         broker-instance (or (:event-bus system) (:broker system))
         subscription (broker/subscribe! broker-instance (broker/all-events-subject))
         events-ch (:channel subscription)

@@ -1,25 +1,46 @@
 {:iris/config-version 1
  :iris/context-files ["SOUL.md" "AGENTS.md" "USER.md" "TOOLS.md" "BOOT.md" "HEARTBEAT.md"]
- :llm {:provider :ollama
-       :model "llama3.2:3b"
-       :temperature 0.2
-       :max-tokens 1024
-       :stream? false
-       :prompt-cache? true
-       :stream-structured-output? true
+ :llm {:active-provider :ollama
        :stream-content? true
-       :timeout-ms 60000
-       :site-url nil
-       :app-name "iris"
-       :openrouter {:base-url "https://openrouter.ai/api/v1"
-                    :api-key nil}
-       :ollama {:base-url "http://localhost:11434"
-                :keep-alive "5m"
-                :embedding-model "nomic-embed-text"}
-       :openai-compatible {:base-url "https://api.openai.com/v1"
-                           :api-key nil}}
+       :providers {:ollama {:type :ollama
+                            :base-url "http://localhost:11434"
+                            :model "llama3.2:3b"
+                            :temperature 0.2
+                            :max-tokens 1024
+                            :stream? false
+                            :prompt-cache? true
+                            :stream-structured-output? true
+                            :timeout-ms 60000
+                            :app-name "iris"
+                            :keep-alive "5m"
+                            :embedding-model "nomic-embed-text"}
+                   :openrouter {:type :openrouter
+                                :base-url "https://openrouter.ai/api/v1"
+                                :model "openai/gpt-4o-mini"
+                                :temperature 0.2
+                                :max-tokens 1024
+                                :stream? false
+                                :prompt-cache? true
+                                :stream-structured-output? true
+                                :timeout-ms 60000
+                                :site-url nil
+                                :app-name "iris"
+                                :api-key nil}
+                   :openai-compatible {:type :openai-compatible
+                                       :base-url "https://api.openai.com/v1"
+                                       :model "gpt-4o-mini"
+                                       :temperature 0.2
+                                       :max-tokens 1024
+                                       :stream? false
+                                       :prompt-cache? true
+                                       :stream-structured-output? true
+                                       :timeout-ms 60000
+                                       :site-url nil
+                                       :app-name "iris"
+                                       :api-key nil}}}
  :storage {:sqlite {:path "data/agent.db"
                     :journal-mode "WAL"}}
+ :chat {:max-steps 6}
  :tools {:http {:enabled true
                 :timeout-ms 30000
                 :max-timeout-ms 30000
