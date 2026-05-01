@@ -202,13 +202,21 @@
           command* (-> command str/lower-case (str/split #"\s+") first)]
       (case command*
         "/start" "Ready. Send message to chat."
-        "/help" "/start /help /reset /memory /status /photo <url> [caption] /file <url> [caption]"
+        "/help" "/start /help /stop /reset /memory /status /photo <url> [caption] /file <url> [caption]"
         "/reset" (do
                    (reset-session! (:store system) chat)
                    "Session reset.")
         "/memory" (memory-status system session-id)
         "/status" (status-text system session-id)
         nil))))
+
+(defn- stop-chat!
+  [system opts chat-id session-id]
+  (chat/cancel-session! session-id)
+  (when-let [task (:future (get @(:active-tasks opts) chat-id))]
+    (future-cancel task)
+    (swap! (:active-tasks opts) dissoc chat-id))
+  {:content "Stopping."})
 
 (defn- handle-media-command!
   "Handles /photo and /file slash commands. Returns true if handled, nil otherwise."
@@ -340,9 +348,27 @@
     (send! chat-id (if (str/blank? final) "(no response)" final))
     final))
 
+(defn- run-chat-async!
+  [system config opts chat chat-id session-id user-text]
+  (let [active-tasks (:active-tasks opts)
+        task-id (str (java.util.UUID/randomUUID))
+        task (future
+               (try
+                 (run-chat! system config opts chat chat-id session-id user-text)
+                 (finally
+                   (swap! active-tasks
+                          (fn [tasks]
+                            (if (= task-id (get-in tasks [chat-id :id]))
+                              (dissoc tasks chat-id)
+                              tasks))))))]
+    (swap! active-tasks assoc chat-id {:id task-id :future task})
+    task))
+
 (defn process-update!
   [system config {:keys [send-message-fn] :as opts} update]
-  (let [message (:message update)
+  (let [opts (cond-> opts
+               (nil? (:active-tasks opts)) (assoc :active-tasks (atom {})))
+        message (:message update)
         chat (:chat message)
         chat-id (:id chat)
         text (:text message)]
@@ -357,6 +383,12 @@
           :blocked)
         (let [send! (or send-message-fn #(send-message! (:bot-token config) %1 %2))]
           (cond
+            (= "/stop" (-> text str/trim str/lower-case (str/split #"\s+") first))
+            (let [mapping (session-mapping! (:store system) chat)
+                  result (stop-chat! system opts chat-id (:session-id mapping))]
+              (send! chat-id (:content result))
+              :processed)
+
             (handle-media-command! config opts chat-id text)
             :processed
 
@@ -365,8 +397,11 @@
               (if builtin-reply
                 (do (send! chat-id builtin-reply) :processed)
                 (let [mapping (session-mapping! (:store system) chat)]
-                  (run-chat! system config opts chat chat-id
-                             (:session-id mapping) text)
+                  (if (:async-chat? opts)
+                    (run-chat-async! system config opts chat chat-id
+                                     (:session-id mapping) text)
+                    (run-chat! system config opts chat chat-id
+                               (:session-id mapping) text))
                   :processed)))))))))
 
 (declare start! stop! health-check)
@@ -393,13 +428,15 @@
 
 (defn create-service
   ([system] (create-service system {}))
-  ([system opts]
+   ([system opts]
    (->TelegramService system
                       (get-in system [:config :channel-adapters :telegram])
                       (atom false)
                       (atom nil)
                       (atom nil)
-                      opts)))
+                      (merge {:active-tasks (atom {})
+                              :async-chat? true}
+                             opts))))
 
 (defn enabled? [service]
   (and (true? (get-in service [:config :enabled]))

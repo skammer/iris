@@ -29,6 +29,57 @@
   (str (UUID/randomUUID)))
 
 (defonce ^:private streaming-state (atom {}))
+(defonce ^:private active-runs (atom {}))
+
+(def stopped-content "Stopped.")
+
+(defn active-run
+  [session-id]
+  (when-let [run (and session-id (get @active-runs session-id))]
+    (select-keys run [:request-id :started-at])))
+
+(defn active? [session-id]
+  (boolean (active-run session-id)))
+
+(defn cancel-session!
+  [session-id]
+  (if-let [{:keys [cancelled? request-id]} (and session-id (get @active-runs session-id))]
+    (do
+      (reset! cancelled? true)
+      (swap! active-runs
+             (fn [runs]
+               (if (= request-id (get-in runs [session-id :request-id]))
+                 (dissoc runs session-id)
+                 runs)))
+      {:cancelled? true
+       :session-id session-id
+       :request-id request-id})
+    {:cancelled? false
+     :session-id session-id}))
+
+(defn- token-cancelled? [cancelled?]
+  (true? @cancelled?))
+
+(defn- cancelled-error []
+  (ex-info "Chat stopped" {:type :chat-cancelled}))
+
+(defn- throw-if-cancelled! [cancelled?]
+  (when (token-cancelled? cancelled?)
+    (throw (cancelled-error))))
+
+(defn- register-run! [session-id request-id cancelled?]
+  (when session-id
+    (swap! active-runs assoc session-id {:request-id request-id
+                                         :cancelled? cancelled?
+                                         :started-at (str (Instant/now))})))
+
+(defn- unregister-run! [session-id request-id]
+  (when session-id
+    (swap! active-runs
+           (fn [runs]
+             (if (= request-id (get-in runs [session-id :request-id]))
+               (dissoc runs session-id)
+               runs)))))
 
 (defn- active-llm
   [system]
@@ -395,6 +446,7 @@
                             (get-in system [:config :chat :max-steps])
                             default-max-steps))
         request-id (request-id)
+        cancelled? (atom false)
         prompt (latest-user-prompt messages)
         user-message (persist-user-turn! system session-id messages)
         history (if session-id (session-messages system session-id) messages)
@@ -409,6 +461,7 @@
                              (not (false? (get-in system [:config :llm :stream-content?] true))))
         on-content-delta (when stream-content?
                            (fn [chunk]
+                             (throw-if-cancelled! cancelled?)
                              (emit-delta! system session-id request-id on-delta chunk)))
         finish! (fn [content trace extra]
                   (clear-streaming! session-id)
@@ -419,6 +472,7 @@
                           :trace trace
                           :stream? (some? on-delta)}
                          extra))]
+    (register-run! session-id request-id cancelled?)
     (emit! system {:event-type :chat.started
                    :entity-type :session
                    :entity-id session-id
@@ -439,6 +493,7 @@
              state {}
              planner-messages initial-messages
              trace []]
+        (throw-if-cancelled! cancelled?)
         (if (>= step-no max-steps)
           (let [content "Stopped: max chat tool steps reached."]
             (emit-content-as-delta! system session-id request-id on-delta content)
@@ -451,6 +506,7 @@
                                           :agent-id (or session-id "chat")
                                           :model (config/active-model (get-in system [:config :llm]))
                                           :on-content-delta on-content-delta})
+                _ (throw-if-cancelled! cancelled?)
                 executable-step (select-keys step [:schema-version :state :directives :receipts])
                 executed (kernel-runtime/execute-step!
                           ops
@@ -458,6 +514,7 @@
                           executable-step
                           {:execute-safe-tools? true
                            :yolo? (true? (get-in system [:config :tools :yolo?]))})
+                _ (throw-if-cancelled! cancelled?)
                 receipts (:receipts executed)
                 trace* (conj trace {:step step-no
                                     :directives (:directives step)
@@ -507,10 +564,29 @@
                            (into planner-messages protocol-messages)
                            trace*))))))))
       (catch Exception e
-        (emit! system {:event-type :chat.error
-                       :entity-type :session
-                       :entity-id session-id
-                       :request-id request-id
-                       :payload {:message (.getMessage e)
-                                 :type (some-> e ex-data :type)}})
-        (fallback-complete! system initial-messages session-id prompt request-id e on-delta)))))
+        (if (or (token-cancelled? cancelled?)
+                (= :chat-cancelled (some-> e ex-data :type)))
+          (do
+            (clear-streaming! session-id)
+            (emit-content-as-delta! system session-id request-id on-delta stopped-content)
+            (persist-completion! system session-id prompt stopped-content request-id)
+            (emit! system {:event-type :chat.cancelled
+                           :entity-type :session
+                           :entity-id session-id
+                           :request-id request-id
+                           :payload {:message (.getMessage e)}})
+            {:content stopped-content
+             :request-id request-id
+             :trace []
+             :stream? (some? on-delta)
+             :cancelled? true})
+          (do
+            (emit! system {:event-type :chat.error
+                           :entity-type :session
+                           :entity-id session-id
+                           :request-id request-id
+                           :payload {:message (.getMessage e)
+                                     :type (some-> e ex-data :type)}})
+            (fallback-complete! system initial-messages session-id prompt request-id e on-delta))))
+      (finally
+        (unregister-run! session-id request-id)))))

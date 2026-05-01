@@ -37,7 +37,7 @@
    [agent.tools.core :as tools]
    [clojure.set :as set]))
 
-(declare spawn-task-worker! send-agent-message! execute-agent-tool!)
+(declare spawn-task-worker! send-agent-message! execute-agent-tool! reload! start-api!)
 
 (defn create-llm-provider
   [cfg]
@@ -231,6 +231,24 @@
   [system subscription]
   (broker/unsubscribe! (:broker system) subscription))
 
+(defn- reload-tool
+  [system-ref]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :system_reload
+     "Reload Iris runtime configuration from disk. Soft reload applies hot-safe runtime config; full reload schedules a process-local rebuild."
+     :category :system
+     :required-permissions #{:system-reload}
+     :input-schema [:map
+                    [:mode {:optional true} [:enum "soft" "full"]]])
+    :execute-fn
+    (fn [input context]
+      (reload! @system-ref {:mode (keyword (or (:mode input) "soft"))
+                            :source (or (:user context) "tool")}))
+    :health-fn
+    (fn [] {:healthy true})}))
+
 (defn create-tool-registry
   ([cfg event-sink store]
    (create-tool-registry cfg event-sink store nil nil nil))
@@ -239,6 +257,8 @@
   ([cfg event-sink store telemetry-collector memory-service]
    (create-tool-registry cfg event-sink store telemetry-collector memory-service nil))
   ([cfg event-sink store telemetry-collector memory-service channel-adapters-cfg]
+   (create-tool-registry cfg event-sink store telemetry-collector memory-service channel-adapters-cfg nil))
+  ([cfg event-sink store telemetry-collector memory-service channel-adapters-cfg system-ref]
    (let [http-cfg (get cfg :http)
          fs-cfg (get cfg :fs)
          shell-cfg (get cfg :shell)
@@ -277,7 +297,10 @@
 
        (telegram-tool/enabled? telegram-cfg)
        (-> (tools/register-tool (telegram-tool/create-send-photo-tool telegram-cfg))
-           (tools/register-tool (telegram-tool/create-send-document-tool telegram-cfg)))))))
+           (tools/register-tool (telegram-tool/create-send-document-tool telegram-cfg)))
+
+       system-ref
+       (tools/register-tool (reload-tool system-ref))))))
 
 (defn create-orchestrator
   ([_cfg event-sink]
@@ -394,6 +417,8 @@
   ([] (create-system nil))
   ([config-path]
    (let [cfg (config/load-config config-path)
+         system-ref (atom nil)
+         reload-state (atom {:status :idle})
          _ (logging/start! (:logging cfg))
          llm-cfg (config/llm-config cfg)
          store (create-store (:storage cfg))
@@ -409,6 +434,9 @@
                     :sqlite-path (get-in cfg [:storage :sqlite :path])
                     :log-path (get-in cfg [:logging :file :path])})
      (let [base-system {:config cfg
+                   :config-path config-path
+                   :system-ref system-ref
+                   :reload-state reload-state
                    :llm-provider (create-llm-provider llm-cfg)
                    :fact-llm-provider (create-fact-llm-provider cfg)
                    :store store
@@ -416,17 +444,177 @@
                    :broker broker-instance
                    :event-sink event-sink
                    :recorded-event-sink recorded-event-sink
-                   :tool-registry (create-tool-registry (:tools cfg) event-sink store telemetry-collector memory-service (:channel-adapters cfg))
+                   :tool-registry (create-tool-registry (:tools cfg) event-sink store telemetry-collector memory-service (:channel-adapters cfg) system-ref)
                    :skills-registry (create-skills-registry (:skills cfg))
                    :memory-service memory-service
                    :runtime-service runtime-service
                    :runner-registry (create-runner-registry runtime-service)
                    :orchestrator (create-orchestrator (:orchestrator cfg) event-sink telemetry-collector store)}]
-       (let [telegram-service (telegram/create-service base-system)]
-         (assoc base-system
-                :telegram-service telegram-service
-                :channel-adapter-registry (create-channel-adapter-registry (:channel-adapters cfg)
-                                                                           telegram-service)))))))
+       (let [telegram-service (telegram/create-service base-system)
+             system* (assoc base-system
+                            :telegram-service telegram-service
+                            :channel-adapter-registry (create-channel-adapter-registry (:channel-adapters cfg)
+                                                                                       telegram-service))]
+         (reset! system-ref system*)
+         system*)))))
+
+(defn current-system
+  [system]
+  (if-let [system-ref (:system-ref system)]
+    (or @system-ref system)
+    system))
+
+(defn reload-status
+  [system]
+  (or (some-> system current-system :reload-state deref)
+      {:status :unavailable}))
+
+(defn- provider-summary [cfg]
+  (let [provider-cfg (config/active-provider-config (:llm cfg))]
+    {:provider (:provider provider-cfg)
+     :model (:model provider-cfg)}))
+
+(defn- reload-result [mode old-cfg new-cfg status]
+  {:mode mode
+   :status status
+   :previous (provider-summary old-cfg)
+   :current (provider-summary new-cfg)})
+
+(defn- running-adapter? [service]
+  (true? (get-in (channel-adapters/adapter-health-check service) [:running])))
+
+(defn- rebuild-hot-system [old-system new-cfg]
+  (let [system-ref (:system-ref old-system)
+        memory-service (create-memory-service (:memory new-cfg)
+                                              (:tools new-cfg)
+                                              (:store old-system))
+        base (assoc old-system
+                    :config new-cfg
+                    :llm-provider (create-llm-provider (:llm new-cfg))
+                    :fact-llm-provider (create-fact-llm-provider new-cfg)
+                    :memory-service memory-service
+                    :skills-registry (create-skills-registry (:skills new-cfg)))
+        telegram-running? (some-> (:telegram-service old-system) running-adapter?)
+        _ (some-> (:telegram-service old-system) channel-adapters/stop-adapter!)
+        telegram-service (telegram/create-service base)
+        telegram-service* (if telegram-running?
+                            (channel-adapters/start-adapter! telegram-service)
+                            telegram-service)]
+    (assoc base
+           :telegram-service telegram-service*
+           :tool-registry (create-tool-registry (:tools new-cfg)
+                                                (:event-sink old-system)
+                                                (:store old-system)
+                                                (:telemetry old-system)
+                                                memory-service
+                                                (:channel-adapters new-cfg)
+                                                system-ref)
+           :channel-adapter-registry (create-channel-adapter-registry (:channel-adapters new-cfg)
+                                                                      telegram-service*))))
+
+(defn- soft-reload! [system opts]
+  (let [system* (current-system system)
+        system-ref (:system-ref system*)
+        old-cfg (:config system*)
+        new-cfg (config/load-config (:config-path system*))
+        new-system (rebuild-hot-system system* new-cfg)
+        result (reload-result :soft old-cfg new-cfg :reloaded)]
+    (logging/start! (:logging new-cfg))
+    (reset! system-ref new-system)
+    (reset! (:reload-state new-system)
+            (assoc result
+                   :source (:source opts)
+                   :reloaded-at (str (java.time.Instant/now))))
+    ((:event-sink new-system)
+     {:event-type :system.config.reloaded
+      :entity-type :system
+      :entity-id "runtime"
+      :payload result})
+    result))
+
+(defn- close-system! [system]
+  (try
+    (some-> (:telegram-service system) channel-adapters/stop-adapter!)
+    (catch Exception e
+      (logging/log-error! :agent.system/telegram-stop-failed e {})))
+  (try
+    (some-> (:api-server system) api/stop-server!)
+    (catch Exception e
+      (logging/log-error! :agent.system/api-stop-failed e {})))
+  (try
+    (some-> (:store system) sqlite/close-store!)
+    (catch Exception e
+      (logging/log-error! :agent.system/store-close-failed e {}))))
+
+(defn- full-reload-now! [system opts]
+  (let [old-system (current-system system)
+        system-ref (:system-ref old-system)
+        reload-state (:reload-state old-system)
+        old-cfg (:config old-system)
+        api-running? (some? (:api-server old-system))
+        new-system* (create-system (:config-path old-system))
+        new-system** (assoc new-system*
+                            :system-ref system-ref
+                            :reload-state reload-state)
+        new-system (if api-running?
+                     (start-api! new-system**)
+                     new-system**)
+        result (reload-result :full old-cfg (:config new-system) :reloaded)]
+    (reset! system-ref new-system)
+    (reset! reload-state
+            (assoc result
+                   :source (:source opts)
+                   :reloaded-at (str (java.time.Instant/now))))
+    ((:event-sink new-system)
+     {:event-type :system.config.reloaded
+      :entity-type :system
+      :entity-id "runtime"
+      :payload result})
+    (close-system! old-system)
+    result))
+
+(defn- schedule-full-reload! [system opts]
+  (let [system* (current-system system)
+        reload-state (:reload-state system*)]
+    (reset! reload-state
+            {:mode :full
+             :status :scheduled
+             :source (:source opts)
+             :scheduled-at (str (java.time.Instant/now))})
+    (future
+      (Thread/sleep (long (or (:delay-ms opts) 500)))
+      (try
+        (full-reload-now! system* opts)
+        (catch Exception e
+          (reset! reload-state
+                  {:mode :full
+                   :status :failed
+                   :source (:source opts)
+                   :message (.getMessage e)
+                   :failed-at (str (java.time.Instant/now))})
+          (logging/log-error! :agent.system/full-reload-failed e {}))))
+    @reload-state))
+
+(defn reload!
+  ([system] (reload! system {}))
+  ([system {:keys [mode] :as opts}]
+   (try
+     (case (or mode :soft)
+       :soft (soft-reload! system opts)
+       :full (schedule-full-reload! system opts)
+       (throw (ex-info "Unsupported reload mode"
+                       {:type :validation-failed
+                        :mode mode})))
+     (catch Exception e
+       (when-let [reload-state (:reload-state (current-system system))]
+         (reset! reload-state
+                 {:mode (or mode :soft)
+                  :status :failed
+                  :source (:source opts)
+                  :message (.getMessage e)
+                  :failed-at (str (java.time.Instant/now))}))
+       (logging/log-error! :agent.system/reload-failed e {:mode mode})
+       (throw e)))))
 
 (defn complete
   ([system prompt]

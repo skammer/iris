@@ -79,6 +79,37 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest telegram-stop-cancels-active-chat
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        sent (atom [])
+        active-tasks (atom {})
+        task-started (promise)
+        release-task (promise)
+        task-id "task-1"
+        task (future
+               (deliver task-started true)
+               @release-task)
+        system {:store store
+                :event-sink (fn [_] nil)}
+        config {:bot-token "token"
+                :allowlist {:allow-all? true}}
+        opts {:active-tasks active-tasks
+              :send-message-fn (fn [chat-id text]
+                                 (swap! sent conj {:chat-id chat-id
+                                                   :text text}))}]
+    (try
+      (is (true? (deref task-started 1000 false)))
+      (swap! active-tasks assoc 100 {:id task-id :future task})
+      (is (= :processed
+             (telegram/process-update! system config opts (update-for 1 100 7 "/stop"))))
+      (is (= [{:chat-id 100 :text "Stopping."}] @sent))
+      (is (nil? (get @active-tasks 100)))
+      (deliver release-task true)
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest telegram-allowlist-blocks-unknown
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path :evict-on-close? true})
@@ -142,8 +173,9 @@
                  {:get-updates-fn (fn [{:keys [offset]}]
                                     (swap! polls conj offset)
                                     (if (< (count @polls) 3) [update] []))
-                  :send-message-fn (fn [_ _] nil)
-                  :chat-fn (fn [_ _]
+	                  :send-message-fn (fn [_ _] nil)
+                  :async-chat? false
+	                  :chat-fn (fn [_ _]
                                  (if (= 1 (swap! attempts inc))
                                    (throw (ex-info "boom" {}))
                                    {:content "ok"}))})]

@@ -56,6 +56,21 @@
   (generate [this messages opts]
     (llm-core/invoke this (assoc opts :messages messages))))
 
+(defrecord BlockingProvider [started response]
+  llm-core/ILLMProvider
+  (complete [_ _ _] "fallback-response")
+  (stream [_ _ _] (async/to-chan! []))
+  (embed [_ _ _] [])
+  (list-models [_] [])
+  (get-capabilities [_ _] {:supports-tools true})
+  (estimate-cost [_ _ _] {:tokens 1 :cost-usd 0.0})
+  llm-core/ILLMProviderInvoke
+  (invoke [_ _]
+    (deliver started true)
+    @response)
+  (generate [this messages opts]
+    (llm-core/invoke this (assoc opts :messages messages))))
+
 (defn- temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-chat-" ".db")))
 
@@ -75,12 +90,22 @@
         config (config-fn (:config base))]
     (assoc base
            :llm-provider provider
+           :fact-llm-provider provider
            :store store
            :event-bus event-bus
            :event-sink event-sink
            :tool-registry (system/create-tool-registry (:tools config) event-sink store)
            :memory-service (memory/create-memory-service (:memory config) store)
            :config config)))
+
+(defn- eventually
+  [pred]
+  (loop [remaining 20]
+    (if (pred)
+      true
+      (when (pos? remaining)
+        (Thread/sleep 25)
+        (recur (dec remaining))))))
 
 (deftest chat-loop-persists-final-answer-and-trace-test
   (let [path (temp-db-path)
@@ -190,6 +215,27 @@
                                       :messages [{:role "user" :content "list files"}]})]
         (is (= "Stopped: max chat tool steps reached." (:content result)))
         (is (= 1 (count @requests))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-can-cancel-active-session-test
+  (let [path (temp-db-path)
+        started (promise)
+        response (promise)
+        provider (->BlockingProvider started response)
+        system (test-system path provider identity)
+        session (system/create-session! system "cancel")]
+    (try
+      (let [result-f (future
+                       (chat/run! system {:session-id (:id session)
+                                          :messages [{:role "user" :content "wait"}]}))]
+        (is (true? (deref started 1000 false)))
+        (is (:cancelled? (chat/cancel-session! (:id session))))
+        (deliver response "late answer")
+        (is (= chat/stopped-content (:content (deref result-f 1000 nil))))
+        (is (eventually #(false? (chat/active? (:id session)))))
+        (is (= ["wait" chat/stopped-content]
+               (mapv :content (sqlite/list-messages (:store system) (:id session))))))
       (finally
         (io/delete-file path true)))))
 

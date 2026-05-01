@@ -13,7 +13,7 @@
   (.getAbsolutePath (java.io.File/createTempFile "iris-system-" ".db")))
 
 (deftest create-llm-provider-selects-ollama
-  (let [provider (system/create-llm-provider (:llm (config/load-config)))]
+  (let [provider (system/create-llm-provider (:llm config/default-config))]
     (is (instance? agent.llm.providers.ollama.OllamaProvider provider))))
 
 (deftest create-llm-provider-selects-openrouter
@@ -32,7 +32,7 @@
         tools (system/list-tools system)
         adapters (system/list-channel-adapters system)
         runner-keys (-> system :runner-registry keys set)]
-    (is (= [:fs :http :memory :shell] (mapv :name tools)))
+    (is (= [:fs :http :memory :shell :system_reload] (mapv :name tools)))
     (is (= ["Discord" "Slack" "Telegram"] (mapv :display-name adapters)))
     (is (contains? runner-keys :local-unsandboxed))
     (is (contains? runner-keys :bubblewrap))
@@ -43,7 +43,7 @@
     (is (= 5 (count (system/memory-surfaces system))))
     (is (false? (get-in (system/health-check system) [:logging :enabled])))
     (is (= :local (get-in (system/health-check system) [:broker :backend])))
-    (is (= 4 (get-in (system/health-check system) [:tools :count])))
+    (is (= 5 (get-in (system/health-check system) [:tools :count])))
     (is (integer? (get-in (system/health-check system) [:runtime :run-count])))
     (is (= 3 (get-in (system/health-check system) [:channel-adapters :count])))
     (is (= 0 (get-in (system/health-check system) [:orchestrator :agent-count])))))

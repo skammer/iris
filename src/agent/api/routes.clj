@@ -12,6 +12,9 @@
    [:session_id {:optional true} :string]
    [:stream {:optional true} :boolean]])
 
+(def ^:private chat-stop-body
+  [:map [:session_id schemas/NonBlankString]])
+
 (def ^:private create-run-body
   [:map
    [:agent_id {:optional true} :string]
@@ -183,6 +186,10 @@
    [:approval_id {:optional true} :string]
    [:activity {:optional true} :any]])
 
+(def ^:private system-reload-body
+  [:map
+   [:mode {:optional true} [:enum "soft" "full"]]])
+
 (def ^:private signal-body
   [:map [:command_type schemas/NonBlankString]])
 
@@ -311,6 +318,8 @@
                               :parameters {:query session-id-query}}}]
    ["/ui/chat" {:post {:handler/id :ui-chat
                        :parameters {:form ui-chat-form}}}]
+   ["/ui/chat/stop" {:post {:handler/id :ui-chat-stop
+                            :parameters {:form [:map [:session_id schemas/NonBlankString]]}}}]
    ["/ui/events" {:get {:handler/id :ui-events}}]
    ["/ui/events/live" {:get {:handler/id :ui-events-live}}]
    ["/ui/memory/prompt" {:get {:handler/id :ui-memory-prompt}}]
@@ -328,6 +337,7 @@
    ["/ui/runs/:run-id/launch" {:post {:handler/id :ui-run-launch}}]
    ["/ui/runs/:run-id/signal" {:post {:handler/id :ui-run-signal}}]
    ["/ui/tools" {:get {:handler/id :ui-tools}}]
+   ["/ui/system/reload" {:post {:handler/id :ui-system-reload}}]
    ["/ui/tool-approvals" {:get {:handler/id :ui-tool-approvals}}]
    ["/ui/tool-approvals/request" {:post {:handler/id :ui-tool-approval-request
                                          :parameters {:form ui-tool-approval-request-form}}}]
@@ -343,6 +353,8 @@
    ["/v1/sessions/:session-id/messages" {:get {:handler/id :list-session-messages}}]
    ["/v1/chat/completions" {:post {:handler/id :chat-completions
                                     :parameters {:body chat-completions-body}}}]
+   ["/v1/chat/stop" {:post {:handler/id :chat-stop
+                            :parameters {:body chat-stop-body}}}]
    ["/v1/runs" {:get {:handler/id :list-runs}
                 :post {:handler/id :create-run
                        :parameters {:body create-run-body}}}]
@@ -375,6 +387,8 @@
    ["/v1/tools" {:get {:handler/id :list-tools}}]
    ["/v1/tools/:tool-name/execute" {:post {:handler/id :execute-tool
                                            :parameters {:body tool-execute-body}}}]
+   ["/v1/system/reload" {:post {:handler/id :system-reload
+                                :parameters {:body system-reload-body}}}]
    ["/v1/tool-approvals" {:get {:handler/id :list-tool-approvals
                                 :parameters {:query status-query}}
                           :post {:handler/id :create-tool-approval

@@ -36,9 +36,9 @@
       (is (true? (get-in cfg [:tools :http :enabled])))
       (is (= 6 (get-in cfg [:chat :max-steps])))
       (is (false? (get-in cfg [:tools :yolo?])))
-      (is (= [:filesystem-read :filesystem-write :http-request]
+      (is (= [:filesystem-read :filesystem-write :http-request :system-reload]
              (get-in cfg [:tools :permissions :api])))
-      (is (= [:filesystem-read :http-request :memory-read :memory-write]
+      (is (= [:filesystem-read :http-request :memory-read :memory-write :system-reload]
              (get-in cfg [:tools :permissions :chat])))
       (is (= {:allowlist []
               :blocklist []

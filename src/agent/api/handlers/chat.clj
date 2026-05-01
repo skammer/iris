@@ -151,3 +151,11 @@
       (let [result (complete! system messages {:session-id session-id})]
         (responses/json-response 200
                                  (openai-style-completion system session-id (:content result)))))))
+
+(defn stop-response
+  [system request]
+  (let [body (h/read-json-body request)
+        session-id (:session_id body)]
+    (v/ensure-session-exists! system session-id)
+    (responses/json-response 200
+                             {:data (chat/cancel-session! session-id)})))

@@ -122,6 +122,23 @@
              (http-kit/close channel)))))
      (fn [_ _] nil))))
 
+(defn chat-stop [system request]
+  (let [{:keys [session_id]} (h/read-form-body request)]
+    (v/ensure-session-exists! system session_id)
+    (chat/cancel-session! session_id)
+    (responses/html-response 200
+                             (str (ui/session-messages-fragment system session_id)
+                                  "<div id=\"chat-status\" class=\"meta chat-status\">stopping...</div>"))))
+
+(defn system-reload [system request]
+  (let [body (h/read-form-body request)
+        mode (keyword (or (:mode body) "soft"))]
+    ((requiring-resolve 'agent.system/reload!)
+     system
+     {:mode mode
+      :source "ui"})
+    (responses/html-response 200 (ui/dashboard-fragment ((requiring-resolve 'agent.system/current-system) system)))))
+
 (defn events [system _request]
   (responses/html-response 200 (ui/events-fragment system)))
 
