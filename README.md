@@ -47,6 +47,7 @@ Configuration:
 - EDN merge order: global `config.edn` → local `./.iris/config.edn` → explicit `--config` file → env vars.
 - Markdown context files merge by concatenating global then local in this order: `SOUL.md`, `AGENTS.md`, `USER.md`, `TOOLS.md`, `BOOT.md`, `HEARTBEAT.md`.
 - `:memory {:prompt {:paths ["MEMORY.md"]}}` uses paths relative to process cwd unless absolute paths are configured.
+- `:skills {:dirs ["skills"]}` resolves relative dirs as config-dir first, then process cwd.
 
 Run rewritten tests:
 
@@ -101,6 +102,12 @@ Build the standalone jar first:
 
 ```bash
 clojure -T:uberjar uberjar
+```
+
+Or rebuild and run in one step:
+
+```bash
+scripts/iris-isolated-rebuild.sh serve
 ```
 
 macOS:

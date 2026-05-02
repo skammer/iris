@@ -12,10 +12,14 @@
                :status :ok
                :input {:q "clojure"}
                :result {:answer "done"}})]
-    (is (str/includes? text "🔧 web ok"))
-    (is (str/includes? text "<blockquote expandable>"))
-    (is (str/includes? text "  \"q\" : \"clojure\""))
-    (is (str/includes? text "  \"answer\" : \"done\""))))
+    (is (str/includes? text "🔧 web"))
+    (is (str/includes? text "q: clojure"))
+    (is (not (str/includes? text "\"q\"")))
+    (is (not (str/includes? text "\"answer\"")))))
+
+(deftest display-args-preview-is-human-readable-not-json-test
+  (is (= "url: http://example.test method: GET"
+         (display/args-preview {:url "http://example.test" :method "GET"} 200))))
 
 (deftest display-telegram-summary-escapes-html-test
   (let [text (display/telegram-summary

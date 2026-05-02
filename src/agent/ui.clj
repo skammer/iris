@@ -41,13 +41,25 @@
                           {:pretty true})
     (catch Exception _ (str value))))
 
+(defn- parse-json-or-value [value]
+  (try
+    (if (string? value)
+      (json/parse-string value true)
+      value)
+    (catch Exception _ value)))
+
 (defn- render-tool-call [{:keys [id function]}]
-  (let [{:keys [name arguments]} function]
-    [:div.tool-call
-     [:div.tool-call__header
+  (let [{:keys [name arguments]} function
+        params (parse-json-or-value arguments)
+        args (tool-display/params-preview params 800)]
+    [:details.tool-call
+     [:summary.tool-call__header
       [:span.tool-call__name (str "→ " name)]
+      (when-not (str/blank? args)
+        [:span.tool-call__args-preview.code args])
       (when id [:span.tool-call__id.meta id])]
-     [:pre.tool-call__args.code (pretty-json arguments)]]))
+     [:div.tool-call__body
+      [:pre.tool-call__args.code (pretty-json params)]]]))
 
 (defn- parse-tool-content [content]
   (try
@@ -61,10 +73,10 @@
   (let [tool-name (or (:tool-name parsed) "tool")
         status (some-> (:status parsed) name)
         cfg (tool-display/channel-config system :web tool-name)
-        args (tool-display/block-preview (:input parsed)
-                                         (or (:args-preview-chars cfg)
-                                             (:preview-chars cfg)
-                                             800))]
+        args (tool-display/params-preview (:input parsed)
+                                          (or (:args-preview-chars cfg)
+                                              (:preview-chars cfg)
+                                              800))]
     [:span.tool-result__summary
      [:span.tool-result__summary-head
       [:span.tool-result__name tool-name]
@@ -470,7 +482,8 @@
       [:aside#sessions-panel.panel.sessions-sidebar
        {"data-on-interval__duration.15s.leading" "@get('/ui/sessions')"}
        [:form#create-session-form.create-session-form
-        {"data-on:submit" "@post('/ui/sessions', {contentType: 'form'})"
+        {"data-on:submit" "@post('/ui/sessions', {contentType: 'form', selector: '#create-session-form'})"
+         "data-on:datastar-fetch" "evt.detail.type === 'finished' && evt.currentTarget.reset()"
          "data-indicator" "createSessionLoading"}
         [:div.compact-form-row
          [:input {:type "text" :name "title" :placeholder "new session title"}]

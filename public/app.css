@@ -485,6 +485,68 @@ select:focus-visible {
   color: var(--accent);
 }
 
+.tool-calls {
+  display: grid;
+  gap: 8px;
+}
+
+.tool-call {
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+  border-radius: 6px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.06));
+  overflow: hidden;
+}
+
+.tool-call__header {
+  cursor: pointer;
+  list-style: none;
+  padding: 6px 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  user-select: none;
+}
+
+.tool-call__header::-webkit-details-marker {
+  display: none;
+}
+
+.tool-call__header::before {
+  content: "▸";
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+.tool-call[open] .tool-call__header::before {
+  content: "▾";
+}
+
+.tool-call__name {
+  font-weight: 600;
+  font-family: "Space Mono", monospace;
+}
+
+.tool-call__args-preview {
+  min-width: 0;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  opacity: 0.8;
+  font-size: 11px;
+}
+
+.tool-call__body {
+  border-top: 1px solid var(--border, rgba(127, 127, 127, 0.2));
+  padding: 8px 10px;
+}
+
+.tool-call__body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 form {
   display: grid;
   gap: 10px;

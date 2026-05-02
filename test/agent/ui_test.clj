@@ -15,6 +15,18 @@
     (is (str/includes? html "/public/web-components.js"))
     (is (not (str/includes? html "/public/app.js")))))
 
+(deftest create-session-form-posts-explicit-form-and-clears-on-success
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [html (ui/sessions-fragment {:store store})]
+        (is (str/includes? html "selector: &apos;#create-session-form&apos;"))
+        (is (str/includes? html "evt.detail.type === &apos;finished&apos;"))
+        (is (str/includes? html "evt.currentTarget.reset()")))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest session-message-content-is-escaped
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})]
@@ -57,8 +69,26 @@
         (let [html (ui/session-messages-fragment {:store store} (:id session))]
           (is (str/includes? html "web"))
           (is (str/includes? html "ok"))
-          (is (str/includes? html "query"))
-          (is (str/includes? html "clojure"))))
+          (is (str/includes? html "query: clojure"))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest assistant-tool-calls-render-collapsed-with-string-args
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [session (sqlite/create-session! store "tool-calls")
+            tool-calls [{:id "call_1"
+                         :type "function"
+                         :function {:name "http"
+                                    :arguments "{\"url\":\"http://example.test\",\"method\":\"GET\"}"}}]]
+        (sqlite/append-message! store (:id session) "assistant" "" {:tool-calls tool-calls})
+        (let [html (ui/session-messages-fragment {:store store} (:id session))]
+          (is (str/includes? html "<details class=\"tool-call\"><summary"))
+          (is (not (str/includes? html "<details class=\"tool-call\" open")))
+          (is (str/includes? html "url: http://example.test"))
+          (is (str/includes? html "method: GET"))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
