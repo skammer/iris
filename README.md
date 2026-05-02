@@ -95,6 +95,38 @@ Runtime isolation note:
 - Container children communicate with parent through `/v1/runs/:run-id/control/*` using the bootstrap token.
 - Local-process children may still use direct SQLite for dev/local compatibility.
 
+## Run Iris isolated
+
+Build the standalone jar first:
+
+```bash
+clojure -T:uberjar uberjar
+```
+
+macOS:
+
+```bash
+mkdir -p ~/.config/iris
+scripts/iris-isolated.sh serve
+```
+
+Linux:
+
+```bash
+mkdir -p ~/.config/iris
+scripts/iris-isolated.sh serve
+```
+
+`scripts/iris-isolated.sh` runs the main Iris process under Seatbelt on macOS and Bubblewrap on Linux. It allows read access to host files, but write/delete access only under the launch cwd and `~/.config/iris`. Override with `IRIS_SANDBOX=seatbelt|bubblewrap`, `IRIS_JAR=target/iris-0.1.0.jar`, or `JAVA_CMD=/path/to/java`.
+
+Ubuntu 24.04 may block unprivileged Bubblewrap with AppArmor. For a local test:
+
+```bash
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+scripts/iris-isolated.sh serve
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
+```
+
 Java warning note:
 
 - `sqlite-jdbc` loads native code.
