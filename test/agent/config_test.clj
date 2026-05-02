@@ -79,6 +79,24 @@
       (is (= (str (io/file data-dir "memory-graph"))
              (get-in cfg [:memory :graph :datahike :path]))))))
 
+(deftest relative-skill-dirs-resolve-config-dir-then-cwd-test
+  (with-isolated-config [root {}]
+    (let [cfg (config/load-config)]
+      (is (= [(str (io/file root "home" ".config" "iris" "skills"))
+              (str (io/file root "work" "skills"))]
+             (get-in cfg [:skills :dirs]))))))
+
+(deftest absolute-and-home-skill-dirs-are-not-cwd-expanded-test
+  (with-isolated-config [root {}]
+    (let [global-dir (io/file root "home" ".config" "iris")]
+      (.mkdirs global-dir)
+      (spit (io/file global-dir "config.edn")
+            (pr-str {:skills {:dirs ["/tmp/iris-skills" "~/iris-skills"]}}))
+      (let [cfg (config/load-config)]
+        (is (= ["/tmp/iris-skills"
+                (str (io/file root "home" "iris-skills"))]
+               (get-in cfg [:skills :dirs])))))))
+
 (deftest data-dir-env-overrides-default-data-paths-test
   (with-isolated-config [root {"IRIS_DATA_DIR" "~/iris-data"}]
     (let [cfg (config/load-config)

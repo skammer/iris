@@ -48,10 +48,16 @@
                            :entity-id (:id session)
                            :payload {:title (not-empty title)
                                      :source :ui}})
-    (responses/html-response 201
-                             (str (ui/sessions-fragment system (:id session))
-                                  (ui/session-detail-fragment system (:id session))
-                                  (ui/dashboard-fragment system)))))
+    (streaming/sse-response
+     request
+     (fn [channel]
+       (streaming/send-datastar-patch!
+        channel
+        (str (ui/sessions-fragment system (:id session))
+             (ui/session-detail-fragment system (:id session))
+             (ui/dashboard-fragment system)))
+       (http-kit/close channel))
+     (fn [_ _] nil))))
 
 (defn session-detail [system request]
   (let [session-id (-> request :parameters :query :session_id)]

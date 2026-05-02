@@ -25,8 +25,6 @@
          :per-tool {}}})
 
 (def ^:private telegram-max-message-chars 4096)
-(def ^:private telegram-blockquote-open "<blockquote expandable>")
-(def ^:private telegram-blockquote-close "</blockquote>")
 
 (defn channel-config
   "Returns the display config for `channel`, merged with per-tool overrides for
@@ -49,11 +47,28 @@
       (str/replace #"\s+" " ")
       str/trim))
 
-(defn- args->string [args]
+(declare params->string)
+
+(defn- value->string [value]
   (cond
-    (nil? args) ""
-    (string? args) args
-    :else (json/generate-string args)))
+    (nil? value) "nil"
+    (keyword? value) (name value)
+    (string? value) value
+    (map? value) (str "{" (params->string value) "}")
+    (sequential? value) (str/join ", " (map value->string value))
+    :else (str value)))
+
+(defn- params->string [params]
+  (cond
+    (nil? params) ""
+    (string? params) params
+    (map? params) (->> params
+                       (map (fn [[k v]]
+                              (str (if (keyword? k) (name k) (str k))
+                                   ": "
+                                   (value->string v))))
+                       (str/join " "))
+    :else (value->string params)))
 
 (defn- result->string [result]
   (cond
@@ -89,7 +104,7 @@
 (defn args-preview
   "Single-line, length-capped representation of tool arguments."
   [args max-chars]
-  (-> args args->string single-line (truncate max-chars)))
+  (-> args params->string single-line (truncate max-chars)))
 
 (defn result-preview
   "Single-line, length-capped representation of a tool result."
@@ -101,27 +116,18 @@
   [value max-chars]
   (-> value pretty-value (truncate max-chars)))
 
-(defn- blockquote [s]
-  (let [max-body (- telegram-max-message-chars
-                    (count telegram-blockquote-open)
-                    (count telegram-blockquote-close))]
-    (str telegram-blockquote-open
-         (escape-html-truncated s max-body)
-         telegram-blockquote-close)))
+(defn params-preview
+  "Human-readable, non-JSON, single-line representation of tool parameters."
+  [params max-chars]
+  (args-preview params max-chars))
 
 (defn telegram-summary
   "Compact one-message summary of a tool turn for Telegram."
-  [system {:keys [tool-name status input result]}]
+  [system {:keys [tool-name input]}]
   (let [cfg (channel-config system :telegram tool-name)
         args-cap (:args-preview-chars cfg 1200)
-        result-cap (:preview-chars cfg 1600)
-        head (str "🔧 " (or tool-name "tool")
-                  (when status (str " " (name (keyword status)))))
-        args-block (let [a (block-preview input args-cap)]
-                     (when-not (str/blank? a) a))
-        result-block (let [r (block-preview result result-cap)]
-                       (when-not (str/blank? r) r))]
-    (blockquote
-     (->> [head args-block result-block]
-         (remove nil?)
-         (str/join "\n")))))
+        args (params-preview input args-cap)
+        line (str "🔧 " (or tool-name "tool")
+                  (when-not (str/blank? args)
+                    (str " " args)))]
+    (escape-html-truncated line telegram-max-message-chars)))

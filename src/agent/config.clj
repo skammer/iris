@@ -247,6 +247,29 @@
     (str (io/file data-dir filename))
     (expand-home-path path)))
 
+(defn- absolute-path? [path]
+  (.isAbsolute (io/file path)))
+
+(defn- distinct-paths [paths]
+  (->> paths
+       (remove nil?)
+       (reduce (fn [acc path]
+                 (if (some #(= % path) acc)
+                   acc
+                   (conj acc path)))
+               [])))
+
+(defn- resolve-config-first-paths [paths config-dir]
+  (->> paths
+       (mapcat (fn [path]
+                 (let [path* (expand-home-path path)]
+                   (if (or (nil? path*) (absolute-path? path*))
+                     [path*]
+                     [(str (io/file config-dir path*))
+                      (str (io/file (*cwd*) path*))]))))
+       distinct-paths
+       vec))
+
 (defn- resource-template-content [name]
   (when-let [resource (io/resource (if (= config-file-name name)
                                      "config/default.edn"
@@ -464,6 +487,10 @@
         (update-in [:storage :sqlite :path] resolve-data-path data-dir* "agent.db")
         (update-in [:memory :graph :datahike :path] resolve-data-path data-dir* "memory-graph"))))
 
+(defn- finalize-skill-dirs
+  [cfg global-dir]
+  (update-in cfg [:skills :dirs] resolve-config-first-paths global-dir))
+
 (defn- keyword-env [name]
   (some-> (getenv name) str/lower-case not-empty keyword))
 
@@ -661,6 +688,7 @@
        (-> (deep-merge file-config (env-config))
            normalize-config
            (finalize-data-paths global-dir)
+           (finalize-skill-dirs global-dir)
            validate-config!)))))
 
 (defn llm-config
