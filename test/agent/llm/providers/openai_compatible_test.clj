@@ -46,6 +46,23 @@
         (is (= {:type "ephemeral"} (:cache_control (nth @bodies* 1))))
         (is (nil? (:cache_control (nth @bodies* 2))))))))
 
+(deftest openai-compatible-provider-config-defaults-test
+  (let [body* (atom nil)]
+    (with-redefs [http/post (fn [_ request]
+                              (reset! body* (json/parse-string (:body request) true))
+                              {:status 200
+                               :headers {"Content-Type" "application/json"}
+                               :body {:choices [{:message {:content "ok"}}]}})]
+      (let [llm (provider/create-openai-compatible-provider
+                 {:api-key "oa-key"
+                  :temperature 0.1
+                  :max-tokens 4096
+                  :extra-body {:presence_penalty 0.2}})]
+        (is (= "ok" (llm-core/complete llm [{:role "user" :content "hi"}] {})))
+        (is (= 0.1 (:temperature @body*)))
+        (is (= 4096 (:max_tokens @body*)))
+        (is (= 0.2 (:presence_penalty @body*)))))))
+
 (deftest openrouter-stream-test
   (with-redefs [http/post (fn [_ _]
                             {:status 200
@@ -83,6 +100,51 @@
         (is (= ["Hello" " world"] @chunks))
         (is (= "Hello world" (:content response)))
         (is (empty? (:tool-calls response)))))))
+
+(deftest invoke-errors-on-reasoning-only-length-stream-test
+  (with-redefs [http/post (fn [_ _]
+                            {:status 200
+                             :headers {"Content-Type" "text/event-stream"}
+                             :body (byte-stream
+                                    (str "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"}}]}\n\n"
+                                         "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n"
+                                         "data: [DONE]\n\n"))})]
+    (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})]
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"ended before final content"
+           (llm-core/invoke
+            llm
+            {:messages [{:role "user" :content "hi"}]
+             :on-content-delta (fn [_])}))))))
+
+(deftest complete-errors-on-reasoning-only-length-test
+  (with-redefs [http/post (fn [_ _]
+                            {:status 200
+                             :headers {"Content-Type" "application/json"}
+                             :body {:choices [{:message {:role "assistant"
+                                                         :reasoning_content "thinking"
+                                                         :content nil}
+                                               :finish_reason "length"}]}})]
+    (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})]
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"ended before final content"
+           (llm-core/complete llm [{:role "user" :content "hi"}] {}))))))
+
+(deftest stream-reports-reasoning-only-length-error-test
+  (with-redefs [http/post (fn [_ _]
+                            {:status 200
+                             :headers {"Content-Type" "text/event-stream"}
+                             :body (byte-stream
+                                    (str "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"}}]}\n\n"
+                                         "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n"
+                                         "data: [DONE]\n\n"))})]
+    (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})
+          ch (llm-core/stream llm [{:role "user" :content "hi"}] {})
+          value (async/<!! ch)]
+      (is (= :error (:type value)))
+      (is (re-find #"ended before final content" (:error value))))))
 
 (deftest invoke-merges-streamed-tool-call-arg-fragments-test
   (with-redefs [http/post (fn [_ _]
@@ -133,6 +195,33 @@
       (is (= "" (:content response)))
       (is (= "shell" (get-in tc [:function :name])))
       (is (= "{\"command\":\"df -h\"}" (get-in tc [:function :arguments]))))))
+
+(deftest invoke-recovers-streamed-tool-call-tags-test
+  (with-redefs [http/post (fn [_ _]
+                            {:status 200
+                             :headers {"Content-Type" "text/event-stream"}
+                             :body (byte-stream
+                                    (str "data: {\"choices\":[{\"delta\":{\"content\":\"<tool_call>\\n<function=memory>\\n\"}}]}\n\n"
+                                         "data: {\"choices\":[{\"delta\":{\"content\":\"<parameter=query>\\nTest User\\n</parameter>\\n\"}}]}\n\n"
+                                         "data: {\"choices\":[{\"delta\":{\"content\":\"<parameter=action>\\nsearch\\n</parameter>\\n\"}}]}\n\n"
+                                         "data: {\"choices\":[{\"delta\":{\"content\":\"</function>\\n</tool_call>\"}}]}\n\n"
+                                         "data: [DONE]\n\n"))})]
+    (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})
+          chunks (atom [])
+          response (llm-core/invoke
+                    llm
+                    {:messages [{:role "user" :content "вспомни Test Userа"}]
+                     :tools [{:type "function"
+                              :function {:name "memory"
+                                         :description "Memory"
+                                         :parameters {:type "object"}}}]
+                     :on-content-delta #(swap! chunks conj %)})
+          tc (first (:tool-calls response))]
+      (is (empty? @chunks))
+      (is (= "" (:content response)))
+      (is (= "memory" (get-in tc [:function :name])))
+      (is (= "{\"query\":\"Test User\",\"action\":\"search\"}"
+             (get-in tc [:function :arguments]))))))
 
 (deftest structured-output-invoke-streams-by-default-test
   (let [body* (atom nil)

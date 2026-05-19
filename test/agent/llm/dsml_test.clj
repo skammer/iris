@@ -25,6 +25,27 @@
       (is (= {"action" "list" "path" "/Users/example"}
              (json/parse-string (-> tc :function :arguments)))))))
 
+(deftest recovers-tool-call-function-tags
+  (let [content (str "<tool_call>\n"
+                     "<function=memory>\n"
+                     "<parameter=query>\n"
+                     "Test User\n"
+                     "</parameter>\n"
+                     "<parameter=action>\n"
+                     "search\n"
+                     "</parameter>\n"
+                     "</function>\n"
+                     "</tool_call>")
+        {:keys [content tool-calls]} (dsml/recover-tool-calls
+                                      {:content content
+                                       :tool-calls []})]
+    (is (= "" content))
+    (is (= 1 (count tool-calls)))
+    (let [tc (first tool-calls)]
+      (is (= "memory" (-> tc :function :name)))
+      (is (= {"query" "Test User" "action" "search"}
+             (json/parse-string (-> tc :function :arguments)))))))
+
 (deftest recovers-multiple-invokes-in-one-block
   (let [content (str "<｜DSML｜tool_calls>"
                      "<｜DSML｜invoke name=\"a\"><｜DSML｜parameter name=\"x\" string=\"true\">1</｜DSML｜parameter></｜DSML｜invoke>"

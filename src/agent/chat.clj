@@ -24,6 +24,8 @@
 (def default-max-steps 6)
 (def memory-result-limit 5)
 (def memory-max-chars 6000)
+(def history-message-max-chars 8000)
+(def tool-output-max-chars 8000)
 
 (defn- request-id []
   (str (UUID/randomUUID)))
@@ -126,9 +128,24 @@
 (defn- latest-user-prompt [messages]
   (:content (last (filter #(= "user" (:role %)) messages))))
 
+(defn- truncate-text [text max-chars]
+  (let [text* (or text "")]
+    (if (> (count text*) max-chars)
+      (str (subs text* 0 max-chars)
+           "\n\n[truncated "
+           (- (count text*) max-chars)
+           " chars]")
+      text*)))
+
+(defn- db-message-content->openai [role content]
+  (let [content* (or content "")]
+    (if (= "tool" role)
+      (truncate-text content* history-message-max-chars)
+      content*)))
+
 (defn- db-message->openai
   [{:keys [role content tool-calls tool-call-id]}]
-  (cond-> {:role role :content (or content "")}
+  (cond-> {:role role :content (db-message-content->openai role content)}
     (seq tool-calls) (assoc :tool_calls tool-calls)
     tool-call-id (assoc :tool_call_id tool-call-id)))
 
@@ -144,7 +161,7 @@
 
 (defn- compact-memory-json
   "Serializes recalled memory to JSON, capped at memory-max-chars to keep
-   recall payloads bounded. Tool outputs use full JSON — see tool-output-content."
+   recall payloads bounded."
   [value]
   (let [text (json/generate-string value)]
     (if (> (count text) memory-max-chars)
@@ -252,10 +269,27 @@
                        (normalize-tool-call-for-chat request-id idx tool-call))
                      (map-indexed vector tool-calls))})
 
+(defn- memory-tool-output-content [receipt]
+  (let [status (keyword (:status receipt))]
+    (case status
+      (:ok :completed) (truncate-text (:result receipt) tool-output-max-chars)
+      :denied (str "Memory tool denied: " (:reason receipt))
+      :approval-required (str "Memory tool approval required: " (:reason receipt))
+      (str "Memory tool failed: " (or (:reason receipt) (:error-type receipt) "unknown error")))))
+
 (defn- tool-output-content [receipt]
-  (json/generate-string
-   (select-keys receipt
-                [:status :tool-name :result :reason :error-type :input])))
+  (if (= "memory" (some-> (:tool-name receipt) name))
+    (memory-tool-output-content receipt)
+    (let [payload (select-keys receipt
+                               [:status :tool-name :result :reason :error-type :input])
+          text (json/generate-string payload)]
+      (if (> (count text) tool-output-max-chars)
+        (json/generate-string
+         (assoc (select-keys receipt [:status :tool-name :reason :error-type :input])
+                :truncated true
+                :original-chars (count text)
+                :preview (subs text 0 tool-output-max-chars)))
+        text))))
 
 (defn- tool-output-message [tool-call receipt]
   {:role "tool"
@@ -347,11 +381,16 @@
 (defn- error-content [error]
   (str "Chat failed: " (.getMessage ^Throwable error)))
 
+(defn- error-payload [error]
+  (cond-> {:message (.getMessage ^Throwable error)}
+    (ex-data error) (merge (ex-data error))))
+
 (defn- stream-delta-text [value]
   (cond
     (string? value) value
     (= :error (:type value)) (throw (ex-info (or (:error value) "LLM stream failed")
-                                             {:type :llm-stream-error}))
+                                             (merge {:type :llm-stream-error}
+                                                    (:details value))))
     (map? value) (or (:content value)
                      (get-in value [:delta :content])
                      (get-in value [:message :content])
@@ -424,13 +463,13 @@
       (clear-streaming! session-id)
       (let [content (error-content fallback-error)
             assistant-message (persist-completion! system session-id prompt content request-id)]
-        (emit! system {:event-type :chat.failed
-                       :entity-type :session
-                       :entity-id session-id
-                       :request-id request-id
-                       :payload {:message (.getMessage fallback-error)
-                                 :type (some-> fallback-error ex-data :type)
-                                 :initial-error (.getMessage error)}})
+            (emit! system {:event-type :chat.failed
+                           :entity-type :session
+                           :entity-id session-id
+                           :request-id request-id
+                           :payload (assoc (error-payload fallback-error)
+                                           :initial-error (.getMessage error)
+                                           :initial-type (some-> error ex-data :type))})
         {:content (:content assistant-message)
          :request-id request-id
          :error? true}))))
@@ -585,8 +624,7 @@
                            :entity-type :session
                            :entity-id session-id
                            :request-id request-id
-                           :payload {:message (.getMessage e)
-                                     :type (some-> e ex-data :type)}})
+                           :payload (error-payload e)})
             (fallback-complete! system initial-messages session-id prompt request-id e on-delta))))
       (finally
         (unregister-run! session-id request-id)))))

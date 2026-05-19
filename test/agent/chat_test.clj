@@ -290,6 +290,37 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest chat-loop-truncates-large-tool-history-before-planner-test
+  (let [path (temp-db-path)
+        responses (atom ["follow-up answer"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider identity)
+        session (system/create-session! system "large-tool-history")
+        large-content (apply str (repeat 9000 "x"))]
+    (try
+      (sqlite/append-message! (:store system) (:id session) "tool" large-content
+                              {:tool-call-id "call_big"})
+      (chat/run! system {:session-id (:id session)
+                         :messages [{:role "user" :content "anything else?"}]})
+      (let [planner-messages (get-in (first @requests) [:request :messages])
+            tool-msg (some #(when (= "tool" (:role %)) %) planner-messages)]
+        (is (< (count (:content tool-msg)) (count large-content)))
+        (is (str/includes? (:content tool-msg) "[truncated ")))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest tool-output-content-truncates-large-results-test
+  (let [large-result (apply str (repeat 9000 "x"))
+        content (#'chat/tool-output-content {:status :completed
+                                             :tool-name :memory
+                                             :result large-result
+                                             :input {:action "search"}})]
+    (is (str/includes? content "[truncated "))
+    (is (not (str/includes? content "\"result\"")))
+    (is (< (count content) (count large-result)))
+    (is (str/starts-with? content "xxx"))))
+
 (deftest chat-loop-uses-chat-completions-tool-result-protocol-test
   (let [path (temp-db-path)
         responses (atom [{:tool-calls [{:id "call_fs_1"

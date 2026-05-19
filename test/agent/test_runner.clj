@@ -30,8 +30,10 @@
    [agent.skills-test]
    [agent.ui-test]
    [agent.tools.common.fs-test]
+   [agent.tools.common.memory-test]
    [agent.llm.providers.ollama-test]
    [agent.llm.core-test]
+   [agent.llm.dsml-test]
    [agent.llm.providers.openai-compatible-test]
    [agent.tools.common.http-test]
    [agent.tools.common.telegram-test]
@@ -68,8 +70,10 @@
     agent.skills-test
     agent.ui-test
     agent.tools.common.fs-test
+    agent.tools.common.memory-test
     agent.llm.providers.ollama-test
     agent.llm.core-test
+    agent.llm.dsml-test
     agent.llm.providers.openai-compatible-test
     agent.tools.common.http-test
     agent.tools.common.telegram-test

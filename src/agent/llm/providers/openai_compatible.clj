@@ -87,14 +87,22 @@
                       (:stream-structured-output? config true))))))
 
 (defn- completion-body [base-url default-model config messages opts]
-  (let [model (or (:model opts) default-model)]
+  (let [model (or (:model opts) default-model)
+        extra-body (merge (or (:extra-body config) {})
+                          (or (:extra-body opts) {}))]
     (cond-> (merge {:model model
                     :messages (llm-core/normalize-messages messages)
-                    :temperature (or (:temperature opts) 0.2)
-                    :max_tokens (or (:max-tokens opts) 1024)
+                    :temperature (or (:temperature opts)
+                                     (:temperature config)
+                                     0.2)
+                    :max_tokens (or (:max-tokens opts)
+                                    (:max_tokens opts)
+                                    (:max-tokens config)
+                                    (:max_tokens config)
+                                    1024)
                     :stream false}
                    (prompt-cache-fields base-url model config opts)
-                   (:extra-body opts))
+                   extra-body)
     (:tools opts) (assoc :tools (:tools opts))
     (:tool-choice opts) (assoc :tool_choice (:tool-choice opts))
     (:structured-output opts) (assoc :response_format (structured-output-format (:structured-output opts)))
@@ -133,18 +141,51 @@
     response
     (throw (retryable-http-error response))))
 
+(defn- blank-content? [content]
+  (or (nil? content)
+      (and (string? content) (str/blank? content))))
+
+(defn- empty-content-error [details]
+  (llm-core/llm-error
+   :empty-response
+   (if (= "length" (:finish-reason details))
+     "LLM response ended before final content (finish_reason=length); increase :max-tokens or disable reasoning"
+     "LLM response had no assistant content")
+   details))
+
+(defn- throw-empty-content!
+  ([content tool-calls finish-reason reasoning?]
+   (throw-empty-content! content tool-calls
+                         {:finish-reason finish-reason
+                          :reasoning-content? (boolean reasoning?)}))
+  ([content tool-calls {:keys [finish-reason reasoning-content?] :as details}]
+   (when (and (blank-content? content)
+              (empty? tool-calls)
+              (or (= "length" finish-reason) reasoning-content?))
+     (throw (empty-content-error (assoc details
+                                        :content-chars (count (or content ""))
+                                        :tool-call-count (count tool-calls)))))))
+
 (defn- post-json [url request]
   (llm-core/retry-with-backoff
    #(checked-response (http/post url (assoc request :throw-exceptions false)))))
 
 (defn- message->turn [body]
-  (let [message (-> body :choices first :message)]
-    (dsml/recover-tool-calls
-     {:role (:role message "assistant")
-      :content (:content message)
-      :tool-calls (vec (or (:tool_calls message) []))
-      :usage (usage->estimate body)
-      :raw message})))
+  (let [choice (-> body :choices first)
+        message (:message choice)
+        turn (dsml/recover-tool-calls
+              {:role (:role message "assistant")
+               :content (:content message)
+               :tool-calls (vec (or (:tool_calls message) []))
+               :usage (usage->estimate body)
+               :raw message})]
+    (throw-empty-content! (:content turn)
+                          (:tool-calls turn)
+                          {:finish-reason (:finish_reason choice)
+                           :reasoning-content? (some? (:reasoning_content message))
+                           :reasoning-chars (count (or (:reasoning_content message) ""))
+                           :usage (usage->estimate body)})
+    turn))
 
 (defn- merge-tool-call-deltas [tool-calls deltas]
   ;; OpenAI streams tool_calls as partial deltas keyed by :index. Each delta may
@@ -172,11 +213,16 @@
      (loop [content []
             tool-calls (sorted-map)
             usage nil
-            raw []]
+            raw []
+            finish-reason nil
+            reasoning-chars 0
+            event-count 0]
        (if-let [line (.readLine reader)]
          (if-let [event (parse-sse-line line)]
            (let [delta (-> event :choices first :delta)
-                 chunk (:content delta)]
+                 choice (-> event :choices first)
+                 chunk (:content delta)
+                 reasoning-chunk (:reasoning_content delta)]
              (when (and on-content-delta (string? chunk) (not= "" chunk))
                (on-content-delta chunk))
              (recur (cond-> content
@@ -185,14 +231,25 @@
                       (merge-tool-call-deltas tool-calls tc-deltas)
                       tool-calls)
                     (or (:usage event) usage)
-                    (conj raw event)))
-           (recur content tool-calls usage raw))
-         (dsml/recover-tool-calls
-          {:role "assistant"
-           :content (apply str content)
-           :tool-calls (vec (vals tool-calls))
-           :usage (usage->estimate {:usage usage})
-           :raw raw}))))))
+                    (conj raw event)
+                    (or (:finish_reason choice) finish-reason)
+                    (+ reasoning-chars (count (or reasoning-chunk "")))
+                    (inc event-count)))
+           (recur content tool-calls usage raw finish-reason reasoning-chars event-count))
+         (let [turn (dsml/recover-tool-calls
+                     {:role "assistant"
+                      :content (apply str content)
+                      :tool-calls (vec (vals tool-calls))
+                      :usage (usage->estimate {:usage usage})
+                      :raw raw})]
+           (throw-empty-content! (:content turn)
+                                 (:tool-calls turn)
+                                 {:finish-reason finish-reason
+                                  :reasoning-content? (pos? reasoning-chars)
+                                  :reasoning-chars reasoning-chars
+                                  :event-count event-count
+                                  :usage (usage->estimate {:usage usage})})
+           turn))))))
 
 (defn- post-stream-turn
   ([url request] (post-stream-turn url request nil))
@@ -230,7 +287,7 @@
                                                                  messages
                                                                  opts))
                                          :as :json))]
-          (-> response :body :choices first :message :content)))))
+          (:content (message->turn (:body response)))))))
 
   (stream [_ messages opts]
     (let [ch (async/chan)]
@@ -251,10 +308,37 @@
                                       :throw-exceptions false
                                       :as :stream}))]
             (with-open [reader (io/reader (:body response))]
-              (doseq [line (line-seq reader)]
-                (when-let [event (parse-sse-line line)]
-                  (when-let [content (-> event :choices first :delta :content)]
-                    (async/>!! ch content))))))
+              (let [state (atom {:content? false
+                                 :reasoning? false
+                                 :finish-reason nil
+                                 :content-chars 0
+                                 :reasoning-chars 0
+                                 :event-count 0})]
+                (doseq [line (line-seq reader)]
+                  (when-let [event (parse-sse-line line)]
+                    (let [choice (-> event :choices first)
+                          delta (:delta choice)]
+                      (swap! state
+                             (fn [s]
+                               (cond-> (-> s
+                                           (update :event-count inc)
+                                           (update :content-chars + (count (or (:content delta) "")))
+                                           (update :reasoning-chars + (count (or (:reasoning_content delta) ""))))
+                                 (:finish_reason choice) (assoc :finish-reason (:finish_reason choice))
+                                 (some? (:reasoning_content delta)) (assoc :reasoning? true))))
+                      (when-let [content (:content delta)]
+                        (when-not (str/blank? content)
+                          (swap! state assoc :content? true))
+                        (async/>!! ch content)))))
+                (let [{:keys [content? reasoning? finish-reason reasoning-chars content-chars event-count]} @state]
+                  (when (and (not content?)
+                             (or (= "length" finish-reason) reasoning?))
+                    (throw (empty-content-error
+                            {:finish-reason finish-reason
+                             :reasoning-content? reasoning?
+                             :reasoning-chars reasoning-chars
+                             :content-chars content-chars
+                             :event-count event-count})))))))
           (catch Exception e
             (async/>!! ch (llm-core/stream-error-event e)))
           (finally
@@ -435,7 +519,13 @@
                                                    :prompt_cache_retention
                                                    :cache-control
                                                    :cache_control
-                                                   :stream-structured-output?])
+                                                   :stream-structured-output?
+                                                   :temperature
+                                                   :max-tokens
+                                                   :max_tokens
+                                                   :top-p
+                                                   :top_p
+                                                   :extra-body])
                                      config)))
 
 (defn create-openrouter-provider
