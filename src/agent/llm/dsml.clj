@@ -53,11 +53,10 @@
       str/trim))
 
 (defn recover-tool-calls
-  "If `:tool-calls` is empty and `:content` contains DSML tool-call blocks,
-   parse them out, append them as structured tool calls, and strip the markup
-   from `:content`. Otherwise return the turn unchanged."
+  "Recover DSML/tool_call markup into structured tool calls and strip markup.
+   If native tool calls already exist, keep them and only strip leaked markup."
   [{:keys [content tool-calls] :as turn}]
-  (if (or (seq tool-calls) (not (string? content)) (str/blank? content))
+  (if (or (not (string? content)) (str/blank? content))
     turn
     (try
       (let [dsml-blocks (re-seq dsml-tool-calls-re content)
@@ -65,11 +64,14 @@
             recovered (concat
                        (mapcat (fn [[_ body]] (dsml-block->tool-calls body)) dsml-blocks)
                        (mapcat (fn [[_ body]] (tagged-block->tool-calls body)) tagged-blocks))]
-        (if (empty? recovered)
+        (if (and (empty? recovered)
+                 (not (seq tool-calls)))
           turn
           (assoc turn
                  :content (strip-blocks content)
-                 :tool-calls (vec (concat (or tool-calls []) recovered)))))
+                 :tool-calls (vec (concat (or tool-calls [])
+                                          (when-not (seq tool-calls)
+                                            recovered))))))
       (catch Exception e
         (tap> {:event :dsml/recover-failed
                :error (.getMessage e)

@@ -2,6 +2,7 @@
   "Native Ollama provider."
   (:require
    [agent.llm.core :as llm-core]
+   [agent.llm.messages :as llm-messages]
    [cheshire.core :as json]
    [clj-http.client :as http]
    [clojure.core.async :as async]
@@ -16,7 +17,7 @@
 
 (defn- chat-body [default-model keep-alive messages opts stream?]
   (cond-> {:model (or (:model opts) default-model)
-           :messages (llm-core/normalize-messages messages)
+           :messages (llm-messages/internal->ollama messages)
            :stream stream?
            :keep_alive (or (:keep-alive opts) keep-alive)
            :options (cond-> {}

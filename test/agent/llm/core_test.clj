@@ -46,12 +46,11 @@
                    (list-models [_] [])
                    (get-capabilities [_ _] {})
                    (estimate-cost [_ _ _] {:tokens 1 :cost-usd 0.0}))]
-    (is (= {:role "assistant"
-            :content "ok"
-            :tool-calls []
-            :usage nil
-            :raw "ok"}
-           (llm-core/invoke provider {:messages [{:role "user" :content "hi"}]})))))
+    (let [response (llm-core/invoke provider {:messages [{:role "user" :content "hi"}]})]
+      (is (= "assistant" (:role response)))
+      (is (= "ok" (:content response)))
+      (is (= [] (:tool-calls response)))
+      (is (= "ok" (:raw response))))))
 
 (deftest test-tool-call-directive-normalization
   (is (= [{:type :tool-call

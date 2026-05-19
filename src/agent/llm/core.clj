@@ -2,6 +2,7 @@
   "Core LLM protocols and interfaces for the agent system.
   Provides abstract interfaces for LLM providers with extended capabilities."
   (:require
+   [agent.llm.messages :as llm-messages]
    [cheshire.core :as json]
    [clojure.spec.alpha :as s]
    [clojure.string :as str])
@@ -128,8 +129,9 @@
 ;; Common Types and Specs
 ;; ======================
 
-(s/def ::role #{"system" "user" "assistant" "tool"})
-(s/def ::content string?)
+(s/def ::role #(contains? #{"system" "user" "assistant" "tool"}
+                          (if (keyword? %) (name %) (str %))))
+(s/def ::content any?)
 (s/def ::message (s/keys :req-un [::role ::content]))
 (s/def ::messages (s/coll-of ::message :min-count 1))
 
@@ -172,18 +174,10 @@
 ;; ======================
 
 (defn normalize-messages
-  "Normalize messages to provider-specific format."
+  "Normalize messages to Iris internal rich format.
+   Provider wire conversion happens in provider namespaces."
   [messages]
-  (mapv (fn [msg]
-          (cond-> msg
-            (string? (:role msg)) (update :role #(case %
-                                                   "system" "system"
-                                                   "user" "user" 
-                                                   "assistant" "assistant"
-                                                   "tool" "tool"
-                                                   "user"))
-            (not (string? (:content msg))) (update :content str)))
-        messages))
+  (llm-messages/messages->internal messages))
 
 (defn validate-messages?
   [messages]
@@ -197,7 +191,7 @@
   "Estimate token count for messages (rough approximation).
   Uses 4 chars per token as a rough estimate."
   [messages]
-  (let [total-chars (reduce + (map (comp count :content) messages))]
+  (let [total-chars (reduce + (map #(count (llm-messages/content-text %)) messages))]
     (int (/ total-chars 4))))
 
 (defn create-completion-request
@@ -206,7 +200,7 @@
                     frequency-penalty presence-penalty]
              :or {temperature 0.7 max-tokens 1000}}]
   {:model model
-   :messages (normalize-messages messages)
+   :messages (llm-messages/internal->openai-compatible messages)
    :temperature temperature
    :max_tokens max-tokens
    :top_p top-p
@@ -232,33 +226,25 @@
 
 (defn normalize-llm-response
   [response opts]
-  (cond
-    (string? response)
-    {:role "assistant"
-     :content response
-     :tool-calls []
-     :usage nil
-     :raw response}
-
-    (map? response)
-    (let [content (or (:content response) "")
-          usage* (or (:usage response)
-                     (:usage opts))]
-      (-> response
-          (assoc :role (or (:role response) "assistant"))
-          (assoc :content content)
-          (assoc :tool-calls (vec (or (:tool-calls response)
-                                      (:tool_calls response)
-                                      [])))
-          (assoc :usage usage*)
-          (assoc :raw (or (:raw response) response))))
-
-    :else
-    {:role "assistant"
-     :content (str response)
-     :tool-calls []
-     :usage nil
-     :raw response}))
+  (let [response* (cond
+                    (map? response) response
+                    (string? response) {:content response}
+                    :else {:content (str response)})
+        turn (llm-messages/provider-response->assistant-turn
+              (:provider opts)
+              (:model opts)
+              (cond-> response*
+                (:usage opts) (assoc :usage (:usage opts))))
+        tool-calls (llm-messages/tool-call-blocks (:content turn))]
+    (-> response*
+        (assoc :role "assistant")
+        (assoc :content (llm-messages/content-text (:content turn)))
+        (assoc :content-blocks (:content turn))
+        (assoc :tool-calls tool-calls)
+        (assoc :usage (:usage turn))
+        (assoc :stop-reason (:stop-reason turn))
+        (assoc :assistant-turn turn)
+        (assoc :raw (or (:raw response*) response)))))
 
 (declare llm-error)
 
@@ -274,16 +260,9 @@
 
 (defn tool-call->directive
   [tool-call]
-  (let [function (or (:function tool-call)
-                     (:function_call tool-call)
-                     tool-call)
-        tool-name (or (:name function)
-                      (:tool-name tool-call)
-                      (:tool_name tool-call)
-                      (:name tool-call))
-        input (parse-tool-arguments (or (:arguments function)
-                                        (:input tool-call)
-                                        (:args tool-call)))]
+  (let [block (llm-messages/provider-tool-call->internal tool-call)
+        tool-name (:name block)
+        input (parse-tool-arguments (:arguments block))]
     (when-not tool-name
       (throw (llm-error :invalid-tool-call
                         "Provider tool call missing tool name"
@@ -291,8 +270,8 @@
     {:type :tool-call
      :payload {:tool-name tool-name
                :input input
-               :context (cond-> {:provider-tool-call tool-call}
-                          (:id tool-call) (assoc :provider-tool-call-id (:id tool-call)))}}))
+               :context (cond-> {:provider-tool-call (or (:raw block) tool-call)}
+                          (:id block) (assoc :provider-tool-call-id (:id block)))}}))
 
 (defn tool-calls->directives
   [tool-calls]

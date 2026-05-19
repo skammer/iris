@@ -3,6 +3,7 @@
   (:require
    [agent.llm.core :as llm-core]
    [agent.llm.dsml :as dsml]
+   [agent.llm.messages :as llm-messages]
    [cheshire.core :as json]
    [clj-http.client :as http]
    [clojure.core.async :as async]
@@ -91,7 +92,7 @@
         extra-body (merge (or (:extra-body config) {})
                           (or (:extra-body opts) {}))]
     (cond-> (merge {:model model
-                    :messages (llm-core/normalize-messages messages)
+                    :messages (llm-messages/internal->openai-compatible messages)
                     :temperature (or (:temperature opts)
                                      (:temperature config)
                                      0.2)

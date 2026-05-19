@@ -7,6 +7,7 @@
    [agent.kernel.runtime :as kernel-runtime]
    [agent.kernel.schema :as kernel-schema]
    [agent.llm.core :as llm-core]
+   [agent.llm.messages :as llm-messages]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.planner :as planner]
@@ -27,7 +28,6 @@
 (def memory-result-limit 5)
 (def memory-max-chars 6000)
 (def history-message-max-chars 8000)
-(def tool-output-max-chars 8000)
 
 (defn- request-id []
   (str (UUID/randomUUID)))
@@ -108,7 +108,11 @@
      message)))
 
 (defn- latest-user-prompt [messages]
-  (:content (last (filter #(= "user" (:role %)) messages))))
+  (some-> (last (filter #(= "user" (if (keyword? (:role %))
+                                      (name (:role %))
+                                      (:role %)))
+                        messages))
+          llm-messages/content-text))
 
 (defn- truncate-text [text max-chars]
   (let [text* (or text "")]
@@ -119,22 +123,23 @@
            " chars]")
       text*)))
 
-(defn- db-message-content->openai [role content]
+(defn- db-message-content [role content]
   (let [content* (or content "")]
     (if (= "tool" role)
       (truncate-text content* history-message-max-chars)
       content*)))
 
-(defn- db-message->openai
+(defn- db-message->internal
   [{:keys [role content tool-calls tool-call-id]}]
-  (cond-> {:role role :content (db-message-content->openai role content)}
-    (seq tool-calls) (assoc :tool_calls tool-calls)
-    tool-call-id (assoc :tool_call_id tool-call-id)))
+  (llm-messages/message->internal
+   (cond-> {:role role :content (db-message-content role content)}
+     (seq tool-calls) (assoc :tool-calls tool-calls)
+     tool-call-id (assoc :tool-call-id tool-call-id))))
 
 (defn- session-messages [system session-id]
   (if session-id
-    (mapv db-message->openai (sqlite/list-messages (:store system) session-id))
-    []))
+    (mapv db-message->internal (sqlite/list-messages (:store system) session-id))
+    (llm-messages/messages->internal [])))
 
 (defn- persist-user-turn! [system session-id messages]
   (when-let [content (and session-id (latest-user-prompt messages))]
@@ -207,94 +212,6 @@
   (set-agent-status! [_ _ _] nil)
   (emit-kernel-event! [_ event] (emit! system event)))
 
-(defn- result-text [value]
-  (cond
-    (string? value) value
-    (nil? value) ""
-    :else (json/generate-string value)))
-
-(defn- approval-receipts [receipts]
-  (filter #(= :approval-required (keyword (:status %))) receipts))
-
-(defn- complete-receipt [receipts]
-  (some #(when (= :completed (keyword (:status %))) %) receipts))
-
-(defn- tool-call-id [request-id idx tool-call]
-  (or (:id tool-call)
-      (:call_id tool-call)
-      (str "call_" request-id "_" idx)))
-
-(defn- normalize-tool-call-for-chat [request-id idx tool-call]
-  (let [function (or (:function tool-call)
-                     (:function_call tool-call)
-                     tool-call)
-        arguments (or (:arguments function)
-                      (:input tool-call)
-                      (:args tool-call)
-                      {})
-        arguments* (cond
-                     (string? arguments) arguments
-                     (nil? arguments) "{}"
-                     :else (json/generate-string arguments))]
-    {:id (tool-call-id request-id idx tool-call)
-     :type (or (:type tool-call) "function")
-     :function {:name (or (:name function)
-                          (:tool-name tool-call)
-                          (:tool_name tool-call)
-                          (:name tool-call))
-                :arguments arguments*}}))
-
-(defn- assistant-tool-call-message [request-id content tool-calls]
-  {:role "assistant"
-   :content (or content "")
-   :tool_calls (mapv (fn [[idx tool-call]]
-                       (normalize-tool-call-for-chat request-id idx tool-call))
-                     (map-indexed vector tool-calls))})
-
-(defn- memory-tool-output-content [receipt]
-  (let [status (keyword (:status receipt))]
-    (case status
-      (:ok :completed) (truncate-text (:result receipt) tool-output-max-chars)
-      :denied (str "Memory tool denied: " (:reason receipt))
-      :approval-required (str "Memory tool approval required: " (:reason receipt))
-      (str "Memory tool failed: " (or (:reason receipt) (:error-type receipt) "unknown error")))))
-
-(defn- tool-output-content [receipt]
-  (if (= "memory" (some-> (:tool-name receipt) name))
-    (memory-tool-output-content receipt)
-    (let [payload (select-keys receipt
-                               [:status :tool-name :result :reason :error-type :input])
-          text (json/generate-string payload)]
-      (if (> (count text) tool-output-max-chars)
-        (json/generate-string
-         (assoc (select-keys receipt [:status :tool-name :reason :error-type :input])
-                :truncated true
-                :original-chars (count text)
-                :preview (subs text 0 tool-output-max-chars)))
-        text))))
-
-(defn- tool-output-message [tool-call receipt]
-  {:role "tool"
-   :tool_call_id (:id tool-call)
-   :content (tool-output-content receipt)})
-
-(defn- tool-protocol-messages [request-id content tool-calls receipts]
-  (let [tool-calls* (mapv (fn [[idx tool-call]]
-                            (normalize-tool-call-for-chat request-id idx tool-call))
-                          (map-indexed vector tool-calls))]
-    (into [(assistant-tool-call-message request-id content tool-calls)]
-          (map tool-output-message tool-calls* receipts))))
-
-(defn- persist-tool-turn!
-  [system session-id assistant-msg tool-msgs]
-  (when session-id
-    (append-message! system session-id "assistant" (:content assistant-msg)
-                     {:tool-calls (:tool_calls assistant-msg)})
-    (clear-streaming! session-id)
-    (doseq [tm tool-msgs]
-      (append-message! system session-id "tool" (:content tm)
-                       {:tool-call-id (:tool_call_id tm)}))))
-
 (defn- request-approval! [system session-id receipt]
   (let [tool-name (keyword (:tool-name receipt))
         approval (tool-approvals/create-request!
@@ -313,13 +230,6 @@
                              :input (:input receipt)
                              :reason (:reason receipt)}})
     approval))
-
-(defn- approval-message [approvals]
-  (str "Tool approval required: "
-       (str/join ", "
-                 (map (fn [approval]
-                        (str (:tool-name approval) " approval_id=" (:id approval)))
-                      approvals))))
 
 (defn- persist-completion! [system session-id prompt content request-id]
   (let [llm (active-llm system)
@@ -540,7 +450,9 @@
             (try
               (compaction/auto-compact! (:store system) session-id (:chat (:config system)))
               (catch Exception _ nil)))
-        history (if session-id (session-messages system session-id) messages)
+        history (if session-id
+                  (session-messages system session-id)
+                  (llm-messages/messages->internal messages))
         recall (recall-memory system session-id prompt)
         iris-context (iris-context-message system)
         stream-content? (and (or stream? on-delta)

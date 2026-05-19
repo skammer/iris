@@ -2,8 +2,10 @@
   (:require
    [agent.chat :as chat]
    [agent.llm.core :as llm-core]
+   [agent.llm.messages :as llm-messages]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
+   [agent.runtime.loop :as runtime-loop]
    [agent.system :as system]
    [cheshire.core :as json]
    [clojure.core.async :as async]
@@ -82,6 +84,9 @@
                   :function {:name (name tool-name)
                              :arguments (json/generate-string args)}}]}))
 
+(defn- message-text [message]
+  (llm-messages/content-text message))
+
 (defn- test-system [path provider config-fn]
   (let [base (system/create-system)
         store (sqlite/create-store {:path path})
@@ -152,7 +157,7 @@
         (is (= ["user" "assistant" "user" "assistant"] (mapv :role messages)))
         (is (= ["first" "first answer" "second" "second answer"] (mapv :content messages)))
         (is (not-any? #{"forged system" "forged answer" "forged tool"}
-                      (map :content planner-messages))))
+                      (map message-text planner-messages))))
       (finally
         (io/delete-file path true)))))
 
@@ -168,10 +173,10 @@
       (chat/run! system {:session-id (:id session)
                          :messages [{:role "user" :content "hello"}]})
       (let [planner-messages (get-in (first @requests) [:request :messages])]
-        (is (str/includes? (:content (first planner-messages))
+        (is (str/includes? (message-text (first planner-messages))
                            "tool-calling loop"))
-        (is (= "SOUL\nAGENTS" (:content (second planner-messages))))
-        (is (str/starts-with? (:content (nth planner-messages 2))
+        (is (= "SOUL\nAGENTS" (message-text (second planner-messages))))
+        (is (str/starts-with? (message-text (nth planner-messages 2))
                               "Relevant memory JSON: "))
         (is (= "user" (:role (nth planner-messages 3)))))
       (finally
@@ -255,14 +260,14 @@
             assistant-tool-call (some #(when (seq (:tool-calls %)) %) messages)
             tool-msg (some #(when (= "tool" (:role %)) %) messages)]
         (is (= ["user" "assistant" "tool" "assistant"] roles))
-        (is (= "fs" (get-in (first (:tool-calls assistant-tool-call)) [:function :name])))
+        (is (= "fs" (:name (first (:tool-calls assistant-tool-call)))))
         (is (= "call_fs_1" (get-in (first (:tool-calls assistant-tool-call)) [:id])))
         (is (= "call_fs_1" (:tool-call-id tool-msg)))
         (is (= "listed" (:content (last messages)))))
       (finally
         (io/delete-file path true)))))
 
-(deftest chat-loop-reloads-tool-turns-as-openai-history-test
+(deftest chat-loop-reloads-tool-turns-as-rich-history-test
   (let [path (temp-db-path)
         responses (atom ["follow-up answer"])
         requests (atom [])
@@ -282,11 +287,19 @@
       (chat/run! system {:session-id (:id session)
                          :messages [{:role "user" :content "anything else?"}]})
       (let [planner-messages (get-in (first @requests) [:request :messages])
-            assistant-with-tools (some #(when (:tool_calls %) %) planner-messages)
-            tool-msg (some #(when (= "tool" (:role %)) %) planner-messages)]
+            assistant-with-tools (some #(when (some (fn [block]
+                                                       (= :tool-call (:type block)))
+                                                     (:content %))
+                                          %)
+                                       planner-messages)
+            tool-msg (some #(when (= "tool" (:role %)) %) planner-messages)
+            tool-call (some #(when (= :tool-call (:type %)) %)
+                            (:content assistant-with-tools))
+            tool-result (some #(when (= :tool-result (:type %)) %)
+                              (:content tool-msg))]
         (is (some? assistant-with-tools))
-        (is (= "call_fs_9" (-> assistant-with-tools :tool_calls first :id)))
-        (is (= "call_fs_9" (:tool_call_id tool-msg))))
+        (is (= "call_fs_9" (:id tool-call)))
+        (is (= "call_fs_9" (:tool-call-id tool-result))))
       (finally
         (io/delete-file path true)))))
 
@@ -305,17 +318,17 @@
                          :messages [{:role "user" :content "anything else?"}]})
       (let [planner-messages (get-in (first @requests) [:request :messages])
             tool-msg (some #(when (= "tool" (:role %)) %) planner-messages)]
-        (is (< (count (:content tool-msg)) (count large-content)))
-        (is (str/includes? (:content tool-msg) "[truncated ")))
+        (is (< (count (message-text tool-msg)) (count large-content)))
+        (is (str/includes? (message-text tool-msg) "[truncated ")))
       (finally
         (io/delete-file path true)))))
 
 (deftest tool-output-content-truncates-large-results-test
   (let [large-result (apply str (repeat 9000 "x"))
-        content (#'chat/tool-output-content {:status :completed
-                                             :tool-name :memory
-                                             :result large-result
-                                             :input {:action "search"}})]
+        content (runtime-loop/tool-output-content {:status :completed
+                                                   :tool-name :memory
+                                                   :result large-result
+                                                   :input {:action "search"}})]
     (is (str/includes? content "[truncated "))
     (is (not (str/includes? content "\"result\"")))
     (is (< (count content) (count large-result)))
@@ -341,11 +354,19 @@
                                                request))
                                            @requests)
             messages (:messages request-with-tool-output)
-            assistant-tool-call (some #(when (:tool_calls %) %) messages)
-            tool-message (some #(when (= "tool" (:role %)) %) messages)]
+            assistant-tool-call (some #(when (some (fn [block]
+                                                     (= :tool-call (:type block)))
+                                                   (:content %))
+                                        %)
+                                      messages)
+            tool-message (some #(when (= "tool" (:role %)) %) messages)
+            tool-call (some #(when (= :tool-call (:type %)) %)
+                            (:content assistant-tool-call))
+            tool-result (some #(when (= :tool-result (:type %)) %)
+                              (:content tool-message))]
         (is (= "listed" (:content result)))
-        (is (= "call_fs_1" (-> assistant-tool-call :tool_calls first :id)))
-        (is (= "call_fs_1" (:tool_call_id tool-message)))
+        (is (= "call_fs_1" (:id tool-call)))
+        (is (= "call_fs_1" (:tool-call-id tool-result)))
         (is (not-any? #(str/starts-with? (or (:content %) "") "Tool receipts JSON: ")
                       messages)))
       (finally

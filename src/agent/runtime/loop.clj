@@ -2,6 +2,7 @@
   "Evented chat-agent loop. No persistence or transport concerns live here."
   (:refer-clojure :exclude [run!])
   (:require
+   [agent.llm.messages :as llm-messages]
    [agent.planner :as planner]
    [agent.runtime.schema :as runtime-schema]
    [cheshire.core :as json]
@@ -52,37 +53,20 @@
 (defn- complete-receipt [receipts]
   (some #(when (= :completed (keyword (:status %))) %) receipts))
 
-(defn- tool-call-id [request-id idx tool-call]
-  (or (:id tool-call)
-      (:call_id tool-call)
-      (str "call_" request-id "_" idx)))
-
-(defn- normalize-tool-call-for-chat [request-id idx tool-call]
-  (let [function (or (:function tool-call)
-                     (:function_call tool-call)
-                     tool-call)
-        arguments (or (:arguments function)
-                      (:input tool-call)
-                      (:args tool-call)
-                      {})
-        arguments* (cond
-                     (string? arguments) arguments
-                     (nil? arguments) "{}"
-                     :else (json/generate-string arguments))]
-    {:id (tool-call-id request-id idx tool-call)
-     :type (or (:type tool-call) "function")
-     :function {:name (or (:name function)
-                          (:tool-name tool-call)
-                          (:tool_name tool-call)
-                          (:name tool-call))
-                :arguments arguments*}}))
+(defn- normalize-tool-call-block [request-id idx tool-call]
+  (let [block (llm-messages/provider-tool-call->internal tool-call)]
+    (cond-> block
+      (not (:id block)) (assoc :id (str "call_" request-id "_" idx)))))
 
 (defn- assistant-tool-call-message [request-id content tool-calls]
-  {:role "assistant"
-   :content (or content "")
-   :tool_calls (mapv (fn [[idx tool-call]]
-                       (normalize-tool-call-for-chat request-id idx tool-call))
-                     (map-indexed vector tool-calls))})
+  (let [tool-blocks (mapv (fn [[idx tool-call]]
+                            (normalize-tool-call-block request-id idx tool-call))
+                          (map-indexed vector tool-calls))
+        text-blocks (if (str/blank? (or content ""))
+                      []
+                      [{:type :text :text content}])]
+    {:role "assistant"
+     :content (vec (concat text-blocks tool-blocks))}))
 
 (defn- truncate-text [text max-chars]
   (let [text* (or text "")]
@@ -119,20 +103,27 @@
 
 (defn- tool-output-message [tool-call receipt tool-output-max-chars]
   {:role "tool"
-   :tool_call_id (:id tool-call)
-   :content (tool-output-content receipt tool-output-max-chars)})
+   :content [{:type :tool-result
+              :tool-call-id (:id tool-call)
+              :name (:name tool-call)
+              :status (:status receipt)
+              :content (tool-output-content receipt tool-output-max-chars)}]})
 
 (defn tool-protocol-messages
   ([request-id content tool-calls receipts]
    (tool-protocol-messages request-id content tool-calls receipts 8000))
   ([request-id content tool-calls receipts tool-output-max-chars]
    (let [tool-calls* (mapv (fn [[idx tool-call]]
-                             (normalize-tool-call-for-chat request-id idx tool-call))
+                             (normalize-tool-call-block request-id idx tool-call))
                            (map-indexed vector tool-calls))]
      (into [(assistant-tool-call-message request-id content tool-calls)]
            (map #(tool-output-message %1 %2 tool-output-max-chars)
                 tool-calls*
                 receipts)))))
+
+(defn- tool-result-block [message]
+  (first (filter #(= :tool-result (:type %))
+                 (runtime-schema/normalize-content (:content message)))))
 
 (defn- approval-message [approvals]
   (str "Tool approval required: "
@@ -142,11 +133,11 @@
                       approvals))))
 
 (defn- apply-context-injectors [messages injectors]
-  (into []
-        (concat (mapcat (fn [injector]
-                          (vec (or (injector {:messages messages}) [])))
-                        injectors)
-                messages)))
+  (llm-messages/messages->internal
+   (concat (mapcat (fn [injector]
+                     (vec (or (injector {:messages messages}) [])))
+                   injectors)
+           messages)))
 
 (defn- usage+ [a b]
   (merge-with (fn [x y]
@@ -173,6 +164,7 @@
                                        :synthetic? true}))
   (event! sink :message-end base (merge {:role "assistant"
                                          :content content
+                                         :content-blocks [{:type :text :text (or content "")}]
                                          :final? true}
                                         final-payload)))
 
@@ -185,14 +177,17 @@
         assistant-msg (first protocol-messages)
         tool-msgs (vec (rest protocol-messages))]
     (event! sink :message-end base {:role "assistant"
-                                    :content (:content assistant-msg)
-                                    :tool-calls (:tool_calls assistant-msg)
+                                    :content (llm-messages/content-text assistant-msg)
+                                    :content-blocks (:content assistant-msg)
+                                    :tool-calls (llm-messages/message-tool-calls assistant-msg)
                                     :tool-turn? true})
     (doseq [tool-msg tool-msgs]
-      (event! sink :message-end base {:role "tool"
-                                      :content (:content tool-msg)
-                                      :tool-call-id (:tool_call_id tool-msg)
-                                      :tool-turn? true}))
+      (let [tool-result (tool-result-block tool-msg)]
+        (event! sink :message-end base {:role "tool"
+                                        :content (:content tool-result)
+                                        :content-blocks (:content tool-msg)
+                                        :tool-call-id (:tool-call-id tool-result)
+                                        :tool-turn? true})))
     (doseq [[tool-call receipt] (map vector tool-calls receipts)]
       (event! sink :tool-execution-end base {:tool-call tool-call
                                              :receipt receipt

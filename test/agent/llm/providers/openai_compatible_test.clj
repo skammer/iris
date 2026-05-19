@@ -148,6 +148,39 @@
            #"ended before final content"
            (llm-core/complete llm [{:role "user" :content "hi"}] {}))))))
 
+(deftest invoke-strips-leaked-tool-call-tags-when-native-tool-call-present-test
+  (with-redefs [http/post (fn [_ _]
+                            {:status 200
+                             :headers {"Content-Type" "application/json"}
+                             :body {:choices [{:message {:role "assistant"
+                                                         :content (str "<tool_call>\n"
+                                                                       "<function=memory>\n"
+                                                                       "<parameter=query>\n"
+                                                                       "Модель: Kimi\n"
+                                                                       "</parameter>\n"
+                                                                       "<parameter=action>\n"
+                                                                       "search\n"
+                                                                       "</parameter>\n"
+                                                                       "</function>\n"
+                                                                       "</tool_call>")
+                                                         :tool_calls [{:id "call_memory_1"
+                                                                       :type "function"
+                                                                       :function {:name "memory"
+                                                                                  :arguments "{\"query\":\"Модель: Kimi\",\"action\":\"search\"}"}}]}
+                                               :finish_reason "tool_calls"}]}})]
+    (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})
+          response (llm-core/invoke
+                    llm
+                    {:messages [{:role "user" :content "find Kimi"}]
+                     :tools [{:type "function"
+                              :function {:name "memory"
+                                         :description "Memory"
+                                         :parameters {:type "object"}}}]})
+          tc (first (:tool-calls response))]
+      (is (= "" (:content response)))
+      (is (= "memory" (:name tc)))
+      (is (= {:query "Модель: Kimi" :action "search"} (:arguments tc))))))
+
 (deftest stream-reports-reasoning-only-length-error-test
   (with-redefs [http/post (fn [_ _]
                             {:status 200
@@ -183,8 +216,8 @@
       (is (empty? @chunks))
       (is (= 1 (count (:tool-calls response))))
       (is (= "call_1" (:id tc)))
-      (is (= "fs" (get-in tc [:function :name])))
-      (is (= "{\"action\":\"list\",\"path\":\".\"}" (get-in tc [:function :arguments]))))))
+      (is (= "fs" (:name tc)))
+      (is (= {:action "list" :path "."} (:arguments tc))))))
 
 (deftest invoke-suppresses-streamed-dsml-when-tools-present-test
   (with-redefs [http/post (fn [_ _]
@@ -209,8 +242,8 @@
           tc (first (:tool-calls response))]
       (is (empty? @chunks))
       (is (= "" (:content response)))
-      (is (= "shell" (get-in tc [:function :name])))
-      (is (= "{\"command\":\"df -h\"}" (get-in tc [:function :arguments]))))))
+      (is (= "shell" (:name tc)))
+      (is (= {:command "df -h"} (:arguments tc))))))
 
 (deftest invoke-recovers-streamed-tool-call-tags-test
   (with-redefs [http/post (fn [_ _]
@@ -235,9 +268,8 @@
           tc (first (:tool-calls response))]
       (is (empty? @chunks))
       (is (= "" (:content response)))
-      (is (= "memory" (get-in tc [:function :name])))
-      (is (= "{\"query\":\"Test User\",\"action\":\"search\"}"
-             (get-in tc [:function :arguments]))))))
+      (is (= "memory" (:name tc)))
+      (is (= {:query "Test User" :action "search"} (:arguments tc))))))
 
 (deftest structured-output-invoke-streams-by-default-test
   (let [body* (atom nil)
