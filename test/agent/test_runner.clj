@@ -27,12 +27,14 @@
    [agent.runners.seatbelt-test]
    [agent.runtime.child-test]
    [agent.runtime.core-test]
+   [agent.runtime.schema-test]
    [agent.skills-test]
    [agent.ui-test]
    [agent.tools.common.fs-test]
    [agent.tools.common.memory-test]
    [agent.llm.providers.ollama-test]
    [agent.llm.core-test]
+   [agent.llm.messages-test]
    [agent.llm.dsml-test]
    [agent.llm.providers.openai-compatible-test]
    [agent.tools.common.http-test]
@@ -67,12 +69,14 @@
     agent.runners.seatbelt-test
     agent.runtime.child-test
     agent.runtime.core-test
+    agent.runtime.schema-test
     agent.skills-test
     agent.ui-test
     agent.tools.common.fs-test
     agent.tools.common.memory-test
     agent.llm.providers.ollama-test
     agent.llm.core-test
+    agent.llm.messages-test
     agent.llm.dsml-test
     agent.llm.providers.openai-compatible-test
     agent.tools.common.http-test
