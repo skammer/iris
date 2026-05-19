@@ -5,7 +5,7 @@
    [ragtime.protocols :as ragtime-protocols]
    [ragtime.strategy :as ragtime-strategy]))
 
-(def latest-schema-version 16)
+(def latest-schema-version 17)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -479,7 +479,54 @@
             VALUES('delete', old.rowid, old.subject, old.predicate, old.object, old.metadata_json);
             INSERT INTO memory_facts_fts(rowid, subject, predicate, object, metadata_json)
             VALUES (new.rowid, new.subject, new.predicate, new.object, new.metadata_json);
-          END;"]}])
+          END;"]}
+   {:version 17
+    :id "17"
+    :name "session-entry-tree"
+    :checksum "6d1b71d94f8c2a03"
+    :irreversible? true
+    :up ["CREATE TABLE IF NOT EXISTS session_entries (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            parent_id TEXT,
+            type TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(session_id) REFERENCES sessions(id),
+            FOREIGN KEY(parent_id) REFERENCES session_entries(id)
+          );"
+         "CREATE INDEX IF NOT EXISTS idx_session_entries_session_created
+          ON session_entries(session_id, created_at);"
+         "CREATE INDEX IF NOT EXISTS idx_session_entries_parent
+          ON session_entries(parent_id);"
+         "CREATE TABLE IF NOT EXISTS session_leaf_selection (
+            session_id TEXT PRIMARY KEY,
+            leaf_entry_id TEXT,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(session_id) REFERENCES sessions(id),
+            FOREIGN KEY(leaf_entry_id) REFERENCES session_entries(id)
+          );"
+         "INSERT OR IGNORE INTO session_entries (id, session_id, parent_id, type, payload_json, created_at)
+          SELECT 'message-' || id,
+                 session_id,
+                 CASE
+                   WHEN lag(id) OVER (PARTITION BY session_id ORDER BY id) IS NULL THEN NULL
+                   ELSE 'message-' || lag(id) OVER (PARTITION BY session_id ORDER BY id)
+                 END,
+                 'message',
+                 json_object('message-id', id,
+                             'role', role,
+                             'content', content,
+                             'tool-calls', json(tool_calls),
+                             'tool-call-id', tool_call_id),
+                 created_at
+          FROM messages;"
+         "INSERT OR IGNORE INTO session_leaf_selection (session_id, leaf_entry_id, updated_at)
+          SELECT session_id,
+                 'message-' || max(id),
+                 strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          FROM messages
+          GROUP BY session_id;"]}])
 
 (defn descriptor-by-version [version]
   (some #(when (= version (:version %)) %) migration-descriptors))

@@ -63,6 +63,22 @@
         (is (= 4096 (:max_tokens @body*)))
         (is (= 0.2 (:presence_penalty @body*)))))))
 
+(deftest openai-compatible-provider-resolves-api-key-per-call-test
+  (let [headers* (atom [])
+        token (atom "k1")]
+    (with-redefs [http/post (fn [_ request]
+                              (swap! headers* conj (:headers request))
+                              {:status 200
+                               :headers {"Content-Type" "application/json"}
+                               :body {:choices [{:message {:content "ok"}}]}})]
+      (let [llm (provider/create-openai-compatible-provider
+                 {:api-key-resolver (fn [_] @token)})]
+        (llm-core/complete llm [{:role "user" :content "hi"}] {})
+        (reset! token "k2")
+        (llm-core/complete llm [{:role "user" :content "hi"}] {})
+        (is (= ["Bearer k1" "Bearer k2"]
+               (mapv #(get % "Authorization") @headers*)))))))
+
 (deftest openrouter-stream-test
   (with-redefs [http/post (fn [_ _]
                             {:status 200

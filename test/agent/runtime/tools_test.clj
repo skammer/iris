@@ -1,0 +1,131 @@
+(ns agent.runtime.tools-test
+  (:require
+   [agent.runtime.tools :as runtime-tools]
+   [agent.tools.core :as tools]
+   [clojure.test :refer :all]))
+
+(defn test-tool
+  [name f & {:keys [permissions sensitive execution-mode]}]
+  (tools/create-tool
+   {:description (tools/create-tool-description
+                  name
+                  (str name)
+                  :input-schema [:map [:value :int]]
+                  :required-permissions (or permissions #{name})
+                  :sensitive sensitive
+                  :execution-mode execution-mode)
+    :execute-fn f}))
+
+(defn registry
+  [& tools*]
+  (reduce tools/register-tool (tools/create-registry) tools*))
+
+(deftest sequential-order-test
+  (let [calls (atom [])
+        reg (registry (test-tool :a (fn [input _] (swap! calls conj [:a (:value input)]) input))
+                      (test-tool :b (fn [input _] (swap! calls conj [:b (:value input)]) input)))
+        result (runtime-tools/execute-batch!
+                reg
+                [{:tool-name :a :input {:value 1}}
+                 {:tool-name :b :input {:value 2}}]
+                {:permissions #{:a :b}}
+                {:mode :sequential})]
+    (is (= [[:a 1] [:b 2]] @calls))
+    (is (= [:a :b] (mapv :tool-name (:results result))))
+    (is (= ["tool-call-0" "tool-call-1"] (mapv :tool-call-id (:messages result))))))
+
+(deftest parallel-completion-order-and-source-transcript-test
+  (let [events (atom [])
+        reg (registry (test-tool :slow (fn [input _] (Thread/sleep 80) input))
+                      (test-tool :fast (fn [input _] input)))
+        result (runtime-tools/execute-batch!
+                reg
+                [{:tool-name :slow :input {:value 1}}
+                 {:tool-name :fast :input {:value 2}}]
+                {:permissions #{:slow :fast}}
+                {:mode :parallel
+                 :event-sink #(swap! events conj %)})
+        completion-order (->> @events
+                              (filter #(= :tool-execution-end (:event-type %)))
+                              (mapv #(get-in % [:payload :tool-name])))]
+    (is (= ["fast" "slow"] completion-order))
+    (is (= [:slow :fast] (mapv :tool-name (:results result))))
+    (is (= ["slow" "fast"] (mapv :name (:messages result))))))
+
+(deftest approval-required-test
+  (let [reg (registry (test-tool :secret (fn [input _] input) :sensitive true))
+        result (runtime-tools/execute-batch!
+                reg
+                [{:tool-name :secret :input {:value 1}}]
+                {:permissions #{:secret}}
+                {:mode :sequential})]
+    (is (= :error (get-in result [:results 0 :status])))
+    (is (= :approval-required (get-in result [:results 0 :error-type])))))
+
+(deftest permission-denied-test
+  (let [reg (registry (test-tool :a (fn [input _] input)))
+        result (runtime-tools/execute-batch!
+                reg
+                [{:tool-name :a :input {:value 1}}]
+                {:permissions #{}}
+                {:mode :sequential})]
+    (is (= :permission-denied (get-in result [:results 0 :error-type])))))
+
+(deftest validation-error-test
+  (let [reg (registry (test-tool :a (fn [input _] input)))
+        result (runtime-tools/execute-batch!
+                reg
+                [{:tool-name :a :input {:value "bad"}}]
+                {:permissions #{:a}}
+                {:mode :sequential})]
+    (is (= :validation-failed (get-in result [:results 0 :error-type])))))
+
+(deftest tool-update-streaming-test
+  (let [events (atom [])
+        reg (registry (test-tool :a (fn [input context]
+                                      ((:on-tool-update context) {:progress 1})
+                                      input)))
+        result (runtime-tools/execute-batch!
+                reg
+                [{:tool-name :a :input {:value 1}}]
+                {:permissions #{:a}}
+                {:mode :sequential
+                 :event-sink #(swap! events conj %)})]
+    (is (= :ok (get-in result [:results 0 :status])))
+    (is (= [1] (->> @events
+                    (filter #(= :tool-execution-update (:event-type %)))
+                    (mapv #(get-in % [:payload :progress])))))))
+
+(deftest terminate-all-and-mixed-test
+  (let [terminating (test-tool :done (fn [input _] (assoc input :terminate true)))
+        continuing (test-tool :more (fn [input _] input))]
+    (is (true? (:terminate?
+                (runtime-tools/execute-batch!
+                 (registry terminating)
+                 [{:tool-name :done :input {:value 1}}]
+                 {:permissions #{:done}}
+                 {:mode :sequential}))))
+    (is (false? (:terminate?
+                 (runtime-tools/execute-batch!
+                  (registry terminating continuing)
+                  [{:tool-name :done :input {:value 1}}
+                   {:tool-name :more :input {:value 2}}]
+                  {:permissions #{:done :more}}
+                  {:mode :sequential}))))))
+
+(deftest before-and-after-hooks-test
+  (let [reg (registry (test-tool :a (fn [input _] input)))]
+    (is (= :tool-blocked
+           (get-in (runtime-tools/execute-batch!
+                    reg
+                    [{:tool-name :a :input {:value 1}}]
+                    {:permissions #{:a}}
+                    {:before-tool-call (fn [_] {:block true :reason "no"})})
+                   [:results 0 :error-type])))
+    (is (= {:value 2}
+           (get-in (runtime-tools/execute-batch!
+                    reg
+                    [{:tool-name :a :input {:value 1}}]
+                    {:permissions #{:a}}
+                    {:after-tool-call (fn [_] {:result {:value 2}})})
+                   [:results 0 :result])))))

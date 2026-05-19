@@ -11,6 +11,7 @@
    [agent.persistence.sqlite :as sqlite]
    [agent.planner :as planner]
    [agent.prompts :as prompts]
+   [agent.runtime.compaction :as compaction]
    [agent.telemetry :as telemetry]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
@@ -488,6 +489,10 @@
         cancelled? (atom false)
         prompt (latest-user-prompt messages)
         user-message (persist-user-turn! system session-id messages)
+        _ (when session-id
+            (try
+              (compaction/auto-compact! (:store system) session-id (:chat (:config system)))
+              (catch Exception _ nil)))
         history (if session-id (session-messages system session-id) messages)
         recall (recall-memory system session-id prompt)
         iris-context (iris-context-message system)

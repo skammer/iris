@@ -12,6 +12,7 @@
    [agent.api.handlers.health :as health]
    [agent.api.handlers.memory :as memory]
    [agent.api.handlers.public :as public]
+   [agent.api.handlers.providers :as providers]
    [agent.api.handlers.runs :as runs]
    [agent.api.handlers.sessions :as sessions]
    [agent.api.handlers.skills :as skills]
@@ -95,9 +96,19 @@
    :list-sessions (fn [r] (sessions/list-sessions (sys) r))
    :create-session (fn [r] (sessions/create (sys) r))
    :list-session-messages (fn [r] (sessions/list-messages (sys) r (path-param r :session-id)))
+   :append-session-entry (fn [r] (sessions/append-entry (sys) r (path-param r :session-id)))
+   :list-session-entries (fn [r] (sessions/list-entries (sys) r (path-param r :session-id)))
+   :session-current-path (fn [r] (sessions/current-path (sys) r (path-param r :session-id)))
+   :session-tree (fn [r] (sessions/tree (sys) r (path-param r :session-id)))
+   :select-session-leaf (fn [r] (sessions/select-leaf (sys) r (path-param r :session-id)))
+   :compact-session (fn [r] (sessions/compact (sys) r (path-param r :session-id)))
 
    :chat-completions (fn [r] (chat/completions-response (sys) r))
    :chat-stop (fn [r] (chat/stop-response (sys) r))
+
+   :list-providers (fn [r] (providers/list-providers (sys) r))
+   :provider-health (fn [r] (providers/provider-health (sys) r (path-param r :provider-key)))
+   :provider-models (fn [r] (providers/provider-models (sys) r (path-param r :provider-key)))
 
    :list-runs (fn [r] (runs/list-runs (sys) r))
    :create-run (fn [r] (runs/create (sys) r))

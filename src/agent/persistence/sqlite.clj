@@ -61,6 +61,37 @@
 (defn list-messages [store session-id]
   (sessions/list-messages store session-id))
 
+(defn migrate-messages-to-entries! [store]
+  (sessions/migrate-messages-to-entries! store))
+
+(defn append-entry!
+  ([store session-id type payload]
+   (sessions/append-entry! store session-id type payload))
+  ([store session-id entry]
+   (sessions/append-entry! store session-id entry)))
+
+(defn list-entries [store session-id]
+  (sessions/list-entries store session-id))
+
+(defn get-entry [store session-id entry-id]
+  (sessions/get-entry store session-id entry-id))
+
+(defn leaf-entry [store session-id]
+  (sessions/leaf-entry store session-id))
+
+(defn select-leaf! [store session-id entry-id]
+  (sessions/select-leaf! store session-id entry-id))
+
+(defn branch-path
+  ([store session-id] (sessions/branch-path store session-id))
+  ([store session-id leaf-id] (sessions/branch-path store session-id leaf-id)))
+
+(defn session-tree [store session-id]
+  (sessions/session-tree store session-id))
+
+(defn current-llm-context [store session-id]
+  (sessions/current-llm-context store session-id))
+
 (defn search-messages
   ([store query] (sessions/search-messages store query))
   ([store query opts] (sessions/search-messages store query opts)))
