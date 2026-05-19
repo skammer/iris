@@ -46,6 +46,24 @@
       (is (= {"query" "Макс" "action" "search"}
              (json/parse-string (-> tc :function :arguments)))))))
 
+(deftest recovers-kimi-memory-tool-call-tags
+  (let [content (str "<tool_call>\n"
+                     "<function=memory>\n"
+                     "<parameter=query>\n"
+                     "Модель: Kimi\n"
+                     "</parameter>\n"
+                     "<parameter=action>\n"
+                     "search\n"
+                     "</parameter>\n"
+                     "</function>\n"
+                     "</tool_call>")
+        {:keys [content tool-calls]} (dsml/recover-tool-calls
+                                      {:content content
+                                       :tool-calls []})]
+    (is (= "" content))
+    (is (= {"query" "Модель: Kimi" "action" "search"}
+           (json/parse-string (-> tool-calls first :function :arguments))))))
+
 (deftest recovers-multiple-invokes-in-one-block
   (let [content (str "<｜DSML｜tool_calls>"
                      "<｜DSML｜invoke name=\"a\"><｜DSML｜parameter name=\"x\" string=\"true\">1</｜DSML｜parameter></｜DSML｜invoke>"
@@ -66,11 +84,12 @@
     (is (re-find #"Done\." content))
     (is (not (re-find #"DSML" content)))))
 
-(deftest noop-when-tool-calls-already-present
+(deftest strips-markup-when-tool-calls-already-present
   (let [native [{:id "call_1" :type "function"
                  :function {:name "x" :arguments "{}"}}]
         turn {:content leaked-fs-call :tool-calls native}]
-    (is (= turn (dsml/recover-tool-calls turn)))))
+    (is (= (assoc turn :content "")
+           (dsml/recover-tool-calls turn)))))
 
 (deftest noop-when-no-blocks
   (let [turn {:content "just a normal answer" :tool-calls []}]

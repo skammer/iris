@@ -1,6 +1,7 @@
 (ns agent.llm.messages
   "Conversions between rich Iris messages and provider wire shapes."
   (:require
+   [agent.llm.dsml :as dsml]
    [agent.runtime.schema :as runtime-schema]
    [cheshire.core :as json]
    [clojure.string :as str])
@@ -37,9 +38,19 @@
 
 (defn- text-content [blocks]
   (str/join "" (keep (fn [block]
-                       (when (= :text (:type block))
-                         (:text block)))
+                       (case (:type block)
+                         :text (:text block)
+                         :tool-result (json-text (:content block))
+                         nil))
                      blocks)))
+
+(defn content-text
+  "Return provider-visible text from a rich content value or message."
+  [value]
+  (text-content (runtime-schema/normalize-content
+                 (if (and (map? value) (contains? value :content))
+                   (:content value)
+                   value))))
 
 (defn- image-url [{:keys [source]}]
   (case (:type source)
@@ -80,6 +91,53 @@
               :raw tool-call}
        (:id tool-call) (assoc :id (:id tool-call))))))
 
+(defn tool-call-blocks
+  [content]
+  (filterv #(= :tool-call (:type %))
+           (runtime-schema/normalize-content content)))
+
+(defn message-tool-calls
+  [message]
+  (let [message* (if (and (map? message) (contains? message :content))
+                   message
+                   {:content message})]
+    (vec (concat (tool-call-blocks (:content message*))
+                 (map provider-tool-call->internal
+                      (or (:tool-calls message*)
+                          (:tool_calls message*)
+                          []))))))
+
+(defn message->internal
+  [message]
+  (let [role (role-name (:role message))
+        legacy-tool-calls (or (:tool-calls message)
+                              (:tool_calls message))
+        tool-call-id (or (:tool-call-id message)
+                         (:tool_call_id message))
+        blocks (if (= "tool" role)
+                 (let [normalized (runtime-schema/normalize-content (:content message))]
+                   (if (some #(= :tool-result (:type %)) normalized)
+                     normalized
+                     [(runtime-schema/validate-message-block!
+                       (cond-> {:type :tool-result
+                                :tool-call-id tool-call-id
+                                :content (:content message)}
+                         (:name message) (assoc :name (:name message))))]))
+                 (runtime-schema/normalize-content (:content message)))
+        existing-tool-call? (some #(= :tool-call (:type %)) blocks)
+        legacy-blocks (when (and (seq legacy-tool-calls)
+                                 (not existing-tool-call?))
+                        (mapv provider-tool-call->internal legacy-tool-calls))]
+    (cond-> {:role role
+             :content (vec (concat blocks legacy-blocks))}
+      (:id message) (assoc :id (:id message))
+      (:name message) (assoc :name (:name message))
+      (:created-at message) (assoc :created-at (:created-at message)))))
+
+(defn messages->internal
+  [messages]
+  (mapv message->internal (or messages [])))
+
 (defn internal-tool-call->provider-tool-call
   ([block] (internal-tool-call->provider-tool-call :openai-compatible block))
   ([_provider block]
@@ -114,17 +172,15 @@
       :tool_call_id (:tool-call-id block*)
       :content (json-text (:content block*))})))
 
-(defn- tool-call-blocks [blocks]
-  (filterv #(= :tool-call (:type %)) blocks))
-
 (defn- tool-result-block [blocks]
   (first (filter #(= :tool-result (:type %)) blocks)))
 
 (defn internal->openai-compatible
   [messages]
   (mapv (fn [message]
-          (let [role (role-name (:role message))
-                blocks (content-blocks message)]
+          (let [message* (message->internal message)
+                role (:role message*)
+                blocks (content-blocks message*)]
             (case role
               "assistant"
               (cond-> {:role "assistant"
@@ -155,8 +211,9 @@
 (defn internal->ollama
   [messages]
   (mapv (fn [message]
-          (let [role (role-name (:role message))
-                blocks (content-blocks message)
+          (let [message* (message->internal message)
+                role (:role message*)
+                blocks (content-blocks message*)
                 images (ollama-images blocks)]
             (cond-> {:role role
                      :content (text-content blocks)}
@@ -185,7 +242,8 @@
 (defn provider-response->assistant-turn
   ([response] (provider-response->assistant-turn nil nil response))
   ([provider model response]
-   (let [response* (if (map? response) response {:content (json-text response)})
+   (let [response* (dsml/recover-tool-calls
+                    (if (map? response) response {:content (json-text response)}))
          thinking (response-thinking response*)
          content (cond-> []
                    (and (string? thinking) (not (str/blank? thinking)))

@@ -3,6 +3,7 @@
    [agent.api :as api]
    [agent.system :as system]
    [agent.llm.core :as llm-core]
+   [agent.llm.messages :as llm-messages]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [cheshire.core :as json]
@@ -47,8 +48,12 @@
        "test-response")
      request))
   (generate [provider messages opts]
-    (llm-core/invoke provider (assoc opts :messages messages)))
+    (llm-core/invoke provider (assoc opts :messages messages))))
 
+(defn- message-text [message]
+  (llm-messages/content-text message))
+
+(extend-type TestProvider
   llm-core/ILLMProviderWithHealth
   (health-check [_] {:healthy true})
   (get-metrics [_] {:provider :test}))
@@ -732,14 +737,14 @@
         (is (= "hello world" (get-in messages-body [:data 5 :content])))
         (is (= ["system" "system" "system" "user" "assistant" "user" "assistant" "user"]
                (mapv :role @messages*)))
-        (is (str/starts-with? (first (mapv :content @messages*))
+        (is (str/starts-with? (first (mapv message-text @messages*))
                               "You drive a tool-calling loop."))
-        (is (str/includes? (second (mapv :content @messages*))
+        (is (str/includes? (second (mapv message-text @messages*))
                            "# SOUL"))
-        (is (str/starts-with? (nth (mapv :content @messages*) 2)
+        (is (str/starts-with? (nth (mapv message-text @messages*) 2)
                               "Relevant memory JSON: "))
         (is (= ["hello" "test-response" "hello ui" "hello world" "hello"]
-               (subvec (mapv :content @messages*) 3))))
+               (subvec (mapv message-text @messages*) 3))))
       (finally
         (api/stop-server! server)
         (io/delete-file path true)))))
