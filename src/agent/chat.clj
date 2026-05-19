@@ -2,16 +2,17 @@
   "First-class session chat loop."
   (:refer-clojure :exclude [run!])
   (:require
-   [agent.broker.core :as broker]
    [agent.config :as config]
    [agent.kernel.ops :as kernel-ops]
    [agent.kernel.runtime :as kernel-runtime]
+   [agent.kernel.schema :as kernel-schema]
    [agent.llm.core :as llm-core]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.planner :as planner]
    [agent.prompts :as prompts]
    [agent.runtime.compaction :as compaction]
+   [agent.runtime.loop :as runtime-loop]
    [agent.telemetry :as telemetry]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
@@ -34,7 +35,7 @@
 (defonce ^:private streaming-state (atom {}))
 (defonce ^:private active-runs (atom {}))
 
-(def stopped-content "Stopped.")
+(def stopped-content runtime-loop/stopped-content)
 
 (defn active-run
   [session-id]
@@ -59,16 +60,6 @@
        :request-id request-id})
     {:cancelled? false
      :session-id session-id}))
-
-(defn- token-cancelled? [cancelled?]
-  (true? @cancelled?))
-
-(defn- cancelled-error []
-  (ex-info "Chat stopped" {:type :chat-cancelled}))
-
-(defn- throw-if-cancelled! [cancelled?]
-  (when (token-cancelled? cancelled?)
-    (throw (cancelled-error))))
 
 (defn- register-run! [session-id request-id cancelled?]
   (when session-id
@@ -96,16 +87,6 @@
 (defn- clear-streaming! [session-id]
   (when session-id
     (swap! streaming-state dissoc session-id)))
-
-(defn- broadcast-delta! [system session-id request-id delta]
-  (when-let [bus (or (:event-bus system) (:broker system))]
-    (let [event {:event-type "chat.delta"
-                 :entity-type "session"
-                 :entity-id session-id
-                 :request-id request-id
-                 :payload {:delta delta}}]
-      (doseq [msg (broker/event->messages event)]
-        (broker/publish! bus msg)))))
 
 (defn- emit! [system event]
   (if-let [sink (:event-sink system)]
@@ -399,89 +380,155 @@
     (nil? value) ""
     :else (str value)))
 
-(defn- emit-delta!
-  [system session-id request-id on-delta delta]
-  (when (and (string? delta) (not= "" delta))
-    (when session-id
-      (swap! streaming-state update session-id (fnil str "") delta))
-    (broadcast-delta! system session-id request-id delta)
-    (when on-delta (on-delta delta))))
+(defn- canonical-event-type [event]
+  (keyword (str/replace (name (:event-type event)) #"_" "-")))
 
-(defn- consume-llm-stream!
-  "Drains an LLM stream channel, dispatching deltas. Returns accumulated text."
-  [ch system session-id request-id on-delta]
+(defn- same-event-type? [event event-type]
+  (= event-type (canonical-event-type event)))
+
+(defn- event-payload [event]
+  (let [payload (:payload event)]
+    (if (map? payload) payload {:value payload})))
+
+(defn- loop-event-sink
+  [system subscribers]
+  (fn [event]
+    (doseq [subscriber subscribers]
+      (try
+        (subscriber event)
+        (catch Exception _ nil)))
+    (emit! system event)))
+
+(defn- persist-final-assistant!
+  [system session-id prompt content request-id]
+  (persist-completion! system session-id prompt content request-id))
+
+(defn- persistence-subscriber
+  [system session-id prompt request-id persisted]
+  (fn [event]
+    (when (same-event-type? event :message-end)
+      (let [{:keys [role content final? tool-turn? tool-calls tool-call-id]} (event-payload event)]
+        (cond
+          (and (= "assistant" role) final?)
+          (let [message (persist-final-assistant! system session-id prompt content request-id)]
+            (swap! persisted assoc :assistant-message message))
+
+          (and session-id (= "assistant" role) tool-turn?)
+          (append-message! system session-id "assistant" content {:tool-calls tool-calls})
+
+          (and session-id (= "tool" role) tool-turn?)
+          (append-message! system session-id "tool" content {:tool-call-id tool-call-id}))))))
+
+(defn- streaming-subscriber
+  [session-id on-delta]
+  (fn [event]
+    (let [payload (event-payload event)]
+      (cond
+        (and (same-event-type? event :message-update)
+             (string? (:delta payload))
+             (not= "" (:delta payload)))
+        (do
+          (when session-id
+            (swap! streaming-state update session-id (fnil str "") (:delta payload)))
+          (when on-delta
+            (on-delta (:delta payload))))
+
+        (and (same-event-type? event :message-end)
+             (or (:final? payload) (:tool-turn? payload)))
+        (clear-streaming! session-id)))))
+
+(defn- tool-call-subscriber
+  [on-tool-call]
+  (fn [event]
+    (when (and on-tool-call
+               (same-event-type? event :tool-execution-end))
+      (let [{:keys [tool-call receipt]} (event-payload event)]
+        (try
+          (on-tool-call {:tool-call tool-call :receipt receipt})
+          (catch Exception _ nil))))))
+
+(defn- legacy-event
+  [event event-type payload]
+  {:event-type event-type
+   :entity-type (:entity-type event)
+   :entity-id (:entity-id event)
+   :request-id (:request-id event)
+   :payload payload})
+
+(defn- legacy-subscriber
+  [system]
+  (fn [event]
+    (let [payload (event-payload event)]
+      (case (canonical-event-type event)
+        :agent-start
+        (emit! system (legacy-event event :chat.started payload))
+
+        :message-update
+        (cond
+          (= :memory-recalled (:kind payload))
+          (emit! system (legacy-event event :chat.memory.recalled payload))
+
+          (contains? payload :delta)
+          (emit! system (legacy-event event "chat.delta" {:delta (:delta payload)})))
+
+        :turn-end
+        (emit! system (legacy-event event :chat.planner.step payload))
+
+        :tool-execution-update
+        (when (= :approval-required (:kind payload))
+          (emit! system (legacy-event event :chat.tool.approval_required payload)))
+
+        :message-start
+        (when (:fallback? payload)
+          (emit! system (legacy-event event :chat.fallback_completion payload)))
+
+        :agent-end
+        (case (keyword (:stop-reason payload))
+          :planner-error (emit! system (legacy-event event :chat.error payload))
+          :cancelled (emit! system (legacy-event event :chat.cancelled payload))
+          :error (emit! system (legacy-event event :chat.failed payload))
+          (:completed :approval-required :max-steps)
+          (emit! system (legacy-event event :chat.completed payload))
+          nil)
+
+        nil))))
+
+(defn- consume-llm-stream-with!
+  [ch emit-delta]
   (loop [acc ""]
     (if-let [value (async/<!! ch)]
       (let [delta (stream-delta-text value)]
-        (emit-delta! system session-id request-id on-delta delta)
+        (emit-delta delta)
         (recur (str acc delta)))
       acc)))
 
-(defn- stream-llm-response!
-  "Issues a plain streaming LLM call and dispatches deltas. Returns content string."
-  [system session-id request-id messages on-delta]
-  (let [ch (llm-core/stream (:llm-provider system)
-                            messages
-                            {:model (config/active-model (get-in system [:config :llm]))})]
-    (consume-llm-stream! ch system session-id request-id on-delta)))
-
-(defn- emit-content-as-delta!
-  "Streams a pre-known content string through on-delta as a single delta. For
-   synthesized terminal text (max-steps, approval-required) so consumers see a
-   final chunk."
-  [system session-id request-id on-delta content]
-  (when (and on-delta (not (str/blank? content)))
-    (emit-delta! system session-id request-id on-delta content)))
-
-(defn- fallback-complete!
-  [system messages session-id prompt request-id error on-delta]
+(defn- fallback-content!
+  [system messages session-id request-id error stream? emit-delta]
   (try
-    (let [content (if on-delta
-                    (stream-llm-response! system session-id request-id messages on-delta)
+    (let [content (if stream?
+                    (let [ch (llm-core/stream (:llm-provider system)
+                                              messages
+                                              {:model (config/active-model (get-in system [:config :llm]))})]
+                      (consume-llm-stream-with! ch emit-delta))
                     (telemetry/complete-with-telemetry! (:telemetry system)
                                                         (:llm-provider system)
                                                         messages
                                                         {}
-                                                        {:agent-id "chat"
+                                                        {:agent-id (or session-id "chat")
                                                          :model (config/active-model (get-in system [:config :llm]))}))]
-      (clear-streaming! session-id)
-      (emit! system {:event-type :chat.fallback_completion
-                     :entity-type :session
-                     :entity-id session-id
-                     :request-id request-id
-                     :payload {:reason (.getMessage error)}})
-      (let [assistant-message (persist-completion! system session-id prompt content request-id)]
-        (extract-turn-memory! system session-id nil assistant-message request-id))
-      (emit! system {:event-type :chat.completed
-                     :entity-type :session
-                     :entity-id session-id
-                     :request-id request-id
-                     :payload {:fallback true}})
       {:content content
-       :request-id request-id
        :fallback? true})
     (catch Exception fallback-error
-      (clear-streaming! session-id)
-      (let [content (error-content fallback-error)
-            assistant-message (persist-completion! system session-id prompt content request-id)]
-            (emit! system {:event-type :chat.failed
-                           :entity-type :session
-                           :entity-id session-id
-                           :request-id request-id
-                           :payload (assoc (error-payload fallback-error)
-                                           :initial-error (.getMessage error)
-                                           :initial-type (some-> error ex-data :type))})
-        {:content (:content assistant-message)
-         :request-id request-id
-         :error? true}))))
+      {:content (error-content fallback-error)
+       :fallback? true
+       :error? true
+       :initial-error (.getMessage error)
+       :initial-type (some-> error ex-data :type)})))
 
 (defn run!
-  "Run a chat turn for `session-id`. With `:on-delta`, the user-visible response
-   streams token-by-token through that callback. With `:on-tool-call`, channels
-   that surface tool activity inline (e.g. Telegram) receive one call per tool
-   turn with `{:tool-call ... :receipt ...}`. The agentic planner loop runs the
-   same way regardless of either callback."
-  [system {:keys [messages session-id max-steps context on-delta on-tool-call]}]
+  "Run a chat turn for `session-id`. Public wrapper keeps persistence, transport
+   callbacks, and legacy events around the evented runtime loop."
+  [system {:keys [messages session-id max-steps context on-delta on-tool-call stream?]}]
   (let [max-steps (long (or max-steps
                             (get-in system [:config :chat :max-steps])
                             default-max-steps))
@@ -496,140 +543,68 @@
         history (if session-id (session-messages system session-id) messages)
         recall (recall-memory system session-id prompt)
         iris-context (iris-context-message system)
-        initial-messages (into (cond-> []
-                                 iris-context (conj iris-context)
-                                 true (conj (memory-message recall)))
-                               history)
-        ops (->ChatKernelOps system session-id request-id context)
-        stream-content? (and on-delta
+        stream-content? (and (or stream? on-delta)
                              (not (false? (get-in system [:config :llm :stream-content?] true))))
-        on-content-delta (when stream-content?
-                           (fn [chunk]
-                             (throw-if-cancelled! cancelled?)
-                             (emit-delta! system session-id request-id on-delta chunk)))
-        finish! (fn [content trace extra]
-                  (clear-streaming! session-id)
-                  (let [assistant-message (persist-completion! system session-id prompt content request-id)]
-                    (extract-turn-memory! system session-id user-message assistant-message request-id))
-                  (merge {:content content
-                          :request-id request-id
-                          :trace trace
-                          :stream? (some? on-delta)}
-                         extra))]
+        persisted (atom {})
+        subscribers [(persistence-subscriber system session-id prompt request-id persisted)
+                     (streaming-subscriber session-id on-delta)
+                     (tool-call-subscriber on-tool-call)
+                     (legacy-subscriber system)]
+        event-sink (loop-event-sink system subscribers)
+        ops (->ChatKernelOps system session-id request-id context)
+        context-injectors (cond-> []
+                            iris-context (conj (constantly [iris-context]))
+                            true (conj (constantly [(memory-message recall)])))]
     (register-run! session-id request-id cancelled?)
-    (emit! system {:event-type :chat.started
-                   :entity-type :session
-                   :entity-id session-id
-                   :request-id request-id
-                   :payload {:message-count (count history)
-                             :stream (some? on-delta)}})
-    (emit! system {:event-type :chat.memory.recalled
-                   :entity-type :session
-                   :entity-id session-id
-                   :request-id request-id
-                   :payload {:query prompt
-                             :message-count (count (get-in recall [:search :messages]))
-                             :event-count (count (get-in recall [:search :events]))
-                             :fact-count (count (get-in recall [:search :facts]))
-                             :prompt-document-count (count (get-in recall [:prompt :documents]))}})
+    (event-sink {:event-type :message-update
+                 :entity-type :session
+                 :entity-id session-id
+                 :request-id request-id
+                 :timestamp (str (Instant/now))
+                 :payload {:kind :memory-recalled
+                           :query prompt
+                           :message-count (count (get-in recall [:search :messages]))
+                           :event-count (count (get-in recall [:search :events]))
+                           :fact-count (count (get-in recall [:search :facts]))
+                           :prompt-document-count (count (get-in recall [:prompt :documents]))}})
     (try
-      (loop [step-no 0
-             state {}
-             planner-messages initial-messages
-             trace []]
-        (throw-if-cancelled! cancelled?)
-        (if (>= step-no max-steps)
-          (let [content "Stopped: max chat tool steps reached."]
-            (emit-content-as-delta! system session-id request-id on-delta content)
-            (finish! content trace {}))
-          (let [step (planner/plan-step! (:llm-provider system)
-                                         {:messages planner-messages
-                                          :state state
-                                          :tools (tools/list-tools (:tool-registry system))
-                                          :telemetry (:telemetry system)
-                                          :agent-id (or session-id "chat")
-                                          :model (config/active-model (get-in system [:config :llm]))
-                                          :on-content-delta on-content-delta})
-                _ (throw-if-cancelled! cancelled?)
-                executable-step (select-keys step [:schema-version :state :directives :receipts])
-                executed (kernel-runtime/execute-step!
-                          ops
-                          (or session-id "chat")
-                          executable-step
-                          {:execute-safe-tools? true
-                           :yolo? (true? (get-in system [:config :tools :yolo?]))})
-                _ (throw-if-cancelled! cancelled?)
-                receipts (:receipts executed)
-                trace* (conj trace {:step step-no
-                                    :directives (:directives step)
-                                    :receipts receipts})]
-            (emit! system {:event-type :chat.planner.step
-                           :entity-type :session
-                           :entity-id session-id
-                           :request-id request-id
-                           :payload {:step step-no
-                                     :directives (:directives step)
-                                     :receipts receipts}})
-            (let [llm-response (:llm-response step)
-                  provider-tool-calls (seq (:tool-calls llm-response))
-                  protocol-messages (when provider-tool-calls
-                                      (tool-protocol-messages request-id
-                                                               (:content llm-response)
-                                                               provider-tool-calls
-                                                               receipts))]
-              (when protocol-messages
-                (persist-tool-turn! system session-id
-                                    (first protocol-messages)
-                                    (rest protocol-messages))
-                (when on-tool-call
-                  (doseq [[tool-call receipt] (map vector provider-tool-calls receipts)]
-                    (try
-                      (on-tool-call {:tool-call tool-call :receipt receipt})
-                      (catch Exception _ nil)))))
-              (if-let [receipt (complete-receipt receipts)]
-                (let [content (result-text (:result receipt))]
-                  (when-not stream-content?
-                    (emit-content-as-delta! system session-id request-id on-delta content))
-                  (emit! system {:event-type :chat.completed
-                                 :entity-type :session
-                                 :entity-id session-id
-                                 :request-id request-id
-                                 :payload {:steps (inc step-no)
-                                           :stream (some? on-delta)}})
-                  (finish! content trace* {}))
-                (let [approval-needed (vec (approval-receipts receipts))]
-                  (if (seq approval-needed)
-                    (let [approvals (mapv #(request-approval! system session-id %) approval-needed)
-                          content (approval-message approvals)]
-                      (emit-content-as-delta! system session-id request-id on-delta content)
-                      (finish! content trace* {:approvals approvals}))
-                    (recur (inc step-no)
-                           (merge state (:state executed))
-                           (into planner-messages protocol-messages)
-                           trace*))))))))
-      (catch Exception e
-        (if (or (token-cancelled? cancelled?)
-                (= :chat-cancelled (some-> e ex-data :type)))
-          (do
-            (clear-streaming! session-id)
-            (emit-content-as-delta! system session-id request-id on-delta stopped-content)
-            (persist-completion! system session-id prompt stopped-content request-id)
-            (emit! system {:event-type :chat.cancelled
-                           :entity-type :session
-                           :entity-id session-id
-                           :request-id request-id
-                           :payload {:message (.getMessage e)}})
-            {:content stopped-content
-             :request-id request-id
-             :trace []
-             :stream? (some? on-delta)
-             :cancelled? true})
-          (do
-            (emit! system {:event-type :chat.error
-                           :entity-type :session
-                           :entity-id session-id
-                           :request-id request-id
-                           :payload (error-payload e)})
-            (fallback-complete! system initial-messages session-id prompt request-id e on-delta))))
+      (let [result (runtime-loop/run!
+                    {:messages history
+                     :context-injectors context-injectors
+                     :system-prompt (planner/planner-system-prompt)
+                     :tools (tools/list-tools (:tool-registry system))
+                     :model (config/active-model (get-in system [:config :llm]))
+                     :provider-config (:llm-provider system)
+                     :telemetry (:telemetry system)
+                     :request-id request-id
+                     :session-id session-id
+                     :agent-id (or session-id "chat")
+                     :max-steps max-steps
+                     :stream? stream-content?
+                     :cancellation-token cancelled?
+                     :event-sink event-sink
+                     :execute-step-fn (fn [executable-step]
+                                        (kernel-runtime/execute-step!
+                                         ops
+                                         (or session-id "chat")
+                                         (kernel-schema/normalize-step executable-step)
+                                         {:execute-safe-tools? true
+                                          :yolo? (true? (get-in system [:config :tools :yolo?]))}))
+                     :approval-fn (fn [receipts]
+                                    (mapv #(request-approval! system session-id %) receipts))
+                     :fallback-fn (fn [{:keys [messages error stream? emit-delta]}]
+                                    (fallback-content! system
+                                                       messages
+                                                       session-id
+                                                       request-id
+                                                       error
+                                                       stream?
+                                                       emit-delta))})]
+        (extract-turn-memory! system
+                              session-id
+                              user-message
+                              (:assistant-message @persisted)
+                              request-id)
+        (assoc result :stream? (boolean (or stream? on-delta))))
       (finally
         (unregister-run! session-id request-id)))))
