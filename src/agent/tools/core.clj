@@ -48,7 +48,7 @@
                                 :error (.getMessage e)})))))
 
 (defn create-tool-description
-  [name description & {:keys [version category input-schema required-permissions timeout-ms source source-details sensitive]
+  [name description & {:keys [version category input-schema required-permissions timeout-ms source source-details sensitive execution-mode]
                        :or {version "1.0.0"
                             required-permissions #{}
                             timeout-ms 30000
@@ -66,6 +66,7 @@
    :timeout-ms timeout-ms
    :source source
    :source-details source-details
+   :execution-mode execution-mode
    :sensitive (if (ifn? sensitive) true (boolean sensitive))
    :sensitive-predicate sensitive})
 

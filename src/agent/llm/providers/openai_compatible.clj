@@ -261,13 +261,21 @@
                                   :as :stream))))
     on-content-delta)))
 
-(defrecord OpenAICompatibleProvider [base-url api-key default-model site-url app-name extra-headers config]
+(defn- current-api-key [provider]
+  (or (when-let [resolver (:api-key-resolver provider)]
+        (resolver provider))
+      (:api-key provider)))
+
+(defn- provider-headers [provider]
+  (bearer-headers {:api-key (current-api-key provider)
+                   :site-url (:site-url provider)
+                   :app-name (:app-name provider)
+                   :extra-headers (:extra-headers provider)}))
+
+(defrecord OpenAICompatibleProvider [base-url api-key default-model site-url app-name extra-headers config api-key-resolver]
   llm-core/ILLMProvider
-  (complete [_ messages opts]
-    (let [request {:headers (bearer-headers {:api-key api-key
-                                             :site-url site-url
-                                             :app-name app-name
-                                             :extra-headers extra-headers})}]
+  (complete [this messages opts]
+    (let [request {:headers (provider-headers this)}]
       (if (stream-structured-output? config opts)
         (:content (post-stream-turn
                    (chat-url base-url)
@@ -289,16 +297,13 @@
                                          :as :json))]
           (:content (message->turn (:body response)))))))
 
-  (stream [_ messages opts]
+  (stream [this messages opts]
     (let [ch (async/chan)]
       (async/thread
         (try
           (let [response (checked-response
                           (http/post (chat-url base-url)
-                                     {:headers (bearer-headers {:api-key api-key
-                                                                :site-url site-url
-                                                                :app-name app-name
-                                                                :extra-headers extra-headers})
+                                     {:headers (provider-headers this)
                                       :body (json/generate-string
                                              (stream-body base-url
                                                           default-model
@@ -345,13 +350,10 @@
             (async/close! ch))))
       ch))
 
-  (embed [_ text opts]
+  (embed [this text opts]
     (let [input (if (string? text) [text] text)
           response (post-json (embeddings-url base-url)
-                              {:headers (bearer-headers {:api-key api-key
-                                                         :site-url site-url
-                                                         :app-name app-name
-                                                         :extra-headers extra-headers})
+                              {:headers (provider-headers this)
                                :body (json/generate-string {:model (or (:model opts) default-model)
                                                             :input input})
                                :as :json})
@@ -360,13 +362,10 @@
         (first embeddings)
         embeddings)))
 
-  (list-models [_]
+  (list-models [this]
     (try
       (let [response (http/get (models-url base-url)
-                               {:headers (bearer-headers {:api-key api-key
-                                                          :site-url site-url
-                                                          :app-name app-name
-                                                          :extra-headers extra-headers})
+                               {:headers (provider-headers this)
                                 :as :json})]
         (vec (or (-> response :body :data) [])))
       (catch Exception _
@@ -387,10 +386,7 @@
   llm-core/ILLMProviderWithTools
   (complete-with-tools [this messages tools opts]
     (let [response (post-json (chat-url (:base-url this))
-                              {:headers (bearer-headers {:api-key (:api-key this)
-                                                         :site-url (:site-url this)
-                                                         :app-name (:app-name this)
-                                                         :extra-headers (:extra-headers this)})
+                              {:headers (provider-headers this)
                                :body (json/generate-string
                                       (completion-body (:base-url this)
                                                        (:default-model this)
@@ -407,10 +403,7 @@
           stream-with-delta? (some? (:on-content-delta opts))
           on-content-delta (when-not (seq (:tools opts))
                              (:on-content-delta opts))
-          request* {:headers (bearer-headers {:api-key (:api-key this)
-                                              :site-url (:site-url this)
-                                              :app-name (:app-name this)
-                                              :extra-headers (:extra-headers this)})}
+          request* {:headers (provider-headers this)}
           response (cond
                      stream-with-delta?
                      (post-stream-turn
@@ -472,7 +465,8 @@
      (or (:site-url new-config) (:site-url this))
      (or (:app-name new-config) (:app-name this))
      (or (:extra-headers new-config) (:extra-headers this))
-     (merge (:config this) new-config)))
+     (merge (:config this) new-config)
+     (or (:api-key-resolver new-config) (:api-key-resolver this))))
 
   (get-config [this]
     {:base-url (:base-url this)
@@ -480,6 +474,7 @@
      :site-url (:site-url this)
      :app-name (:app-name this)
      :api-key (when (:api-key this) "***REDACTED***")
+     :api-key-resolver? (boolean (:api-key-resolver this))
      :config (:config this)}))
 
 (extend-type OpenAICompatibleProvider
@@ -487,10 +482,7 @@
   (health-check [this]
     (try
       (let [response (http/get (models-url (:base-url this))
-                               {:headers (bearer-headers {:api-key (:api-key this)
-                                                          :site-url (:site-url this)
-                                                          :app-name (:app-name this)
-                                                          :extra-headers (:extra-headers this)})
+                               {:headers (provider-headers this)
                                 :throw-exceptions false
                                 :as :json})]
         {:healthy (= 200 (:status response))
@@ -503,7 +495,7 @@
     {:provider :openai-compatible}))
 
 (defn create-openai-compatible-provider
-  [{:keys [base-url api-key default-model model site-url app-name extra-headers config]
+  [{:keys [base-url api-key default-model model site-url app-name extra-headers config api-key-resolver]
     :as opts
     :or {base-url "https://api.openai.com/v1"
          app-name "iris"}}]
@@ -526,10 +518,11 @@
                                                    :top-p
                                                    :top_p
                                                    :extra-body])
-                                     config)))
+                                     config)
+                              api-key-resolver))
 
 (defn create-openrouter-provider
-  [{:keys [api-key base-url model site-url app-name config]
+  [{:keys [api-key base-url model site-url app-name config api-key-resolver]
     :as opts
     :or {base-url "https://openrouter.ai/api/v1"
          app-name "iris"}}]
@@ -546,4 +539,5 @@
            :default-model (or model "openai/gpt-4o-mini")
            :site-url site-url
            :app-name app-name
-           :config config})))
+           :config config
+           :api-key-resolver api-key-resolver})))

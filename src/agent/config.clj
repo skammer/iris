@@ -46,7 +46,11 @@
                                          :api-key nil}}}
    :storage {:sqlite {:path "data/agent.db"
                       :journal-mode "WAL"}}
-   :chat {:max-steps 6}
+   :chat {:max-steps 6
+          :compaction {:max-context-tokens 8192
+                       :reserve-output-tokens 1024
+                       :keep-recent-tokens 2048
+                       :max-summary-input-tokens 8192}}
    :tools {:http {:enabled true
                   :timeout-ms 30000
                   :max-timeout-ms 30000

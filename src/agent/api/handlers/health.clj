@@ -4,6 +4,7 @@
    [agent.channels.core :as channel-adapters]
    [agent.config :as config]
    [agent.llm.core :as llm-core]
+   [agent.llm.registry :as llm-registry]
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
@@ -15,6 +16,8 @@
   (responses/json-response 200
                            {:ok true
                             :llm (llm-core/health-check (:llm-provider system))
+                            :llm-registry {:active-provider (:active-provider (:llm-registry system))
+                                           :providers (count (llm-registry/list-providers (:llm-registry system)))}
                             :storage (sqlite/health-check (:store system))
                             :tools (tools/registry-health (:tool-registry system))
                             :skills (skills/registry-health (:skills-registry system))

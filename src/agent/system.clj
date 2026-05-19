@@ -14,6 +14,7 @@
    [agent.llm.core :as llm-core]
    [agent.llm.providers.ollama :as ollama]
    [agent.llm.providers.openai-compatible :as openai-compatible]
+   [agent.llm.registry :as llm-registry]
    [agent.logging :as logging]
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
@@ -437,6 +438,7 @@
                    :config-path config-path
                    :system-ref system-ref
                    :reload-state reload-state
+                   :llm-registry (llm-registry/create-registry llm-cfg)
                    :llm-provider (create-llm-provider llm-cfg)
                    :fact-llm-provider (create-fact-llm-provider cfg)
                    :store store
@@ -641,6 +643,8 @@
 (defn health-check
   [system]
   {:llm (llm-core/health-check (:llm-provider system))
+   :llm-registry {:active-provider (:active-provider (:llm-registry system))
+                  :provider-count (count (:providers (:llm-registry system)))}
    :storage (sqlite/health-check (:store system))
    :logging (logging/health-check)
    :broker (broker/health-check (:broker system))

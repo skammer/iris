@@ -116,3 +116,65 @@ from channel_inbox
 where source = :source
   and update_id = :update_id
 limit 1
+
+-- :name insert-session-entry :! :n
+insert into session_entries (id, session_id, parent_id, type, payload_json, created_at)
+values (:id, :session_id, :parent_id, :type, :payload_json, :created_at)
+
+-- :name get-session-entry :? :1
+select id, session_id, parent_id, type, payload_json, created_at
+from session_entries
+where id = :id
+  and session_id = :session_id
+limit 1
+
+-- :name list-session-entries :? :*
+select id, session_id, parent_id, type, payload_json, created_at
+from session_entries
+where session_id = :session_id
+order by created_at asc, rowid asc
+
+-- :name latest-session-entry :? :1
+select id, session_id, parent_id, type, payload_json, created_at
+from session_entries
+where session_id = :session_id
+order by created_at desc, rowid desc
+limit 1
+
+-- :name get-session-leaf-selection :? :1
+select s.leaf_entry_id
+from session_leaf_selection s
+where s.session_id = :session_id
+limit 1
+
+-- :name upsert-session-leaf-selection :! :n
+insert into session_leaf_selection (session_id, leaf_entry_id, updated_at)
+values (:session_id, :leaf_entry_id, :updated_at)
+on conflict(session_id) do update set
+  leaf_entry_id = excluded.leaf_entry_id,
+  updated_at = excluded.updated_at
+
+-- :name insert-missing-message-entries :! :n
+insert or ignore into session_entries (id, session_id, parent_id, type, payload_json, created_at)
+select 'message-' || id,
+       session_id,
+       case
+         when lag(id) over (partition by session_id order by id) is null then null
+         else 'message-' || lag(id) over (partition by session_id order by id)
+       end,
+       'message',
+       json_object('message-id', id,
+                   'role', role,
+                   'content', content,
+                   'tool-calls', json(tool_calls),
+                   'tool-call-id', tool_call_id),
+       created_at
+from messages
+
+-- :name upsert-missing-session-leaves :! :n
+insert or ignore into session_leaf_selection (session_id, leaf_entry_id, updated_at)
+select session_id,
+       'message-' || max(id),
+       strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+from messages
+group by session_id

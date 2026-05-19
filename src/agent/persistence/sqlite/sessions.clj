@@ -1,9 +1,73 @@
 (ns agent.persistence.sqlite.sessions
   (:require
    [agent.persistence.sqlite.common :as common]
+   [clojure.string :as str]
    [hugsql.core :as hugsql]))
 
 (hugsql/def-sqlvec-fns "agent/persistence/sqlite/sessions.sql")
+
+(def entry-types
+  #{:message :model_change :thinking_level_change :compaction :branch_summary
+    :custom :custom_message :label :session_info})
+
+(defn- normalize-entry-type [value]
+  (cond
+    (keyword? value) (keyword (str/replace (name value) "-" "_"))
+    (string? value) (keyword (str/replace value "-" "_"))
+    :else value))
+
+(defn- valid-entry-type! [type]
+  (let [type* (normalize-entry-type type)]
+    (when-not (contains? entry-types type*)
+      (throw (ex-info (str "Unsupported session entry type: " type)
+                      {:type :validation-failed
+                       :entry-type type})))
+    type*))
+
+(defn- row->entry
+  [{:keys [id session_id parent_id type payload_json created_at]}]
+  {:id id
+   :session-id session_id
+   :parent-id parent_id
+   :type (keyword type)
+   :payload (common/parse-json-string payload_json)
+   :created-at created_at})
+
+(defn- payload->message [payload]
+  (let [message (or (:message payload) payload)]
+    {:role (or (:role message) "user")
+     :content (or (:content message) "")
+     :tool-calls (:tool-calls message)
+     :tool-call-id (:tool-call-id message)}))
+
+(defn- current-leaf-id [conn session-id]
+  (or (:leaf_entry_id (common/select-one conn
+                                         (get-session-leaf-selection-sqlvec {:session_id session-id})
+                                         identity))
+      (:id (common/select-one conn
+                              (latest-session-entry-sqlvec {:session_id session-id})
+                              identity))))
+
+(defn- upsert-leaf! [conn session-id leaf-id now]
+  (common/execute! conn (upsert-session-leaf-selection-sqlvec
+                         {:session_id session-id
+                          :leaf_entry_id leaf-id
+                          :updated_at now})))
+
+(defn- insert-entry-row! [conn {:keys [id session-id parent-id type payload created-at]}]
+  (let [entry {:id (or id (common/uuid-str))
+               :session_id session-id
+               :parent_id parent-id
+               :type (name (valid-entry-type! type))
+               :payload_json (common/json-string payload)
+               :created_at (or created-at (common/now-str))}]
+    (common/execute! conn (insert-session-entry-sqlvec entry))
+    (row->entry {:id (:id entry)
+                 :session_id (:session_id entry)
+                 :parent_id (:parent_id entry)
+                 :type (:type entry)
+                 :payload_json (:payload_json entry)
+                 :created_at (:created_at entry)})))
 
 (defn create-session!
   ([store] (create-session! store nil))
@@ -49,7 +113,18 @@
               store
               (fn [conn]
                 (common/execute! conn (insert-message-sqlvec message))
-                (:id (common/select-one conn (last-insert-row-id-sqlvec) identity))))]
+                (let [message-id (:id (common/select-one conn (last-insert-row-id-sqlvec) identity))
+                      entry (insert-entry-row! conn {:session-id session-id
+                                                     :parent-id (current-leaf-id conn session-id)
+                                                     :type :message
+                                                     :payload (cond-> {:message-id message-id
+                                                                       :role role
+                                                                       :content content}
+                                                                tool-calls (assoc :tool-calls tool-calls)
+                                                                tool-call-id (assoc :tool-call-id tool-call-id))
+                                                     :created-at (:created_at message)})]
+                  (upsert-leaf! conn session-id (:id entry) (:created-at entry))
+                  message-id)))]
      (cond-> {:id id
               :session-id session-id
               :role role
@@ -257,3 +332,141 @@
                           {:source (common/normalize-name source)
                            :update_id (long update-id)})
                          identity))))
+
+(defn migrate-messages-to-entries! [store]
+  (common/with-transaction
+    store
+    (fn [conn]
+      (let [inserted (common/execute! conn (insert-missing-message-entries-sqlvec))
+            leaves (common/execute! conn (upsert-missing-session-leaves-sqlvec))]
+        {:inserted inserted
+         :leaf-selections leaves}))))
+
+(defn append-entry!
+  ([store session-id type payload]
+   (append-entry! store session-id {:type type :payload payload}))
+  ([store session-id {:keys [id parent-id type payload created-at select-leaf?]
+                      :or {select-leaf? true}}]
+   (common/with-transaction
+     store
+     (fn [conn]
+       (let [type* (valid-entry-type! type)
+             now (or created-at (common/now-str))
+             payload* (if (= :message type*)
+                        (let [{:keys [role content tool-calls tool-call-id]} (payload->message payload)
+                              tool-calls-json (when (seq tool-calls) (common/json-string tool-calls))
+                              message {:session_id session-id
+                                       :role role
+                                       :content content
+                                       :tool_calls tool-calls-json
+                                       :tool_call_id tool-call-id
+                                       :created_at now}]
+                          (common/execute! conn (insert-message-sqlvec message))
+                          (let [message-id (:id (common/select-one conn (last-insert-row-id-sqlvec) identity))]
+                            (cond-> (assoc payload :message-id message-id
+                                           :role role
+                                           :content content)
+                              tool-calls (assoc :tool-calls tool-calls)
+                              tool-call-id (assoc :tool-call-id tool-call-id))))
+                        payload)
+             entry (insert-entry-row! conn {:id id
+                                            :session-id session-id
+                                            :parent-id (if (some? parent-id)
+                                                         parent-id
+                                                         (current-leaf-id conn session-id))
+                                            :type type*
+                                            :payload payload*
+                                            :created-at now})]
+         (when select-leaf?
+           (upsert-leaf! conn session-id (:id entry) (:created-at entry)))
+         entry)))))
+
+(defn list-entries [store session-id]
+  (common/with-connection
+    store
+    (fn [conn]
+      (mapv row->entry
+            (common/select-many conn
+                                (list-session-entries-sqlvec {:session_id session-id})
+                                identity)))))
+
+(defn get-entry [store session-id entry-id]
+  (common/with-connection
+    store
+    (fn [conn]
+      (some-> (common/select-one conn
+                                 (get-session-entry-sqlvec {:session_id session-id
+                                                            :id entry-id})
+                                 identity)
+              row->entry))))
+
+(defn leaf-entry [store session-id]
+  (common/with-connection
+    store
+    (fn [conn]
+      (when-let [leaf-id (current-leaf-id conn session-id)]
+        (some-> (common/select-one conn
+                                   (get-session-entry-sqlvec {:session_id session-id
+                                                              :id leaf-id})
+                                   identity)
+                row->entry)))))
+
+(defn select-leaf! [store session-id entry-id]
+  (common/with-transaction
+    store
+    (fn [conn]
+      (let [entry (or (some-> (common/select-one conn
+                                                 (get-session-entry-sqlvec {:session_id session-id
+                                                                            :id entry-id})
+                                                 identity)
+                              row->entry)
+                      (throw (ex-info "Session entry not found"
+                                      {:type :entry-not-found
+                                       :session-id session-id
+                                       :entry-id entry-id})))]
+        (upsert-leaf! conn session-id entry-id (common/now-str))
+        entry))))
+
+(defn branch-path
+  ([store session-id]
+   (branch-path store session-id (some-> (leaf-entry store session-id) :id)))
+  ([store session-id leaf-id]
+   (let [entries (list-entries store session-id)
+         by-id (into {} (map (juxt :id identity)) entries)]
+     (loop [entry (get by-id leaf-id)
+            path ()]
+       (if entry
+         (recur (get by-id (:parent-id entry)) (conj path entry))
+         (vec path))))))
+
+(defn- latest-labels [entries]
+  (reduce (fn [acc {:keys [payload created-at]}]
+            (let [target (:target-id payload)]
+              (if target
+                (assoc acc target {:label (:label payload)
+                                   :label-timestamp created-at})
+                acc)))
+          {}
+          (filter #(= :label (:type %)) entries)))
+
+(defn session-tree [store session-id]
+  (let [entries (list-entries store session-id)
+        labels (latest-labels entries)
+        children (group-by :parent-id entries)]
+    (letfn [(node [entry]
+              (merge {:entry entry
+                      :children (mapv node (get children (:id entry)))}
+                     (when-let [label (get labels (:id entry))]
+                       label)))]
+      (mapv node (get children nil)))))
+
+(defn current-llm-context [store session-id]
+  (->> (branch-path store session-id)
+       (keep (fn [{:keys [type payload]}]
+               (case type
+                 :message {:role (:role payload)
+                           :content (:content payload)}
+                 :custom_message {:role "user"
+                                  :content (:content payload)}
+                 nil)))
+       vec))
