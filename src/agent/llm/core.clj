@@ -323,10 +323,12 @@
 
 (defn stream-error-event
   [error]
-  {:type :error
-   :error (if (instance? Throwable error)
-            (.getMessage ^Throwable error)
-            (str error))})
+  (cond-> {:type :error
+           :error (if (instance? Throwable error)
+                    (.getMessage ^Throwable error)
+                    (str error))}
+    (instance? clojure.lang.ExceptionInfo error)
+    (assoc :details (ex-data error))))
 
 (defn- retry-after-ms [headers]
   (when-let [value (or (get headers "Retry-After")

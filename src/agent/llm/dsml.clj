@@ -6,31 +6,50 @@
    [cheshire.core :as json]
    [clojure.string :as str]))
 
-(def ^:private tool-calls-re
+(def ^:private dsml-tool-calls-re
   #"(?s)<｜DSML｜tool_calls>(.*?)</｜DSML｜tool_calls>")
 
-(def ^:private invoke-re
+(def ^:private dsml-invoke-re
   #"(?s)<｜DSML｜invoke\s+name=\"([^\"]+)\">(.*?)</｜DSML｜invoke>")
 
-(def ^:private parameter-re
+(def ^:private dsml-parameter-re
   #"(?s)<｜DSML｜parameter\s+name=\"([^\"]+)\"[^>]*>(.*?)</｜DSML｜parameter>")
 
-(defn- parse-invoke [invoke-body]
-  (->> (re-seq parameter-re invoke-body)
+(def ^:private tool-call-re
+  #"(?s)<tool_call>(.*?)</tool_call>")
+
+(def ^:private function-re
+  #"(?s)<function\s*=\s*\"?([^>\"]+?)\"?\s*>(.*?)</function>")
+
+(def ^:private parameter-re
+  #"(?s)<parameter\s*=\s*\"?([^>\"]+?)\"?\s*>(.*?)</parameter>")
+
+(defn- parse-parameters [re invoke-body]
+  (->> (re-seq re invoke-body)
        (reduce (fn [acc [_ k v]]
-                 (assoc acc k (str/trim v)))
+                 (assoc acc (str/trim k) (str/trim v)))
                {})))
 
-(defn- block->tool-calls [block-body]
+(defn- tool-call [prefix tool-name args]
+  {:id (str prefix "_" (java.util.UUID/randomUUID))
+   :type "function"
+   :function {:name (str/trim tool-name)
+              :arguments (json/generate-string args)}})
+
+(defn- dsml-block->tool-calls [block-body]
   (mapv (fn [[_ tool-name body]]
-          {:id (str "dsml_" (java.util.UUID/randomUUID))
-           :type "function"
-           :function {:name tool-name
-                      :arguments (json/generate-string (parse-invoke body))}})
-        (re-seq invoke-re block-body)))
+          (tool-call "dsml" tool-name (parse-parameters dsml-parameter-re body)))
+        (re-seq dsml-invoke-re block-body)))
+
+(defn- tagged-block->tool-calls [block-body]
+  (mapv (fn [[_ tool-name body]]
+          (tool-call "toolcall" tool-name (parse-parameters parameter-re body)))
+        (re-seq function-re block-body)))
 
 (defn- strip-blocks [content]
-  (-> (str/replace content tool-calls-re "")
+  (-> content
+      (str/replace dsml-tool-calls-re "")
+      (str/replace tool-call-re "")
       str/trim))
 
 (defn recover-tool-calls
@@ -41,8 +60,11 @@
   (if (or (seq tool-calls) (not (string? content)) (str/blank? content))
     turn
     (try
-      (let [blocks (re-seq tool-calls-re content)
-            recovered (mapcat (fn [[_ body]] (block->tool-calls body)) blocks)]
+      (let [dsml-blocks (re-seq dsml-tool-calls-re content)
+            tagged-blocks (re-seq tool-call-re content)
+            recovered (concat
+                       (mapcat (fn [[_ body]] (dsml-block->tool-calls body)) dsml-blocks)
+                       (mapcat (fn [[_ body]] (tagged-block->tool-calls body)) tagged-blocks))]
         (if (empty? recovered)
           turn
           (assoc turn
