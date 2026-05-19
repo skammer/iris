@@ -23,7 +23,26 @@
                     "chat.tool.approval_required"
                     "chat.fallback_completion"
                     "tool.execution.succeeded"
-                    "tool.execution.failed"}
+                    "tool.execution.failed"
+                    "agent-start"
+                    "turn-start"
+                    "turn-end"
+                    "message-start"
+                    "message-end"
+                    "tool-execution-update"
+                    "tool-execution-end"}
+                  (:event-type event))))
+
+(defn- chat-stream-delta-event? [event session-id]
+  (and (= "session" (:entity-type event))
+       (= session-id (:entity-id event))
+       (= "message-update" (:event-type event))
+       (string? (get-in event [:payload :delta]))))
+
+(defn- chat-stream-terminal-event? [event session-id]
+  (and (= "session" (:entity-type event))
+       (= session-id (:entity-id event))
+       (contains? #{"agent-end" "chat.completed" "chat.cancelled" "chat.failed"}
                   (:event-type event))))
 
 (defn- openai-style-completion [system session-id content]
@@ -47,9 +66,29 @@
         broker-instance (or (:event-bus system) (:broker system))
         subscription (broker/subscribe! broker-instance (broker/all-events-subject))
         events-ch (:channel subscription)
-        delta-ch (async/chan 16)
         result-ch (async/chan 1)
-        open? (atom true)]
+        open? (atom true)
+        send-delta! (fn [channel delta]
+                      (streaming/send-sse-chunk! channel
+                                                 {:id stream-id
+                                                  :object "chat.completion.chunk"
+                                                  :session_id session-id
+                                                  :provider provider
+                                                  :model model
+                                                  :choices [{:index 0
+                                                             :delta {:content delta}
+                                                             :finish_reason nil}]}))
+        send-event! (fn [channel event]
+                      (cond
+                        (chat-stream-delta-event? event session-id)
+                        (send-delta! channel (get-in event [:payload :delta]))
+
+                        (chat-stream-progress-event? event session-id)
+                        (streaming/send-sse-chunk! channel
+                                                   {:id stream-id
+                                                    :object "chat.progress"
+                                                    :session_id session-id
+                                                    :event (ser/event->response event)})))]
     (streaming/sse-response
      request
      (fn [channel]
@@ -70,44 +109,26 @@
                           {:result (chat/run! system
                                               {:messages messages
                                                :session-id session-id
-                                               :on-delta #(async/>!! delta-ch %)})})
+                                               :stream? true})})
                (catch Exception e
                  (async/>!! result-ch {:error e}))))
-           (loop []
+           (loop [result-value nil
+                  terminal? false]
              (when @open?
-               (let [[value port] (async/alts!! [result-ch delta-ch events-ch])]
+               (let [[value port] (async/alts!! [result-ch events-ch])]
                  (cond
-                   (= port delta-ch)
-                   (do
-                     (when value
-                       (streaming/send-sse-chunk! channel
-                                                  {:id stream-id
-                                                   :object "chat.completion.chunk"
-                                                   :session_id session-id
-                                                   :provider provider
-                                                   :model model
-                                                   :choices [{:index 0
-                                                              :delta {:content value}
-                                                              :finish_reason nil}]}))
-                     (recur))
-
                    (= port result-ch)
-                   (do
-                     (if-let [error (:error value)]
+                   (if-let [error (:error value)]
+                     (do
                        (streaming/send-sse-chunk! channel
                                                   {:error "stream_error"
                                                    :message (.getMessage error)})
+                       (streaming/send-sse-done! channel)
+                       (http-kit/close channel))
+                     (if terminal?
                        (do
                          (when (:error? (:result value))
-                           (streaming/send-sse-chunk! channel
-                                                      {:id stream-id
-                                                       :object "chat.completion.chunk"
-                                                       :session_id session-id
-                                                       :provider provider
-                                                       :model model
-                                                       :choices [{:index 0
-                                                                  :delta {:content (get-in value [:result :content])}
-                                                                  :finish_reason nil}]}))
+                           (send-delta! channel (get-in value [:result :content])))
                          (streaming/send-sse-chunk! channel
                                                     {:id stream-id
                                                      :object "chat.completion.chunk"
@@ -116,20 +137,33 @@
                                                      :model model
                                                      :choices [{:index 0
                                                                 :delta {}
-                                                                :finish_reason "stop"}]})))
-                     (streaming/send-sse-done! channel)
-                     (http-kit/close channel))
+                                                                :finish_reason "stop"}]})
+                         (streaming/send-sse-done! channel)
+                         (http-kit/close channel))
+                       (recur value terminal?)))
 
                    (= port events-ch)
                    (do
                      (when-let [event (:payload value)]
-                       (when (chat-stream-progress-event? event session-id)
-                         (streaming/send-sse-chunk! channel
-                                                    {:id stream-id
-                                                     :object "chat.progress"
-                                                     :session_id session-id
-                                                     :event (ser/event->response event)})))
-                     (recur))))))
+                       (send-event! channel event)
+                       (let [terminal?* (or terminal?
+                                            (chat-stream-terminal-event? event session-id))]
+                         (if (and result-value terminal?*)
+                           (do
+                             (when (:error? (:result result-value))
+                               (send-delta! channel (get-in result-value [:result :content])))
+                             (streaming/send-sse-chunk! channel
+                                                        {:id stream-id
+                                                         :object "chat.completion.chunk"
+                                                         :session_id session-id
+                                                         :provider provider
+                                                         :model model
+                                                         :choices [{:index 0
+                                                                    :delta {}
+                                                                    :finish_reason "stop"}]})
+                             (streaming/send-sse-done! channel)
+                             (http-kit/close channel))
+                           (recur result-value terminal?*)))))))))
            (catch Exception e
              (streaming/send-sse-chunk! channel
                                         {:error "stream_error"

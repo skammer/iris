@@ -1,6 +1,7 @@
 (ns agent.telegram
   "Telegram long-polling adapter."
   (:require
+   [agent.broker.core :as broker]
    [agent.chat :as chat]
    [agent.channels.core :as channels]
    [agent.persistence.sqlite :as sqlite]
@@ -9,6 +10,7 @@
    [agent.tools.display :as tool-display]
    [cheshire.core :as json]
    [clj-http.client :as http]
+   [clojure.core.async :as async]
    [clojure.string :as str]))
 
 (def ^:private telegram-api "https://api.telegram.org")
@@ -325,6 +327,95 @@
       (reset! running? false)
       (future-cancel worker))))
 
+(defn- session-event? [event session-id event-type]
+  (and (= "session" (:entity-type event))
+       (= session-id (:entity-id event))
+       (= event-type (:event-type event))))
+
+(defn- terminal-session-event? [event session-id]
+  (and (= "session" (:entity-type event))
+       (= session-id (:entity-id event))
+       (contains? #{"agent-end" "chat.completed" "chat.cancelled" "chat.failed"}
+                  (:event-type event))))
+
+(defn- run-chat-callbacks!
+  [system opts chat-id session-id user-text stream-controls on-tool-call]
+  ((or (:chat-fn opts) chat/run!)
+   system
+   (cond-> {:session-id session-id
+            :messages [{:role "user" :content user-text}]
+            :context {:telegram-chat-id chat-id}}
+     (:on-delta stream-controls) (assoc :on-delta (:on-delta stream-controls))
+     on-tool-call (assoc :on-tool-call on-tool-call))))
+
+(defn- run-chat-events!
+  [system chat-id session-id user-text stream-controls on-tool-call]
+  (let [broker-instance (or (:event-bus system) (:broker system))
+        subscription (broker/subscribe! broker-instance (broker/all-events-subject))
+        ch (:channel subscription)
+        result-ch (async/chan 1)
+        saw-delta? (atom false)
+        finalize! (:finalize! stream-controls)]
+    (try
+      (future
+        (try
+          (async/>!! result-ch
+                     {:result (chat/run! system
+                                         {:session-id session-id
+                                          :messages [{:role "user" :content user-text}]
+                                          :context {:telegram-chat-id chat-id}
+                                          :stream? true})})
+          (catch Throwable t
+            (async/>!! result-ch {:error t}))))
+      (loop [result-value nil
+             terminal? false]
+        (if (and result-value terminal?)
+          (if-let [error (:error result-value)]
+            (throw error)
+            (:result result-value))
+          (let [[value port] (async/alts!! [result-ch ch])]
+            (cond
+              (= port result-ch)
+              (recur value terminal?)
+
+              (= port ch)
+              (let [event (:payload value)
+                    payload (:payload event)]
+                (when (and event
+                           (session-event? event session-id "message-update")
+                           (string? (:delta payload)))
+                  (reset! saw-delta? true)
+                  (when-let [on-delta (:on-delta stream-controls)]
+                    (on-delta (:delta payload))))
+                (when (and event
+                           (session-event? event session-id "message-end")
+                           (:tool-turn? payload)
+                           (= "assistant" (:role payload)))
+                  (when (and (not @saw-delta?)
+                             (not (str/blank? (:content payload))))
+                    (when-let [on-delta (:on-delta stream-controls)]
+                      (on-delta (:content payload)))))
+                (when (and event
+                           (session-event? event session-id "message-end")
+                           (:final? payload))
+                  (when (and (not @saw-delta?)
+                             (not (str/blank? (:content payload))))
+                    (when-let [on-delta (:on-delta stream-controls)]
+                      (on-delta (:content payload))))
+                  (when finalize! (finalize!))
+                  (reset! saw-delta? false))
+                (when (and event
+                           (session-event? event session-id "tool-execution-end"))
+                  (when on-tool-call
+                    (on-tool-call {:receipt (:receipt payload)
+                                   :tool-call (:tool-call payload)}))
+                  (reset! saw-delta? false))
+                (recur result-value (or terminal?
+                                        (and event
+                                             (terminal-session-event? event session-id)))))))))
+      (finally
+        (broker/unsubscribe! broker-instance subscription)))))
+
 (defn- run-chat!
   [system config opts chat chat-id session-id user-text]
   (let [token (:bot-token config)
@@ -332,20 +423,19 @@
                   (fn [cid text] (send-message! token cid text)))
         stop-typing! (start-typing-indicator! config opts chat-id)
         stream-controls (build-stream-controls config opts chat chat-id)
-        on-delta (:on-delta stream-controls)
         on-tool-call (build-on-tool-call system opts chat-id stream-controls)
+        callback-path? (or (:chat-fn opts)
+                           (nil? (or (:event-bus system) (:broker system))))
         result (try
-                 ((or (:chat-fn opts) chat/run!)
-                  system
-                  (cond-> {:session-id session-id
-                           :messages [{:role "user" :content user-text}]
-                           :context {:telegram-chat-id chat-id}}
-                    on-delta (assoc :on-delta on-delta)
-                    on-tool-call (assoc :on-tool-call on-tool-call)))
+                 (if callback-path?
+                   (run-chat-callbacks! system opts chat-id session-id user-text stream-controls on-tool-call)
+                   (run-chat-events! system chat-id session-id user-text stream-controls on-tool-call))
                  (finally
                    (stop-typing!)))
         final (or (:content result) "")]
-    (send! chat-id (if (str/blank? final) "(no response)" final))
+    (when (or callback-path?
+              (nil? (:finalize! stream-controls)))
+      (send! chat-id (if (str/blank? final) "(no response)" final)))
     final))
 
 (defn- run-chat-async!

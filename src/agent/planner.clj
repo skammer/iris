@@ -22,9 +22,10 @@
 (defn- native-tool-definitions [tools]
   (mapv native-tool-definition (or tools [])))
 
-(defn- build-llm-request [{:keys [messages state tools model] :as request}]
+(defn- build-llm-request [{:keys [messages state tools model system-prompt] :as request}]
   (let [tool-defs (native-tool-definitions tools)
-        messages* (vec (concat [{:role "system" :content (planner-system-prompt)}]
+        messages* (vec (concat [{:role "system" :content (or system-prompt
+                                                              (planner-system-prompt))}]
                                (or messages [])))]
     (cond-> (merge
              (select-keys request [:temperature :max-tokens :top-p :cache-control

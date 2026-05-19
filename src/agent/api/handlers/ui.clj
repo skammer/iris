@@ -76,7 +76,23 @@
        (= session-id (:entity-id event))
        (or (contains? #{"message.appended" "completion.completed" "session.created"}
                       (:event-type event))
+           (contains? #{"agent-start"
+                        "agent-end"
+                        "turn-start"
+                        "turn-end"
+                        "message-start"
+                        "message-update"
+                        "message-end"
+                        "tool-execution-update"
+                        "tool-execution-end"}
+                      (:event-type event))
            (str/starts-with? (or (:event-type event) "") "chat."))))
+
+(defn- terminal-session-event? [event session-id]
+  (and (= "session" (:entity-type event))
+       (= session-id (:entity-id event))
+       (contains? #{"agent-end" "chat.completed" "chat.cancelled" "chat.failed"}
+                  (:event-type event))))
 
 (defn session-live-response
   [system request]
@@ -112,20 +128,50 @@
      request
      (fn [channel]
        (future
-         (try
-           (let [push! (fn []
-                         (streaming/send-datastar-patch!
-                          channel
-                          (ui/session-messages-fragment system session_id)))]
-             (chat/run! system
-                        {:messages [{:role "user" :content prompt}]
-                         :session-id session_id
-                         :on-delta (fn [_] (push!))})
-             (push!))
-           (catch Throwable t
-             (println "chat/run! failed:" (.getMessage t)))
-           (finally
-             (http-kit/close channel)))))
+         (let [broker-instance (or (:event-bus system) (:broker system))
+               subscription (broker/subscribe! broker-instance (broker/all-events-subject))
+               ch (:channel subscription)
+               result-ch (async/chan 1)
+               push! (fn []
+                       (streaming/send-datastar-patch!
+                        channel
+                        (ui/session-messages-fragment system session_id)))]
+           (try
+             (push!)
+             (future
+               (try
+                 (async/>!! result-ch
+                            {:result (chat/run! system
+                                                {:messages [{:role "user" :content prompt}]
+                                                 :session-id session_id
+                                                 :stream? true})})
+                 (catch Throwable t
+                   (async/>!! result-ch {:error t}))))
+             (loop [done? false
+                    terminal? false]
+               (when-not (and done? terminal?)
+                 (let [[value port] (async/alts!! [result-ch ch])]
+                   (cond
+                     (= port result-ch)
+                     (if-let [error (:error value)]
+                       (throw error)
+                       (do
+                         (push!)
+                         (recur true terminal?)))
+
+                     (= port ch)
+                     (do
+                       (when-let [event (:payload value)]
+                         (when (relevant-session-event? event session_id)
+                           (push!))
+                         (recur done? (or terminal?
+                                          (terminal-session-event? event session_id)))))))))
+             (push!)
+             (catch Throwable t
+               (println "chat/run! failed:" (.getMessage t)))
+             (finally
+               (broker/unsubscribe! broker-instance subscription)
+               (http-kit/close channel))))))
      (fn [_ _] nil))))
 
 (defn chat-stop [system request]
