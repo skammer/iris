@@ -61,6 +61,9 @@
 (defn list-messages [store session-id]
   (sessions/list-messages store session-id))
 
+(defn update-message-runtime-flags! [store message-id flags]
+  (sessions/update-message-runtime-flags! store message-id flags))
+
 (defn migrate-messages-to-entries! [store]
   (sessions/migrate-messages-to-entries! store))
 

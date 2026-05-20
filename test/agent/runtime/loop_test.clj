@@ -93,6 +93,54 @@
                 (filter #(= :message-end (:event-type %)))
                 (mapv #(get-in % [:payload :role])))))))
 
+(deftest normalize-chat-history-inserts-missing-tool-result-test
+  (let [{:keys [messages repairs]}
+        (runtime-loop/normalize-chat-history
+         [{:role "assistant"
+           :content [{:type :tool-call
+                      :id "call_1"
+                      :name "fs"
+                      :arguments {:action "list"}}]}
+          {:role "user" :content "next"}])]
+    (is (= 1 (:inserted-tool-results repairs)))
+    (is (= ["assistant" "tool" "user"] (mapv :role messages)))
+    (is (= "call_1" (get-in messages [1 :content 0 :tool-call-id])))))
+
+(deftest normalize-chat-history-removes-orphan-tool-result-test
+  (let [{:keys [messages repairs]}
+        (runtime-loop/normalize-chat-history
+         [{:role "tool"
+           :content [{:type :tool-result
+                      :tool-call-id "orphan"
+                      :content "late"}]}
+          {:role "user" :content "next"}])]
+    (is (= 1 (:removed-tool-results repairs)))
+    (is (= ["user"] (mapv :role messages)))))
+
+(deftest normalize-chat-history-preserves-valid-tool-order-test
+  (let [input [{:role "assistant"
+                :content [{:type :tool-call
+                           :id "call_1"
+                           :name "fs"
+                           :arguments {:action "list"}}]}
+               {:role "tool"
+                :content [{:type :tool-result
+                           :tool-call-id "call_1"
+                           :content "ok"}]}
+               {:role "user" :content [{:type :text :text "next"}]}]
+        normalized (runtime-loop/normalize-chat-history input)]
+    (is (= {} (:repairs normalized)))
+    (is (= input (:messages normalized)))))
+
+(deftest normalize-chat-history-adds-empty-assistant-placeholder-test
+  (let [{:keys [messages repairs]}
+        (runtime-loop/normalize-chat-history
+         [{:role "assistant" :content []}
+          {:role "user" :content "next"}])]
+    (is (= 1 (:placeholder-assistant-messages repairs)))
+    (is (= runtime-loop/empty-assistant-content
+           (get-in messages [0 :content 0 :text])))))
+
 (deftest cancellation-test
   (let [cancelled? (atom true)
         {:keys [result events]} (run-loop {:cancellation-token cancelled?
@@ -116,3 +164,27 @@
                                     :planner-fn (fn [_ _] (tool-step))})]
     (is (= runtime-loop/max-steps-content (:content result)))
     (is (= :max-steps (:stop-reason result)))))
+
+(deftest max-token-truncation-stops-turn-test
+  (let [{:keys [result events]}
+        (run-loop {:planner-fn (fn [_ _]
+                                 {:schema-version kernel-schema/current-step-schema-version
+                                  :state {}
+                                  :directives [{:type :complete
+                                                :payload {:result "should not run"}}]
+                                  :receipts []
+                                  :llm-response {:content "partial"
+                                                 :tool-calls []
+                                                 :usage {:tokens 9}
+                                                 :stop-reason "length"}})})]
+    (is (= runtime-loop/max-tokens-content (:content result)))
+    (is (= :max-tokens (:stop-reason result)))
+    (is (= ["partial" runtime-loop/max-tokens-content]
+           (->> @events
+                (filter #(= :message-end (:event-type %)))
+                (mapv #(get-in % [:payload :content])))))
+    (is (true? (->> @events
+                    (filter #(= :message-end (:event-type %)))
+                    first
+                    :payload
+                    :excluded-from-context?)))))

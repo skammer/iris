@@ -28,18 +28,20 @@
 (def memory-result-limit 5)
 (def memory-max-chars 6000)
 (def history-message-max-chars 8000)
+(def queued-message-metadata-key :queued)
 
 (defn- request-id []
   (str (UUID/randomUUID)))
 
 (defonce ^:private streaming-state (atom {}))
-(defonce ^:private active-runs (atom {}))
+(defonce ^:private session-runtimes (atom {}))
+(def ^:private manager-lock (Object.))
 
 (def stopped-content runtime-loop/stopped-content)
 
 (defn active-run
   [session-id]
-  (when-let [run (and session-id (get @active-runs session-id))]
+  (when-let [run (and session-id (get-in @session-runtimes [session-id :active]))]
     (select-keys run [:request-id :started-at])))
 
 (defn active? [session-id]
@@ -47,33 +49,15 @@
 
 (defn cancel-session!
   [session-id]
-  (if-let [{:keys [cancelled? request-id]} (and session-id (get @active-runs session-id))]
-    (do
-      (reset! cancelled? true)
-      (swap! active-runs
-             (fn [runs]
-               (if (= request-id (get-in runs [session-id :request-id]))
-                 (dissoc runs session-id)
-                 runs)))
-      {:cancelled? true
-       :session-id session-id
-       :request-id request-id})
-    {:cancelled? false
-     :session-id session-id}))
-
-(defn- register-run! [session-id request-id cancelled?]
-  (when session-id
-    (swap! active-runs assoc session-id {:request-id request-id
-                                         :cancelled? cancelled?
-                                         :started-at (str (Instant/now))})))
-
-(defn- unregister-run! [session-id request-id]
-  (when session-id
-    (swap! active-runs
-           (fn [runs]
-             (if (= request-id (get-in runs [session-id :request-id]))
-               (dissoc runs session-id)
-               runs)))))
+  (locking manager-lock
+    (if-let [{:keys [cancelled? request-id]} (and session-id (get-in @session-runtimes [session-id :active]))]
+      (do
+        (reset! cancelled? true)
+        {:cancelled? true
+         :session-id session-id
+         :request-id request-id})
+      {:cancelled? false
+       :session-id session-id})))
 
 (defn- active-llm
   [system]
@@ -100,7 +84,9 @@
    (let [message (sqlite/append-message! (:store system) session-id role content extra)
          payload (cond-> {:role role :content content}
                    (:tool-calls extra) (assoc :tool-calls (:tool-calls extra))
-                   (:tool-call-id extra) (assoc :tool-call-id (:tool-call-id extra)))]
+                   (:tool-call-id extra) (assoc :tool-call-id (:tool-call-id extra))
+                   (:metadata extra) (assoc :metadata (:metadata extra))
+                   (:excluded-from-context? extra) (assoc :excluded-from-context? true))]
      (emit! system {:event-type :message.appended
                     :entity-type :session
                     :entity-id session-id
@@ -138,7 +124,9 @@
 
 (defn- session-messages [system session-id]
   (if session-id
-    (mapv db-message->internal (sqlite/list-messages (:store system) session-id))
+    (mapv db-message->internal
+          (remove :excluded-from-context?
+                  (sqlite/list-messages (:store system) session-id)))
     (llm-messages/messages->internal [])))
 
 (defn- persist-user-turn! [system session-id messages]
@@ -231,10 +219,13 @@
                              :reason (:reason receipt)}})
     approval))
 
-(defn- persist-completion! [system session-id prompt content request-id]
+(defn- persist-completion!
+  ([system session-id prompt content request-id]
+   (persist-completion! system session-id prompt content request-id nil))
+  ([system session-id prompt content request-id extra]
   (let [llm (active-llm system)
         assistant-message (when session-id
-                            (append-message! system session-id "assistant" content))]
+                            (append-message! system session-id "assistant" content extra))]
     (sqlite/log-completion! (:store system)
                             {:session-id session-id
                              :provider (:provider llm)
@@ -247,7 +238,7 @@
                    :request-id request-id
                    :payload {:provider (name (:provider llm))
                              :model (:model llm)}})
-    assistant-message))
+    assistant-message)))
 
 (defn- extract-turn-memory! [system session-id user-message assistant-message request-id]
   (when (and session-id user-message assistant-message)
@@ -310,18 +301,31 @@
     (emit! system event)))
 
 (defn- persist-final-assistant!
-  [system session-id prompt content request-id]
-  (persist-completion! system session-id prompt content request-id))
+  ([system session-id prompt content request-id]
+   (persist-final-assistant! system session-id prompt content request-id nil))
+  ([system session-id prompt content request-id extra]
+   (persist-completion! system session-id prompt content request-id extra)))
+
+(defn- message-extra [payload]
+  (select-keys payload [:tool-calls :tool-call-id :metadata :excluded-from-context?]))
 
 (defn- persistence-subscriber
   [system session-id prompt request-id persisted]
   (fn [event]
     (when (same-event-type? event :message-end)
-      (let [{:keys [role content final? tool-turn? tool-calls tool-call-id]} (event-payload event)]
+      (let [{:keys [role content final? tool-turn? audit? tool-calls tool-call-id] :as payload} (event-payload event)]
         (cond
           (and (= "assistant" role) final?)
-          (let [message (persist-final-assistant! system session-id prompt content request-id)]
+          (let [message (persist-final-assistant! system
+                                                  session-id
+                                                  prompt
+                                                  content
+                                                  request-id
+                                                  (message-extra payload))]
             (swap! persisted assoc :assistant-message message))
+
+          (and session-id (= "assistant" role) audit?)
+          (append-message! system session-id "assistant" content (message-extra payload))
 
           (and session-id (= "assistant" role) tool-turn?)
           (append-message! system session-id "assistant" content {:tool-calls tool-calls})
@@ -396,6 +400,7 @@
         (case (keyword (:stop-reason payload))
           :planner-error (emit! system (legacy-event event :chat.error payload))
           :cancelled (emit! system (legacy-event event :chat.cancelled payload))
+          :max-tokens (emit! system (legacy-event event :chat.failed payload))
           :error (emit! system (legacy-event event :chat.failed payload))
           (:completed :approval-required :max-steps)
           (emit! system (legacy-event event :chat.completed payload))
@@ -435,17 +440,22 @@
        :initial-error (.getMessage error)
        :initial-type (some-> error ex-data :type)})))
 
-(defn run!
+(defn- run-turn!
   "Run a chat turn for `session-id`. Public wrapper keeps persistence, transport
    callbacks, and legacy events around the evented runtime loop."
-  [system {:keys [messages session-id max-steps context on-delta on-tool-call stream?]}]
+  [system {:keys [messages session-id max-steps context on-delta on-tool-call stream?
+                  cancellation-token persist-user? user-message]
+           :or {persist-user? true}
+           :as opts}]
   (let [max-steps (long (or max-steps
                             (get-in system [:config :chat :max-steps])
                             default-max-steps))
-        request-id (request-id)
-        cancelled? (atom false)
+        request-id (or (:request-id opts) (request-id))
+        cancelled? (or cancellation-token (atom false))
         prompt (latest-user-prompt messages)
-        user-message (persist-user-turn! system session-id messages)
+        user-message (if persist-user?
+                       (persist-user-turn! system session-id messages)
+                       user-message)
         _ (when session-id
             (try
               (compaction/auto-compact! (:store system) session-id (:chat (:config system)))
@@ -467,7 +477,6 @@
         context-injectors (cond-> []
                             iris-context (conj (constantly [iris-context]))
                             true (conj (constantly [(memory-message recall)])))]
-    (register-run! session-id request-id cancelled?)
     (event-sink {:event-type :message-update
                  :entity-type :session
                  :entity-id session-id
@@ -519,4 +528,140 @@
                               request-id)
         (assoc result :stream? (boolean (or stream? on-delta))))
       (finally
-        (unregister-run! session-id request-id)))))
+        nil))))
+
+(defn- empty-queue []
+  clojure.lang.PersistentQueue/EMPTY)
+
+(defn- active-turn [request-id cancelled? stream?]
+  {:request-id request-id
+   :started-at (str (Instant/now))
+   :cancelled? cancelled?
+   :stream? (boolean stream?)
+   :stream-state (atom {})})
+
+(defn- enqueue-item [state item]
+  (update (or state {:queue (empty-queue)})
+          :queue
+          (fnil conj (empty-queue))
+          item))
+
+(defn- queued-user-metadata [request-id]
+  {queued-message-metadata-key true
+   :request-id request-id})
+
+(defn- persist-queued-user-turn! [system session-id messages request-id]
+  (when-let [content (and session-id (latest-user-prompt messages))]
+    (when-not (str/blank? content)
+      (append-message! system
+                       session-id
+                       "user"
+                       content
+                       {:metadata (queued-user-metadata request-id)
+                        :excluded-from-context? true}))))
+
+(defn- activate-queued-message! [system {:keys [queued-message request-id]}]
+  (when queued-message
+    (let [metadata (-> (:metadata queued-message)
+                       (dissoc queued-message-metadata-key)
+                       (assoc :request-id request-id
+                              :activated-at (str (Instant/now))))]
+      (sqlite/update-message-runtime-flags! (:store system)
+                                            (:id queued-message)
+                                            {:metadata metadata
+                                             :excluded-from-context? false})
+      (emit! system {:event-type :message.updated
+                     :entity-type :session
+                     :entity-id (:session-id queued-message)
+                     :request-id request-id
+                     :payload {:message-id (:id queued-message)
+                               :role "user"
+                               :metadata metadata
+                               :excluded-from-context? false}})
+      (assoc queued-message :metadata metadata :excluded-from-context? false))))
+
+(declare run-queued-item!)
+
+(defn- start-next-queued! [system session-id request-id]
+  (let [item (locking manager-lock
+               (let [{:keys [active queue] :as state} (get @session-runtimes session-id)]
+                 (when (= request-id (:request-id active))
+                   (if (seq queue)
+                     (let [item (peek queue)
+                           queue* (pop queue)]
+                       (swap! session-runtimes assoc session-id
+                              {:active (active-turn (:request-id item)
+                                                    (:cancelled? item)
+                                                    (get-in item [:opts :stream?]))
+                               :queue queue*})
+                       item)
+                     (do
+                       (swap! session-runtimes dissoc session-id)
+                       nil)))))]
+    (when item
+      (future (run-queued-item! system item)))))
+
+(defn- run-active-item! [system {:keys [opts request-id cancelled? queued-message result]}]
+  (try
+    (let [activated-message (activate-queued-message! system {:queued-message queued-message
+                                                              :request-id request-id})
+          result* (run-turn! system
+                             (cond-> (assoc opts
+                                            :request-id request-id
+                                            :cancellation-token cancelled?)
+                               queued-message (assoc :persist-user? false
+                                                     :user-message activated-message)))]
+      (when result
+        (deliver result {:result result*}))
+      result*)
+    (catch Throwable t
+      (when result
+        (deliver result {:error t}))
+      (throw t))
+    (finally
+      (start-next-queued! system (:session-id opts) request-id))))
+
+(defn- run-queued-item! [system item]
+  (run-active-item! system item))
+
+(defn- begin-managed-run! [system {:keys [session-id stream?] :as opts} request-id cancelled? result]
+  (locking manager-lock
+    (if (get-in @session-runtimes [session-id :active])
+      (let [queued-message (persist-queued-user-turn! system session-id (:messages opts) request-id)
+            item {:opts opts
+                  :request-id request-id
+                  :cancelled? cancelled?
+                  :queued-message queued-message
+                  :result result}]
+        (swap! session-runtimes update session-id enqueue-item item)
+        (emit! system {:event-type :chat.queued
+                       :entity-type :session
+                       :entity-id session-id
+                       :request-id request-id
+                       :payload {:message-id (:id queued-message)}})
+        :queued)
+      (do
+        (swap! session-runtimes assoc-in [session-id :active]
+               (active-turn request-id cancelled? stream?))
+        :active))))
+
+(defn run!
+  "Run or queue a chat turn for `session-id`."
+  [system {:keys [session-id] :as opts}]
+  (if-not session-id
+    (run-turn! system opts)
+    (let [request-id* (or (:request-id opts) (request-id))
+          cancelled? (atom false)
+          result (promise)
+          mode (begin-managed-run! system opts request-id* cancelled? result)]
+      (case mode
+        :active
+        (run-active-item! system {:opts opts
+                                  :request-id request-id*
+                                  :cancelled? cancelled?})
+
+        :queued
+        (let [{:keys [result error]} @result]
+          (if error
+            (throw error)
+            result)))))) 

@@ -1,6 +1,7 @@
 (ns agent.chat-test
   (:require
    [agent.chat :as chat]
+   [agent.kernel.runtime :as kernel-runtime]
    [agent.llm.core :as llm-core]
    [agent.llm.messages :as llm-messages]
    [agent.memory.core :as memory]
@@ -27,6 +28,9 @@
   (invoke [_ request]
     (swap! requests conj {:mode :invoke :request request})
     (let [response (first (first (swap-vals! responses rest)))
+          response (if (instance? clojure.lang.IDeref response)
+                     @response
+                     response)
           response* (merge {:role "assistant"
                             :content ""
                             :tool-calls []
@@ -86,6 +90,9 @@
 
 (defn- message-text [message]
   (llm-messages/content-text message))
+
+(defn- dialogue-texts [messages]
+  (mapv message-text (filter #(contains? #{"user" "assistant"} (:role %)) messages)))
 
 (defn- test-system [path provider config-fn]
   (let [base (system/create-system)
@@ -228,7 +235,7 @@
         started (promise)
         response (promise)
         provider (->BlockingProvider started response)
-        system (test-system path provider identity)
+        system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
         session (system/create-session! system "cancel")]
     (try
       (let [result-f (future
@@ -241,6 +248,195 @@
         (is (eventually #(false? (chat/active? (:id session)))))
         (is (= ["wait" chat/stopped-content]
                (mapv :content (sqlite/list-messages (:store system) (:id session))))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-queues-rapid-sequential-session-messages-test
+  (let [path (temp-db-path)
+        first-response (promise)
+        responses (atom [first-response "second answer"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
+        session (system/create-session! system "queue")]
+    (try
+      (let [first-f (future
+                      (chat/run! system {:session-id (:id session)
+                                         :messages [{:role "user" :content "first"}]}))]
+        (is (eventually #(= 1 (count @requests))))
+        (let [second-f (future
+                         (chat/run! system {:session-id (:id session)
+                                            :messages [{:role "user" :content "second"}]}))]
+          (is (eventually #(= 2 (count (sqlite/list-messages (:store system) (:id session))))))
+          (let [queued (second (sqlite/list-messages (:store system) (:id session)))]
+            (is (= "second" (:content queued)))
+            (is (true? (get-in queued [:metadata :queued])))
+            (is (true? (:excluded-from-context? queued))))
+          (deliver first-response "first answer")
+          (is (= "first answer" (:content (deref first-f 2000 nil))))
+          (is (= "second answer" (:content (deref second-f 2000 nil))))
+          (is (= ["first" "first answer" "second" "second answer"]
+                 (mapv :content (sqlite/list-messages (:store system) (:id session)))))
+          (is (not-any? :excluded-from-context?
+                        (sqlite/list-messages (:store system) (:id session))))
+          (let [second-request (get-in (second @requests) [:request :messages])]
+            (is (= ["first" "first answer" "second"] (dialogue-texts second-request))))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-queues-during-tool-execution-test
+  (let [path (temp-db-path)
+        release-tool (promise)
+        tool-started (promise)
+        responses (atom [(tool-call-response :fs {:action "list" :path "."})
+                         "first done"
+                         "second done"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
+        session (system/create-session! system "tool-queue")]
+    (try
+      (with-redefs [kernel-runtime/execute-step!
+                    (fn [_ _ step _]
+                      (deliver tool-started true)
+                      @release-tool
+                      (assoc step
+                             :receipts (mapv (fn [directive]
+                                               (case (:type directive)
+                                                 :complete {:directive :complete
+                                                            :status :completed
+                                                            :result (get-in directive [:payload :result])}
+                                                 :tool-call {:directive :tool-call
+                                                             :status :ok
+                                                             :tool-name :fs
+                                                             :tool-call-id "call_fs"
+                                                             :input {:action "list"}
+                                                             :result "listed"}))
+                                             (:directives step))))]
+        (let [first-f (future
+                        (chat/run! system {:session-id (:id session)
+                                           :messages [{:role "user" :content "first"}]}))]
+          (is (true? (deref tool-started 1000 false)))
+          (let [second-f (future
+                           (chat/run! system {:session-id (:id session)
+                                              :messages [{:role "user" :content "second"}]}))]
+            (is (eventually #(some (fn [m]
+                                      (and (= "second" (:content m))
+                                           (:excluded-from-context? m)))
+                                    (sqlite/list-messages (:store system) (:id session)))))
+            (deliver release-tool true)
+            (is (= "first done" (:content (deref first-f 2000 nil))))
+            (is (= "second done" (:content (deref second-f 2000 nil))))
+            (let [during-tool-request (get-in (second @requests) [:request :messages])
+                  queued-request (get-in (nth @requests 2) [:request :messages])]
+              (is (not-any? #(= "second" (message-text %)) during-tool-request))
+              (is (some #(= "second" (message-text %)) queued-request))))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-cancellation-drains-queued-turn-test
+  (let [path (temp-db-path)
+        first-response (promise)
+        responses (atom [first-response "after cancel answer"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
+        session (system/create-session! system "cancel-queue")]
+    (try
+      (let [first-f (future
+                      (chat/run! system {:session-id (:id session)
+                                         :messages [{:role "user" :content "wait"}]}))]
+        (is (eventually #(= 1 (count @requests))))
+        (let [second-f (future
+                         (chat/run! system {:session-id (:id session)
+                                            :messages [{:role "user" :content "after cancel"}]}))]
+          (is (eventually #(= 2 (count (sqlite/list-messages (:store system) (:id session))))))
+          (is (:cancelled? (chat/cancel-session! (:id session))))
+          (deliver first-response "late answer")
+          (is (= chat/stopped-content (:content (deref first-f 2000 nil))))
+          (is (= "after cancel answer" (:content (deref second-f 2000 nil))))
+          (is (= ["wait" chat/stopped-content "after cancel" "after cancel answer"]
+                 (mapv :content (sqlite/list-messages (:store system) (:id session)))))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-persists-truncation-and-recovers-next-turn-test
+  (let [path (temp-db-path)
+        responses (atom [{:content "partial output"
+                          :stop-reason "length"
+                          :usage {:tokens 7}}
+                         "next answer"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
+        session (system/create-session! system "truncation")]
+    (try
+      (let [first-result (chat/run! system {:session-id (:id session)
+                                            :messages [{:role "user" :content "too big"}]})
+            first-messages (sqlite/list-messages (:store system) (:id session))
+            next-result (chat/run! system {:session-id (:id session)
+                                           :messages [{:role "user" :content "smaller"}]})
+            next-request-messages (get-in (second @requests) [:request :messages])]
+        (is (= runtime-loop/max-tokens-content (:content first-result)))
+        (is (= ["too big" "partial output" runtime-loop/max-tokens-content]
+               (mapv :content first-messages)))
+        (is (true? (:excluded-from-context? (second first-messages))))
+        (is (true? (get-in (second first-messages) [:metadata :truncated])))
+        (is (= "next answer" (:content next-result)))
+        (is (not-any? #(= "partial output" (message-text %)) next-request-messages))
+        (is (some #(= runtime-loop/max-tokens-content (message-text %)) next-request-messages)))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-repairs-missing-tool-result-history-test
+  (let [path (temp-db-path)
+        responses (atom ["recovered"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
+        session (system/create-session! system "missing-tool-result")]
+    (try
+      (sqlite/append-message! (:store system) (:id session) "user" "list")
+      (sqlite/append-message! (:store system) (:id session) "assistant" ""
+                              {:tool-calls [{:id "call_missing"
+                                             :type "function"
+                                             :function {:name "fs"
+                                                        :arguments "{\"action\":\"list\"}"}}]})
+      (is (= "recovered"
+             (:content (chat/run! system {:session-id (:id session)
+                                          :messages [{:role "user" :content "continue"}]}))))
+      (let [request-messages (get-in (first @requests) [:request :messages])
+            repaired-tool (some #(when (= "tool" (:role %)) %) request-messages)
+            repair-event (some #(when (= "history-repaired" (get-in % [:payload :kind])) %)
+                               (sqlite/list-events (:store system)
+                                                   {:entity-type :session
+                                                    :entity-id (:id session)
+                                                    :limit 50}))]
+        (is (= "call_missing" (get-in repaired-tool [:content 0 :tool-call-id])))
+        (is (= 1 (get-in repair-event [:payload :repairs :inserted-tool-results]))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-drops-orphan-tool-result-history-test
+  (let [path (temp-db-path)
+        responses (atom ["recovered"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
+        session (system/create-session! system "orphan-tool-result")]
+    (try
+      (sqlite/append-message! (:store system) (:id session) "tool" "late"
+                              {:tool-call-id "orphan"})
+      (chat/run! system {:session-id (:id session)
+                         :messages [{:role "user" :content "continue"}]})
+      (let [request-messages (get-in (first @requests) [:request :messages])
+            repair-event (some #(when (= "history-repaired" (get-in % [:payload :kind])) %)
+                               (sqlite/list-events (:store system)
+                                                   {:entity-type :session
+                                                    :entity-id (:id session)
+                                                    :limit 50}))]
+        (is (not-any? #(= "tool" (:role %)) request-messages))
+        (is (= 1 (get-in repair-event [:payload :repairs :removed-tool-results]))))
       (finally
         (io/delete-file path true)))))
 
@@ -312,6 +508,11 @@
         session (system/create-session! system "large-tool-history")
         large-content (apply str (repeat 9000 "x"))]
     (try
+      (sqlite/append-message! (:store system) (:id session) "assistant" ""
+                              {:tool-calls [{:id "call_big"
+                                             :type "function"
+                                             :function {:name "fs"
+                                                        :arguments "{\"action\":\"read\"}"}}]})
       (sqlite/append-message! (:store system) (:id session) "tool" large-content
                               {:tool-call-id "call_big"})
       (chat/run! system {:session-id (:id session)

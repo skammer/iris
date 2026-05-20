@@ -12,6 +12,10 @@
 
 (def stopped-content "Stopped.")
 (def max-steps-content "Stopped: max chat tool steps reached.")
+(def max-tokens-content
+  "[SYSTEM ERROR: Assistant response was truncated because it exceeded max output tokens. Truncated output was saved for audit but will not be reused as context. Retry with smaller, incremental changes.]")
+(def synthetic-tool-result-content "not executed; retry possible")
+(def empty-assistant-content "(no response)")
 
 (defn- now-str [] (str (Instant/now)))
 
@@ -125,6 +129,90 @@
   (first (filter #(= :tool-result (:type %))
                  (runtime-schema/normalize-content (:content message)))))
 
+(defn- message-tool-result-blocks [message]
+  (filterv #(= :tool-result (:type %))
+           (runtime-schema/normalize-content (:content message))))
+
+(defn- synthetic-tool-result-message [tool-call]
+  {:role "tool"
+   :content [{:type :tool-result
+              :tool-call-id (:id tool-call)
+              :name (:name tool-call)
+              :status :error
+              :content synthetic-tool-result-content}]})
+
+(defn- empty-assistant? [message]
+  (and (= "assistant" (:role message))
+       (empty? (runtime-schema/normalize-content (:content message)))))
+
+(defn- placeholder-assistant [message]
+  (assoc message :content [{:type :text :text empty-assistant-content}]))
+
+(defn- append-missing-tool-results [acc pending]
+  (if (seq (:order pending))
+    (-> acc
+        (update :messages into (map synthetic-tool-result-message (:order pending)))
+        (update-in [:repairs :inserted-tool-results] (fnil + 0) (count (:order pending))))
+    acc))
+
+(defn- tool-result-id [block]
+  (:tool-call-id block))
+
+(defn- consume-tool-results [acc message pending]
+  (let [pending-set (:ids pending)
+        blocks (message-tool-result-blocks message)
+        grouped (group-by #(contains? pending-set (tool-result-id %)) blocks)
+        valid (vec (get grouped true))
+        removed (count (get grouped false))
+        consumed (set (map tool-result-id valid))
+        pending* {:ids (apply disj pending-set consumed)
+                  :order (vec (remove #(contains? consumed (:id %)) (:order pending)))}]
+    [(cond-> acc
+       (seq valid) (update :messages conj (assoc message :content valid))
+       (pos? removed) (update-in [:repairs :removed-tool-results] (fnil + 0) removed))
+     pending*]))
+
+(defn normalize-chat-history
+  "Repair provider tool protocol in transient LLM context. Does not persist."
+  [messages]
+  (letfn [(finish-pending [acc pending]
+            [(append-missing-tool-results acc pending) nil])]
+    (loop [remaining (mapv llm-messages/message->internal (or messages []))
+           acc {:messages [] :repairs {}}
+           pending nil]
+      (if-let [message (first remaining)]
+        (let [role (:role message)
+              rest-messages (subvec remaining 1)]
+          (case role
+            "assistant"
+            (let [[acc* _] (if pending (finish-pending acc pending) [acc nil])
+                  message* (if (empty-assistant? message)
+                             (placeholder-assistant message)
+                             message)
+                  tool-calls (llm-messages/message-tool-calls message*)
+                  acc** (cond-> (update acc* :messages conj message*)
+                          (and (not= message message*) (seq rest-messages))
+                          (update-in [:repairs :placeholder-assistant-messages] (fnil inc 0)))]
+              (recur rest-messages
+                     acc**
+                     (when (seq tool-calls)
+                       {:ids (set (keep :id tool-calls))
+                        :order (vec (filter :id tool-calls))})))
+
+            "tool"
+            (if pending
+              (let [[acc* pending*] (consume-tool-results acc message pending)]
+                (recur rest-messages acc* (when (seq (:order pending*)) pending*)))
+              (recur rest-messages
+                     (update-in acc [:repairs :removed-tool-results] (fnil + 0)
+                                (max 1 (count (message-tool-result-blocks message))))
+                     nil))
+
+            (let [[acc* _] (if pending (finish-pending acc pending) [acc nil])]
+              (recur rest-messages (update acc* :messages conj message) nil))))
+        (let [[acc* _] (if pending (finish-pending acc pending) [acc nil])]
+          acc*)))))
+
 (defn- approval-message [approvals]
   (str "Tool approval required: "
        (str/join ", "
@@ -167,6 +255,37 @@
                                          :content-blocks [{:type :text :text (or content "")}]
                                          :final? true}
                                         final-payload)))
+
+(defn- max-token-stop-reason? [reason]
+  (contains? #{"length" "max_tokens" "max-tokens" "max_tokens_reached" "max-output-tokens"}
+             (some-> reason name str/lower-case)))
+
+(defn- llm-response-content-blocks [request-id llm-response]
+  (let [text-blocks (if (str/blank? (or (:content llm-response) ""))
+                      []
+                      [{:type :text :text (:content llm-response)}])
+        tool-blocks (mapv (fn [[idx tool-call]]
+                            (normalize-tool-call-block request-id idx tool-call))
+                          (map-indexed vector (:tool-calls llm-response)))]
+    (vec (concat text-blocks tool-blocks))))
+
+(defn- emit-max-token-truncation! [sink base request-id llm-response]
+  (let [content-blocks (llm-response-content-blocks request-id llm-response)
+        content (llm-messages/content-text {:content content-blocks})
+        metadata {:truncated true
+                  :stop-reason (some-> (:stop-reason llm-response) name)
+                  :usage (:usage llm-response)}]
+    (when (seq content-blocks)
+      (event! sink :message-end base {:role "assistant"
+                                      :content content
+                                      :content-blocks content-blocks
+                                      :audit? true
+                                      :excluded-from-context? true
+                                      :metadata metadata
+                                      :stop-reason :max-tokens}))
+    (emit-terminal-message! sink base max-tokens-content {:stop-reason :max-tokens
+                                                          :error-type :truncation
+                                                          :metadata {:error-type :truncation}})))
 
 (defn- emit-tool-turn! [sink base request-id llm-response tool-calls receipts tool-output-max-chars]
   (let [protocol-messages (tool-protocol-messages request-id
@@ -247,8 +366,14 @@
             (reset! delta-emitted? false)
             (event! event-sink :message-start base {:role "assistant"
                                                     :step step-no})
-            (let [step (planner-fn provider-config
-                                   {:messages planner-messages
+            (let [{planner-messages* :messages repairs :repairs}
+                  (normalize-chat-history planner-messages)
+                  _ (when (seq repairs)
+                      (event! event-sink :message-update base
+                              {:kind :history-repaired
+                               :repairs repairs}))
+                  step (planner-fn provider-config
+                                   {:messages planner-messages*
                                     :state state
                                     :tools tools
                                     :telemetry telemetry
@@ -258,60 +383,52 @@
                                     :on-content-delta on-content-delta})
                   _ (throw-if-cancelled! cancellation-token)
                   executable-step (select-keys step [:schema-version :state :directives :receipts])
-                  executed (execute-step-fn executable-step)
-                  _ (throw-if-cancelled! cancellation-token)
-                  receipts (:receipts executed)
-                  trace-entry {:step step-no
-                               :directives (:directives step)
-                               :receipts receipts}
-                  trace* (conj trace trace-entry)
                   llm-response (:llm-response step)
                   usage* (usage+ usage (:usage llm-response))]
-              (event! event-sink :turn-end base {:step step-no
-                                                 :directives (:directives step)
-                                                 :receipts receipts})
-              (let [provider-tool-calls (seq (:tool-calls llm-response))
-                    protocol-messages (when provider-tool-calls
-                                        (emit-tool-turn! event-sink
-                                                         base
-                                                         request-id
-                                                         llm-response
-                                                         provider-tool-calls
-                                                         receipts
-                                                         tool-output-max-chars))
-                    final-messages* (into final-messages protocol-messages)]
-                (if-let [receipt (complete-receipt receipts)]
-                  (let [content (result-text (:result receipt))]
-                    (when-not @delta-emitted?
-                      (emit-delta! content))
-                    (event! event-sink :message-end base {:role "assistant"
-                                                          :content content
-                                                          :final? true
-                                                          :stop-reason :completed})
-                    (event! event-sink :agent-end base {:steps (inc step-no)
-                                                        :stop-reason :completed
-                                                        :stream stream?*})
-                    {:content content
-                     :request-id request-id
-                     :final-messages (conj final-messages* {:role "assistant"
-                                                            :content content})
-                     :trace trace*
-                     :usage usage*
-                     :stop-reason :completed
-                     :stream? stream?*})
-                  (let [approval-needed (vec (approval-receipts receipts))]
-                    (if (seq approval-needed)
-                      (let [approvals (if approval-fn
-                                        (approval-fn approval-needed)
-                                        approval-needed)
-                            content (approval-message approvals)]
-                        (event! event-sink :tool-execution-update base {:kind :approval-required
-                                                                        :approvals approvals
-                                                                        :receipts approval-needed})
-                        (emit-terminal-message! event-sink base content {:stop-reason :approval-required
-                                                                         :approvals approvals})
+              (if (max-token-stop-reason? (:stop-reason llm-response))
+                (do
+                  (emit-max-token-truncation! event-sink base request-id llm-response)
+                  (event! event-sink :agent-end base {:steps (inc step-no)
+                                                      :stop-reason :max-tokens
+                                                      :stream stream?*})
+                  {:content max-tokens-content
+                   :request-id request-id
+                   :final-messages [{:role "assistant" :content max-tokens-content}]
+                   :trace trace
+                   :usage usage*
+                   :stop-reason :max-tokens
+                   :stream? stream?*
+                   :error? true})
+                (let [executed (execute-step-fn executable-step)
+                      _ (throw-if-cancelled! cancellation-token)
+                      receipts (:receipts executed)
+                      trace-entry {:step step-no
+                                   :directives (:directives step)
+                                   :receipts receipts}
+                      trace* (conj trace trace-entry)]
+                  (event! event-sink :turn-end base {:step step-no
+                                                     :directives (:directives step)
+                                                     :receipts receipts})
+                  (let [provider-tool-calls (seq (:tool-calls llm-response))
+                        protocol-messages (when provider-tool-calls
+                                            (emit-tool-turn! event-sink
+                                                             base
+                                                             request-id
+                                                             llm-response
+                                                             provider-tool-calls
+                                                             receipts
+                                                             tool-output-max-chars))
+                        final-messages* (into final-messages protocol-messages)]
+                    (if-let [receipt (complete-receipt receipts)]
+                      (let [content (result-text (:result receipt))]
+                        (when-not @delta-emitted?
+                          (emit-delta! content))
+                        (event! event-sink :message-end base {:role "assistant"
+                                                              :content content
+                                                              :final? true
+                                                              :stop-reason :completed})
                         (event! event-sink :agent-end base {:steps (inc step-no)
-                                                            :stop-reason :approval-required
+                                                            :stop-reason :completed
                                                             :stream stream?*})
                         {:content content
                          :request-id request-id
@@ -319,15 +436,37 @@
                                                                 :content content})
                          :trace trace*
                          :usage usage*
-                         :stop-reason :approval-required
-                         :approvals approvals
+                         :stop-reason :completed
                          :stream? stream?*})
-                      (recur (inc step-no)
-                             (merge state (:state executed))
-                             (into planner-messages protocol-messages)
-                             trace*
-                             final-messages*
-                             usage*)))))))))
+                      (let [approval-needed (vec (approval-receipts receipts))]
+                        (if (seq approval-needed)
+                          (let [approvals (if approval-fn
+                                            (approval-fn approval-needed)
+                                            approval-needed)
+                                content (approval-message approvals)]
+                            (event! event-sink :tool-execution-update base {:kind :approval-required
+                                                                            :approvals approvals
+                                                                            :receipts approval-needed})
+                            (emit-terminal-message! event-sink base content {:stop-reason :approval-required
+                                                                             :approvals approvals})
+                            (event! event-sink :agent-end base {:steps (inc step-no)
+                                                                :stop-reason :approval-required
+                                                                :stream stream?*})
+                            {:content content
+                             :request-id request-id
+                             :final-messages (conj final-messages* {:role "assistant"
+                                                                    :content content})
+                             :trace trace*
+                             :usage usage*
+                             :stop-reason :approval-required
+                             :approvals approvals
+                             :stream? stream?*})
+                          (recur (inc step-no)
+                                 (merge state (:state executed))
+                                 (into planner-messages* protocol-messages)
+                                 trace*
+                                 final-messages*
+                                 usage*)))))))))))
       (catch Exception e
         (if (or (cancelled? cancellation-token)
                 (= :chat-cancelled (some-> e ex-data :type)))

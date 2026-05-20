@@ -14,14 +14,20 @@ where id = :id
 limit 1
 
 -- :name insert-message :! :n
-insert into messages (session_id, role, content, tool_calls, tool_call_id, created_at)
-values (:session_id, :role, :content, :tool_calls, :tool_call_id, :created_at)
+insert into messages (session_id, role, content, tool_calls, tool_call_id, metadata_json, excluded_from_context, created_at)
+values (:session_id, :role, :content, :tool_calls, :tool_call_id, :metadata_json, :excluded_from_context, :created_at)
 
 -- :name list-messages :? :*
-select id, role, content, tool_calls, tool_call_id, created_at
+select id, role, content, tool_calls, tool_call_id, metadata_json, excluded_from_context, created_at
 from messages
 where session_id = :session_id
-order by id asc
+order by coalesce(json_extract(metadata_json, '$.activated-at'), created_at) asc, id asc
+
+-- :name update-message-runtime-flags :! :n
+update messages
+set metadata_json = :metadata_json,
+    excluded_from_context = :excluded_from_context
+where id = :id
 
 -- :name search-messages-like :? :*
 select id, session_id, role, content, created_at
@@ -167,7 +173,9 @@ select 'message-' || id,
                    'role', role,
                    'content', content,
                    'tool-calls', json(tool_calls),
-                   'tool-call-id', tool_call_id),
+                   'tool-call-id', tool_call_id,
+                   'metadata', json(metadata_json),
+                   'excluded-from-context?', excluded_from_context = 1),
        created_at
 from messages
 

@@ -5,7 +5,7 @@
    [ragtime.protocols :as ragtime-protocols]
    [ragtime.strategy :as ragtime-strategy]))
 
-(def latest-schema-version 17)
+(def latest-schema-version 18)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -526,7 +526,14 @@
                  'message-' || max(id),
                  strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
           FROM messages
-          GROUP BY session_id;"]}])
+          GROUP BY session_id;"]}
+   {:version 18
+    :id "18"
+    :name "message-runtime-flags"
+    :checksum "f4d67d91a6c0e2b8"
+    :irreversible? true
+    :up ["ALTER TABLE messages ADD COLUMN metadata_json TEXT;"
+         "ALTER TABLE messages ADD COLUMN excluded_from_context INTEGER NOT NULL DEFAULT 0;"]}])
 
 (defn descriptor-by-version [version]
   (some #(when (= version (:version %)) %) migration-descriptors))
@@ -594,6 +601,11 @@
          (conj (first up))
          true
          (into (rest up)))
+    18 (cond-> []
+          (not (common/column-exists? conn "messages" "metadata_json"))
+          (conj (first up))
+          (not (common/column-exists? conn "messages" "excluded_from_context"))
+          (conj (second up)))
     up))
 
 (defn- ensure-ragtime-table! [conn]
