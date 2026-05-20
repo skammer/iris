@@ -524,6 +524,49 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest chat-loop-persists-prompt-compaction-entry-test
+  (let [path (temp-db-path)
+        responses (atom ["summary of old context" "fresh answer"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider #(-> %
+                                               (assoc-in [:memory :facts :extractor :enabled] false)
+                                               (assoc-in [:memory :prompt :paths] [])
+                                               (assoc-in [:memory :search :max-limit] 0)
+                                               (assoc-in [:memory :graph :enabled] false)
+                                               (assoc-in [:chat :compaction :max-context-tokens] 10000)
+                                               (assoc-in [:chat :compaction :reserve-output-tokens] 0)
+                                               (assoc-in [:chat :compaction :destructive-threshold] 0.1)
+                                               (assoc-in [:chat :compaction :warning-threshold] 0.05)))
+        session (system/create-session! system "prompt-compact")
+        old (apply str (repeat 2200 "old "))]
+    (try
+      (sqlite/append-message! (:store system) (:id session) "user" old)
+      (sqlite/append-message! (:store system) (:id session) "assistant" old)
+      (is (= "fresh answer"
+             (:content (chat/run! system {:session-id (:id session)
+                                          :messages [{:role "user" :content "latest"}]}))))
+      (let [entries (sqlite/list-entries (:store system) (:id session))
+            compaction-entry (some #(when (= :compaction (:type %)) %) entries)
+            messages (sqlite/list-messages (:store system) (:id session))
+            planner-request (some (fn [{:keys [request]}]
+                                    (when (get-in request [:metadata :planner])
+                                      request))
+                                  @requests)]
+        (is (= "summary of old context" (get-in compaction-entry [:payload :summary])))
+        (is (some #(= "context-warning" (get-in % [:payload :kind]))
+                  (sqlite/list-events (:store system)
+                                      {:entity-type :session
+                                       :entity-id (:id session)
+                                       :limit 100})))
+        (is (not-any? #(str/includes? (:content %) "context-warning") messages))
+        (is (not-any? #(str/includes? (message-text %) "old old old")
+                      (:messages planner-request)))
+        (is (some #(str/includes? (message-text %) "summary of old context")
+                  (:messages planner-request))))
+      (finally
+        (io/delete-file path true)))))
+
 (deftest tool-output-content-truncates-large-results-test
   (let [large-result (apply str (repeat 9000 "x"))
         content (runtime-loop/tool-output-content {:status :completed

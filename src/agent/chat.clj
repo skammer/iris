@@ -13,6 +13,7 @@
    [agent.planner :as planner]
    [agent.prompts :as prompts]
    [agent.runtime.compaction :as compaction]
+   [agent.runtime.context-pack :as context-pack]
    [agent.runtime.loop :as runtime-loop]
    [agent.telemetry :as telemetry]
    [agent.tools.approvals :as tool-approvals]
@@ -151,18 +152,14 @@
       (truncate-text content* history-message-max-chars)
       content*)))
 
-(defn- db-message->internal
-  [{:keys [role content tool-calls tool-call-id]}]
-  (llm-messages/message->internal
-   (cond-> {:role role :content (db-message-content role content)}
-     (seq tool-calls) (assoc :tool-calls tool-calls)
-     tool-call-id (assoc :tool-call-id tool-call-id))))
-
 (defn- session-messages [system session-id]
   (if session-id
-    (mapv db-message->internal
-          (remove :excluded-from-context?
-                  (sqlite/list-messages (:store system) session-id)))
+    (mapv (fn [{:keys [role content] :as message}]
+            (llm-messages/message->internal
+             (assoc message :content (db-message-content role content))))
+          (sqlite/current-llm-context (:store system)
+                                      session-id
+                                      {:include-entry-id? true}))
     (llm-messages/messages->internal [])))
 
 (defn- persist-user-turn! [system session-id messages]
@@ -400,26 +397,36 @@
 (defn- persistence-subscriber
   [system session-id prompt request-id persisted]
   (fn [event]
-    (when (same-event-type? event :message-end)
-      (let [{:keys [role content final? tool-turn? audit? tool-calls tool-call-id] :as payload} (event-payload event)]
-        (cond
-          (and (= "assistant" role) final?)
-          (let [message (persist-final-assistant! system
-                                                  session-id
-                                                  prompt
-                                                  content
-                                                  request-id
-                                                  (message-extra payload))]
-            (swap! persisted assoc :assistant-message message))
+    (let [payload (event-payload event)]
+      (cond
+        (and session-id
+             (same-event-type? event :message-update)
+             (contains? #{:context-compacted "context-compacted"} (:kind payload)))
+        (sqlite/append-entry! (:store system)
+                              session-id
+                              {:type :compaction
+                               :payload (:compaction payload)})
 
-          (and session-id (= "assistant" role) audit?)
-          (append-message! system session-id "assistant" content (message-extra payload))
+        (same-event-type? event :message-end)
+        (let [{:keys [role content final? tool-turn? audit? tool-calls tool-call-id]} payload]
+          (cond
+            (and (= "assistant" role) final?)
+            (let [message (persist-final-assistant! system
+                                                    session-id
+                                                    prompt
+                                                    content
+                                                    request-id
+                                                    (message-extra payload))]
+              (swap! persisted assoc :assistant-message message))
 
-          (and session-id (= "assistant" role) tool-turn?)
-          (append-message! system session-id "assistant" content {:tool-calls tool-calls})
+            (and session-id (= "assistant" role) audit?)
+            (append-message! system session-id "assistant" content (message-extra payload))
 
-          (and session-id (= "tool" role) tool-turn?)
-          (append-message! system session-id "tool" content {:tool-call-id tool-call-id}))))))
+            (and session-id (= "assistant" role) tool-turn?)
+            (append-message! system session-id "assistant" content {:tool-calls tool-calls})
+
+            (and session-id (= "tool" role) tool-turn?)
+            (append-message! system session-id "tool" content {:tool-call-id tool-call-id})))))))
 
 (defn- streaming-subscriber
   [session-id on-delta]
@@ -531,6 +538,33 @@
        :initial-error (.getMessage error)
        :initial-type (some-> error ex-data :type)})))
 
+(defn- summarize-context!
+  [system prompt]
+  (let [response (llm-core/invoke
+                  (:llm-provider system)
+                  {:model (config/active-model (get-in system [:config :llm]))
+                   :messages [{:role "system"
+                               :content "Summarize compacted conversation context for the next LLM call."}
+                              {:role "user"
+                               :content prompt}]
+                   :max-tokens (get-in system [:config :chat :compaction :summary-max-tokens] 512)
+                   :metadata {:context-pack-summary true}})]
+    (if (map? response)
+      (or (:content response)
+          (llm-messages/content-text response)
+          "")
+      (str response))))
+
+(defn- context-pack-fn
+  [system]
+  (let [cfg (get-in system [:config :chat :compaction])]
+    (fn [ctx]
+      (context-pack/pack-context
+       (assoc ctx
+              :config cfg
+              :summarizer-fn (fn [{:keys [prompt]}]
+                               (summarize-context! system prompt)))))))
+
 (defn- run-turn!
   "Run a chat turn for `session-id`. Public wrapper keeps persistence, transport
    callbacks, and legacy events around the evented runtime loop."
@@ -567,6 +601,7 @@
         flusher (stream-delta-flusher event-sink*)
         event-sink (:emit! flusher)
         ops (->ChatKernelOps system session-id request-id context)
+        pack-context (context-pack-fn system)
         context-injectors (cond-> []
                             iris-context (conj (constantly [iris-context]))
                             true (conj (constantly [(memory-message recall)])))]
@@ -595,6 +630,7 @@
                      :request-id request-id
                      :session-id session-id
                      :agent-id (or session-id "chat")
+                     :context-pack-fn pack-context
                      :max-steps max-steps
                      :stream? stream-content?
                      :cancellation-token cancelled?
@@ -653,7 +689,8 @@
                        "user"
                        content
                        {:metadata (queued-user-metadata request-id)
-                        :excluded-from-context? true}))))
+                        :excluded-from-context? true
+                        :select-leaf? false}))))
 
 (defn- activate-queued-message! [system {:keys [queued-message request-id]}]
   (when queued-message
@@ -664,7 +701,10 @@
       (sqlite/update-message-runtime-flags! (:store system)
                                             (:id queued-message)
                                             {:metadata metadata
-                                             :excluded-from-context? false})
+                                             :excluded-from-context? false
+                                             :session-id (:session-id queued-message)
+                                             :reparent-to-current-leaf? true
+                                             :select-leaf? true})
       (emit! system {:event-type :message.updated
                      :entity-type :session
                      :entity-id (:session-id queued-message)

@@ -35,6 +35,31 @@ set metadata_json = :metadata_json,
     excluded_from_context = :excluded_from_context
 where id = :id
 
+-- :name update-message-entry-runtime-flags :! :n
+update session_entries
+set payload_json = json_set(payload_json,
+                            '$.metadata', json(:metadata_json),
+                            '$."excluded-from-context?"',
+                            case when :excluded_from_context = 1
+                                 then json('true')
+                                 else json('false')
+                            end)
+where type = 'message'
+  and json_extract(payload_json, '$."message-id"') = :id
+
+-- :name update-message-entry-parent :! :n
+update session_entries
+set parent_id = :parent_id
+where type = 'message'
+  and json_extract(payload_json, '$."message-id"') = :id
+
+-- :name get-message-entry-by-message-id :? :1
+select id, session_id, parent_id, type, payload_json, created_at
+from session_entries
+where type = 'message'
+  and json_extract(payload_json, '$."message-id"') = :id
+limit 1
+
 -- :name search-messages-like :? :*
 select id, session_id, role, content, created_at
 from messages

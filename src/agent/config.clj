@@ -50,7 +50,19 @@
           :compaction {:max-context-tokens 8192
                        :reserve-output-tokens 1024
                        :keep-recent-tokens 2048
-                       :max-summary-input-tokens 8192}}
+                       :max-summary-input-tokens 8192
+                       :warning-threshold 0.8
+                       :destructive-threshold 1.0
+                       :summarizer-input-cap 8192
+                       :summary-max-tokens 512
+                       :tool-result-truncate-chars 2000
+                       :budgets {:system 1200
+                                 :memory 1200
+                                 :recent-conversation 4096
+                                 :tool-schema 1600
+                                 :pending-tool-result 800
+                                 :referenced-file 2400
+                                 :output-reserve 1024}}}
    :tools {:http {:enabled true
                   :timeout-ms 30000
                   :max-timeout-ms 30000
