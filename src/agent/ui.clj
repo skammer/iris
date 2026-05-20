@@ -496,13 +496,18 @@
        [:h2 "Sessions"]
        (if (seq sessions)
          [:div.session-list
-          (for [{:keys [id title created-at]} sessions]
+          (for [{:keys [id title created-at]} sessions
+                :let [state (chat/session-state system id)]]
             [:button.session-link
              {:type "button"
               :class (when (= id active-id) "session-link--active")
               "data-on:click" (str "@get('/ui/session-detail?session_id=" id "')")}
              [:strong (or title "Untitled session")]
-             [:div.session-meta created-at]])]
+             [:div.session-meta
+              (str created-at
+                   (when (:working? state) " | working")
+                   (when (pos? (:queued-count state))
+                     (str " | queued " (:queued-count state))))]])]
          [:div.empty "No sessions yet."])]))))
 
 (defn session-detail-fragment [system session-id]
@@ -514,12 +519,19 @@
        [:section#session-detail-panel.panel
         [:h2 "Transcript"]
         [:div.empty "Create session to start chatting."]]
+       (let [state (chat/session-state system (:id session))]
        [:agent-chat-panel#session-detail-panel.panel
         {:data-session-id (:id session)
          "data-init" (str "@get('/ui/session/live?session_id=" (:id session) "', {openWhenHidden: true})")}
         [:div.chat-titlebar
          [:h2 (or (:title session) "Untitled session")]
-         [:span.meta.code (:id session)]]
+         [:span.meta.code (:id session)]
+         [:span.meta (str (or (:active-provider state) "-")
+                          "/"
+                          (or (:active-model state) "-")
+                          (when (:working? state) " | working")
+                          (when (pos? (:queued-count state))
+                            (str " | queued " (:queued-count state))))]]
         (trusted-fragment (session-messages-fragment system (:id session)))
         [:form#chat-form
          {"data-on:submit" "@post('/ui/chat', {contentType: 'form'})"
@@ -540,9 +552,11 @@
                    "data-attr:disabled" "$chatLoading"}
           "Send"]
          [:div#chat-status.meta.chat-status
-          {:style "display:none"
+          {:style (when-not (:working? state) "display:none")
            "data-show" "$chatLoading"}
-          "thinking..."]]]))))
+          (if (pos? (:queued-count state))
+            (str "working, queued " (:queued-count state))
+            "thinking...")]]])))))
 
 (defn- streaming-message [content]
   [:article.message.message--streaming

@@ -28,6 +28,7 @@
 (def memory-result-limit 5)
 (def memory-max-chars 6000)
 (def history-message-max-chars 8000)
+(def stream-flush-interval-ms 50)
 (def queued-message-metadata-key :queued)
 
 (defn- request-id []
@@ -36,6 +37,8 @@
 (defonce ^:private streaming-state (atom {}))
 (defonce ^:private session-runtimes (atom {}))
 (def ^:private manager-lock (Object.))
+
+(declare emit-session-state!)
 
 (def stopped-content runtime-loop/stopped-content)
 
@@ -47,21 +50,37 @@
 (defn active? [session-id]
   (boolean (active-run session-id)))
 
-(defn cancel-session!
-  [session-id]
-  (locking manager-lock
-    (if-let [{:keys [cancelled? request-id]} (and session-id (get-in @session-runtimes [session-id :active]))]
-      (do
-        (reset! cancelled? true)
-        {:cancelled? true
-         :session-id session-id
-         :request-id request-id})
-      {:cancelled? false
-       :session-id session-id})))
-
 (defn- active-llm
   [system]
   (config/active-provider-config (get-in system [:config :llm])))
+
+(defn session-state
+  [system session-id]
+  (let [{:keys [active queue]} (get @session-runtimes session-id)
+        llm (when system (active-llm system))]
+    (cond-> {:working? (boolean active)
+             :queued-count (count queue)
+             :active-provider (some-> (:provider llm) name)
+             :active-model (:model llm)}
+      active (assoc :active-request-id (:request-id active)
+                    :active-started-at (:started-at active)))))
+
+(defn cancel-session!
+  ([session-id]
+   (locking manager-lock
+     (if-let [{:keys [cancelled? request-id]} (and session-id (get-in @session-runtimes [session-id :active]))]
+       (do
+         (reset! cancelled? true)
+         {:cancelled? true
+          :session-id session-id
+          :request-id request-id})
+       {:cancelled? false
+        :session-id session-id})))
+  ([system session-id]
+   (let [result (cancel-session! session-id)]
+     (when (:cancelled? result)
+       (emit-session-state! system session-id :cancel))
+     result)))
 
 (defn streaming-content
   "Returns in-progress assistant text accumulated for `session-id`, or nil."
@@ -76,6 +95,23 @@
   (if-let [sink (:event-sink system)]
     (sink event)
     (sqlite/log-event! (:store system) event)))
+
+(defn- state-event-payload [state reason]
+  {:working (boolean (:working? state))
+   :queued-count (:queued-count state 0)
+   :active-provider (:active-provider state)
+   :active-model (:active-model state)
+   :active-request-id (:active-request-id state)
+   :active-started-at (:active-started-at state)
+   :reason (name reason)})
+
+(defn- emit-session-state! [system session-id reason]
+  (when (and system session-id)
+    (emit! system {:event-type :chat.state.changed
+                   :entity-type :session
+                   :entity-id session-id
+                   :payload (state-event-payload (session-state system session-id)
+                                                 reason)})))
 
 (defn- append-message!
   ([system session-id role content]
@@ -300,6 +336,58 @@
         (catch Exception _ nil)))
     (emit! system event)))
 
+(defn- text-delta-event? [event]
+  (let [payload (event-payload event)]
+    (and (same-event-type? event :message-update)
+         (string? (:delta payload))
+         (not= "" (:delta payload)))))
+
+(defn- buffered-delta-event [event text]
+  (-> event
+      (assoc :payload (assoc (event-payload event) :delta text))
+      (assoc :timestamp (str (Instant/now)))))
+
+(defn- stream-delta-flusher
+  [emit-event!]
+  (let [lock (Object.)
+        state (atom {:text ""
+                     :event nil
+                     :scheduled? false
+                     :timer-id 0})
+        flush! (fn [expected-timer-id]
+                 (let [event* (locking lock
+                                (let [{:keys [text event timer-id]} @state]
+                                  (when (or (nil? expected-timer-id)
+                                            (= expected-timer-id timer-id))
+                                    (swap! state assoc
+                                           :text ""
+                                           :event nil
+                                           :scheduled? false)
+                                    (when (and event (not= "" text))
+                                      (buffered-delta-event event text)))))]
+                   (when event*
+                     (emit-event! event*))))]
+    {:flush! #(flush! nil)
+     :emit! (fn [event]
+              (if (text-delta-event? event)
+                (let [[schedule? timer-id] (locking lock
+                                             (let [schedule? (not (:scheduled? @state))]
+                                               (swap! state
+                                                      (fn [s]
+                                                        (cond-> (-> s
+                                                                    (update :text str (get-in event [:payload :delta]))
+                                                                    (assoc :event event
+                                                                           :scheduled? true))
+                                                          schedule? (update :timer-id inc))))
+                                               [schedule? (:timer-id @state)]))]
+                  (when schedule?
+                    (future
+                      (Thread/sleep stream-flush-interval-ms)
+                      (flush! timer-id))))
+                (do
+                  (flush! nil)
+                  (emit-event! event))))}))
+
 (defn- persist-final-assistant!
   ([system session-id prompt content request-id]
    (persist-final-assistant! system session-id prompt content request-id nil))
@@ -472,7 +560,9 @@
                      (streaming-subscriber session-id on-delta)
                      (tool-call-subscriber on-tool-call)
                      (legacy-subscriber system)]
-        event-sink (loop-event-sink system subscribers)
+        event-sink* (loop-event-sink system subscribers)
+        flusher (stream-delta-flusher event-sink*)
+        event-sink (:emit! flusher)
         ops (->ChatKernelOps system session-id request-id context)
         context-injectors (cond-> []
                             iris-context (conj (constantly [iris-context]))
@@ -528,7 +618,7 @@
                               request-id)
         (assoc result :stream? (boolean (or stream? on-delta))))
       (finally
-        nil))))
+        ((:flush! flusher))))))
 
 (defn- empty-queue []
   clojure.lang.PersistentQueue/EMPTY)
@@ -582,44 +672,59 @@
 
 (declare run-queued-item!)
 
-(defn- start-next-queued! [system session-id request-id]
-  (let [item (locking manager-lock
-               (let [{:keys [active queue] :as state} (get @session-runtimes session-id)]
-                 (when (= request-id (:request-id active))
-                   (if (seq queue)
-                     (let [item (peek queue)
-                           queue* (pop queue)]
-                       (swap! session-runtimes assoc session-id
-                              {:active (active-turn (:request-id item)
-                                                    (:cancelled? item)
-                                                    (get-in item [:opts :stream?]))
-                               :queue queue*})
-                       item)
-                     (do
-                       (swap! session-runtimes dissoc session-id)
-                       nil)))))]
-    (when item
-      (future (run-queued-item! system item)))))
+(defn- start-next-queued! [system session-id request-id terminal-reason]
+  (let [{:keys [item cleared?]} (locking manager-lock
+                                  (let [{:keys [active queue]} (get @session-runtimes session-id)]
+                                    (when (= request-id (:request-id active))
+                                      (if (seq queue)
+                                        (let [item (peek queue)
+                                              queue* (pop queue)]
+                                          (swap! session-runtimes assoc session-id
+                                                 {:active (active-turn (:request-id item)
+                                                                       (:cancelled? item)
+                                                                       (get-in item [:opts :stream?]))
+                                                  :queue queue*})
+                                          {:item item})
+                                        (do
+                                          (swap! session-runtimes dissoc session-id)
+                                          {:cleared? true})))))]
+    (cond
+      item
+      (do
+        (emit-session-state! system session-id :drain)
+        (future (run-queued-item! system item)))
+
+      cleared?
+      (emit-session-state! system session-id terminal-reason))))
+
+(defn- terminal-state-reason [result]
+  (cond
+    (:cancelled? result) :cancel
+    (:error? result) :error
+    :else :complete))
 
 (defn- run-active-item! [system {:keys [opts request-id cancelled? queued-message result]}]
-  (try
-    (let [activated-message (activate-queued-message! system {:queued-message queued-message
-                                                              :request-id request-id})
-          result* (run-turn! system
-                             (cond-> (assoc opts
-                                            :request-id request-id
-                                            :cancellation-token cancelled?)
-                               queued-message (assoc :persist-user? false
-                                                     :user-message activated-message)))]
-      (when result
-        (deliver result {:result result*}))
-      result*)
-    (catch Throwable t
-      (when result
-        (deliver result {:error t}))
-      (throw t))
-    (finally
-      (start-next-queued! system (:session-id opts) request-id))))
+  (let [terminal-reason (atom :complete)]
+    (try
+      (let [activated-message (activate-queued-message! system {:queued-message queued-message
+                                                                :request-id request-id})
+            result* (run-turn! system
+                               (cond-> (assoc opts
+                                              :request-id request-id
+                                              :cancellation-token cancelled?)
+                                 queued-message (assoc :persist-user? false
+                                                       :user-message activated-message)))]
+        (reset! terminal-reason (terminal-state-reason result*))
+        (when result
+          (deliver result {:result result*}))
+        result*)
+      (catch Throwable t
+        (reset! terminal-reason :error)
+        (when result
+          (deliver result {:error t}))
+        (throw t))
+      (finally
+        (start-next-queued! system (:session-id opts) request-id @terminal-reason)))))
 
 (defn- run-queued-item! [system item]
   (run-active-item! system item))
@@ -638,11 +743,15 @@
                        :entity-type :session
                        :entity-id session-id
                        :request-id request-id
-                       :payload {:message-id (:id queued-message)}})
+                       :payload {:message-id (:id queued-message)
+                                 :queued-count (get-in (session-state system session-id)
+                                                       [:queued-count])}})
+        (emit-session-state! system session-id :queued)
         :queued)
       (do
         (swap! session-runtimes assoc-in [session-id :active]
                (active-turn request-id cancelled? stream?))
+        (emit-session-state! system session-id :start)
         :active))))
 
 (defn run!

@@ -7,6 +7,12 @@ select id, title, created_at
 from sessions
 order by created_at desc
 
+-- :name get-session :? :1
+select id, title, created_at
+from sessions
+where id = :id
+limit 1
+
 -- :name session-exists :? :1
 select 1 as present
 from sessions

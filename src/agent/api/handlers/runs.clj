@@ -259,7 +259,11 @@
                                         (broker/run-events-subject run-id)
                                         {:after-id after_id
                                          :limit replay-limit})
-        subscription (broker/subscribe! broker-instance (broker/all-runs-subject))
+        subscription (broker/subscribe! broker-instance
+                                        (broker/all-runs-subject)
+                                        {:buffer-size 256
+                                         :buffer-strategy :sliding
+                                         :slow-client :drop-new})
         ch (:channel subscription)
         open? (atom true)]
     (streaming/sse-response

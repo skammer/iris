@@ -665,7 +665,7 @@
             invoked-with-callback? (some? (get-in (first @requests) [:request :on-content-delta]))]
         (is (= "Hello world" (:content result)))
         (is invoked-with-callback?)
-        (is (= ["Hello" " " "world"] @deltas)))
+        (is (= ["Hello world"] @deltas)))
       (finally
         (io/delete-file path true)))))
 
