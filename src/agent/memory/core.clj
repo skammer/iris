@@ -5,6 +5,7 @@
    [agent.persistence.sqlite :as sqlite]
    [agent.prompts :as prompts]
    [cheshire.core :as json]
+   [clojure.edn :as edn]
    [clojure.java.io :as io]
    [clojure.set]
    [clojure.string :as str]))
@@ -14,6 +15,9 @@
   (merge-entities! [this canonical aliases])
   (query-facts [this query opts])
   (backend-health-check [this]))
+
+(defprotocol IDatalogExplorer
+  (datalog-query* [this query opts]))
 
 (declare save-graph-fact! merge-graph-entities! query-graph-memory)
 
@@ -26,7 +30,40 @@
   (query-facts [_ _ _] [])
   (backend-health-check [_]
     {:healthy true
-     :details {:enabled false}}))
+     :details {:enabled false}})
+  IDatalogExplorer
+  (datalog-query* [_ _ _]
+    (throw (ex-info "Graph memory backend is disabled" {:type :graph-memory-disabled}))))
+
+(defn- parse-edn-value [value field fallback]
+  (cond
+    (nil? value) fallback
+    (and (string? value) (str/blank? value)) fallback
+    (string? value)
+    (try
+      (edn/read-string value)
+      (catch Exception e
+        (throw (ex-info (str field " must be EDN")
+                        {:type :invalid-edn
+                         :field field
+                         :message (.getMessage e)}))))
+    :else value))
+
+(defn- parse-datalog-query [query]
+  (let [query* (parse-edn-value query "query" nil)]
+    (when-not (or (vector? query*) (seq? query*))
+      (throw (ex-info "query must be a Datalog EDN vector or list"
+                      {:type :invalid-datalog-query
+                       :query query*})))
+    query*))
+
+(defn- parse-datalog-args [args]
+  (let [args* (parse-edn-value args "args" [])]
+    (when-not (sequential? args*)
+      (throw (ex-info "args must be an EDN vector or list"
+                      {:type :invalid-datalog-args
+                       :args args*})))
+    (vec args*)))
 
 (defn- existing-file [path]
   (let [file (io/file path)]
@@ -412,6 +449,13 @@
   ([memory-service query] (query-graph-memory memory-service query {}))
   ([memory-service query opts]
    (query-facts (:graph-backend memory-service) query opts)))
+
+(defn query-datalog-memory
+  ([memory-service query] (query-datalog-memory memory-service query {}))
+  ([memory-service query opts]
+   (datalog-query* (:graph-backend memory-service)
+                   (parse-datalog-query query)
+                   (update opts :args parse-datalog-args))))
 
 (defn- expected-match? [expected ranked]
   (let [item (:item ranked)]
