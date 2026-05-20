@@ -95,8 +95,11 @@
 (defn session-tree [store session-id]
   (sessions/session-tree store session-id))
 
-(defn current-llm-context [store session-id]
-  (sessions/current-llm-context store session-id))
+(defn current-llm-context
+  ([store session-id]
+   (sessions/current-llm-context store session-id))
+  ([store session-id opts]
+   (sessions/current-llm-context store session-id opts)))
 
 (defn search-messages
   ([store query] (sessions/search-messages store query))

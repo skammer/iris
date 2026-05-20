@@ -113,7 +113,8 @@
 (defn append-message!
   ([store session-id role content]
    (append-message! store session-id role content nil))
-  ([store session-id role content {:keys [tool-calls tool-call-id metadata excluded-from-context?]}]
+  ([store session-id role content {:keys [tool-calls tool-call-id metadata excluded-from-context? select-leaf?]
+                                   :or {select-leaf? true}}]
    (let [tool-calls-json (when (seq tool-calls) (common/json-string tool-calls))
          metadata-json (common/json-string metadata)
          message {:session_id session-id
@@ -140,7 +141,8 @@
                                                                 metadata (assoc :metadata metadata)
                                                                 excluded-from-context? (assoc :excluded-from-context? true))
                                                      :created-at (:created_at message)})]
-                  (upsert-leaf! conn session-id (:id entry) (:created-at entry))
+                  (when select-leaf?
+                    (upsert-leaf! conn session-id (:id entry) (:created-at entry)))
                   message-id)))]
      (cond-> {:id id
               :session-id session-id
@@ -171,15 +173,27 @@
             (common/select-many conn (list-messages-sqlvec {:session_id session-id}) identity)))))
 
 (defn update-message-runtime-flags!
-  [store message-id {:keys [metadata excluded-from-context?]}]
-  (common/with-connection
+  [store message-id {:keys [metadata excluded-from-context? session-id reparent-to-current-leaf? select-leaf?]}]
+  (common/with-transaction
     store
     (fn [conn]
-      (common/execute! conn
-                       (update-message-runtime-flags-sqlvec
-                        {:id message-id
-                         :metadata_json (common/json-string metadata)
-                         :excluded_from_context (if excluded-from-context? 1 0)})))))
+      (let [params {:id message-id
+                    :metadata_json (common/json-string metadata)
+                    :excluded_from_context (if excluded-from-context? 1 0)}]
+        (common/execute! conn (update-message-runtime-flags-sqlvec params))
+        (common/execute! conn (update-message-entry-runtime-flags-sqlvec params))
+        (when (and reparent-to-current-leaf? session-id)
+          (common/execute! conn
+                           (update-message-entry-parent-sqlvec
+                            {:id message-id
+                             :parent_id (current-leaf-id conn session-id)})))
+        (when select-leaf?
+          (when-let [entry (some-> (common/select-one conn
+                                                      (get-message-entry-by-message-id-sqlvec
+                                                       {:id message-id})
+                                                      identity)
+                                   row->entry)]
+            (upsert-leaf! conn (:session-id entry) (:id entry) (common/now-str))))))))
 
 (defn- row->search-message
   [{:keys [id session_id role content created_at]}]
@@ -496,14 +510,44 @@
                        label)))]
       (mapv node (get children nil)))))
 
-(defn current-llm-context [store session-id]
-  (->> (branch-path store session-id)
-       (keep (fn [{:keys [type payload]}]
-               (case type
-                 :message (when-not (:excluded-from-context? payload)
-                            {:role (:role payload)
-                             :content (:content payload)})
-                 :custom_message {:role "user"
-                                  :content (:content payload)}
-                 nil)))
-       vec))
+(defn- latest-compaction [entries]
+  (last (filter #(= :compaction (:type %)) entries)))
+
+(defn- entries-after-compaction-cut [entries compaction-entry]
+  (if-let [first-kept-id (get-in compaction-entry [:payload :first-kept-entry-id])]
+    (let [kept (vec (drop-while #(not= first-kept-id (:id %)) entries))]
+      (if (seq kept) kept entries))
+    entries))
+
+(defn- compaction-summary-message [compaction-entry]
+  (when-let [summary (get-in compaction-entry [:payload :summary])]
+    {:role "system"
+     :content (str "Context summary for compacted earlier conversation:\n"
+                   summary)}))
+
+(defn- entry->llm-message [{:keys [id type payload]} include-entry-id?]
+  (let [with-id (fn [message]
+                  (cond-> message
+                    include-entry-id? (assoc :id id)))]
+    (case type
+      :message (when-not (:excluded-from-context? payload)
+                 (with-id (cond-> {:role (:role payload)
+                                   :content (:content payload)}
+                            (:tool-calls payload) (assoc :tool-calls (:tool-calls payload))
+                            (:tool-call-id payload) (assoc :tool-call-id (:tool-call-id payload))
+                            (:metadata payload) (assoc :metadata (:metadata payload)))))
+      :custom_message (with-id {:role "user"
+                                :content (:content payload)})
+      nil)))
+
+(defn current-llm-context
+  ([store session-id] (current-llm-context store session-id nil))
+  ([store session-id {:keys [include-entry-id?]}]
+   (let [entries (branch-path store session-id)
+         compaction-entry (latest-compaction entries)
+         entries* (entries-after-compaction-cut entries compaction-entry)
+         summary-message (compaction-summary-message compaction-entry)]
+     (let [messages (vec (keep #(entry->llm-message % include-entry-id?) entries*))]
+       (if summary-message
+         (vec (cons summary-message messages))
+         messages)))))

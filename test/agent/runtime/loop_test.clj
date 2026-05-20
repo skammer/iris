@@ -93,6 +93,33 @@
                 (filter #(= :message-end (:event-type %)))
                 (mapv #(get-in % [:payload :role])))))))
 
+(deftest context-pack-runs-before-planner-test
+  (let [requests (atom [])
+        pack-input (atom nil)
+        {:keys [events]}
+        (run-loop {:context-injectors [(constantly [{:role "system" :content "memory"}])]
+                   :context-pack-fn (fn [{:keys [messages] :as ctx}]
+                                      (reset! pack-input ctx)
+                                      {:messages [(last messages)]
+                                       :tokens-before 100
+                                       :tokens-after 10
+                                       :budgets {:system {:used 1 :limit 10}}
+                                       :warnings [{:level :destructive
+                                                   :tokens 100
+                                                   :threshold 90}]
+                                       :compaction {:summary "summary"
+                                                    :first-kept-entry-id (:id (last messages))
+                                                    :tokens-before 100
+                                                    :tokens-after 10}})
+                   :planner-fn (fn [_ request]
+                                 (swap! requests conj request)
+                                 (complete-step "done"))})]
+    (is (= ["system" "user"] (mapv :role (:messages @pack-input))))
+    (is (= ["user"] (mapv :role (:messages (first @requests)))))
+    (is (some #(= :context-budget (get-in % [:payload :kind])) @events))
+    (is (some #(= :context-warning (get-in % [:payload :kind])) @events))
+    (is (some #(= :context-compacted (get-in % [:payload :kind])) @events))))
+
 (deftest normalize-chat-history-inserts-missing-tool-result-test
   (let [{:keys [messages repairs]}
         (runtime-loop/normalize-chat-history

@@ -75,6 +75,30 @@
                 {:role "user" :content "injected"}]
                (sqlite/current-llm-context store (:id session))))))))
 
+(deftest current-llm-context-applies-latest-compaction-test
+  (with-store
+    (fn [store]
+      (let [session (sqlite/create-session! store "ctx")
+            old (sqlite/append-entry! store (:id session) :message {:role "user" :content "old"})
+            kept (sqlite/append-entry! store (:id session) :message {:role "user" :content "kept"})
+            _ (sqlite/append-entry! store (:id session) :compaction {:summary "old summary"
+                                                                     :first-kept-entry-id (:id kept)
+                                                                     :tokens-before 100})
+            after (sqlite/append-entry! store (:id session) :message {:role "assistant" :content "after"})]
+        (is (= [{:role "system"
+                 :content "Context summary for compacted earlier conversation:\nold summary"}
+                {:role "user" :content "kept"}
+                {:role "assistant" :content "after"}]
+               (sqlite/current-llm-context store (:id session))))
+        (is (= [(:id kept) (:id after)]
+               (mapv :id (filter :id (sqlite/current-llm-context store
+                                                                  (:id session)
+                                                                  {:include-entry-id? true})))))
+        (is (not-any? #(= (:id old) (:id %))
+                      (sqlite/current-llm-context store
+                                                  (:id session)
+                                                  {:include-entry-id? true})))))))
+
 (deftest linear-messages-migrate-to-entry-chain-test
   (with-store
     (fn [store]

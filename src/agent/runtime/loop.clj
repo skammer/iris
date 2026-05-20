@@ -316,10 +316,11 @@
 
 (defn run!
   [{:keys [messages context-injectors system-prompt tools model provider-config
-           telemetry observer trace planner-fn execute-step-fn approval-fn fallback-fn event-sink
+           telemetry observer trace planner-fn context-pack-fn execute-step-fn approval-fn fallback-fn event-sink
            cancellation-token request-id session-id agent-id max-steps stream?
            tool-output-max-chars]
     :or {planner-fn planner/plan-step!
+         context-pack-fn identity
          max-steps 6
          tool-output-max-chars 8000}}]
   (let [base {:entity-type :session
@@ -372,8 +373,40 @@
                       (event! event-sink :message-update base
                               {:kind :history-repaired
                                :repairs repairs}))
+                  context-pack-raw (context-pack-fn {:messages planner-messages*
+                                                     :system-prompt system-prompt
+                                                     :tools tools
+                                                     :model model
+                                                     :provider-config provider-config
+                                                     :request-id request-id
+                                                     :session-id session-id
+                                                     :step step-no})
+                  context-pack (cond
+                                 (vector? context-pack-raw) {:messages context-pack-raw}
+                                 (map? context-pack-raw) context-pack-raw
+                                 :else {:messages planner-messages*})
+                  planner-visible-messages (or (:messages context-pack)
+                                               planner-messages*)
+                  _ (when (contains? context-pack :tokens-before)
+                      (event! event-sink :message-update base
+                              {:kind :context-budget
+                               :step step-no
+                               :tokens-before (:tokens-before context-pack)
+                               :tokens-after (:tokens-after context-pack)
+                               :budgets (:budgets context-pack)
+                               :decisions (:decisions context-pack)}))
+                  _ (doseq [warning (:warnings context-pack)]
+                      (event! event-sink :message-update base
+                              {:kind :context-warning
+                               :step step-no
+                               :warning warning}))
+                  _ (when-let [compaction (:compaction context-pack)]
+                      (event! event-sink :message-update base
+                              {:kind :context-compacted
+                               :step step-no
+                               :compaction compaction}))
                   step (planner-fn provider-config
-                                   {:messages planner-messages*
+                                   {:messages planner-visible-messages
                                     :state state
                                     :tools tools
                                     :telemetry telemetry
@@ -383,6 +416,7 @@
                                     :request-id request-id
                                     :model model
                                     :system-prompt system-prompt
+                                    :context-pack context-pack
                                     :on-content-delta on-content-delta})
                   _ (throw-if-cancelled! cancellation-token)
                   executable-step (select-keys step [:schema-version :state :directives :receipts])
