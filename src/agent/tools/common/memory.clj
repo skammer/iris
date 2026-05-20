@@ -125,7 +125,8 @@
              query
              (memory/search-memory memory-service
                                    query
-                                   (cond-> {:limit (or limit 20)}
+                                   (cond-> {}
+                                     limit (assoc :limit limit)
                                      scope (assoc :scope scope)
                                      (:session-id context) (assoc :session-id (:session-id context))
                                      (:agent-id context) (assoc :agent-id (:agent-id context)))))))

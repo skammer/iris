@@ -1,5 +1,6 @@
 (ns agent.telegram-test
   (:require
+   [agent.channels.core :as channels]
    [agent.persistence.sqlite :as sqlite]
    [agent.telegram :as telegram]
    [clojure.java.io :as io]
@@ -17,6 +18,17 @@
                     :type "private"
                     :first_name "Test"}
              :text text}})
+
+(deftest telegram-advertises-only-implemented-adapter-capabilities
+  (let [service (telegram/create-service {:config {:channel-adapters {:telegram {:bot-token "token"}}}})
+        caps (:capabilities (channels/describe-adapter service))]
+    (is (= #{:supports-outbound
+             :supports-streaming
+             :supports-typing
+             :supports-draft-updates
+             :supports-draft-lifecycle}
+           caps))
+    (is (empty? (channels/capability-validation-errors service)))))
 
 (deftest telegram-reuses-session-per-chat
   (let [path (temp-db-path)

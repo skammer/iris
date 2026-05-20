@@ -1,6 +1,7 @@
 (ns agent.ui-test
   (:require
    [agent.persistence.sqlite :as sqlite]
+   [agent.runtime.trace :as trace]
    [agent.ui :as ui]
    [clojure.java.io :as io]
    [clojure.string :as str]
@@ -58,6 +59,31 @@
     (is (not (str/includes? html "<script")))
     (is (not (str/includes? html "<img")))
     (is (not (str/includes? html "onerror=\"alert(1)\"")))))
+
+(deftest logs-fragment-shows-events-and-trace-state
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        dir (.toFile (java.nio.file.Files/createTempDirectory
+                      "iris-ui-trace-"
+                      (make-array java.nio.file.attribute.FileAttribute 0)))
+        runtime-trace (trace/create-trace {:mode :rolling :path "trace.jsonl"} (.getPath dir))]
+    (try
+      (sqlite/log-event! store {:event-type :test.event
+                                :entity-type :test
+                                :entity-id "1"
+                                :payload {:ok true}})
+      (trace/record-event! runtime-trace {:event-type :llm.call
+                                          :success true
+                                          :payload {:model "m"}})
+      (let [html (ui/logs-fragment {:store store :trace runtime-trace})]
+        (is (str/includes? html "Event Log"))
+        (is (str/includes? html "Runtime Trace"))
+        (is (str/includes? html "test.event"))
+        (is (str/includes? html "llm.call")))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)
+        (io/delete-file dir true)))))
 
 (deftest tool-message-summary-shows-arguments
   (let [path (temp-db-path)

@@ -116,11 +116,13 @@
 
 (defn create-orchestrator
   ([] (create-orchestrator {}))
-  ([{:keys [event-sink federation-deliver telemetry]}]
+  ([{:keys [event-sink federation-deliver telemetry observer trace]}]
    {:state (atom (initial-state))
     :federation-deliver federation-deliver
     :event-sink event-sink
-    :telemetry telemetry}))
+    :telemetry telemetry
+    :observer observer
+    :trace trace}))
 
 (defn- make-logical-address [agent-id]
   (str "agent://" agent-id))
@@ -427,7 +429,9 @@
                                                        llm-provider
                                                        llm-messages
                                                        {}
-                                                       {:agent-id agent-id})
+                                                       {:agent-id agent-id
+                                                        :observer (:observer orchestrator)
+                                                        :trace (:trace orchestrator)})
         assistant-message {:role "assistant"
                            :content completion
                            :created-at (now)}]
@@ -909,7 +913,9 @@
                                                            llm-provider
                                                            llm-messages
                                                            {}
-                                                           {:agent-id agent-id})
+                                                           {:agent-id agent-id
+                                                            :observer (:observer orchestrator)
+                                                            :trace (:trace orchestrator)})
             assistant-message {:role "assistant"
                                :content completion
                                :created-at (now)}]

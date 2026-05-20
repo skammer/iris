@@ -93,7 +93,8 @@
                          :per-tool {}}}}
  :skills {:dirs ["skills"]}
  :memory {:prompt {:paths ["MEMORY.md"]}
-          :search {:default-limit 20}
+          :search {:default-limit 10
+                   :max-limit 10}
           :vault {:paths ["memory"]
                   :writable? true}
           :facts {:extractor {:enabled true
@@ -160,6 +161,12 @@
                                            :circuit-open-ms 30000}}}
  :telemetry {:enabled true
              :max-latency-samples 1000}
+ :observer {:enabled true
+            :best-effort? true
+            :sinks [:telemetry :logging]}
+ :trace {:mode :none
+         :path "runtime-trace.jsonl"
+         :rolling-max-entries 1000}
  :api {:host "127.0.0.1"
        :key nil
        :port 8080}}

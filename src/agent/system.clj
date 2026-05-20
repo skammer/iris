@@ -26,6 +26,7 @@
    [agent.runners.options :as runner-options]
    [agent.runners.seatbelt :as seatbelt]
    [agent.runtime.core :as runtime]
+   [agent.runtime.trace :as runtime-trace]
    [agent.skills :as skills]
    [agent.telegram :as telegram]
    [agent.telemetry :as telemetry]
@@ -161,25 +162,63 @@
   [cfg]
   (telemetry/create-collector cfg))
 
+(defn create-observer
+  [telemetry-collector cfg]
+  (telemetry/create-observer telemetry-collector cfg))
+
+(defn create-trace
+  [cfg]
+  (runtime-trace/create-trace (:trace cfg) (get-in cfg [:iris :data-dir])))
+
+(defn- observe-system-event!
+  [telemetry-collector observer recorded]
+  (if observer
+    (telemetry/record-event! observer {:event-type :system/event
+                                       :payload recorded})
+    (do
+      (logging/log-system-event! recorded)
+      (telemetry/record-system-event! telemetry-collector recorded))))
+
+(defn- trace-system-event!
+  [trace recorded]
+  (let [entity-type (if (keyword? (:entity-type recorded))
+                      (name (:entity-type recorded))
+                      (str (:entity-type recorded)))]
+  (runtime-trace/record-event!
+   trace
+   {:event-type (:event-type recorded)
+    :turn-id (:request-id recorded)
+    :channel (when (= "channel" entity-type)
+               (:entity-id recorded))
+    :success (not (or (contains? #{"chat.failed" "telegram.error"} (:event-type recorded))
+                      (= "failed" (get-in recorded [:payload :status]))))
+    :error-message (or (get-in recorded [:payload :message])
+                       (get-in recorded [:payload :error]))
+    :payload (select-keys recorded [:event-type :entity-type :entity-id :request-id :payload])})))
+
 (defn create-event-sink
   ([store broker-instance]
    (create-event-sink store broker-instance nil))
   ([store broker-instance telemetry-collector]
-  (fn [event]
-    (let [recorded (sqlite/log-event! store event)]
-      (logging/log-system-event! recorded)
-      (telemetry/record-system-event! telemetry-collector recorded)
-      (doseq [message (broker/event->messages recorded)]
-        (broker/publish! broker-instance message))
-      recorded))))
+   (create-event-sink store broker-instance telemetry-collector nil nil))
+  ([store broker-instance telemetry-collector observer trace]
+   (fn [event]
+     (let [recorded (sqlite/log-event! store event)]
+       (observe-system-event! telemetry-collector observer recorded)
+       (trace-system-event! trace recorded)
+       (doseq [message (broker/event->messages recorded)]
+         (broker/publish! broker-instance message))
+       recorded))))
 
 (defn create-recorded-event-sink
   ([broker-instance]
    (create-recorded-event-sink broker-instance nil))
   ([broker-instance telemetry-collector]
+   (create-recorded-event-sink broker-instance telemetry-collector nil nil))
+  ([broker-instance telemetry-collector observer trace]
    (fn [recorded]
-     (logging/log-system-event! recorded)
-     (telemetry/record-system-event! telemetry-collector recorded)
+     (observe-system-event! telemetry-collector observer recorded)
+     (trace-system-event! trace recorded)
      (doseq [message (broker/event->messages recorded)]
        (broker/publish! broker-instance message))
      recorded)))
@@ -252,14 +291,16 @@
 
 (defn create-tool-registry
   ([cfg event-sink store]
-   (create-tool-registry cfg event-sink store nil nil nil))
+   (create-tool-registry cfg event-sink store nil nil nil nil nil nil))
   ([cfg event-sink store telemetry-collector]
-   (create-tool-registry cfg event-sink store telemetry-collector nil nil))
+   (create-tool-registry cfg event-sink store telemetry-collector nil nil nil nil nil))
   ([cfg event-sink store telemetry-collector memory-service]
-   (create-tool-registry cfg event-sink store telemetry-collector memory-service nil))
+   (create-tool-registry cfg event-sink store telemetry-collector memory-service nil nil nil nil))
   ([cfg event-sink store telemetry-collector memory-service channel-adapters-cfg]
-   (create-tool-registry cfg event-sink store telemetry-collector memory-service channel-adapters-cfg nil))
+   (create-tool-registry cfg event-sink store telemetry-collector memory-service channel-adapters-cfg nil nil nil))
   ([cfg event-sink store telemetry-collector memory-service channel-adapters-cfg system-ref]
+   (create-tool-registry cfg event-sink store telemetry-collector memory-service channel-adapters-cfg system-ref nil nil))
+  ([cfg event-sink store telemetry-collector memory-service channel-adapters-cfg system-ref observer trace]
    (let [http-cfg (get cfg :http)
          fs-cfg (get cfg :fs)
          shell-cfg (get cfg :shell)
@@ -275,13 +316,31 @@
                                                      (runtime/create-runtime-service {:store store})
                                                      activity
                                                      f))))
-                    :after-execute (fn [{:keys [tool context duration-ms is-error error] :as hook}]
-                                     (telemetry/record-tool! telemetry-collector
-                                                             {:tool-name (:name tool)
-                                                              :duration-ms duration-ms
-                                                              :success? (not is-error)
-                                                              :error error
-                                                              :user (:user context)})
+                    :after-execute (fn [{:keys [tool context duration-ms is-error error input result] :as hook}]
+                                     (let [observation {:tool-name (:name tool)
+                                                        :duration-ms duration-ms
+                                                        :success? (not is-error)
+                                                        :error error
+                                                        :user (:user context)}]
+                                       (if observer
+                                         (do
+                                           (telemetry/record-event! observer {:event-type :tool/call
+                                                                              :payload observation})
+                                           (telemetry/record-metric! observer {:metric-type :request-latency-ms
+                                                                               :component :tool
+                                                                               :tool-name (:name tool)
+                                                                               :value duration-ms}))
+                                         (telemetry/record-tool! telemetry-collector observation))
+                                       (runtime-trace/record-event!
+                                        trace
+                                        {:event-type :tool.call
+                                         :turn-id (:request-id context)
+                                         :success (not is-error)
+                                         :error-message (some-> error .getMessage)
+                                         :payload {:tool-name (some-> (:name tool) name)
+                                                   :duration-ms duration-ms
+                                                   :input input
+                                                   :result result}}))
                                      hook)})]
      (cond-> registry
        (not= false (:enabled http-cfg))
@@ -305,16 +364,20 @@
 
 (defn create-orchestrator
   ([_cfg event-sink]
-   (create-orchestrator _cfg event-sink nil nil))
+   (create-orchestrator _cfg event-sink nil nil nil nil))
   ([_cfg event-sink telemetry-collector]
-   (create-orchestrator _cfg event-sink telemetry-collector nil))
+   (create-orchestrator _cfg event-sink telemetry-collector nil nil nil))
   ([cfg event-sink telemetry-collector store]
-  (orchestrator/create-orchestrator {:event-sink event-sink
-                                     :telemetry telemetry-collector
-                                     :federation-deliver (federation-http/create-forwarder
-                                                          (assoc (:federation cfg)
-                                                                 :store store
-                                                                 :telemetry telemetry-collector))})))
+   (create-orchestrator cfg event-sink telemetry-collector store nil nil))
+  ([cfg event-sink telemetry-collector store observer trace]
+   (orchestrator/create-orchestrator {:event-sink event-sink
+                                      :telemetry telemetry-collector
+                                      :observer observer
+                                      :trace trace
+                                      :federation-deliver (federation-http/create-forwarder
+                                                           (assoc (:federation cfg)
+                                                                  :store store
+                                                                  :telemetry telemetry-collector))})))
 
 (defn create-skills-registry
   [cfg]
@@ -390,11 +453,11 @@
         specs [{:key :discord
                 :display-name "Discord"
                 :inbound-mode :gateway
-                :capabilities #{:supports-outbound :supports-streaming :supports-interactive :supports-threads :supports-voice-ingest :supports-reactions}}
+                :capabilities #{}}
                {:key :slack
                 :display-name "Slack"
                 :inbound-mode :socket-mode
-                :capabilities #{:supports-outbound :supports-streaming :supports-interactive :supports-threads :supports-reactions}}]]
+                :capabilities #{}}]]
     (reduce
      (fn [acc {:keys [key display-name inbound-mode capabilities]}]
        (channel-adapters/register-adapter
@@ -424,9 +487,11 @@
          llm-cfg (config/llm-config cfg)
          store (create-store (:storage cfg))
          telemetry-collector (create-telemetry (:telemetry cfg))
+         observer (create-observer telemetry-collector (:observer cfg))
+         trace (create-trace cfg)
          broker-instance (create-broker store)
-         event-sink (create-event-sink store broker-instance telemetry-collector)
-         recorded-event-sink (create-recorded-event-sink broker-instance telemetry-collector)
+         event-sink (create-event-sink store broker-instance telemetry-collector observer trace)
+         recorded-event-sink (create-recorded-event-sink broker-instance telemetry-collector observer trace)
          runtime-service (create-runtime-service store event-sink broker-instance recorded-event-sink)
          memory-service (create-memory-service (:memory cfg) (:tools cfg) store)]
      (logging/log! :agent.system/created
@@ -443,15 +508,17 @@
                    :fact-llm-provider (create-fact-llm-provider cfg)
                    :store store
                    :telemetry telemetry-collector
+                   :observer observer
+                   :trace trace
                    :broker broker-instance
                    :event-sink event-sink
                    :recorded-event-sink recorded-event-sink
-                   :tool-registry (create-tool-registry (:tools cfg) event-sink store telemetry-collector memory-service (:channel-adapters cfg) system-ref)
+                   :tool-registry (create-tool-registry (:tools cfg) event-sink store telemetry-collector memory-service (:channel-adapters cfg) system-ref observer trace)
                    :skills-registry (create-skills-registry (:skills cfg))
                    :memory-service memory-service
                    :runtime-service runtime-service
                    :runner-registry (create-runner-registry runtime-service)
-                   :orchestrator (create-orchestrator (:orchestrator cfg) event-sink telemetry-collector store)}]
+                   :orchestrator (create-orchestrator (:orchestrator cfg) event-sink telemetry-collector store observer trace)}]
        (let [telegram-service (telegram/create-service base-system)
              system* (assoc base-system
                             :telegram-service telegram-service
@@ -490,10 +557,14 @@
         memory-service (create-memory-service (:memory new-cfg)
                                               (:tools new-cfg)
                                               (:store old-system))
+        observer (create-observer (:telemetry old-system) (:observer new-cfg))
+        trace (create-trace new-cfg)
         base (assoc old-system
                     :config new-cfg
                     :llm-provider (create-llm-provider (:llm new-cfg))
                     :fact-llm-provider (create-fact-llm-provider new-cfg)
+                    :observer observer
+                    :trace trace
                     :memory-service memory-service
                     :skills-registry (create-skills-registry (:skills new-cfg)))
         telegram-running? (some-> (:telegram-service old-system) running-adapter?)
@@ -510,7 +581,9 @@
                                                 (:telemetry old-system)
                                                 memory-service
                                                 (:channel-adapters new-cfg)
-                                                system-ref)
+                                                system-ref
+                                                observer
+                                                trace)
            :channel-adapter-registry (create-channel-adapter-registry (:channel-adapters new-cfg)
                                                                       telegram-service*))))
 
@@ -627,6 +700,8 @@
                                        messages
                                        opts
                                        {:agent-id "system"
+                                        :observer (:observer system)
+                                        :trace (:trace system)
                                         :model (or (:model opts)
                                                    (config/active-model (get-in system [:config :llm])))})))
 
@@ -652,6 +727,7 @@
    :skills (skills/registry-health (:skills-registry system))
    :memory (memory/health-check (:memory-service system))
    :telemetry (telemetry/health-check (:telemetry system))
+   :trace (runtime-trace/health-check (:trace system))
    :runtime (runtime/runtime-health (:runtime-service system))
    :channel-adapters (channel-adapters/registry-health (:channel-adapter-registry system))
    :orchestrator (orchestrator/health-check (:orchestrator system))
@@ -719,6 +795,11 @@
 (defn telemetry-snapshot
   [system]
   (telemetry/snapshot (:telemetry system)))
+
+(defn trace-events
+  ([system] (trace-events system {}))
+  ([system opts]
+   (runtime-trace/load-events (:trace system) opts)))
 
 (defn memory-surfaces
   [system]

@@ -251,6 +251,9 @@
 (defn- private-chat? [chat]
   (= "private" (:type chat)))
 
+(defn- next-draft-id []
+  (inc (mod (System/currentTimeMillis) 2147483647)))
+
 (defn- build-stream-controls
   "Returns `{:on-delta f :finalize! f}` for animating a partial reply via
    sendMessageDraft. `finalize!` promotes the accumulated draft to a real
@@ -260,7 +263,7 @@
   [config opts chat chat-id]
   (when (private-chat? chat)
     (let [token (:bot-token config)
-          draft-id (atom (inc (mod (System/currentTimeMillis) 2147483647)))
+          draft-id (atom (next-draft-id))
           accumulator (atom "")
           last-flush (atom 0)
           send-draft! (or (:send-message-draft-fn opts)
@@ -472,6 +475,15 @@
                                            :user-id (get-in message [:from :id])}})
           :blocked)
         (let [send! (or send-message-fn #(send-message! (:bot-token config) %1 %2))]
+          ((:event-sink system) {:event-type :channel.message.received
+                                 :entity-type :channel
+                                 :entity-id "telegram"
+                                 :payload {:channel :telegram
+                                           :direction :inbound
+                                           :chat-id (str chat-id)
+                                           :message-id (some-> message :message_id str)
+                                           :sender-id (some-> message :from :id str)
+                                           :thread-scope (str chat-id)}})
           (cond
             (= "/stop" (-> text str/trim str/lower-case (str/split #"\s+") first))
             (let [mapping (session-mapping! (:store system) chat)
@@ -501,7 +513,7 @@
    :telegram
    "Telegram"
    :polling
-   #{:supports-outbound :supports-streaming :supports-voice-ingest :supports-reactions :supports-location :supports-otp}
+   #{:supports-outbound :supports-streaming :supports-typing :supports-draft-updates :supports-draft-lifecycle}
    :public-url-required? false
    :config-schema {:enabled :boolean
                    :bot-token :string
@@ -514,7 +526,30 @@
   (start-adapter! [this] (start! this))
   (stop-adapter! [this] (stop! this))
   (send-adapter-message! [_ destination message]
-    (send-message! (:bot-token config) destination message)))
+    (let [message* (channels/normalize-send-message destination message)]
+      (when (seq (:attachments message*))
+        (channels/unsupported-operation! :send-attachments {:adapter :telegram}))
+      (send-message! (:bot-token config) (:recipient message*) (:content message*))))
+  channels/IChannelTyping
+  (send-adapter-typing! [_ recipient _metadata]
+    (send-chat-action! (:bot-token config) recipient "typing"))
+  channels/IChannelDrafts
+  (send-adapter-draft! [_ message]
+    (let [message* (channels/normalize-send-message nil message)
+          draft-id (long (or (get-in message* [:metadata :draft-id])
+                             (next-draft-id)))]
+      (send-message-draft! (:bot-token config) (:recipient message*) draft-id (:content message*))
+      {:channel :telegram
+       :recipient (:recipient message*)
+       :draft-id draft-id}))
+  (update-adapter-draft! [_ draft update]
+    (let [content (or (:content update) (:text update) (str update))]
+      (send-message-draft! (:bot-token config) (:recipient draft) (:draft-id draft) content)
+      (assoc draft :content content)))
+  (finalize-adapter-draft! [_ draft final]
+    (let [content (or (:content final) (:text final) (str final))]
+      (send-message! (:bot-token config) (:recipient draft) content)
+      (assoc draft :content content :finalized? true))))
 
 (defn create-service
   ([system] (create-service system {}))

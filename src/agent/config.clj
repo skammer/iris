@@ -95,7 +95,8 @@
                            :per-tool {}}}}
    :skills {:dirs ["skills"]}
    :memory {:prompt {:paths ["MEMORY.md"]}
-            :search {:default-limit 20}
+            :search {:default-limit 10
+                     :max-limit 10}
             :vault {:paths ["memory"]
                     :writable? true}
             :facts {:extractor {:enabled true
@@ -142,6 +143,12 @@
            :port-file ".nrepl-port"}
    :telemetry {:enabled true
                :max-latency-samples 1000}
+   :observer {:enabled true
+              :best-effort? true
+              :sinks [:telemetry :logging]}
+   :trace {:mode :none
+           :path "runtime-trace.jsonl"
+           :rolling-max-entries 1000}
    :logging {:enabled false
              :file {:path "logs/iris.log"
                     :max-bytes 10485760
@@ -189,7 +196,7 @@
 (def template-file-names (conj context-file-names memory-file-name))
 (def app-config-keys
   [:llm :storage :tools :skills :memory :channel-adapters :runners
-   :orchestrator :telemetry :logging :api :chat])
+   :orchestrator :telemetry :observer :trace :logging :api :chat])
 
 (def default-config-edn
   {:iris/config-version 1
@@ -524,6 +531,7 @@
         chat-max-steps (parse-long* (getenv "AGENT_CHAT_MAX_STEPS"))
         memory-prompt-paths (parse-csv (getenv "AGENT_MEMORY_PROMPT_PATHS"))
         memory-search-limit (parse-long* (getenv "AGENT_MEMORY_SEARCH_DEFAULT_LIMIT"))
+        memory-search-max-limit (parse-long* (getenv "AGENT_MEMORY_SEARCH_MAX_LIMIT"))
         memory-vault-paths (parse-csv (getenv "AGENT_MEMORY_VAULT_PATHS"))
         memory-vault-writable? (parse-bool (getenv "AGENT_MEMORY_VAULT_WRITABLE"))
         fact-extractor-enabled (parse-bool (getenv "AGENT_FACT_EXTRACTOR_ENABLED"))
@@ -542,6 +550,12 @@
         log-enabled (parse-bool (getenv "AGENT_LOG_ENABLED"))
         telemetry-enabled (parse-bool (getenv "AGENT_TELEMETRY_ENABLED"))
         telemetry-max-latency-samples (parse-long* (getenv "AGENT_TELEMETRY_MAX_LATENCY_SAMPLES"))
+        observer-enabled (parse-bool (getenv "AGENT_OBSERVER_ENABLED"))
+        observer-best-effort? (parse-bool (getenv "AGENT_OBSERVER_BEST_EFFORT"))
+        observer-sinks (parse-keyword-csv (getenv "AGENT_OBSERVER_SINKS"))
+        trace-mode (keyword-env "AGENT_TRACE_MODE")
+        trace-path (getenv "AGENT_TRACE_PATH")
+        trace-rolling-max-entries (parse-long* (getenv "AGENT_TRACE_ROLLING_MAX_ENTRIES"))
         otel-enabled (parse-bool (or (getenv "AGENT_OTEL_ENABLED")
                                      (getenv "OTEL_ENABLED")))
         otel-url (or (getenv "AGENT_OTEL_URL")
@@ -571,7 +585,10 @@
         nrepl-port-file (getenv "AGENT_NREPL_PORT_FILE")
         memory-config (cond-> {}
                         memory-prompt-paths (assoc :prompt {:paths memory-prompt-paths})
-                        (some? memory-search-limit) (assoc :search {:default-limit memory-search-limit})
+                        (or (some? memory-search-limit) (some? memory-search-max-limit))
+                        (assoc :search (cond-> {}
+                                         (some? memory-search-limit) (assoc :default-limit memory-search-limit)
+                                         (some? memory-search-max-limit) (assoc :max-limit memory-search-max-limit)))
                         (or memory-vault-paths (some? memory-vault-writable?))
                         (assoc :vault (cond-> {}
                                         memory-vault-paths (assoc :paths memory-vault-paths)
@@ -660,6 +677,14 @@
      :telemetry (cond-> {}
                   (some? telemetry-enabled) (assoc :enabled telemetry-enabled)
                   (some? telemetry-max-latency-samples) (assoc :max-latency-samples telemetry-max-latency-samples))
+     :observer (cond-> {}
+                 (some? observer-enabled) (assoc :enabled observer-enabled)
+                 (some? observer-best-effort?) (assoc :best-effort? observer-best-effort?)
+                 observer-sinks (assoc :sinks observer-sinks))
+     :trace (cond-> {}
+              trace-mode (assoc :mode trace-mode)
+              trace-path (assoc :path trace-path)
+              (some? trace-rolling-max-entries) (assoc :rolling-max-entries trace-rolling-max-entries))
      :logging (cond-> {}
                 (some? log-enabled) (assoc :enabled log-enabled)
                 log-file (assoc :file {:path log-file})

@@ -2,11 +2,112 @@
   "First-class cost/latency telemetry and μ/log emission."
   (:require
    [agent.llm.core :as llm-core]
-   [agent.logging :as logging])
+   [agent.logging :as logging]
+   [agent.runtime.trace :as runtime-trace])
   (:import
    (java.time Instant)))
 
 (def terminal-run-statuses #{"completed" "failed" "cancelled" "expired"})
+
+(def observer-event-types
+  #{:system/event
+    :llm/request
+    :llm/call
+    :tool/call
+    :turn/start
+    :turn/end
+    :channel/message
+    :runtime/transition
+    :error
+    :cache/hit
+    :deployment/recovery})
+
+(def observer-metric-types
+  #{:request-latency-ms
+    :tokens
+    :active-sessions
+    :queue-depth
+    :run-duration-ms
+    :tool-success-rate})
+
+(defprotocol IObserver
+  (record-event! [this event])
+  (record-metric! [this metric])
+  (flush! [this])
+  (observer-name [this]))
+
+(defn- safe-observer-call
+  [observer operation f]
+  (try
+    (f)
+    (catch Exception e
+      (logging/log-error! :agent.observer/callback-failed
+                          e
+                          {:observer/name (observer-name observer)
+                           :observer/operation operation})
+      nil)))
+
+(defrecord MultiObserver [observers best-effort?]
+  IObserver
+  (record-event! [_ event]
+    (doseq [observer observers]
+      (if best-effort?
+        (safe-observer-call observer :record-event #(record-event! observer event))
+        (record-event! observer event))))
+  (record-metric! [_ metric]
+    (doseq [observer observers]
+      (if best-effort?
+        (safe-observer-call observer :record-metric #(record-metric! observer metric))
+        (record-metric! observer metric))))
+  (flush! [_]
+    (doseq [observer observers]
+      (if best-effort?
+        (safe-observer-call observer :flush #(flush! observer))
+        (flush! observer))))
+  (observer-name [_] "multi"))
+
+(declare record-system-event! record-llm-call! record-tool!)
+
+(defrecord TelemetryCollectorObserver [collector]
+  IObserver
+  (record-event! [_ {:keys [event-type payload]}]
+    (case event-type
+      :system/event (record-system-event! collector payload)
+      :llm/call (record-llm-call! collector payload)
+      :tool/call (record-tool! collector payload)
+      nil))
+  (record-metric! [_ _metric] nil)
+  (flush! [_] nil)
+  (observer-name [_] "telemetry-collector"))
+
+(defrecord LoggingObserver []
+  IObserver
+  (record-event! [_ {:keys [event-type payload] :as event}]
+    (if (= :system/event event-type)
+      (logging/log-system-event! payload)
+      (logging/log! :agent.observer/event
+                    {:observer/event-type (name event-type)
+                     :observer/event event})))
+  (record-metric! [_ metric]
+    (logging/log! :agent.observer/metric {:observer/metric metric}))
+  (flush! [_] nil)
+  (observer-name [_] "logging"))
+
+(defn create-observer
+  ([collector] (create-observer collector {}))
+  ([collector {:keys [enabled sinks best-effort?]
+               :or {enabled true
+                    sinks [:telemetry :logging]
+                    best-effort? true}}]
+   (if-not (true? enabled)
+     nil
+     (let [sinks* (set sinks)
+           observers (cond-> []
+                       (and collector (contains? sinks* :telemetry))
+                       (conj (->TelemetryCollectorObserver collector))
+                       (contains? sinks* :logging)
+                       (conj (->LoggingObserver)))]
+       (->MultiObserver observers (not (false? best-effort?)))))))
 
 (defn- now-ms []
   (System/currentTimeMillis))
@@ -192,23 +293,51 @@
 (defn complete-with-telemetry!
   [collector provider messages opts attrs]
   (let [start-ns (System/nanoTime)
-        opts* (merge (select-keys attrs [:model]) opts)]
+        observer (:observer attrs)
+        trace (:trace attrs)
+        attrs* (dissoc attrs :observer :trace)
+        opts* (merge (select-keys attrs* [:model]) opts)
+        observe! (fn [observation]
+                   (if observer
+                     (do
+                       (record-event! observer {:event-type :llm/call
+                                                :payload observation})
+                       (record-metric! observer {:metric-type :request-latency-ms
+                                                 :component :llm
+                                                 :value (:duration-ms observation)})
+                       (when (:tokens observation)
+                         (record-metric! observer {:metric-type :tokens
+                                                   :component :llm
+                                                   :value (:tokens observation)})))
+                     (record-llm-call! collector observation))
+                   (runtime-trace/record-event!
+                    trace
+                    {:event-type :llm.call
+                     :turn-id (:request-id attrs*)
+                     :provider (:provider attrs*)
+                     :model (:model observation)
+                     :success (not (false? (:success? observation)))
+                     :error-message (some-> (:error observation) .getMessage)
+                     :payload (select-keys observation
+                                           [:agent-id :duration-ms :tokens
+                                            :prompt-tokens :completion-tokens
+                                            :cached-tokens :cost-usd])}))]
     (try
       (let [completion (llm-core/complete provider messages opts)
-            usage (usage-estimate provider messages completion opts*)]
-        (record-llm-call! collector
-                          (merge attrs
-                                 usage
-                                 {:duration-ms (duration-ms start-ns)
-                                  :success? true}))
+            usage (usage-estimate provider messages completion opts*)
+            observation (merge attrs*
+                               usage
+                               {:duration-ms (duration-ms start-ns)
+                                :success? true})]
+        (observe! observation)
         completion)
       (catch Exception e
-        (record-llm-call! collector
-                          (merge attrs
+        (let [observation (merge attrs*
                                  (usage-estimate provider messages "" opts*)
                                  {:duration-ms (duration-ms start-ns)
                                   :success? false
-                                  :error e}))
+                                  :error e})]
+          (observe! observation))
         (throw e)))))
 
 (defn record-tool!

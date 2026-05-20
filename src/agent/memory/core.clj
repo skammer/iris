@@ -160,6 +160,23 @@
          (take limit)
          vec)))
 
+(def default-search-limit 10)
+
+(defn- positive-limit [value fallback]
+  (if (and (integer? value) (pos? value))
+    value
+    fallback))
+
+(defn- search-limit-config [search]
+  (let [configured-default (positive-limit (get search :default-limit) default-search-limit)
+        configured-max (positive-limit (get search :max-limit) configured-default)]
+    {:default-limit (min configured-default configured-max)
+     :max-limit configured-max}))
+
+(defn- effective-search-limit [memory-service requested]
+  (min (positive-limit requested (:search-default-limit memory-service))
+       (:search-max-limit memory-service)))
+
 (defn- similar-duplicate [memory-service fact opts]
   (when-let [threshold (get-in memory-service [:config :facts :dedup :similarity-threshold])]
     (let [candidates (sqlite/search-memory-facts (:store memory-service)
@@ -173,14 +190,16 @@
 
 (defn create-memory-service
   [{:keys [prompt search graph vault fs-roots] :as cfg} store]
-  {:config cfg
-   :prompt-paths (vec (get prompt :paths ["MEMORY.md"]))
-   :search-default-limit (get search :default-limit 20)
-   :vault-roots (canonical-roots (get vault :paths []))
-   :vault-writable? (true? (:writable? vault))
-   :fs-roots (canonical-roots (or fs-roots []))
-   :graph-backend (create-graph-backend graph)
-   :store store})
+  (let [{:keys [default-limit max-limit]} (search-limit-config search)]
+    {:config cfg
+     :prompt-paths (vec (get prompt :paths ["MEMORY.md"]))
+     :search-default-limit default-limit
+     :search-max-limit max-limit
+     :vault-roots (canonical-roots (get vault :paths []))
+     :vault-writable? (true? (:writable? vault))
+     :fs-roots (canonical-roots (or fs-roots []))
+     :graph-backend (create-graph-backend graph)
+     :store store}))
 
 (defn list-surfaces
   [memory-service]
@@ -191,11 +210,13 @@
    {:name :search
     :type :sqlite
     :writable false
-    :default-limit (:search-default-limit memory-service)}
+    :default-limit (:search-default-limit memory-service)
+    :max-limit (:search-max-limit memory-service)}
    {:name :facts
     :type :sqlite
     :writable true
-    :default-limit (:search-default-limit memory-service)}
+    :default-limit (:search-default-limit memory-service)
+    :max-limit (:search-max-limit memory-service)}
    {:name :graph
     :type (get-in memory-service [:config :graph :backend] :none)
     :writable true
@@ -215,7 +236,7 @@
 (defn search-memory
   ([memory-service query] (search-memory memory-service query {}))
   ([memory-service query opts]
-   (let [limit (or (:limit opts) (:search-default-limit memory-service))
+   (let [limit (effective-search-limit memory-service (:limit opts))
          messages (sqlite/search-messages (:store memory-service)
                                           query
                                           {:limit limit
@@ -276,8 +297,7 @@
   ([memory-service query opts]
    (sqlite/search-memory-facts (:store memory-service)
                                query
-                               (merge {:limit (:search-default-limit memory-service)}
-                                      opts))))
+                               (assoc opts :limit (effective-search-limit memory-service (:limit opts))))))
 
 (defn read-vault-file
   [memory-service path]
@@ -495,7 +515,8 @@
      :prompt {:document-count (count prompt)
               :paths (mapv :path prompt)}
      :search {:healthy true
-              :default-limit (:search-default-limit memory-service)}
+              :default-limit (:search-default-limit memory-service)
+              :max-limit (:search-max-limit memory-service)}
      :facts {:healthy true
              :count (sqlite/count-memory-facts (:store memory-service))}
      :vault {:healthy true

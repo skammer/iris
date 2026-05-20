@@ -29,6 +29,7 @@
    [agent.runtime.child-test]
    [agent.runtime.core-test]
    [agent.runtime.schema-test]
+   [agent.runtime.trace-test]
    [agent.skills-test]
    [agent.ui-test]
    [agent.tools.common.fs-test]
@@ -72,6 +73,7 @@
     agent.runtime.child-test
     agent.runtime.core-test
     agent.runtime.schema-test
+    agent.runtime.trace-test
     agent.skills-test
     agent.ui-test
     agent.tools.common.fs-test

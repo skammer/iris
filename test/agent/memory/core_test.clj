@@ -64,6 +64,24 @@
     (.delete prompt-dir)
     (io/delete-file db-path true)))
 
+(deftest memory-search-limit-is-configurable-and-clamped-test
+  (let [db-path (temp-db-path)
+        store (sqlite/create-store {:path db-path})
+        session (sqlite/create-session! store "mem-limit")
+        service (memory/create-memory-service
+                 {:prompt {:paths []}
+                  :search {:default-limit 2
+                           :max-limit 3}
+                  :graph {:enabled false}}
+                 store)]
+    (try
+      (doseq [idx (range 6)]
+        (sqlite/append-message! store (:id session) "assistant" (str "needle result " idx)))
+      (is (= 2 (count (:ranked (memory/search-memory service "needle")))))
+      (is (= 3 (count (:ranked (memory/search-memory service "needle" {:limit 99})))))
+      (finally
+        (io/delete-file db-path true)))))
+
 (deftest memory-facts-dedup-and-scope-test
   (let [db-path (temp-db-path)
         store (sqlite/create-store {:path db-path})
