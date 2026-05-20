@@ -280,6 +280,102 @@
                              (ui/memory-search-results-fragment
                               (memory/search-memory (:memory-service system) query)))))
 
+(defn- parse-int-form [value]
+  (when-not (str/blank? (str value))
+    (Integer/parseInt (str value))))
+
+(defn- form-scope [{:keys [scope_type scope_id]}]
+  (when-not (str/blank? (str scope_type))
+    (cond-> {:type scope_type}
+      (not (str/blank? (str scope_id))) (assoc :id scope_id))))
+
+(defn- memory-tool-input [{:keys [action query subject predicate object path content] :as body}]
+  (cond-> {:action action}
+    (not (str/blank? (str query))) (assoc :query query)
+    (parse-int-form (:limit body)) (assoc :limit (parse-int-form (:limit body)))
+    (form-scope body) (assoc :scope (form-scope body))
+    (not (str/blank? (str subject))) (assoc :subject subject)
+    (not (str/blank? (str predicate))) (assoc :predicate predicate)
+    (not (str/blank? (str object))) (assoc :object object)
+    (not (str/blank? (str path))) (assoc :path path)
+    (contains? body :content) (assoc :content content)))
+
+(defn memory-tool-run [system request]
+  (try
+    (let [body (h/read-form-body request)
+          input (memory-tool-input body)]
+      (responses/html-response
+       200
+       (ui/memory-tool-result-fragment
+        {:ok? true
+         :input input
+         :result (tools/execute-tool (:tool-registry system)
+                                     :memory
+                                     input
+                                     (assoc
+                                      (tools-h/execution-context system :ui :memory input
+                                                                 {:user "ui-memory"})
+                                      :permissions #{:memory-read :memory-write}))})))
+    (catch Exception e
+      (responses/html-response
+       200
+       (ui/memory-tool-result-fragment
+        {:ok? false
+         :error (.getMessage e)
+         :details (ex-data e)})))))
+
+(defn- graph-query-opts [{:keys [mode entity from to as_of include_historical] :as body}]
+  (cond-> {}
+    (not (str/blank? (str mode))) (assoc :mode (keyword mode))
+    (parse-int-form (:limit body)) (assoc :limit (parse-int-form (:limit body)))
+    (not (str/blank? (str entity))) (assoc :entity entity)
+    (parse-int-form (:depth body)) (assoc :depth (parse-int-form (:depth body)))
+    (not (str/blank? (str from))) (assoc :from from)
+    (not (str/blank? (str to))) (assoc :to to)
+    (parse-int-form (:max_depth body)) (assoc :max-depth (parse-int-form (:max_depth body)))
+    (not (str/blank? (str as_of))) (assoc :as-of as_of)
+    (form-bool include_historical) (assoc :include-historical? true)))
+
+(defn memory-graph-query [system request]
+  (try
+    (let [{:keys [query] :as body} (h/read-form-body request)
+          opts (graph-query-opts body)]
+      (responses/html-response
+       200
+       (ui/memory-graph-result-fragment
+        {:ok? true
+         :query query
+         :opts opts
+         :result (memory/query-graph-memory (:memory-service system)
+                                            (not-empty query)
+                                            opts)})))
+    (catch Exception e
+      (responses/html-response
+       200
+       (ui/memory-graph-result-fragment
+        {:ok? false
+         :error (.getMessage e)
+         :details (ex-data e)})))))
+
+(defn memory-datalog-query [system request]
+  (try
+    (let [{:keys [query args] :as body} (h/read-form-body request)
+          opts (cond-> {}
+                 (parse-int-form (:limit body)) (assoc :limit (parse-int-form (:limit body)))
+                 (contains? body :args) (assoc :args args))]
+      (responses/html-response
+       200
+       (ui/memory-datalog-result-fragment
+        {:ok? true
+         :result (memory/query-datalog-memory (:memory-service system) query opts)})))
+    (catch Exception e
+      (responses/html-response
+       200
+       (ui/memory-datalog-result-fragment
+        {:ok? false
+         :error (.getMessage e)
+         :details (ex-data e)})))))
+
 (defn list-runs [system _request]
   (responses/html-response 200 (ui/runs-fragment system)))
 

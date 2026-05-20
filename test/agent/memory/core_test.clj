@@ -258,6 +258,10 @@
                                     :valid-from "2026-02-01T00:00:00Z"
                                     :observed-at "2026-02-01T00:00:00Z"})
         queried (memory/query-graph-memory service "likes")
+        datalog (memory/query-datalog-memory
+                 service
+                 "[:find ?label :where [?e :entity/label ?label]]"
+                 {:limit 10})
         neighborhood (memory/query-graph-memory service nil {:entity "alice" :depth 2 :include-historical? true})
         current-neighborhood (memory/query-graph-memory service nil {:entity "alice" :depth 2})
         old-like (memory/query-graph-memory service "likes" {:as-of "2026-01-15T00:00:00Z"})
@@ -265,6 +269,7 @@
         current (memory/query-graph-memory service "java" {:as-of "2026-06-01T00:00:00Z"})
         health (memory/health-check service)]
     (is (= "alice" (:subject saved)))
+    (is (contains? (set (map first (:rows datalog))) "alice"))
     (is (= 1 (count queried)))
     (is (= "likes" (:predicate (first queried))))
     (is (= "rust" (:object (first queried))))

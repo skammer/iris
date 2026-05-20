@@ -242,6 +242,38 @@
 (def ^:private ui-memory-search-form
   [:map [:query schemas/NonBlankString]])
 
+(def ^:private ui-memory-tool-form
+  [:map
+   [:action schemas/NonBlankString]
+   [:query {:optional true} :string]
+   [:limit {:optional true} :string]
+   [:scope_type {:optional true} :string]
+   [:scope_id {:optional true} :string]
+   [:subject {:optional true} :string]
+   [:predicate {:optional true} :string]
+   [:object {:optional true} :string]
+   [:path {:optional true} :string]
+   [:content {:optional true} :string]])
+
+(def ^:private ui-memory-graph-query-form
+  [:map
+   [:mode {:optional true} :string]
+   [:query {:optional true} :string]
+   [:limit {:optional true} :string]
+   [:entity {:optional true} :string]
+   [:depth {:optional true} :string]
+   [:from {:optional true} :string]
+   [:to {:optional true} :string]
+   [:max_depth {:optional true} :string]
+   [:as_of {:optional true} :string]
+   [:include_historical {:optional true} :string]])
+
+(def ^:private ui-memory-datalog-query-form
+  [:map
+   [:query schemas/NonBlankString]
+   [:args {:optional true} :string]
+   [:limit {:optional true} :string]])
+
 (def ^:private ui-create-run-form
   [:map
    [:agent_id {:optional true} :string]
@@ -339,6 +371,12 @@
    ["/ui/memory/prompt" {:get {:handler/id :ui-memory-prompt}}]
    ["/ui/memory/search" {:post {:handler/id :ui-memory-search
                                 :parameters {:form ui-memory-search-form}}}]
+   ["/ui/memory/tool" {:post {:handler/id :ui-memory-tool
+                              :parameters {:form ui-memory-tool-form}}}]
+   ["/ui/memory/graph" {:post {:handler/id :ui-memory-graph
+                               :parameters {:form ui-memory-graph-query-form}}}]
+   ["/ui/memory/datalog" {:post {:handler/id :ui-memory-datalog
+                                 :parameters {:form ui-memory-datalog-query-form}}}]
    ["/ui/runs" {:get {:handler/id :ui-runs}
                 :post {:handler/id :ui-create-run
                        :parameters {:form ui-create-run-form}}}]

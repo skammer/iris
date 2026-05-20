@@ -86,13 +86,13 @@ body {
 }
 
 main {
-  max-width: 1520px;
+  max-width: none;
   margin: 0 auto;
-  padding: 12px;
+  padding: 8px;
   height: 100vh;
   height: 100dvh;
   display: grid;
-  gap: 12px;
+  gap: 8px;
   overflow: hidden;
 }
 
@@ -250,7 +250,7 @@ theme-toggle {
 .workspace-stack {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
-  gap: 12px;
+  gap: 8px;
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -258,7 +258,7 @@ theme-toggle {
 
 .workspace-grid {
   display: grid;
-  gap: 12px;
+  gap: 8px;
   grid-auto-rows: minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
@@ -272,6 +272,10 @@ theme-toggle {
   grid-template-columns: minmax(0, 0.95fr) minmax(380px, 0.85fr);
 }
 
+.workspace-grid.memory-workspace {
+  grid-template-columns: minmax(240px, 0.7fr) minmax(420px, 1.1fr) minmax(420px, 1fr);
+}
+
 .workspace-grid.single {
   grid-template-columns: 1fr;
 }
@@ -281,7 +285,7 @@ theme-toggle {
 }
 
 .panel {
-  padding: 20px;
+  padding: 12px;
   min-height: 0;
   overflow: auto;
 }
@@ -305,11 +309,11 @@ theme-toggle {
 }
 
 .stat {
-  padding: 14px 16px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
   background: var(--surface-raised);
-  min-height: 104px;
+  min-height: 72px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -321,20 +325,20 @@ theme-toggle {
 
 .stat.stat--wide .value {
   font-family: "IoskeleyMono", "Doto", "Space Mono", monospace;
-  font-size: 42px;
+  font-size: 28px;
   line-height: 1;
   color: var(--accent);
 }
 
 .stat.stat--wide .provider-value {
-  font-size: 24px;
+  font-size: 18px;
   line-height: 1.15;
   word-break: break-word;
 }
 
 .value {
   font-family: "IoskeleyMono", "Space Mono", "JetBrains Mono", "SF Mono", monospace;
-  font-size: 26px;
+  font-size: 20px;
   line-height: 1.1;
   color: var(--text-display);
 }
@@ -383,8 +387,8 @@ button {
   border-radius: var(--radius-compact);
   background: transparent;
   color: var(--text-primary);
-  padding: 12px 16px;
-  font: 400 13px/1.2 "IoskeleyMono", "Space Mono", "JetBrains Mono", "SF Mono", monospace;
+  padding: 8px 10px;
+  font: 400 11px/1.2 "IoskeleyMono", "Space Mono", "JetBrains Mono", "SF Mono", monospace;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   cursor: pointer;
@@ -459,7 +463,7 @@ select:focus-visible {
 .result {
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
-  padding: 14px 16px;
+  padding: 10px 12px;
   background: var(--surface-raised);
 }
 
@@ -556,12 +560,16 @@ input,
 textarea,
 select {
   width: 100%;
-  padding: 9px 10px;
+  padding: 7px 8px;
   border: 1px solid var(--border-visible);
   border-radius: 0;
   background: transparent;
   color: var(--text-display);
-  font: 400 13px/1.35 "IoskeleyMono", "Space Mono", "JetBrains Mono", "SF Mono", monospace;
+  font: 400 12px/1.35 "IoskeleyMono", "Space Mono", "JetBrains Mono", "SF Mono", monospace;
+}
+
+input[type="checkbox"] {
+  width: auto;
 }
 
 input::placeholder,
@@ -766,16 +774,112 @@ textarea {
 #tools-panel h3,
 #tool-approvals-panel h3,
 #memory-prompt-panel h3,
-#memory-search-results-panel h3 {
+#memory-search-results-panel h3,
+#memory-tool-output h3,
+#memory-graph-results-panel h3,
+#memory-datalog-results-panel h3 {
   margin-bottom: var(--space-sm);
 }
 
 .result strong,
 .event-item strong {
   display: block;
-  margin-bottom: 8px;
-  font: 500 16px/1.2 "IoskeleyMono", "Space Grotesk", "DM Sans", system-ui, sans-serif;
+  margin-bottom: 6px;
+  font: 500 13px/1.2 "IoskeleyMono", "Space Grotesk", "DM Sans", system-ui, sans-serif;
   color: var(--text-display);
+}
+
+.memory-overview,
+.memory-lab,
+.memory-graph {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.memory-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.memory-stat {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+
+.memory-stat .value {
+  display: block;
+  margin-top: 4px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.memory-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.memory-table th,
+.memory-table td {
+  padding: 6px;
+  border: 1px solid var(--border);
+  vertical-align: top;
+  text-align: left;
+}
+
+.memory-table th {
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.memory-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.memory-tool-form {
+  gap: 6px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.memory-tool-form textarea {
+  min-height: 72px;
+}
+
+.memory-result-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.7fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.memory-result-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 0;
+}
+
+.memory-result-list pre,
+#memory-tool-output pre,
+#memory-graph-results-panel pre,
+#memory-datalog-results-panel pre,
+.memory-docs pre {
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+}
+
+.memory-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .event-item {
@@ -806,8 +910,10 @@ textarea {
 @media (max-width: 1180px) {
   .workspace-grid.two-up,
   .workspace-grid.tools,
+  .workspace-grid.memory-workspace,
   .stats,
-  .dual {
+  .dual,
+  .memory-result-grid {
     grid-template-columns: 1fr;
   }
 
@@ -877,6 +983,11 @@ textarea {
 
   .chat-titlebar .meta {
     display: none;
+  }
+
+  .memory-form-grid,
+  .memory-stats {
+    grid-template-columns: 1fr;
   }
 }
 

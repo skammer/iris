@@ -1,5 +1,6 @@
 (ns agent.ui-test
   (:require
+   [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.trace :as trace]
    [agent.ui :as ui]
@@ -59,6 +60,26 @@
     (is (not (str/includes? html "<script")))
     (is (not (str/includes? html "<img")))
     (is (not (str/includes? html "onerror=\"alert(1)\"")))))
+
+(deftest memory-workspace-exposes-tool-and-datalog-lab
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        memory-service (memory/create-memory-service
+                        {:prompt {:paths []}
+                         :search {:default-limit 10}
+                         :graph {:enabled false}}
+                        store)]
+    (try
+      (let [html (ui/memory-workspace-fragment {:store store
+                                                :memory-service memory-service})]
+        (is (str/includes? html "Memory Tool"))
+        (is (str/includes? html "/ui/memory/tool"))
+        (is (str/includes? html "Datalog DB"))
+        (is (str/includes? html "/ui/memory/datalog"))
+        (is (str/includes? html "workspace-grid memory-workspace")))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
 
 (deftest logs-fragment-shows-events-and-trace-state
   (let [path (temp-db-path)

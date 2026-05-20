@@ -534,7 +534,16 @@
       (catch Exception e
         {:healthy false
          :details {:path (backend-path cfg)
-                   :error (.getMessage e)}}))))
+                   :error (.getMessage e)}})))
+  agent.memory.core/IDatalogExplorer
+  (datalog-query* [_ query {:keys [args limit] :or {limit 100}}]
+    (let [limit* (max 1 (min 500 (or limit 100)))
+          rows (apply d/q query @conn (or args []))]
+      {:query query
+       :args (vec (or args []))
+       :limit limit*
+       :row-count (count rows)
+       :rows (vec (take limit* rows))})))
 
 (defn create-backend
   [cfg]
