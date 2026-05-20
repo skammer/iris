@@ -22,6 +22,7 @@
                     "chat.planner.step"
                     "chat.tool.approval_required"
                     "chat.fallback_completion"
+                    "chat.state.changed"
                     "tool.execution.succeeded"
                     "tool.execution.failed"
                     "agent-start"
@@ -64,7 +65,11 @@
         provider (name (:provider llm))
         model (:model llm)
         broker-instance (or (:event-bus system) (:broker system))
-        subscription (broker/subscribe! broker-instance (broker/all-events-subject))
+        subscription (broker/subscribe! broker-instance
+                                        (broker/all-events-subject)
+                                        {:buffer-size 256
+                                         :buffer-strategy :sliding
+                                         :slow-client :drop-new})
         events-ch (:channel subscription)
         result-ch (async/chan 1)
         open? (atom true)
@@ -192,4 +197,4 @@
         session-id (:session_id body)]
     (v/ensure-session-exists! system session-id)
     (responses/json-response 200
-                             {:data (chat/cancel-session! session-id)})))
+                             {:data (chat/cancel-session! system session-id)})))

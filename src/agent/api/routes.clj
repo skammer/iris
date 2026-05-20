@@ -363,6 +363,7 @@
    ["/v1/sessions" {:get {:handler/id :list-sessions}
                     :post {:handler/id :create-session
                            :parameters {:body create-session-body}}}]
+   ["/v1/sessions/:session-id" {:get {:handler/id :get-session}}]
    ["/v1/sessions/:session-id/messages" {:get {:handler/id :list-session-messages}}]
    ["/v1/sessions/:session-id/entries" {:get {:handler/id :list-session-entries}
                                         :post {:handler/id :append-session-entry

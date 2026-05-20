@@ -16,7 +16,11 @@
   [system request]
   (let [stream-id (str "events-" (System/currentTimeMillis))
         broker-instance (or (:event-bus system) (:broker system))
-        subscription (broker/subscribe! broker-instance (broker/all-events-subject))
+        subscription (broker/subscribe! broker-instance
+                                        (broker/all-events-subject)
+                                        {:buffer-size 256
+                                         :buffer-strategy :sliding
+                                         :slow-client :drop-new})
         ch (:channel subscription)
         open? (atom true)]
     (streaming/sse-response

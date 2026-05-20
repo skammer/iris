@@ -6,13 +6,33 @@
   (:import
    (java.util UUID)))
 
+(defn- channel-buffer [{:keys [buffer-size buffer-strategy]
+                        :or {buffer-size 64
+                             buffer-strategy :fixed}}]
+  (case (keyword buffer-strategy)
+    :dropping (async/dropping-buffer buffer-size)
+    :sliding (async/sliding-buffer buffer-size)
+    :fixed buffer-size
+    buffer-size))
+
+(defn- publish-to-subscriber! [{:keys [channel opts dropped-count]} message]
+  (case (keyword (:slow-client opts :park))
+    :drop-new
+    (when-not (async/offer! channel message)
+      (swap! dropped-count inc))
+
+    :block
+    (async/>!! channel message)
+
+    (async/put! channel message)))
+
 (defrecord LocalBroker [subscriptions published-count replay-fn]
   broker/IBroker
   (publish! [_ {:keys [subject] :as message}]
     (swap! published-count inc)
-    (doseq [[_ {:keys [pattern channel]}] @subscriptions]
+    (doseq [[_ {:keys [pattern] :as subscription}] @subscriptions]
       (when (broker/match-subject? pattern subject)
-        (async/put! channel message)))
+        (publish-to-subscriber! subscription message)))
     message)
   (subscribe! [_ pattern]
     (broker/subscribe! _ pattern {}))
@@ -20,7 +40,8 @@
     (let [subscription {:id (str (UUID/randomUUID))
                         :pattern pattern
                         :opts opts
-                        :channel (async/chan 64)}]
+                        :dropped-count (atom 0)
+                        :channel (async/chan (channel-buffer opts))}]
       (swap! subscriptions assoc (:id subscription) subscription)
       subscription))
   (unsubscribe! [_ {:keys [id channel]}]

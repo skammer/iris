@@ -94,6 +94,16 @@
                :created-at created_at})
             (common/select-many conn (list-sessions-sqlvec) identity)))))
 
+(defn get-session [store session-id]
+  (common/with-connection
+    store
+    (fn [conn]
+      (some-> (common/select-one conn (get-session-sqlvec {:id session-id}) identity)
+              ((fn [{:keys [id title created_at]}]
+                 {:id id
+                  :title title
+                  :created-at created_at}))))))
+
 (defn session-exists? [store session-id]
   (common/with-connection
     store

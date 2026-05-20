@@ -98,7 +98,11 @@
   [system request]
   (let [session-id (-> request :parameters :query :session_id)
         broker-instance (or (:event-bus system) (:broker system))
-        subscription (broker/subscribe! broker-instance (broker/all-events-subject))
+        subscription (broker/subscribe! broker-instance
+                                        (broker/all-events-subject)
+                                        {:buffer-size 256
+                                         :buffer-strategy :sliding
+                                         :slow-client :drop-new})
         ch (:channel subscription)
         open? (atom true)]
     (v/ensure-session-exists! system session-id)
@@ -129,7 +133,11 @@
      (fn [channel]
        (future
          (let [broker-instance (or (:event-bus system) (:broker system))
-               subscription (broker/subscribe! broker-instance (broker/all-events-subject))
+               subscription (broker/subscribe! broker-instance
+                                               (broker/all-events-subject)
+                                               {:buffer-size 256
+                                                :buffer-strategy :sliding
+                                                :slow-client :drop-new})
                ch (:channel subscription)
                result-ch (async/chan 1)
                push! (fn []
@@ -177,7 +185,7 @@
 (defn chat-stop [system request]
   (let [{:keys [session_id]} (h/read-form-body request)]
     (v/ensure-session-exists! system session_id)
-    (chat/cancel-session! session_id)
+    (chat/cancel-session! system session_id)
     (responses/html-response 200
                              (str (ui/session-messages-fragment system session_id)
                                   "<div id=\"chat-status\" class=\"meta chat-status\">stopping...</div>"))))
@@ -202,7 +210,11 @@
   [system request]
   (let [run-id (-> request :parameters :query :run_id)
         broker-instance (or (:event-bus system) (:broker system))
-        subscription (broker/subscribe! broker-instance (broker/all-events-subject))
+        subscription (broker/subscribe! broker-instance
+                                        (broker/all-events-subject)
+                                        {:buffer-size 256
+                                         :buffer-strategy :sliding
+                                         :slow-client :drop-new})
         ch (:channel subscription)
         open? (atom true)]
     (streaming/sse-response
@@ -232,7 +244,11 @@
 (defn events-live-response
   [system request]
   (let [broker-instance (or (:event-bus system) (:broker system))
-        subscription (broker/subscribe! broker-instance (broker/all-events-subject))
+        subscription (broker/subscribe! broker-instance
+                                        (broker/all-events-subject)
+                                        {:buffer-size 256
+                                         :buffer-strategy :sliding
+                                         :slow-client :drop-new})
         ch (:channel subscription)
         open? (atom true)]
     (streaming/sse-response

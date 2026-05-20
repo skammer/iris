@@ -4,8 +4,12 @@
    [agent.api.responses :as responses]
    [agent.api.serializers :as ser]
    [agent.api.validation :as v]
+   [agent.chat :as chat]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.compaction :as compaction]))
+
+(defn- with-state [system session]
+  (assoc session :state (chat/session-state system (:id session))))
 
 (defn create [system request]
   (let [{:keys [title]} (h/read-json-body request)
@@ -20,7 +24,15 @@
 (defn list-sessions [system _request]
   (responses/json-response 200
                            {:data (mapv ser/session->response
-                                        (sqlite/list-sessions (:store system)))}))
+                                        (map #(with-state system %)
+                                             (sqlite/list-sessions (:store system))))}))
+
+(defn get-session [system _request session-id]
+  (v/ensure-session-exists! system session-id)
+  (responses/json-response 200
+                           {:data (ser/session->response
+                                   (with-state system
+                                     (sqlite/get-session (:store system) session-id)))}))
 
 (defn list-messages [system _request session-id]
   (v/ensure-session-exists! system session-id)

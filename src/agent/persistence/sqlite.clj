@@ -49,6 +49,9 @@
 (defn list-sessions [store]
   (sessions/list-sessions store))
 
+(defn get-session [store session-id]
+  (sessions/get-session store session-id))
+
 (defn session-exists? [store session-id]
   (sessions/session-exists? store session-id))
 

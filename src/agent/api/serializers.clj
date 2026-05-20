@@ -5,9 +5,16 @@
    [clojure.string :as str]))
 
 (defn session->response [session]
-  {:id (:id session)
-   :title (:title session)
-   :created_at (:created-at session)})
+  (cond-> {:id (:id session)
+           :title (:title session)
+           :created_at (:created-at session)}
+    (:state session)
+    (assoc :state {:working (boolean (get-in session [:state :working?]))
+                   :queued_count (get-in session [:state :queued-count] 0)
+                   :active_provider (get-in session [:state :active-provider])
+                   :active_model (get-in session [:state :active-model])
+                   :active_request_id (get-in session [:state :active-request-id])
+                   :active_started_at (get-in session [:state :active-started-at])})))
 
 (defn message->response [message]
   (cond-> {:id (:id message)
