@@ -80,6 +80,7 @@
    :ui-chat (fn [r] (ui/chat-action (sys) r))
    :ui-chat-stop (fn [r] (ui/chat-stop (sys) r))
    :ui-events (fn [r] (ui/events (sys) r))
+   :ui-logs (fn [r] (ui/logs (sys) r))
    :ui-events-live (fn [r] (ui/events-live-response (sys) r))
    :ui-memory-prompt (fn [r] (ui/memory-prompt (sys) r))
    :ui-memory-search (fn [r] (ui/memory-search (sys) r))

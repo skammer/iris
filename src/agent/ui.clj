@@ -7,6 +7,7 @@
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
+   [agent.runtime.trace :as runtime-trace]
    [agent.runners.core :as runners]
    [agent.runners.docker-podman :as docker-podman]
    [agent.runtime.core :as runtime]
@@ -152,6 +153,7 @@
          session-detail-fragment
          session-messages-fragment
          events-fragment
+         logs-fragment
          memory-prompt-fragment
          memory-search-results-fragment
          tools-fragment
@@ -165,7 +167,8 @@
    {:key :chat :label "Chat"}
    {:key :runs :label "Runs"}
    {:key :tools :label "Tools"}
-   {:key :memory :label "Memory"}])
+   {:key :memory :label "Memory"}
+   {:key :logs :label "Logs"}])
 
 (defn- normalize-tab [value]
   (let [tab (some-> value name str/lower-case keyword)]
@@ -265,8 +268,11 @@
                          [:div.actions
                           [:button {:type "button"
                                     "data-on:click" "@post('/ui/memory/search', {contentType: 'form', selector: '#memory-search-form'})"}
-                           "Search"]]]
+                         "Search"]]]
                         [:div#memory-search-results-panel.empty "Run memory search."]]])
+             :logs (render-many
+                    [:section.workspace-grid.single
+                     (trusted-fragment (logs-fragment system))])
              (render-many
               [:section.workspace-grid.two-up
                (trusted-fragment (dashboard-fragment system))
@@ -593,6 +599,52 @@
           [:div.code (json/generate-string payload)]
           [:div.meta created-at]])]
       [:div.empty "No events yet."])]))
+
+(defn logs-fragment [system]
+  (let [events (sqlite/list-events (:store system) {:limit 40})
+        trace (:trace system)
+        trace-health (runtime-trace/health-check trace)
+        trace-events (runtime-trace/load-events trace {:limit 40})]
+    (render
+     [:section#logs-panel.panel
+      {"data-on-interval__duration.5s.leading" "@get('/ui/logs')"}
+      [:h2 "Logs"]
+      [:div.run-grid
+       [:div.result
+        [:strong "Event Log"]
+        [:div.meta (str "sqlite events | latest " (count events))]
+        (if (seq events)
+          [:div.event-list
+           (for [{:keys [event-type entity-type entity-id created-at payload]} events]
+             [:article.event-item
+              [:strong event-type]
+              [:div.meta (str (or entity-type "system") " / " (or entity-id "-") " / " created-at)]
+              [:div.code (json/generate-string payload)]])]
+          [:div.empty "No events yet."])]
+       [:div.result
+        [:strong "Runtime Trace"]
+        [:div.meta (str "mode: " (or (some-> (:mode trace-health) name) "none")
+                        " | path: " (:path trace-health))]
+        (cond
+          (not (:enabled trace-health))
+          [:div.empty "Trace disabled. Set :trace {:mode :rolling} for local/dev logs."]
+
+          (seq trace-events)
+          [:div.event-list
+           (for [{:keys [event-type timestamp turn-id channel model success error-message payload]} trace-events]
+             [:article.event-item
+              [:strong event-type]
+              [:div.meta (str (or timestamp "-")
+                              " / " (or turn-id "-")
+                              " / " (or channel "-")
+                              " / " (or model "-")
+                              " / success " (if (nil? success) "-" success))]
+              (when error-message
+                [:div.meta (str "error: " error-message)])
+              [:div.code (json/generate-string payload)]])]
+
+          :else
+          [:div.empty "Trace enabled, no entries yet."])]]])))
 
 (defn memory-prompt-fragment [system]
   (let [{:keys [documents combined]} (memory/read-prompt-memory (:memory-service system))]

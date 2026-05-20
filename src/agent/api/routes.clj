@@ -334,6 +334,7 @@
    ["/ui/chat/stop" {:post {:handler/id :ui-chat-stop
                             :parameters {:form [:map [:session_id schemas/NonBlankString]]}}}]
    ["/ui/events" {:get {:handler/id :ui-events}}]
+   ["/ui/logs" {:get {:handler/id :ui-logs}}]
    ["/ui/events/live" {:get {:handler/id :ui-events-live}}]
    ["/ui/memory/prompt" {:get {:handler/id :ui-memory-prompt}}]
    ["/ui/memory/search" {:post {:handler/id :ui-memory-search

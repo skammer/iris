@@ -217,7 +217,8 @@
    :writable (boolean (:writable surface))
    :enabled (boolean (:enabled surface))
    :paths (:paths surface)
-   :default_limit (:default-limit surface)})
+   :default_limit (:default-limit surface)
+   :max_limit (:max-limit surface)})
 
 (defn fact->response [fact]
   {:id (:id fact)

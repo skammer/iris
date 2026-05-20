@@ -67,3 +67,42 @@
     (is (= 2 (get-in (telemetry/snapshot collector) [:tools "shell" :calls])))
     (is (= 1 (get-in (telemetry/snapshot collector) [:tools "shell" :errors])))
     (is (= 0.5 (get-in (telemetry/snapshot collector) [:tools "shell" :error-rate])))))
+
+(defrecord CountingObserver [events metrics]
+  telemetry/IObserver
+  (record-event! [_ event] (swap! events conj event))
+  (record-metric! [_ metric] (swap! metrics conj metric))
+  (flush! [_] nil)
+  (observer-name [_] "counting"))
+
+(defrecord FailingObserver []
+  telemetry/IObserver
+  (record-event! [_ _] (throw (ex-info "observer boom" {})))
+  (record-metric! [_ _] (throw (ex-info "observer boom" {})))
+  (flush! [_] (throw (ex-info "observer boom" {})))
+  (observer-name [_] "failing"))
+
+(deftest multi-observer-fans-out-and-is-best-effort
+  (let [events (atom [])
+        metrics (atom [])
+        observer (telemetry/->MultiObserver [(->FailingObserver)
+                                             (->CountingObserver events metrics)]
+                                            true)]
+    (telemetry/record-event! observer {:event-type :turn/start :payload {:id "t1"}})
+    (telemetry/record-metric! observer {:metric-type :queue-depth :value 2})
+    (telemetry/flush! observer)
+    (is (= [{:event-type :turn/start :payload {:id "t1"}}] @events))
+    (is (= [{:metric-type :queue-depth :value 2}] @metrics))))
+
+(deftest telemetry-collector-observer-records-system-events
+  (let [collector (telemetry/create-collector {:enabled true})
+        observer (telemetry/create-observer collector {:sinks [:telemetry]
+                                                       :best-effort? true})]
+    (telemetry/record-event! observer
+                             {:event-type :system/event
+                              :payload {:event-type "agent.run.requested"
+                                        :entity-type "agent_run"
+                                        :entity-id "run-1"
+                                        :payload {:agent-id "agent-1"}
+                                        :created-at "2026-04-21T00:00:00Z"}})
+    (is (= 1 (get-in (telemetry/snapshot collector) [:runs :count])))))

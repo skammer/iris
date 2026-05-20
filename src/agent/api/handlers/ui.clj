@@ -202,6 +202,9 @@
 (defn events [system _request]
   (responses/html-response 200 (ui/events-fragment system)))
 
+(defn logs [system _request]
+  (responses/html-response 200 (ui/logs-fragment system)))
+
 (defn- relevant-run-detail-event? [event run-id]
   (and (= "agent_run" (:entity-type event))
        (= run-id (:entity-id event))))

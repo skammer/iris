@@ -316,7 +316,7 @@
 
 (defn run!
   [{:keys [messages context-injectors system-prompt tools model provider-config
-           telemetry planner-fn execute-step-fn approval-fn fallback-fn event-sink
+           telemetry observer trace planner-fn execute-step-fn approval-fn fallback-fn event-sink
            cancellation-token request-id session-id agent-id max-steps stream?
            tool-output-max-chars]
     :or {planner-fn planner/plan-step!
@@ -377,7 +377,10 @@
                                     :state state
                                     :tools tools
                                     :telemetry telemetry
+                                    :observer observer
+                                    :trace trace
                                     :agent-id agent-id*
+                                    :request-id request-id
                                     :model model
                                     :system-prompt system-prompt
                                     :on-content-delta on-content-delta})

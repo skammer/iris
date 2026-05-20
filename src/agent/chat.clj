@@ -518,6 +518,9 @@
                                                         messages
                                                         {}
                                                         {:agent-id (or session-id "chat")
+                                                         :observer (:observer system)
+                                                         :trace (:trace system)
+                                                         :request-id request-id
                                                          :model (config/active-model (get-in system [:config :llm]))}))]
       {:content content
        :fallback? true})
@@ -587,6 +590,8 @@
                      :model (config/active-model (get-in system [:config :llm]))
                      :provider-config (:llm-provider system)
                      :telemetry (:telemetry system)
+                     :observer (:observer system)
+                     :trace (:trace system)
                      :request-id request-id
                      :session-id session-id
                      :agent-id (or session-id "chat")

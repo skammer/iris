@@ -56,3 +56,31 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest memory-tool-search-clamps-requested-limit-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        session (sqlite/create-session! store "memory-tool-limit")
+        service (memory/create-memory-service
+                 {:prompt {:paths []}
+                  :search {:default-limit 2
+                           :max-limit 2}
+                  :facts {:extractor {:enabled false}}
+                  :graph {:enabled false}}
+                 store)
+        registry* (registry service)]
+    (try
+      (doseq [idx (range 6)]
+        (sqlite/append-message! store (:id session) "assistant" (str "Kimi clamp marker " idx)))
+      (let [result (tools/execute-tool registry*
+                                       :memory
+                                       {:action :search
+                                        :query "Kimi"
+                                        :limit 99}
+                                       {:permissions #{:memory-read}
+                                        :session-id (:id session)})
+            result-lines (->> (str/split-lines result)
+                              (filter #(str/starts-with? % "- "))
+                              vec)]
+        (is (= 2 (count result-lines))))
+      (finally
+        (io/delete-file path true)))))

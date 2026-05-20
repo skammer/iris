@@ -4,6 +4,7 @@
    [agent.kernel.schema :as kernel-schema]
    [agent.llm.core :as llm]
    [agent.prompts :as prompts]
+   [agent.runtime.trace :as runtime-trace]
    [agent.telemetry :as telemetry]))
 
 (defn- duration-ms [start-ns]
@@ -49,25 +50,63 @@
      :receipts []}))
 
 (defn plan-step!
-  [provider {:keys [telemetry agent-id] :as request}]
+  [provider {:keys [telemetry observer trace agent-id model request-id] :as request}]
   (let [start-ns (System/nanoTime)
         llm-request (build-llm-request request)]
     (try
       (let [response (llm/invoke provider llm-request)
+            duration (duration-ms start-ns)
             step (-> response
                      response->step
                      kernel-schema/normalize-step
                      kernel-schema/validate-step!)]
         (telemetry/record-planner! telemetry
                                    {:agent-id agent-id
-                                    :duration-ms (duration-ms start-ns)
+                                    :duration-ms duration
                                     :success? true
                                     :directive-count (count (:directives step))})
+        (when observer
+          (telemetry/record-event! observer
+                                   {:event-type :llm/call
+                                    :payload {:agent-id agent-id
+                                              :model model
+                                              :duration-ms duration
+                                              :success? true
+                                              :tokens (get-in response [:usage :total-tokens])
+                                              :prompt-tokens (get-in response [:usage :prompt-tokens])
+                                              :completion-tokens (get-in response [:usage :completion-tokens])}}))
+        (runtime-trace/record-event! trace
+                                     {:event-type :llm.call
+                                      :turn-id request-id
+                                      :model model
+                                      :success true
+                                      :payload {:agent-id agent-id
+                                                :duration-ms duration
+                                                :usage (:usage response)
+                                                :stop-reason (:stop-reason response)
+                                                :tool-call-count (count (:tool-calls response))}})
         (assoc step :llm-response response))
       (catch Exception e
-        (telemetry/record-planner! telemetry
-                                   {:agent-id agent-id
-                                    :duration-ms (duration-ms start-ns)
-                                    :success? false
-                                    :error e})
+        (let [duration (duration-ms start-ns)]
+          (telemetry/record-planner! telemetry
+                                     {:agent-id agent-id
+                                      :duration-ms duration
+                                      :success? false
+                                      :error e})
+          (when observer
+            (telemetry/record-event! observer
+                                     {:event-type :llm/call
+                                      :payload {:agent-id agent-id
+                                                :model model
+                                                :duration-ms duration
+                                                :success? false
+                                                :error e}}))
+          (runtime-trace/record-event! trace
+                                       {:event-type :llm.call
+                                        :turn-id request-id
+                                        :model model
+                                        :success false
+                                        :error-message (.getMessage e)
+                                        :payload {:agent-id agent-id
+                                                  :duration-ms duration}}))
         (throw e)))))

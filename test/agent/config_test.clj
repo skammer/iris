@@ -49,6 +49,9 @@
               :provider nil
               :model nil}
              (get-in cfg [:memory :facts :extractor])))
+      (is (= {:default-limit 10
+              :max-limit 10}
+             (get-in cfg [:memory :search])))
       (is (= :session (get-in cfg [:memory :facts :default-scope])))
       (is (nil? (get-in cfg [:memory :facts :dedup :similarity-threshold])))
       (is (= {:enabled false
@@ -62,6 +65,14 @@
       (is (false? (get-in cfg [:logging :enabled])))
       (is (= "logs/iris.log" (get-in cfg [:logging :file :path])))
       (is (= 10485760 (get-in cfg [:logging :file :max-bytes])))
+      (is (= {:enabled true
+              :best-effort? true
+              :sinks [:telemetry :logging]}
+             (:observer cfg)))
+      (is (= {:mode :none
+              :path "runtime-trace.jsonl"
+              :rolling-max-entries 1000}
+             (:trace cfg)))
       (is (= {:enabled true
               :bind "127.0.0.1"
               :port 0
@@ -224,7 +235,9 @@
 (deftest env-overrides-explicit-config-test
   (with-isolated-config [root {"AGENT_LLM_PROVIDER" "ollama"
                                "AGENT_LLM_MODEL" "env-model"
-                               "AGENT_CHAT_MAX_STEPS" "12"}]
+                               "AGENT_CHAT_MAX_STEPS" "12"
+                               "AGENT_MEMORY_SEARCH_DEFAULT_LIMIT" "7"
+                               "AGENT_MEMORY_SEARCH_MAX_LIMIT" "9"}]
     (let [global-dir (io/file root "home" ".config" "iris")
           explicit-file (io/file root "explicit.edn")]
       (.mkdirs global-dir)
@@ -235,7 +248,21 @@
       (let [cfg (config/load-config (.getPath explicit-file))]
         (is (= :ollama (config/active-provider-key (:llm cfg))))
         (is (= "env-model" (config/active-model (:llm cfg))))
-        (is (= 12 (get-in cfg [:chat :max-steps])))))))
+        (is (= 12 (get-in cfg [:chat :max-steps])))
+        (is (= {:default-limit 7
+                :max-limit 9}
+               (get-in cfg [:memory :search])))))))
+
+(deftest trace-env-config-test
+  (with-isolated-config [root {"AGENT_TRACE_MODE" "rolling"
+                               "AGENT_TRACE_PATH" "dev-trace.jsonl"
+                               "AGENT_TRACE_ROLLING_MAX_ENTRIES" "25"
+                               "AGENT_OBSERVER_BEST_EFFORT" "true"}]
+    (let [cfg (config/load-config)]
+      (is (= :rolling (get-in cfg [:trace :mode])))
+      (is (= "dev-trace.jsonl" (get-in cfg [:trace :path])))
+      (is (= 25 (get-in cfg [:trace :rolling-max-entries])))
+      (is (true? (get-in cfg [:observer :best-effort?]))))))
 
 (deftest namespaced-map-config-normalization-test
   (with-isolated-config [root {}]
