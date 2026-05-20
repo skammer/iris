@@ -74,7 +74,7 @@
 (defn- relevant-session-event? [event session-id]
   (and (= "session" (:entity-type event))
        (= session-id (:entity-id event))
-       (or (contains? #{"message.appended" "completion.completed" "session.created"}
+       (or (contains? #{"message.appended" "message.updated" "completion.completed" "session.created"}
                       (:event-type event))
            (contains? #{"agent-start"
                         "agent-end"

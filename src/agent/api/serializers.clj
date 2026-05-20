@@ -10,9 +10,14 @@
    :created_at (:created-at session)})
 
 (defn message->response [message]
-  {:role (:role message)
-   :content (:content message)
-   :created_at (:created-at message)})
+  (cond-> {:id (:id message)
+           :role (:role message)
+           :content (:content message)
+           :created_at (:created-at message)}
+    (:tool-calls message) (assoc :tool_calls (:tool-calls message))
+    (:tool-call-id message) (assoc :tool_call_id (:tool-call-id message))
+    (:metadata message) (assoc :metadata (:metadata message))
+    (:excluded-from-context? message) (assoc :excluded_from_context true)))
 
 (defn tool->response [tool]
   {:name (name (:name tool))

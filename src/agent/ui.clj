@@ -104,7 +104,10 @@
 
 (defn- render-message
   ([msg] (render-message nil msg))
-  ([system {:keys [role content created-at tool-calls] :as msg}]
+  ([system {:keys [role content created-at tool-calls metadata excluded-from-context?] :as msg}]
+   (let [meta-text (str created-at
+                        (when (:queued metadata) " | queued")
+                        (when excluded-from-context? " | out-of-context"))]
    (cond
      (= role "tool")
      (render-tool-message system msg)
@@ -114,13 +117,13 @@
       [:div.message-role {:class role} role]
       (when (seq (str content)) (render-message-content content))
       [:div.tool-calls (for [tc tool-calls] (render-tool-call tc))]
-      [:div.meta created-at]]
+      [:div.meta meta-text]]
 
      :else
      [:article.message
       [:div.message-role {:class role} role]
       (render-message-content content)
-      [:div.meta created-at]])))
+      [:div.meta meta-text]]))))
 
 (defn- now-ms []
   (.toEpochMilli (Instant/now)))

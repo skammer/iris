@@ -38,7 +38,9 @@
     {:role (or (:role message) "user")
      :content (or (:content message) "")
      :tool-calls (:tool-calls message)
-     :tool-call-id (:tool-call-id message)}))
+     :tool-call-id (:tool-call-id message)
+     :metadata (:metadata message)
+     :excluded-from-context? (true? (:excluded-from-context? message))}))
 
 (defn- current-leaf-id [conn session-id]
   (or (:leaf_entry_id (common/select-one conn
@@ -101,13 +103,16 @@
 (defn append-message!
   ([store session-id role content]
    (append-message! store session-id role content nil))
-  ([store session-id role content {:keys [tool-calls tool-call-id]}]
+  ([store session-id role content {:keys [tool-calls tool-call-id metadata excluded-from-context?]}]
    (let [tool-calls-json (when (seq tool-calls) (common/json-string tool-calls))
+         metadata-json (common/json-string metadata)
          message {:session_id session-id
                   :role role
                   :content content
                   :tool_calls tool-calls-json
                   :tool_call_id tool-call-id
+                  :metadata_json metadata-json
+                  :excluded_from_context (if excluded-from-context? 1 0)
                   :created_at (common/now-str)}
          id (common/with-transaction
               store
@@ -121,7 +126,9 @@
                                                                        :role role
                                                                        :content content}
                                                                 tool-calls (assoc :tool-calls tool-calls)
-                                                                tool-call-id (assoc :tool-call-id tool-call-id))
+                                                                tool-call-id (assoc :tool-call-id tool-call-id)
+                                                                metadata (assoc :metadata metadata)
+                                                                excluded-from-context? (assoc :excluded-from-context? true))
                                                      :created-at (:created_at message)})]
                   (upsert-leaf! conn session-id (:id entry) (:created-at entry))
                   message-id)))]
@@ -131,16 +138,20 @@
               :content content
               :created-at (:created_at message)}
        tool-calls (assoc :tool-calls tool-calls)
-       tool-call-id (assoc :tool-call-id tool-call-id)))))
+       tool-call-id (assoc :tool-call-id tool-call-id)
+       metadata (assoc :metadata metadata)
+       excluded-from-context? (assoc :excluded-from-context? true)))))
 
 (defn- row->message
-  [{:keys [id role content tool_calls tool_call_id created_at]}]
+  [{:keys [id role content tool_calls tool_call_id metadata_json excluded_from_context created_at]}]
   (cond-> {:id id
            :role role
            :content content
            :created-at created_at}
     (seq tool_calls) (assoc :tool-calls (common/parse-json-string tool_calls))
-    tool_call_id (assoc :tool-call-id tool_call_id)))
+    tool_call_id (assoc :tool-call-id tool_call_id)
+    metadata_json (assoc :metadata (common/parse-json-string metadata_json))
+    (pos? (int (or excluded_from_context 0))) (assoc :excluded-from-context? true)))
 
 (defn list-messages [store session-id]
   (common/with-connection
@@ -148,6 +159,17 @@
     (fn [conn]
       (mapv row->message
             (common/select-many conn (list-messages-sqlvec {:session_id session-id}) identity)))))
+
+(defn update-message-runtime-flags!
+  [store message-id {:keys [metadata excluded-from-context?]}]
+  (common/with-connection
+    store
+    (fn [conn]
+      (common/execute! conn
+                       (update-message-runtime-flags-sqlvec
+                        {:id message-id
+                         :metadata_json (common/json-string metadata)
+                         :excluded_from_context (if excluded-from-context? 1 0)})))))
 
 (defn- row->search-message
   [{:keys [id session_id role content created_at]}]
@@ -353,13 +375,15 @@
        (let [type* (valid-entry-type! type)
              now (or created-at (common/now-str))
              payload* (if (= :message type*)
-                        (let [{:keys [role content tool-calls tool-call-id]} (payload->message payload)
+                        (let [{:keys [role content tool-calls tool-call-id metadata excluded-from-context?]} (payload->message payload)
                               tool-calls-json (when (seq tool-calls) (common/json-string tool-calls))
                               message {:session_id session-id
                                        :role role
                                        :content content
                                        :tool_calls tool-calls-json
                                        :tool_call_id tool-call-id
+                                       :metadata_json (common/json-string metadata)
+                                       :excluded_from_context (if excluded-from-context? 1 0)
                                        :created_at now}]
                           (common/execute! conn (insert-message-sqlvec message))
                           (let [message-id (:id (common/select-one conn (last-insert-row-id-sqlvec) identity))]
@@ -367,7 +391,9 @@
                                            :role role
                                            :content content)
                               tool-calls (assoc :tool-calls tool-calls)
-                              tool-call-id (assoc :tool-call-id tool-call-id))))
+                              tool-call-id (assoc :tool-call-id tool-call-id)
+                              metadata (assoc :metadata metadata)
+                              excluded-from-context? (assoc :excluded-from-context? true))))
                         payload)
              entry (insert-entry-row! conn {:id id
                                             :session-id session-id
@@ -464,8 +490,9 @@
   (->> (branch-path store session-id)
        (keep (fn [{:keys [type payload]}]
                (case type
-                 :message {:role (:role payload)
-                           :content (:content payload)}
+                 :message (when-not (:excluded-from-context? payload)
+                            {:role (:role payload)
+                             :content (:content payload)})
                  :custom_message {:role "user"
                                   :content (:content payload)}
                  nil)))
