@@ -287,6 +287,8 @@
       (let [texts (mapv :text @sent)]
         (is (some #(= "cherry paragraph" %) texts)
             "streamed pre-tool-call text must be promoted to a real message")
+        (is (some #(= "🔧 list_dir status: completed path: ./obsidian" %) texts)
+            "tool-call summary must include tool name and status")
         (is (some #(= "final answer" %) texts)
             "final answer must be sent as a real message")
         (is (= "final answer" (last texts))

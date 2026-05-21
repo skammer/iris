@@ -13,9 +13,17 @@
                :input {:q "clojure"}
                :result {:answer "done"}})]
     (is (str/includes? text "🔧 web"))
+    (is (str/includes? text "status: ok"))
     (is (str/includes? text "q: clojure"))
     (is (not (str/includes? text "\"q\"")))
     (is (not (str/includes? text "\"answer\"")))))
+
+(deftest display-telegram-summary-normalizes-keyword-tool-name-test
+  (let [text (display/telegram-summary
+              {}
+              {:tool-name :fs
+               :status :denied})]
+    (is (= "🔧 fs status: denied" text))))
 
 (deftest display-args-preview-is-human-readable-not-json-test
   (is (= "url: http://example.test method: GET"

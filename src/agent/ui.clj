@@ -695,20 +695,36 @@
    (render-message-content content)
    [:div.meta "streaming…"]])
 
-(defn session-messages-fragment [system session-id]
-  (let [messages (sqlite/list-messages (:store system) session-id)
-        streaming (chat/streaming-content session-id)]
-    (render
-     [:chat-stream#session-messages-panel
-      (if (or (seq messages) streaming)
-        (list*
-         [:div.chat-stream__filler]
-         (concat
-          (for [message messages]
-            (render-message system message))
-          (when streaming
-            [(streaming-message streaming)])))
-        [:div.empty "No messages yet."])])))
+(defn- working-message [state]
+  (streaming-message
+   (if (pos? (:queued-count state))
+     (str "working, queued " (:queued-count state))
+     "thinking...")))
+
+(defn session-messages-fragment
+  ([system session-id]
+   (session-messages-fragment system session-id {}))
+  ([system session-id opts]
+   (let [messages (sqlite/list-messages (:store system) session-id)
+         state (chat/session-state system session-id)
+         streaming (if (contains? opts :streaming)
+                     (:streaming opts)
+                     (chat/streaming-content session-id))
+         streaming* (when-not (str/blank? (str streaming))
+                      (str streaming))]
+     (render
+      [:chat-stream#session-messages-panel
+       (if (or (seq messages) streaming* (:working? state))
+         (list*
+          [:div.chat-stream__filler]
+          (concat
+           (for [message messages]
+             (render-message system message))
+           (cond
+             streaming* [(streaming-message streaming*)]
+             (:working? state) [(working-message state)]
+             :else nil)))
+         [:div.empty "No messages yet."])]))))
 
 (defn events-fragment [system]
   (render

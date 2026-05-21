@@ -52,6 +52,12 @@
     (str ns "/" (name value))
     (name value)))
 
+(defn- label [value]
+  (cond
+    (nil? value) ""
+    (keyword? value) (keyword-label value)
+    :else (str value)))
+
 (declare params->string)
 
 (defn- value->string [value]
@@ -128,11 +134,14 @@
 
 (defn telegram-summary
   "Compact one-message summary of a tool turn for Telegram."
-  [system {:keys [tool-name input]}]
+  [system {:keys [tool-name input status]}]
   (let [cfg (channel-config system :telegram tool-name)
         args-cap (:args-preview-chars cfg 1200)
         args (params-preview input args-cap)
-        line (str "🔧 " (or tool-name "tool")
+        status-text (label status)
+        line (str "🔧 " (or (not-empty (label tool-name)) "tool")
+                  (when-not (str/blank? status-text)
+                    (str " status: " status-text))
                   (when-not (str/blank? args)
                     (str " " args)))]
     (escape-html-truncated line telegram-max-message-chars)))

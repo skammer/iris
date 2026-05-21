@@ -262,6 +262,50 @@
                                   :as :stream))))
     on-content-delta)))
 
+(def ^:private tool-markup-openers
+  ["<｜DSML｜tool_calls>" "<tool_call>"])
+
+(defn- starts-with-tool-markup? [text]
+  (let [trimmed (str/triml (str text))]
+    (some #(str/starts-with? trimmed %) tool-markup-openers)))
+
+(defn- possible-tool-markup-prefix? [text]
+  (let [trimmed (str/triml (str text))]
+    (or (str/blank? trimmed)
+        (some #(or (str/starts-with? % trimmed)
+                   (str/starts-with? trimmed %))
+              tool-markup-openers))))
+
+(defn- guarded-content-delta
+  [on-content-delta tools]
+  (cond
+    (nil? on-content-delta) nil
+    (empty? tools) on-content-delta
+    :else
+    (let [mode (atom :undecided)
+          buffered (atom "")]
+      (fn [chunk]
+        (case @mode
+          :streaming
+          (on-content-delta chunk)
+
+          :suppressing
+          nil
+
+          :undecided
+          (let [text (swap! buffered str chunk)]
+            (cond
+              (starts-with-tool-markup? text)
+              (reset! mode :suppressing)
+
+              (possible-tool-markup-prefix? text)
+              nil
+
+              :else
+              (do
+                (reset! mode :streaming)
+                (on-content-delta text)))))))))
+
 (defn- current-api-key [provider]
   (or (when-let [resolver (:api-key-resolver provider)]
         (resolver provider))
@@ -402,8 +446,8 @@
   (invoke [this request]
     (let [opts (llm-core/request->completion-opts request)
           stream-with-delta? (some? (:on-content-delta opts))
-          on-content-delta (when-not (seq (:tools opts))
-                             (:on-content-delta opts))
+          on-content-delta (guarded-content-delta (:on-content-delta opts)
+                                                  (:tools opts))
           request* {:headers (provider-headers this)}
           response (cond
                      stream-with-delta?
