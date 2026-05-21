@@ -232,6 +232,27 @@
         (api/stop-server! server)
         (io/delete-file path true)))))
 
+(deftest ui-chat-streams-partial-patch-test
+  (let [path (temp-db-path)
+        port (free-port)
+        base-url (str "http://127.0.0.1:" port)
+        {:keys [server]} (started-test-system path port identity)]
+    (try
+      (let [created (http-post (str base-url "/v1/sessions") {:title "stream"})
+            session-id (:id (json/parse-string (:body created) true))
+            response (http-post-form (str base-url "/ui/chat")
+                                     (str "session_id=" session-id "&prompt=hello"))
+            body (:body response)
+            stream-idx (str/index-of body "message--streaming")
+            final-idx (str/last-index-of body "hello world")]
+        (is (= 200 (:status response)))
+        (is (some? stream-idx))
+        (is (some? final-idx))
+        (is (< stream-idx final-idx)))
+      (finally
+        (api/stop-server! server)
+        (io/delete-file path true)))))
+
 (deftest api-tool-policy-exposes-approval-required-test
   (let [path (temp-db-path)
         port (free-port)

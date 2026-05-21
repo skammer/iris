@@ -117,6 +117,32 @@
         (is (= "Hello world" (:content response)))
         (is (empty? (:tool-calls response)))))))
 
+(deftest invoke-streams-normal-content-when-tools-present-test
+  (let [body* (atom nil)]
+    (with-redefs [http/post (fn [_ request]
+                              (reset! body* (json/parse-string (:body request) true))
+                              {:status 200
+                               :headers {"Content-Type" "text/event-stream"}
+                               :body (byte-stream
+                                      (str "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"Hello\"}}]}\n\n"
+                                           "data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n"
+                                           "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+                                           "data: [DONE]\n\n"))})]
+      (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})
+            chunks (atom [])
+            response (llm-core/invoke
+                      llm
+                      {:messages [{:role "user" :content "hi"}]
+                       :tools [{:type "function"
+                                :function {:name "fs"
+                                           :description "Filesystem"
+                                           :parameters {:type "object"}}}]
+                       :on-content-delta #(swap! chunks conj %)})]
+        (is (true? (:stream @body*)))
+        (is (= ["Hello" " world"] @chunks))
+        (is (= "Hello world" (:content response)))
+        (is (empty? (:tool-calls response)))))))
+
 (deftest invoke-errors-on-reasoning-only-length-stream-test
   (with-redefs [http/post (fn [_ _]
                             {:status 200

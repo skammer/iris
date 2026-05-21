@@ -101,6 +101,20 @@
        (contains? #{"agent-end" "chat.completed" "chat.cancelled" "chat.failed"}
                   (:event-type event))))
 
+(defn- message-delta-event? [event session-id]
+  (and (= "session" (:entity-type event))
+       (= session-id (:entity-id event))
+       (= "message-update" (:event-type event))
+       (string? (get-in event [:payload :delta]))))
+
+(defn- stream-ending-message-event? [event session-id]
+  (and (= "session" (:entity-type event))
+       (= session-id (:entity-id event))
+       (= "message-end" (:event-type event))
+       (let [payload (:payload event)]
+         (or (:final? payload)
+             (:tool-turn? payload)))))
+
 (defn session-live-response
   [system request]
   (let [session-id (-> request :parameters :query :session_id)
@@ -147,10 +161,23 @@
                                                 :slow-client :drop-new})
                ch (:channel subscription)
                result-ch (async/chan 1)
-               push! (fn []
-                       (streaming/send-datastar-patch!
-                        channel
-                        (ui/session-messages-fragment system session_id)))]
+               streaming-text (atom nil)
+               push! (fn
+                       ([]
+                        (streaming/send-datastar-patch!
+                         channel
+                         (ui/session-messages-fragment system session_id)))
+                       ([streaming]
+                        (streaming/send-datastar-patch!
+                         channel
+                         (ui/session-messages-fragment system
+                                                       session_id
+                                                       {:streaming streaming}))))
+               push-delta! (fn [delta]
+                             (when-not (str/blank? (str delta))
+                               (push! (swap! streaming-text
+                                             (fnil str "")
+                                             delta))))]
            (try
              (push!)
              (future
@@ -159,7 +186,8 @@
                             {:result (chat/run! system
                                                 {:messages [{:role "user" :content prompt}]
                                                  :session-id session_id
-                                                 :stream? true})})
+                                                 :stream? true
+                                                 :on-delta push-delta!})})
                  (catch Throwable t
                    (async/>!! result-ch {:error t}))))
              (loop [done? false
@@ -177,7 +205,16 @@
                      (= port ch)
                      (do
                        (when-let [event (:payload value)]
-                         (when (relevant-session-event? event session_id)
+                         (cond
+                           (message-delta-event? event session_id)
+                           nil
+
+                           (stream-ending-message-event? event session_id)
+                           (do
+                             (reset! streaming-text nil)
+                             (push! nil))
+
+                           (relevant-session-event? event session_id)
                            (push!))
                          (recur done? (or terminal?
                                           (terminal-session-event? event session_id)))))))))
