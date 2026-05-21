@@ -112,6 +112,33 @@
                :created? false
                :similar-duplicate? true)))))
 
+(defn get-fact [store id]
+  (common/with-connection
+    store
+    (fn [conn]
+      (common/select-one conn (get-fact-sqlvec {:id id}) row->fact))))
+
+(defn remove-fact! [store {:keys [id] :as fact}]
+  (let [row (fact-row fact)
+        now (common/now-str)
+        params (assoc row :updated_at now)
+        removed (common/with-transaction
+                  store
+                  (fn [conn]
+                    (if id
+                      (common/execute! conn (remove-fact-by-id-sqlvec {:id id
+                                                                       :updated_at now}))
+                      (common/execute! conn (remove-fact-by-normalized-sqlvec params)))))]
+    {:id id
+     :subject (:subject fact)
+     :predicate (:predicate fact)
+     :object (:object fact)
+     :scope {:type (:scope_type row)
+             :id (:scope_id row)}
+     :removed-count removed
+     :removed? (pos? (long removed))
+     :updated-at now}))
+
 (defn search-facts
   ([store query] (search-facts store query {}))
   ([store query {:keys [limit include-global?] :or {limit 20 include-global? true} :as opts}]

@@ -218,7 +218,8 @@
    :enabled (boolean (:enabled surface))
    :paths (:paths surface)
    :default_limit (:default-limit surface)
-   :max_limit (:max-limit surface)})
+   :max_limit (:max-limit surface)
+   :min_score (:min-score surface)})
 
 (defn fact->response [fact]
   {:id (:id fact)

@@ -34,13 +34,34 @@
   ;; Markdown intentionally disabled; Hiccup escapes LLM/user text here.
   [:div.code (str content)])
 
+(defn- keyword-label [value]
+  (if-let [ns (namespace value)]
+    (str ns "/" (name value))
+    (name value)))
+
+(defn- json-ready [value]
+  (cond
+    (keyword? value) (keyword-label value)
+    (map? value) (into {}
+                       (map (fn [[k v]]
+                              [(if (keyword? k) (keyword-label k) k)
+                               (json-ready v)]))
+                       value)
+    (set? value) (mapv json-ready value)
+    (sequential? value) (mapv json-ready value)
+    :else value))
+
 (defn- pretty-json [value]
   (try
-    (json/generate-string (if (string? value)
-                            (json/parse-string value true)
-                            value)
+    (json/generate-string (json-ready (if (string? value)
+                                        (json/parse-string value true)
+                                        value))
                           {:pretty true})
-    (catch Exception _ (str value))))
+    (catch Exception _
+      (if (string? value)
+        value
+        (binding [*print-namespace-maps* false]
+          (pr-str value))))))
 
 (defn- parse-json-or-value [value]
   (try
@@ -683,7 +704,7 @@
                                args (assoc :args args)
                                details (assoc :details details)))]]])
 
-(defn memory-tool-result-fragment [{:keys [ok? input result] :as payload}]
+(defn memory-tool-result-fragment [{:keys [ok? input result source-json] :as payload}]
   (render
    [:div#memory-tool-output
     (if ok?
@@ -696,7 +717,11 @@
          [:pre.code (pretty-json input)]]
         [:div.result
          [:strong "output"]
-         [:pre.code (str result)]]]]
+         [:pre.code (str result)]]
+        (when source-json
+          [:div.result
+           [:strong "source json"]
+           [:pre.code (pretty-json source-json)]])]]
       (error-result "Memory Tool Result" payload))]))
 
 (defn memory-graph-result-fragment [{:keys [ok? query opts result] :as payload}]

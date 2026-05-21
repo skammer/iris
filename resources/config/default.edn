@@ -94,7 +94,8 @@
  :skills {:dirs ["skills"]}
  :memory {:prompt {:paths ["MEMORY.md"]}
           :search {:default-limit 10
-                   :max-limit 10}
+                   :max-limit 10
+                   :min-score 0.3}
           :vault {:paths ["memory"]
                   :writable? true}
           :facts {:extractor {:enabled true

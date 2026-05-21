@@ -12,6 +12,7 @@
 
 (defprotocol IGraphMemoryBackend
   (save-fact! [this fact])
+  (remove-fact! [this fact])
   (merge-entities! [this canonical aliases])
   (query-facts [this query opts])
   (backend-health-check [this]))
@@ -19,11 +20,13 @@
 (defprotocol IDatalogExplorer
   (datalog-query* [this query opts]))
 
-(declare save-graph-fact! merge-graph-entities! query-graph-memory)
+(declare save-graph-fact! remove-graph-fact! merge-graph-entities! query-graph-memory)
 
 (defrecord NullGraphMemoryBackend []
   IGraphMemoryBackend
   (save-fact! [_ _]
+    (throw (ex-info "Graph memory backend is disabled" {:type :graph-memory-disabled})))
+  (remove-fact! [_ _]
     (throw (ex-info "Graph memory backend is disabled" {:type :graph-memory-disabled})))
   (merge-entities! [_ _ _]
     (throw (ex-info "Graph memory backend is disabled" {:type :graph-memory-disabled})))
@@ -140,6 +143,11 @@
 (defn- fact-text [fact]
   (str (:subject fact) " " (:predicate fact) " " (:object fact)))
 
+(defn- graph-path-text [path]
+  (str (str/join " " (map :label (:nodes path)))
+       " "
+       (str/join " " (map :predicate (:edges path)))))
+
 (defn- contains-query-score [query text]
   (let [query* (str/lower-case (str/trim (or query "")))
         text* (str/lower-case (or text ""))]
@@ -158,7 +166,9 @@
     :message (:content item)
     :event (json/generate-string (:payload item))
     :fact (fact-text item)
-    :graph (fact-text item)
+    :graph (if (= "path" (:type item))
+             (graph-path-text item)
+             (fact-text item))
     ""))
 
 (defn- score-memory-item [query surface item]
@@ -184,20 +194,40 @@
                        :surface-weight surface-weight}
      :item item}))
 
+(defn- dedupe-ranked-results [ranked]
+  (second
+   (reduce (fn [[seen results] {:keys [surface item] :as scored}]
+             (let [value (-> (item-text surface item)
+                             (str/lower-case)
+                             (str/replace #"\s+" " ")
+                             str/trim)
+                   key (if (str/blank? value)
+                         (pr-str item)
+                         value)]
+               (if (contains? seen key)
+                 [seen results]
+                 [(conj seen key) (conj results scored)])))
+           [#{} []]
+           ranked)))
+
 (defn rank-memory-results
   [query results opts]
-  (let [limit (or (:limit opts) 20)]
+  (let [limit (or (:limit opts) 20)
+        min-score (or (:min-score opts) 0.0)
+        dedupe? (not= false (:dedupe? opts))]
     (->> (concat
           (map #(score-memory-item query :message %) (:messages results))
           (map #(score-memory-item query :event %) (:events results))
           (map #(score-memory-item query :fact %) (:facts results))
           (map #(score-memory-item query :graph %) (:graph results)))
-         (filter #(pos? (:score %)))
          (sort-by :score >)
+         (filter #(and (pos? (:score %)) (>= (:score %) min-score)))
+         (#(if dedupe? (dedupe-ranked-results %) %))
          (take limit)
          vec)))
 
 (def default-search-limit 10)
+(def default-min-search-score 0.3)
 
 (defn- positive-limit [value fallback]
   (if (and (integer? value) (pos? value))
@@ -209,6 +239,12 @@
         configured-max (positive-limit (get search :max-limit) configured-default)]
     {:default-limit (min configured-default configured-max)
      :max-limit configured-max}))
+
+(defn- search-min-score-config [search]
+  (let [score (:min-score search)]
+    (if (number? score)
+      (max 0.0 (double score))
+      default-min-search-score)))
 
 (defn- effective-search-limit [memory-service requested]
   (min (positive-limit requested (:search-default-limit memory-service))
@@ -232,6 +268,7 @@
      :prompt-paths (vec (get prompt :paths ["MEMORY.md"]))
      :search-default-limit default-limit
      :search-max-limit max-limit
+     :search-min-score (search-min-score-config search)
      :vault-roots (canonical-roots (get vault :paths []))
      :vault-writable? (true? (:writable? vault))
      :fs-roots (canonical-roots (or fs-roots []))
@@ -248,7 +285,8 @@
     :type :sqlite
     :writable false
     :default-limit (:search-default-limit memory-service)
-    :max-limit (:search-max-limit memory-service)}
+    :max-limit (:search-max-limit memory-service)
+    :min-score (:search-min-score memory-service)}
    {:name :facts
     :type :sqlite
     :writable true
@@ -274,6 +312,7 @@
   ([memory-service query] (search-memory memory-service query {}))
   ([memory-service query opts]
    (let [limit (effective-search-limit memory-service (:limit opts))
+         min-score (or (:min-score opts) (:search-min-score memory-service))
          messages (sqlite/search-messages (:store memory-service)
                                           query
                                           {:limit limit
@@ -290,7 +329,7 @@
          graph (try
                  (->> (query-graph-memory memory-service nil {:limit graph-limit})
                       (map #(assoc % :score (:score (score-memory-item query :graph %))))
-                      (filter #(pos? (or (:score %) 0.0)))
+                      (filter #(>= (or (:score %) 0.0) min-score))
                       (sort-by :score >)
                       (take limit)
                       vec)
@@ -300,7 +339,9 @@
                     :events events
                     :facts facts
                     :graph graph}]
-       (assoc results :ranked (rank-memory-results query results {:limit limit}))))))
+       (assoc results :ranked (rank-memory-results query results {:limit limit
+                                                                   :min-score min-score
+                                                                   :dedupe? (:dedupe? opts)}))))))
 
 (defn save-memory-fact!
   ([memory-service fact] (save-memory-fact! memory-service fact {}))
@@ -328,6 +369,30 @@
                                    :predicate (:predicate saved)
                                    :source-session-id (:source-session-id saved)}})
      saved)))
+
+(defn remove-memory-fact!
+  ([memory-service fact] (remove-memory-fact! memory-service fact {}))
+  ([memory-service fact opts]
+   (let [fact* (merge opts fact)
+         removed (sqlite/remove-memory-fact! (:store memory-service) fact*)]
+     (when (and (:removed? removed)
+                (true? (get-in memory-service [:config :graph :enabled])))
+       (try
+         (remove-graph-fact! memory-service fact*)
+         (catch Exception _ nil)))
+     (sqlite/log-event! (:store memory-service)
+                        {:event-type :memory.fact.removed
+                         :entity-type :memory
+                         :entity-id (or (:id fact*) (:id removed))
+                         :request-id (:source-request-id fact*)
+                         :payload {:id (or (:id fact*) (:id removed))
+                                   :removed? (:removed? removed)
+                                   :removed-count (:removed-count removed)
+                                   :scope (:scope removed)
+                                   :subject (:subject fact*)
+                                   :predicate (:predicate fact*)
+                                   :object (:object fact*)}})
+     removed)))
 
 (defn search-facts
   ([memory-service query] (search-facts memory-service query {}))
@@ -441,6 +506,10 @@
   [memory-service fact]
   (save-fact! (:graph-backend memory-service) fact))
 
+(defn remove-graph-fact!
+  [memory-service fact]
+  (remove-fact! (:graph-backend memory-service) fact))
+
 (defn merge-graph-entities!
   [memory-service canonical aliases]
   (merge-entities! (:graph-backend memory-service) canonical aliases))
@@ -497,6 +566,7 @@
     (:ranked (search-memory memory-service
                             (:query case*)
                             (merge {:limit limit}
+                                   {:dedupe? false}
                                    (:search-opts case*))))))
 
 (defn evaluate-retrieval

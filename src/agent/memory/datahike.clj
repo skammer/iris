@@ -428,6 +428,34 @@
                   :edge/valid-to observed-at
                   :edge/invalidated-by new-edge-id})))))
 
+(defn- remove-edge-match? [db fact edge]
+  (let [id (:id fact)
+        subject (:subject fact)
+        predicate (:predicate fact)
+        object (:object fact)
+        source-id (when subject (canonical-entity-id db subject))
+        target-id (when object (canonical-entity-id db object))]
+    (and (str/blank? (or (:edge/valid-to edge) ""))
+         (if (not (str/blank? (or id "")))
+           (or (= id (:edge/id edge))
+               (= id (:edge/source-fact-id edge)))
+           (and (not (str/blank? (or subject "")))
+                (not (str/blank? (or predicate "")))
+                (not (str/blank? (or object "")))
+                (= source-id (get-in edge [:edge/source :entity/id]))
+                (= predicate (:edge/predicate edge))
+                (= target-id (get-in edge [:edge/target :entity/id])))))))
+
+(defn- remove-edge-tx [db fact observed-at]
+  (let [invalidated-by (or (:invalidated-by fact)
+                           (str "removed:" (UUID/randomUUID)))]
+    (->> (query-edges db)
+         (filter #(remove-edge-match? db fact %))
+         (mapv (fn [edge]
+                 {:db/id (:db/id edge)
+                  :edge/valid-to observed-at
+                  :edge/invalidated-by invalidated-by})))))
+
 (defn- merge-entity-tx [db canonical aliases observed-at]
   (let [canonical-id (canonical-entity-id db canonical)
         canonical-existing (query-entity-by-normalized db canonical)
@@ -485,6 +513,18 @@
                            (graph-tx @conn fact**)))]
       (d/transact conn {:tx-data tx})
       fact**))
+  (remove-fact! [_ fact]
+    (let [observed-at (or (:observed-at fact) (now))
+          tx (remove-edge-tx @conn fact observed-at)]
+      (when (seq tx)
+        (d/transact conn {:tx-data tx}))
+      {:id (:id fact)
+       :subject (:subject fact)
+       :predicate (:predicate fact)
+       :object (:object fact)
+       :removed-count (count tx)
+       :removed? (pos? (count tx))
+       :observed-at observed-at}))
   (merge-entities! [_ canonical aliases]
     (let [observed-at (now)
           aliases* (vec (remove str/blank? (map str aliases)))
