@@ -587,11 +587,15 @@
   ([system] (sessions-fragment system nil))
   ([system active-session-id]
    (let [sessions (sqlite/list-sessions (:store system))
-         active-id (or active-session-id
+         active-id (or (not-empty active-session-id)
                        (some-> sessions first :id))]
      (render
       [:aside#sessions-panel.panel.sessions-sidebar
-       {"data-on-interval__duration.15s.leading" "@get('/ui/sessions')"}
+       {"data-on-interval__duration.15s.leading"
+        (str "@get('/ui/sessions"
+             (when active-id
+               (str "?session_id=" (url-encode active-id)))
+             "')")}
        [:form#create-session-form.create-session-form
         {"data-on:submit" "@post('/ui/sessions', {contentType: 'form', selector: '#create-session-form'})"
          "data-on:datastar-fetch" "evt.detail.type === 'finished' && evt.currentTarget.reset()"

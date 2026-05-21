@@ -340,6 +340,9 @@
    [:session_id {:optional true} :string]
    [:run_id {:optional true} :string]])
 
+(def ^:private optional-session-id-query
+  [:map [:session_id {:optional true} :string]])
+
 (def ^:private session-id-query
   [:map [:session_id schemas/NonBlankString]])
 
@@ -363,7 +366,8 @@
                        :parameters {:query shell-query}}}]
    ["/ui/dashboard" {:get {:handler/id :ui-dashboard}}]
    ["/ui/operator-board" {:get {:handler/id :ui-operator-board}}]
-   ["/ui/sessions" {:get {:handler/id :ui-sessions}
+   ["/ui/sessions" {:get {:handler/id :ui-sessions
+                          :parameters {:query optional-session-id-query}}
                     :post {:handler/id :ui-create-session
                            :parameters {:form ui-create-session-form}}}]
    ["/ui/session-detail" {:get {:handler/id :ui-session-detail

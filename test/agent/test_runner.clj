@@ -19,21 +19,28 @@
    [agent.memory.core-test]
    [agent.mcp.core-test]
    [agent.orchestrator-test]
+   [agent.persistence.session-entries-test]
    [agent.persistence.sqlite-test]
    [agent.planner-test]
    [agent.release-smoke-test]
+   [agent.runners.bubblewrap-test]
    [agent.runners.docker-podman-e2e-test]
    [agent.runners.docker-podman-test]
    [agent.runners.local-unsandboxed-test]
    [agent.runners.seatbelt-test]
    [agent.runtime.child-test]
+   [agent.runtime.compaction-test]
+   [agent.runtime.context-pack-test]
    [agent.runtime.core-test]
+   [agent.runtime.loop-test]
    [agent.runtime.schema-test]
+   [agent.runtime.tools-test]
    [agent.runtime.trace-test]
    [agent.skills-test]
    [agent.ui-test]
    [agent.tools.common.fs-test]
    [agent.tools.common.memory-test]
+   [agent.llm.registry-test]
    [agent.llm.providers.ollama-test]
    [agent.llm.core-test]
    [agent.llm.messages-test]
@@ -63,21 +70,28 @@
     agent.memory.core-test
     agent.mcp.core-test
     agent.orchestrator-test
+    agent.persistence.session-entries-test
     agent.persistence.sqlite-test
     agent.planner-test
     agent.release-smoke-test
+    agent.runners.bubblewrap-test
     agent.runners.docker-podman-e2e-test
     agent.runners.docker-podman-test
     agent.runners.local-unsandboxed-test
     agent.runners.seatbelt-test
     agent.runtime.child-test
+    agent.runtime.compaction-test
+    agent.runtime.context-pack-test
     agent.runtime.core-test
+    agent.runtime.loop-test
     agent.runtime.schema-test
+    agent.runtime.tools-test
     agent.runtime.trace-test
     agent.skills-test
     agent.ui-test
     agent.tools.common.fs-test
     agent.tools.common.memory-test
+    agent.llm.registry-test
     agent.llm.providers.ollama-test
     agent.llm.core-test
     agent.llm.messages-test

@@ -34,6 +34,23 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest sessions-refresh-preserves-selected-session
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [_first-session (sqlite/create-session! store "first")
+            selected-session (sqlite/create-session! store "selected")
+            html (ui/sessions-fragment {:store store} (:id selected-session))]
+        (is (str/includes? html
+                           (str "@get(&apos;/ui/sessions?session_id="
+                                (:id selected-session)
+                                "&apos;)")))
+        (is (str/includes? html "session-link--active"))
+        (is (str/includes? html "selected")))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest session-message-content-is-escaped
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})]
