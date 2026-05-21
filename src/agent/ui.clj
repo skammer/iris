@@ -18,6 +18,7 @@
    [clojure.string :as str]
    [hiccup2.core :as h])
   (:import
+   (java.net URLEncoder)
    (java.time Instant)))
 
 (defn- render [node]
@@ -63,6 +64,15 @@
         (binding [*print-namespace-maps* false]
           (pr-str value))))))
 
+(defn- url-encode [value]
+  (URLEncoder/encode (str value) "UTF-8"))
+
+(defn- safe-dom-id [prefix value]
+  (str prefix "-"
+       (str/replace (str value)
+                    #"[^A-Za-z0-9_-]"
+                    "-")))
+
 (defn- parse-json-or-value [value]
   (try
     (if (string? value)
@@ -70,18 +80,42 @@
       value)
     (catch Exception _ value)))
 
+(defn- tool-status-node [status]
+  (when status
+    [:span {:class (str "tool-status status--" status)} status]))
+
+(defn- tool-detail-template [id title status & body]
+  [:template {:id id}
+   [:div.tool-detail-content
+    [:div.tool-detail-content__meta
+     [:span.meta title]
+     (tool-status-node status)]
+    body]])
+
 (defn- render-tool-call [{:keys [id function]}]
   (let [{:keys [name arguments]} function
         params (parse-json-or-value arguments)
-        args (tool-display/params-preview params 800)]
-    [:details.tool-call
-     [:summary.tool-call__header
-      [:span.tool-call__name (str "→ " name)]
+        args (tool-display/params-preview params 800)
+        detail-id (safe-dom-id "tool-call-detail" (or id (str name "-" (hash arguments))))]
+    [:div.tool-call
+     [:button.tool-row
+      {:type "button"
+       "data-tool-detail" true
+       "data-tool-detail-template" detail-id
+       "data-tool-detail-title" (str "function: " name)
+       "data-tool-detail-status" "requested"}
+      [:span.tool-row__main
+       [:span.tool-row__name (str "→ " name)]
+       (tool-status-node "requested")
+       (when id [:span.tool-row__id.meta id])]
       (when-not (str/blank? args)
-        [:span.tool-call__args-preview.code args])
-      (when id [:span.tool-call__id.meta id])]
-     [:div.tool-call__body
-      [:pre.tool-call__args.code (pretty-json params)]]]))
+        [:span.tool-row__args.code args])]
+     (tool-detail-template
+      detail-id
+      (str "function: " name)
+      "requested"
+      [:h3 "Arguments"]
+      [:pre.tool-detail__pre.code (pretty-json params)])]))
 
 (defn- parse-tool-content [content]
   (try
@@ -90,7 +124,7 @@
     (catch Exception _ nil)))
 
 (defn- tool-result-summary
-  "Builds the collapsed-summary line for a tool result: name · status · args preview."
+  "Builds one-line tool result summary: name · status · args preview."
   [system parsed tool-call-id]
   (let [tool-name (or (:tool-name parsed) "tool")
         status (some-> (:status parsed) name)
@@ -102,26 +136,34 @@
     [:span.tool-result__summary
      [:span.tool-result__summary-head
       [:span.tool-result__name tool-name]
-      (when status [:span.tool-result__status {:class (str "status--" status)} status])]
+      (tool-status-node status)]
      (when-not (str/blank? args)
        [:span.tool-result__args.code args])
      (when tool-call-id [:span.tool-result__id.meta tool-call-id])]))
 
-(defn- render-tool-message [system {:keys [content created-at tool-call-id]}]
+(defn- render-tool-message [system {:keys [id content created-at tool-call-id]}]
   (let [parsed (parse-tool-content content)
-        cfg (tool-display/channel-config system :web (:tool-name parsed))
-        height-px (:max-result-height-px cfg 320)
+        status (some-> (:status parsed) name)
+        tool-name (or (:tool-name parsed) "tool")
+        detail-id (safe-dom-id "tool-result-detail" (or id tool-call-id (hash content)))
         body (if parsed
                (pretty-json (dissoc parsed :tool-name :status))
                (pretty-json content))]
     [:article.message.message--tool
-     [:details.tool-result
-      (when-not (:collapsed? cfg true) {:open true})
-      [:summary.tool-result__head
+     [:div.tool-result
+      [:button.tool-row.tool-result__head
+       {:type "button"
+        "data-tool-detail" true
+        "data-tool-detail-template" detail-id
+        "data-tool-detail-title" (str "tool: " tool-name)
+        "data-tool-detail-status" (or status "")}
        (tool-result-summary system parsed tool-call-id)]
-      [:div.tool-result__body
-       {:style (str "max-height:" height-px "px;overflow:auto;")}
-       [:pre.tool-result.code body]]]
+      (tool-detail-template
+       detail-id
+       (str "tool: " tool-name)
+       status
+       [:h3 "Result"]
+       [:pre.tool-detail__pre.code body])]
      [:div.meta created-at]]))
 
 (defn- render-message
@@ -199,14 +241,52 @@
   (let [tab (some-> value name str/lower-case keyword)]
     (if (some #(= tab (:key %)) tabs) tab :chat)))
 
+(defn- route-path [{:keys [tab session-id run-id]}]
+  (case (normalize-tab tab)
+    :overview "/overview"
+    :chat (if session-id (str "/chat/" session-id) "/chat")
+    :runs (if run-id (str "/runs/" run-id) "/runs")
+    :tools "/tools"
+    :memory "/memory"
+    :logs "/logs"
+    "/chat"))
+
+(defn- route-state-from-path [path]
+  (let [[segment id] (->> (str/split (or path "") #"/")
+                          (remove str/blank?)
+                          (take 2))]
+    (case segment
+      "overview" {:tab :overview}
+      "chat" (cond-> {:tab :chat} id (assoc :session-id id))
+      "runs" (cond-> {:tab :runs} id (assoc :run-id id))
+      "tools" {:tab :tools}
+      "memory" {:tab :memory}
+      "logs" {:tab :logs}
+      {:tab :chat})))
+
+(defn- shell-url [{:keys [tab session-id run-id]}]
+  (str "/ui/shell?tab=" (name (normalize-tab tab))
+       (when session-id
+         (str "&session_id=" (url-encode session-id)))
+       (when run-id
+         (str "&run_id=" (url-encode run-id)))))
+
+(defn router-state-fragment [path]
+  (render [:div#router-state {:hidden true
+                              "data-route-path" path}]))
+
 (defn- tab-link [tab active-tab]
   [:button.tab-link
    {:type "button"
     :class (when (= (:key tab) active-tab) "active")
+    "data-route" (route-path {:tab (:key tab)})
     "data-on:click" (str "@get('/ui/shell?tab=" (name (:key tab)) "')")}
    (:label tab)])
 
-(defn index-page []
+(defn index-page
+  ([] (index-page "/"))
+  ([path]
+   (let [route-state (route-state-from-path path)]
   (render
    [:html {:lang "en"}
     [:head
@@ -225,11 +305,14 @@
     [:body
      [:main
       [:div#shell-fragment
-       {"data-init" "@get('/ui/shell?tab=chat')"}
-       "[LOADING...]"]]]]))
+       {"data-init" (str "@get('" (shell-url route-state) "')")}
+       "[LOADING...]"]]]]))))
 
-(defn shell-fragment [system active-tab]
-  (let [active-tab (normalize-tab active-tab)
+(defn shell-fragment [system active-route]
+  (let [route (if (map? active-route) active-route {:tab active-route})
+        active-tab (normalize-tab (:tab route))
+        session-id (:session-id route)
+        run-id (:run-id route)
         storage (sqlite/health-check (:store system))
         runtime-health (runtime/runtime-health (:runtime-service system))
         provider (name (config/active-provider-key (get-in system [:config :llm])))
@@ -238,6 +321,9 @@
         port (get-in system [:config :api :port])]
     (render
      [:div#shell-fragment.workspace-stack
+      (trusted-fragment (router-state-fragment (route-path {:tab active-tab
+                                                            :session-id session-id
+                                                            :run-id run-id})))
       [:header.shell-header
        [:div.status-bar
         [:div.status-block.status-block--accent
@@ -267,12 +353,12 @@
       (trusted-fragment (case active-tab
              :chat (render-many
                     [:section.workspace-grid.chat-workspace
-                     (trusted-fragment (sessions-fragment system))
-                     (trusted-fragment (session-detail-fragment system nil))])
+                     (trusted-fragment (sessions-fragment system session-id))
+                     (trusted-fragment (session-detail-fragment system session-id))])
              :runs (render-many
                     [:section.workspace-grid.two-up
                      (trusted-fragment (runs-fragment system))
-                     (trusted-fragment (run-detail-fragment system nil))])
+                     (trusted-fragment (run-detail-fragment system run-id))])
              :tools (render-many
                      [:section.workspace-grid.tools
                       [:section.panel.stack
@@ -404,12 +490,13 @@
       [:div.stack
        [:div.result
         [:strong "Active runs"]
-        (if (seq active-runs)
-          [:div.stack
-           (for [{:keys [id substrate status created-at]} (take 6 active-runs)]
+       (if (seq active-runs)
+         [:div.stack
+          (for [{:keys [id substrate status created-at]} (take 6 active-runs)]
              [:button.session-link
               {:type "button"
-               "data-on:click" (str "@get('/ui/run-detail?run_id=" id "')")}
+               "data-route" (route-path {:tab :runs :run-id id})
+               "data-on:click" (str "@get('/ui/shell?tab=runs&run_id=" id "')")}
               [:strong id]
               [:div.session-meta (str substrate " | " status)]
               [:div.session-meta created-at]])]
@@ -417,11 +504,12 @@
        [:div.result.diagnostic-result
         [:strong "Stale runs"]
         (if (seq stale-runs)
-          [:div.stack
-           (for [{:keys [id status heartbeat created-at]} (take 6 stale-runs)]
+         [:div.stack
+          (for [{:keys [id status heartbeat created-at]} (take 6 stale-runs)]
              [:button.session-link
               {:type "button"
-               "data-on:click" (str "@get('/ui/run-detail?run_id=" id "')")}
+               "data-route" (route-path {:tab :runs :run-id id})
+               "data-on:click" (str "@get('/ui/shell?tab=runs&run_id=" id "')")}
               [:strong id]
               [:div.session-meta (str status " | stale")]
               [:div.session-meta (str "last seen | " (or (:observed-at heartbeat) created-at))]])]
@@ -440,11 +528,12 @@
        [:div.result.diagnostic-result
         [:strong "Failure queue"]
         (if (seq failed-runs)
-          [:div.stack
-           (for [{:keys [id status last-error finished-at]} (take 6 failed-runs)]
+         [:div.stack
+          (for [{:keys [id status last-error finished-at]} (take 6 failed-runs)]
              [:button.session-link
               {:type "button"
-               "data-on:click" (str "@get('/ui/run-detail?run_id=" id "')")}
+               "data-route" (route-path {:tab :runs :run-id id})
+               "data-on:click" (str "@get('/ui/shell?tab=runs&run_id=" id "')")}
               [:strong id]
               [:div.session-meta (str status " | " (or finished-at "-"))]
               (when (seq last-error)
@@ -520,6 +609,7 @@
             [:button.session-link
              {:type "button"
               :class (when (= id active-id) "session-link--active")
+              "data-route" (route-path {:tab :chat :session-id id})
               "data-on:click" (str "@get('/ui/session-detail?session_id=" id "')")}
              [:strong (or title "Untitled session")]
              [:div.session-meta
@@ -529,10 +619,18 @@
                      (str " | queued " (:queued-count state))))]])]
          [:div.empty "No sessions yet."])]))))
 
+(defn- session-target [system session-id]
+  (let [sessions (sqlite/list-sessions (:store system))]
+    (or (some #(when (= session-id (:id %)) %) sessions)
+        (first sessions))))
+
+(defn session-route-path [system session-id]
+  (if-let [session (session-target system session-id)]
+    (route-path {:tab :chat :session-id (:id session)})
+    "/chat"))
+
 (defn session-detail-fragment [system session-id]
-  (let [sessions (sqlite/list-sessions (:store system))
-        session (or (some #(when (= session-id (:id %)) %) sessions)
-                    (first sessions))]
+  (let [session (session-target system session-id)]
     (render
      (if-not session
        [:section#session-detail-panel.panel
@@ -552,6 +650,20 @@
                           (when (pos? (:queued-count state))
                             (str " | queued " (:queued-count state))))]]
         (trusted-fragment (session-messages-fragment system (:id session)))
+        [:aside#tool-detail-sidebar.tool-detail-sidebar
+         {:hidden true
+          :aria-label "Tool detail"}
+         [:div.tool-detail-sidebar__head
+          [:div
+           [:h2#tool-detail-sidebar-title "Tool detail"]
+           [:div#tool-detail-sidebar-status.meta ""]]
+          [:button.tool-detail-sidebar__close
+           {:type "button"
+            "data-tool-detail-close" true
+            :aria-label "Close tool detail"}
+           "Close"]]
+         [:div#tool-detail-sidebar-body.tool-detail-sidebar__body
+          [:div.empty "Select tool row."]]]
         [:form#chat-form
          {"data-on:submit" "@post('/ui/chat', {contentType: 'form'})"
           "data-indicator" "chatLoading"
@@ -1010,6 +1122,7 @@
          (for [{:keys [id name agent-id substrate status created-at]} runs]
            [:button.session-link
             {:type "button"
+             "data-route" (route-path {:tab :runs :run-id id})
              "data-on:click" (str "@get('/ui/run-detail?run_id=" id "')")}
             [:strong (or name id)]
             [:div.session-meta.code (str agent-id " / " substrate)]
@@ -1041,6 +1154,11 @@
     (or (when run-id (runtime/get-run (:runtime-service system) run-id))
         (when-let [candidate (first runs)]
           (runtime/get-run (:runtime-service system) (:id candidate))))))
+
+(defn run-route-path [system run-id]
+  (if-let [run (run-detail-target system run-id)]
+    (route-path {:tab :runs :run-id (:id run)})
+    "/runs"))
 
 (defn- json-result [title value]
   [:div.result

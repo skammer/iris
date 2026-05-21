@@ -61,7 +61,7 @@
   (let [sys #(current-system system)]
   {:health (fn [r] (health/handle (sys) r))
 
-   :ui-index (fn [_] (responses/html-response 200 (ui-views/index-page)))
+   :ui-index (fn [r] (responses/html-response 200 (ui-views/index-page (:uri r))))
    :ui-shell (fn [r] (ui/shell (sys) r))
    :ui-dashboard (fn [r] (ui/dashboard (sys) r))
    :ui-operator-board (fn [r] (ui/operator-board (sys) r))
