@@ -1,6 +1,85 @@
 const AUTOSCROLL_THRESHOLD_PX = 300;
 const THEME_STORAGE_KEY = "iris-theme";
 
+const syncRoute = (path, replace = false) => {
+  if (!path || window.location.pathname === path) return;
+  const method = replace ? "replaceState" : "pushState";
+  window.history[method]({ irisRoute: path }, "", path);
+};
+
+const routerStatePath = () =>
+  document.getElementById("router-state")?.dataset.routePath || "";
+
+let routerInitialized = false;
+
+const syncRouterState = () => {
+  const path = routerStatePath();
+  if (!path) return;
+  syncRoute(path, !routerInitialized);
+  routerInitialized = true;
+};
+
+const routerObserver = new MutationObserver(() => syncRouterState());
+
+const closeToolDetail = () => {
+  const sidebar = document.getElementById("tool-detail-sidebar");
+  if (!(sidebar instanceof HTMLElement)) return;
+  sidebar.hidden = true;
+  sidebar.removeAttribute("data-open");
+};
+
+const openToolDetail = (trigger) => {
+  const templateId = trigger.dataset.toolDetailTemplate;
+  const template = templateId ? document.getElementById(templateId) : null;
+  const sidebar = document.getElementById("tool-detail-sidebar");
+  const title = document.getElementById("tool-detail-sidebar-title");
+  const status = document.getElementById("tool-detail-sidebar-status");
+  const body = document.getElementById("tool-detail-sidebar-body");
+  if (
+    !(template instanceof HTMLTemplateElement)
+    || !(sidebar instanceof HTMLElement)
+    || !(title instanceof HTMLElement)
+    || !(status instanceof HTMLElement)
+    || !(body instanceof HTMLElement)
+  ) return;
+  title.textContent = trigger.dataset.toolDetailTitle || "Tool detail";
+  status.textContent = trigger.dataset.toolDetailStatus || "";
+  body.replaceChildren(template.content.cloneNode(true));
+  sidebar.hidden = false;
+  sidebar.dataset.open = "true";
+};
+
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+
+  const close = target.closest("[data-tool-detail-close]");
+  if (close) {
+    closeToolDetail();
+    return;
+  }
+
+  const detail = target.closest("[data-tool-detail]");
+  if (detail instanceof HTMLElement) {
+    openToolDetail(detail);
+    return;
+  }
+
+  const route = target.closest("[data-route]");
+  if (route instanceof HTMLElement) {
+    const path = route.dataset.route;
+    if (path) syncRoute(path);
+  }
+}, true);
+
+window.addEventListener("popstate", () => {
+  window.location.reload();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeToolDetail();
+});
+
 const storedTheme = () => {
   try {
     return localStorage.getItem(THEME_STORAGE_KEY);
@@ -240,3 +319,11 @@ if (!customElements.get("scroll-bottom")) customElements.define("scroll-bottom",
 if (!customElements.get("chat-stream")) customElements.define("chat-stream", ChatStream);
 if (!customElements.get("agent-chat-panel")) customElements.define("agent-chat-panel", AgentChatPanel);
 if (!customElements.get("agent-run-panel")) customElements.define("agent-run-panel", AgentRunPanel);
+
+routerObserver.observe(document.body, {
+  childList: true,
+  subtree: true,
+  attributes: true,
+  attributeFilter: ["data-route-path"],
+});
+requestAnimationFrame(syncRouterState);

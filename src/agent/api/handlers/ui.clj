@@ -27,7 +27,11 @@
 
 (defn shell [system request]
   (responses/html-response 200
-                           (ui/shell-fragment system (some-> request :parameters :query :tab keyword))))
+                           (let [query (-> request :parameters :query)]
+                             (ui/shell-fragment system
+                                                {:tab (some-> (:tab query) keyword)
+                                                 :session-id (:session_id query)
+                                                 :run-id (:run_id query)}))))
 
 (defn dashboard [system _request]
   (responses/html-response 200 (ui/dashboard-fragment system)))
@@ -55,7 +59,8 @@
         channel
         (str (ui/sessions-fragment system (:id session))
              (ui/session-detail-fragment system (:id session))
-             (ui/dashboard-fragment system)))
+             (ui/dashboard-fragment system)
+             (ui/router-state-fragment (ui/session-route-path system (:id session)))))
        (http-kit/close channel))
      (fn [_ _] nil))))
 
@@ -63,7 +68,9 @@
   (let [session-id (-> request :parameters :query :session_id)]
     (responses/html-response 200
                              (str (ui/sessions-fragment system session-id)
-                                  (ui/session-detail-fragment system session-id)))))
+                                  (ui/session-detail-fragment system session-id)
+                                  (ui/router-state-fragment
+                                   (ui/session-route-path system session-id))))))
 
 (defn session-messages [system request]
   (let [session-id (-> request :parameters :query :session_id)]
@@ -392,7 +399,10 @@
 
 (defn run-detail [system request]
   (responses/html-response 200
-                           (ui/run-detail-fragment system (-> request :parameters :query :run_id))))
+                           (let [run-id (-> request :parameters :query :run_id)]
+                             (str (ui/run-detail-fragment system run-id)
+                                  (ui/router-state-fragment
+                                   (ui/run-route-path system run-id))))))
 
 (defn run-detail-body [system request]
   (responses/html-response 200
@@ -415,19 +425,25 @@
         _ (runs/launch-run! system (:id run))]
     (responses/html-response 201
                              (str (ui/runs-fragment system)
-                                  (ui/run-detail-fragment system (:id run))))))
+                                  (ui/run-detail-fragment system (:id run))
+                                  (ui/router-state-fragment
+                                   (ui/run-route-path system (:id run)))))))
 
 (defn run-launch [system _request run-id]
   (runs/launch-run! system run-id)
   (responses/html-response 200
                            (str (ui/runs-fragment system)
-                                (ui/run-detail-fragment system run-id))))
+                                (ui/run-detail-fragment system run-id)
+                                (ui/router-state-fragment
+                                 (ui/run-route-path system run-id)))))
 
 (defn run-signal [system _request run-id]
   (runs/signal-run! system run-id {:command-type "cancel"})
   (responses/html-response 200
                            (str (ui/runs-fragment system)
-                                (ui/run-detail-fragment system run-id))))
+                                (ui/run-detail-fragment system run-id)
+                                (ui/router-state-fragment
+                                 (ui/run-route-path system run-id)))))
 
 (defn list-tools [system _request]
   (responses/html-response 200 (ui/tools-fragment system)))

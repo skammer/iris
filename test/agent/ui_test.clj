@@ -15,7 +15,12 @@
   (let [html (ui/index-page)]
     (is (str/includes? html "datastar.js"))
     (is (str/includes? html "/public/web-components.js"))
+    (is (str/includes? html "/ui/shell?tab=chat"))
     (is (not (str/includes? html "/public/app.js")))))
+
+(deftest index-page-deep-link-loads-route-fragment
+  (let [html (ui/index-page "/runs/run-1")]
+    (is (str/includes? html "/ui/shell?tab=runs&amp;run_id=run-1"))))
 
 (deftest create-session-form-posts-explicit-form-and-clears-on-success
   (let [path (temp-db-path)
@@ -141,12 +146,14 @@
         (let [html (ui/session-messages-fragment {:store store} (:id session))]
           (is (str/includes? html "web"))
           (is (str/includes? html "ok"))
-          (is (str/includes? html "query: clojure"))))
+          (is (str/includes? html "query: clojure"))
+          (is (str/includes? html "data-tool-detail"))
+          (is (not (str/includes? html "<details")))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
-(deftest assistant-tool-calls-render-collapsed-with-string-args
+(deftest assistant-tool-calls-render-as-status-row-with-sidebar-details
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})]
     (try
@@ -157,8 +164,10 @@
                                     :arguments "{\"url\":\"http://example.test\",\"method\":\"GET\"}"}}]]
         (sqlite/append-message! store (:id session) "assistant" "" {:tool-calls tool-calls})
         (let [html (ui/session-messages-fragment {:store store} (:id session))]
-          (is (str/includes? html "<details class=\"tool-call\"><summary"))
-          (is (not (str/includes? html "<details class=\"tool-call\" open")))
+          (is (str/includes? html "class=\"tool-row"))
+          (is (str/includes? html "requested"))
+          (is (str/includes? html "data-tool-detail-template"))
+          (is (not (str/includes? html "<details")))
           (is (str/includes? html "url: http://example.test"))
           (is (str/includes? html "method: GET"))))
       (finally
