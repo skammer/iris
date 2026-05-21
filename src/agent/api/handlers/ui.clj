@@ -39,8 +39,10 @@
 (defn operator-board [system _request]
   (responses/html-response 200 (ui/operator-board-fragment system)))
 
-(defn sessions [system _request]
-  (responses/html-response 200 (ui/sessions-fragment system)))
+(defn sessions [system request]
+  (responses/html-response 200
+                           (ui/sessions-fragment system
+                                                 (-> request :parameters :query :session_id))))
 
 (defn create-session [system request]
   (let [body (h/read-form-body request)

@@ -99,9 +99,15 @@
 (deftest ui-sessions-list-smoke
   (with-server nil
     (fn [{:keys [base-url]}]
-      (let [{:keys [status body]} (helpers/http-get (str base-url "/ui/sessions"))]
+      (let [created (helpers/http-post (str base-url "/v1/sessions") {:title "selected"})
+            session-id (:id (json/parse-string (:body created) true))
+            {:keys [status body]} (helpers/http-get
+                                   (str base-url "/ui/sessions?session_id=" session-id))]
+        (is (= 201 (:status created)))
         (is (= 200 status))
-        (is (str/includes? body "Sessions"))))))
+        (is (str/includes? body "Sessions"))
+        (is (str/includes? body "session-link--active"))
+        (is (str/includes? body (str "/ui/sessions?session_id=" session-id)))))))
 
 (deftest ui-events-page-smoke
   (with-server nil
