@@ -37,6 +37,33 @@ set subject = :subject,
     updated_at = :updated_at
 where id = :id
 
+-- :name get-fact :? :1
+select id, scope_type, scope_id, subject, predicate, object,
+       normalized_subject, normalized_predicate, normalized_object,
+       source_session_id, source_message_ids_json, source_request_id,
+       confidence, status, metadata_json, created_at, updated_at
+from memory_facts
+where id = :id
+limit 1
+
+-- :name remove-fact-by-id :! :n
+update memory_facts
+set status = 'removed',
+    updated_at = :updated_at
+where id = :id
+  and status = 'active'
+
+-- :name remove-fact-by-normalized :! :n
+update memory_facts
+set status = 'removed',
+    updated_at = :updated_at
+where scope_type = :scope_type
+  and coalesce(scope_id, '') = coalesce(:scope_id, '')
+  and normalized_subject = :normalized_subject
+  and normalized_predicate = :normalized_predicate
+  and normalized_object = :normalized_object
+  and status = 'active'
+
 -- :name search-facts-scoped-like :? :*
 select id, scope_type, scope_id, subject, predicate, object,
        normalized_subject, normalized_predicate, normalized_object,

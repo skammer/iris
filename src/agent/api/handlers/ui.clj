@@ -300,22 +300,33 @@
     (not (str/blank? (str path))) (assoc :path path)
     (contains? body :content) (assoc :content content)))
 
+(defn- memory-search-source-json [system {:keys [action query limit scope]}]
+  (when (and (= :search (keyword (str/lower-case (str action))))
+             (not (str/blank? (str query))))
+    (memory/search-memory (:memory-service system)
+                          query
+                          (cond-> {}
+                            limit (assoc :limit limit)
+                            scope (assoc :scope scope)))))
+
 (defn memory-tool-run [system request]
   (try
     (let [body (h/read-form-body request)
-          input (memory-tool-input body)]
-      (responses/html-response
-       200
-       (ui/memory-tool-result-fragment
-        {:ok? true
-         :input input
-         :result (tools/execute-tool (:tool-registry system)
+          input (memory-tool-input body)
+          result (tools/execute-tool (:tool-registry system)
                                      :memory
                                      input
                                      (assoc
                                       (tools-h/execution-context system :ui :memory input
                                                                  {:user "ui-memory"})
-                                      :permissions #{:memory-read :memory-write}))})))
+                                      :permissions #{:memory-read :memory-write}))]
+      (responses/html-response
+       200
+       (ui/memory-tool-result-fragment
+        {:ok? true
+         :input input
+         :result result
+         :source-json (memory-search-source-json system input)})))
     (catch Exception e
       (responses/html-response
        200

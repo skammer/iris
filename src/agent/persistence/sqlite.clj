@@ -152,6 +152,12 @@
 (defn save-memory-fact! [store fact]
   (memory/save-fact! store fact))
 
+(defn get-memory-fact [store id]
+  (memory/get-fact store id))
+
+(defn remove-memory-fact! [store fact]
+  (memory/remove-fact! store fact))
+
 (defn merge-memory-fact-source! [store existing fact]
   (memory/merge-fact-source! store existing fact))
 

@@ -47,12 +47,17 @@
       (str/replace #"\s+" " ")
       str/trim))
 
+(defn- keyword-label [value]
+  (if-let [ns (namespace value)]
+    (str ns "/" (name value))
+    (name value)))
+
 (declare params->string)
 
 (defn- value->string [value]
   (cond
     (nil? value) "nil"
-    (keyword? value) (name value)
+    (keyword? value) (keyword-label value)
     (string? value) value
     (map? value) (str "{" (params->string value) "}")
     (sequential? value) (str/join ", " (map value->string value))
@@ -64,7 +69,7 @@
     (string? params) params
     (map? params) (->> params
                        (map (fn [[k v]]
-                              (str (if (keyword? k) (name k) (str k))
+                              (str (if (keyword? k) (keyword-label k) (str k))
                                    ": "
                                    (value->string v))))
                        (str/join " "))

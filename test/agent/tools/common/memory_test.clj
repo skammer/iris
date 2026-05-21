@@ -21,17 +21,38 @@
 
 (defn- registry [service]
   (-> (tools/create-registry)
-      (tools/register-tool (memory-tool/create-memory-tool service))))
+      (tools/register-tool (memory-tool/create-memory-tool service))
+      (tools/register-tool (memory-tool/create-message-search-tool service))))
 
-(deftest memory-tool-search-returns-compact-text-test
+(deftest memory-tool-search-uses-facts-graph-and-prompt-files-test
   (let [path (temp-db-path)
+        root (doto (java.nio.file.Files/createTempDirectory "iris-memory-tool" (make-array java.nio.file.attribute.FileAttribute 0))
+               (.toFile))
+        root-file (.toFile root)
+        prompt-file (io/file root-file "MEMORY.md")
+        graph-path (.getAbsolutePath (io/file root-file "graph-store"))
         store (sqlite/create-store {:path path})
         session (sqlite/create-session! store "memory-tool")
-        service (memory-service store)
+        _ (spit prompt-file (str "Kimi prompt marker " (apply str (repeat 1200 "x"))))
+        service (memory/create-memory-service
+                 {:prompt {:paths [(.getAbsolutePath prompt-file)]}
+                  :search {:default-limit 10}
+                  :facts {:extractor {:enabled false}}
+                  :graph {:enabled true
+                          :backend :datahike
+                          :datahike {:path graph-path
+                                     :keep-history? true}}}
+                 store)
         registry* (registry service)]
     (try
       (sqlite/append-message! store (:id session) "assistant"
                               (str "Kimi model marker " (apply str (repeat 2000 "x"))))
+      (memory/save-memory-fact! service
+                                {:subject "Kimi"
+                                 :predicate "supports"
+                                 :object "memory facts"}
+                                {:scope {:type :global}
+                                 :source-session-id (:id session)})
       (let [result (tools/execute-tool registry*
                                        :memory
                                        {:action :search
@@ -41,8 +62,11 @@
                                         :session-id (:id session)})]
         (is (string? result))
         (is (str/includes? result "Memory results for: Kimi"))
-        (is (str/includes? result "message #"))
+        (is (str/includes? result "fact #"))
+        (is (str/includes? result "graph #"))
+        (is (str/includes? result "prompt #MEMORY.md"))
         (is (str/includes? result "[truncated "))
+        (is (not (str/includes? result "message #")))
         (is (not (str/includes? result "\"messages\"")))
         (is (not (str/includes? result "\"ranked\""))))
       (let [blank-result (tools/execute-tool registry*
@@ -54,7 +78,8 @@
         (is (= "Memory search skipped: query is blank. Provide a focused query."
                blank-result)))
       (finally
-        (io/delete-file path true)))))
+        (io/delete-file path true)
+        (io/delete-file root-file true)))))
 
 (deftest memory-tool-search-clamps-requested-limit-test
   (let [path (temp-db-path)
@@ -70,7 +95,12 @@
         registry* (registry service)]
     (try
       (doseq [idx (range 6)]
-        (sqlite/append-message! store (:id session) "assistant" (str "Kimi clamp marker " idx)))
+        (memory/save-memory-fact! service
+                                  {:subject "Kimi"
+                                   :predicate "clamp-marker"
+                                   :object (str "value-" idx)}
+                                  {:scope {:type :global}
+                                   :source-session-id (:id session)}))
       (let [result (tools/execute-tool registry*
                                        :memory
                                        {:action :search
@@ -84,3 +114,100 @@
         (is (= 2 (count result-lines))))
       (finally
         (io/delete-file path true)))))
+
+(deftest message-search-tool-returns-only-text-chunks-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        session (sqlite/create-session! store "message-search")
+        service (memory-service store)
+        registry* (registry service)]
+    (try
+      (sqlite/append-message! store (:id session) "assistant"
+                              (str "alpha "
+                                   (apply str (repeat 1200 "x"))
+                                   " Kimi chunk marker omega"))
+      (let [result (tools/execute-tool registry*
+                                       :message_search
+                                       {:query "Kimi"
+                                        :limit 3}
+                                       {:permissions #{:memory-read}
+                                        :session-id (:id session)})]
+        (is (str/includes? result "Message chunks for: Kimi"))
+        (is (str/includes? result "Kimi chunk marker"))
+        (is (not (str/includes? result "message #")))
+        (is (not (str/includes? result "session-id"))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest memory-tool-removes-sqlite-facts-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        service (memory-service store)
+        registry* (registry service)]
+    (try
+      (tools/execute-tool registry*
+                          :memory
+                          {:action :save-fact
+                           :subject "Kimi"
+                           :predicate "stores"
+                           :object "facts"
+                           :scope {:type :global}}
+                          {:permissions #{:memory-write}})
+      (is (= 1 (count (memory/search-facts service "Kimi" {:all-scopes? true}))))
+      (tools/execute-tool registry*
+                          :memory
+                          {:action :remove-fact
+                           :subject "Kimi"
+                           :predicate "stores"
+                           :object "facts"
+                           :scope {:type :global}}
+                          {:permissions #{:memory-write}})
+      (is (empty? (memory/search-facts service "Kimi" {:all-scopes? true})))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest memory-tool-stores-removes-graph-facts-and-runs-datalog-test
+  (let [path (temp-db-path)
+        root (doto (java.nio.file.Files/createTempDirectory "iris-memory-graph-tool" (make-array java.nio.file.attribute.FileAttribute 0))
+               (.toFile))
+        root-file (.toFile root)
+        graph-path (.getAbsolutePath (io/file root-file "graph-store"))
+        store (sqlite/create-store {:path path})
+        service (memory/create-memory-service
+                 {:prompt {:paths []}
+                  :search {:default-limit 10}
+                  :facts {:extractor {:enabled false}}
+                  :graph {:enabled true
+                          :backend :datahike
+                          :datahike {:path graph-path
+                                     :keep-history? true}}}
+                 store)
+        registry* (registry service)]
+    (try
+      (tools/execute-tool registry*
+                          :memory
+                          {:action :save-graph-fact
+                           :id "graph-kimi-fact"
+                           :subject "Kimi"
+                           :predicate "powers"
+                           :object "graph memory"}
+                          {:permissions #{:memory-write}})
+      (is (= ["graph memory"]
+             (mapv :object (memory/query-graph-memory service "Kimi" {:mode :facts}))))
+      (is (str/includes?
+           (tools/execute-tool registry*
+                               :memory
+                               {:action :datalog
+                                :query "[:find ?label :where [?e :entity/label ?label]]"
+                                :limit 10}
+                               {:permissions #{:memory-read}})
+           "Kimi"))
+      (tools/execute-tool registry*
+                          :memory
+                          {:action :remove-graph-fact
+                           :id "graph-kimi-fact"}
+                          {:permissions #{:memory-write}})
+      (is (empty? (memory/query-graph-memory service "Kimi" {:mode :facts})))
+      (finally
+        (io/delete-file path true)
+        (io/delete-file root-file true)))))

@@ -350,7 +350,8 @@
        (tools/register-tool (fs-tool/create-fs-tool fs-cfg))
 
        memory-service
-       (tools/register-tool (memory-tool/create-memory-tool memory-service))
+       (-> (tools/register-tool (memory-tool/create-memory-tool memory-service))
+           (tools/register-tool (memory-tool/create-message-search-tool memory-service)))
 
        (not= false (:enabled shell-cfg))
        (tools/register-tool (shell-tool/create-shell-tool shell-cfg))

@@ -108,7 +108,8 @@
    :skills {:dirs ["skills"]}
    :memory {:prompt {:paths ["MEMORY.md"]}
             :search {:default-limit 10
-                     :max-limit 10}
+                     :max-limit 10
+                     :min-score 0.3}
             :vault {:paths ["memory"]
                     :writable? true}
             :facts {:extractor {:enabled true
@@ -183,6 +184,10 @@
 (defn- parse-long* [value]
   (when (some? value)
     (Long/parseLong (str value))))
+
+(defn- parse-double* [value]
+  (when (some? value)
+    (Double/parseDouble (str value))))
 
 (defn- parse-csv [value]
   (when (some? value)
@@ -544,6 +549,7 @@
         memory-prompt-paths (parse-csv (getenv "AGENT_MEMORY_PROMPT_PATHS"))
         memory-search-limit (parse-long* (getenv "AGENT_MEMORY_SEARCH_DEFAULT_LIMIT"))
         memory-search-max-limit (parse-long* (getenv "AGENT_MEMORY_SEARCH_MAX_LIMIT"))
+        memory-search-min-score (parse-double* (getenv "AGENT_MEMORY_SEARCH_MIN_SCORE"))
         memory-vault-paths (parse-csv (getenv "AGENT_MEMORY_VAULT_PATHS"))
         memory-vault-writable? (parse-bool (getenv "AGENT_MEMORY_VAULT_WRITABLE"))
         fact-extractor-enabled (parse-bool (getenv "AGENT_FACT_EXTRACTOR_ENABLED"))
@@ -597,10 +603,12 @@
         nrepl-port-file (getenv "AGENT_NREPL_PORT_FILE")
         memory-config (cond-> {}
                         memory-prompt-paths (assoc :prompt {:paths memory-prompt-paths})
-                        (or (some? memory-search-limit) (some? memory-search-max-limit))
+                        (or (some? memory-search-limit) (some? memory-search-max-limit)
+                            (some? memory-search-min-score))
                         (assoc :search (cond-> {}
                                          (some? memory-search-limit) (assoc :default-limit memory-search-limit)
-                                         (some? memory-search-max-limit) (assoc :max-limit memory-search-max-limit)))
+                                         (some? memory-search-max-limit) (assoc :max-limit memory-search-max-limit)
+                                         (some? memory-search-min-score) (assoc :min-score memory-search-min-score)))
                         (or memory-vault-paths (some? memory-vault-writable?))
                         (assoc :vault (cond-> {}
                                         memory-vault-paths (assoc :paths memory-vault-paths)

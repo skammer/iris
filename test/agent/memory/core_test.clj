@@ -335,6 +335,45 @@
       (finally
         (io/delete-file db-path true)))))
 
+(deftest memory-search-thresholds-and-dedupes-ranked-values-test
+  (let [db-path (temp-db-path)
+        graph-root (temp-dir)
+        graph-path (.getAbsolutePath (io/file graph-root "graph-store"))
+        store (sqlite/create-store {:path db-path})
+        service (memory/create-memory-service
+                 {:prompt {:paths []}
+                  :search {:default-limit 10
+                           :min-score 0.3}
+                  :graph {:enabled true
+                          :backend :datahike
+                          :datahike {:path graph-path
+                                     :keep-history? true}}}
+                 store)]
+    (try
+      (memory/save-memory-fact! service
+                                {:subject "Alice"
+                                 :predicate "likes"
+                                 :object "Clojure"}
+                                {:scope {:type :global}})
+      (memory/save-graph-fact! service
+                               {:subject "Bob"
+                                :predicate "likes"
+                                :object "Java"})
+      (let [results (memory/search-memory service "Alice Clojure" {:limit 10})
+            ranked (:ranked results)]
+        (is (= 1 (count ranked)))
+        (is (= :graph (:surface (first ranked))))
+        (is (= "Alice likes Clojure"
+               (str (get-in ranked [0 :item :subject])
+                    " "
+                    (get-in ranked [0 :item :predicate])
+                    " "
+                    (get-in ranked [0 :item :object]))))
+        (is (not-any? #(= "Java" (:object %)) (:graph results))))
+    (finally
+      (io/delete-file db-path true)
+      (io/delete-file graph-root true)))))
+
 (deftest graph-entity-alias-resolution-and-merge-test
   (let [db-path (temp-db-path)
         graph-root (temp-dir)

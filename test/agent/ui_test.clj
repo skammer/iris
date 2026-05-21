@@ -81,6 +81,31 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest memory-tool-result-shows-text-and-source-json
+  (let [html (ui/memory-tool-result-fragment
+              {:ok? true
+               :input {:action :search :query "tags"}
+               :result "Memory results for: tags\n- graph score=0.500: x"
+               :source-json {:ranked [{:surface :graph
+                                        :item {:fact/tags ["project"]
+                                               :edge/tags ["memory"]}}]}})]
+    (is (str/includes? html "Memory results for: tags"))
+    (is (str/includes? html "source json"))
+    (is (str/includes? html "fact/tags"))
+    (is (str/includes? html "edge/tags"))))
+
+(deftest memory-datalog-result-preserves-namespaced-keywords
+  (let [html (ui/memory-datalog-result-fragment
+              {:ok? true
+               :result {:query "[:find ?e]"
+                        :args []
+                        :limit 10
+                        :row-count 1
+                        :rows [[{:fact/tags ["tag-a"]
+                                  :edge/tags ["tag-b"]}]]}})]
+    (is (str/includes? html "fact/tags"))
+    (is (str/includes? html "edge/tags"))))
+
 (deftest logs-fragment-shows-events-and-trace-state
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})

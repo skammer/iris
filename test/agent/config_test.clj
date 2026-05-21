@@ -50,7 +50,8 @@
               :model nil}
              (get-in cfg [:memory :facts :extractor])))
       (is (= {:default-limit 10
-              :max-limit 10}
+              :max-limit 10
+              :min-score 0.3}
              (get-in cfg [:memory :search])))
       (is (= :session (get-in cfg [:memory :facts :default-scope])))
       (is (nil? (get-in cfg [:memory :facts :dedup :similarity-threshold])))
@@ -237,7 +238,8 @@
                                "AGENT_LLM_MODEL" "env-model"
                                "AGENT_CHAT_MAX_STEPS" "12"
                                "AGENT_MEMORY_SEARCH_DEFAULT_LIMIT" "7"
-                               "AGENT_MEMORY_SEARCH_MAX_LIMIT" "9"}]
+                               "AGENT_MEMORY_SEARCH_MAX_LIMIT" "9"
+                               "AGENT_MEMORY_SEARCH_MIN_SCORE" "0.45"}]
     (let [global-dir (io/file root "home" ".config" "iris")
           explicit-file (io/file root "explicit.edn")]
       (.mkdirs global-dir)
@@ -250,7 +252,8 @@
         (is (= "env-model" (config/active-model (:llm cfg))))
         (is (= 12 (get-in cfg [:chat :max-steps])))
         (is (= {:default-limit 7
-                :max-limit 9}
+                :max-limit 9
+                :min-score 0.45}
                (get-in cfg [:memory :search])))))))
 
 (deftest trace-env-config-test
