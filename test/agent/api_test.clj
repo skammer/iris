@@ -215,6 +215,43 @@
         (api/stop-server! server)
         (io/delete-file path true)))))
 
+(deftest session-mode-api-test
+  (let [path (temp-db-path)
+        port (free-port)
+        base-url (str "http://127.0.0.1:" port)
+        {:keys [server]} (started-test-system path port identity)]
+    (try
+      (let [created-body (-> (http-post (str base-url "/v1/sessions") {:title "mode"})
+                             :body
+                             (json/parse-string true))
+            session-id (:id created-body)
+            set-response (http-post (str base-url "/v1/sessions/" session-id "/mode")
+                                    {:mode "code"})
+            set-body (json/parse-string (:body set-response) true)
+            clear-response (http-post (str base-url "/v1/sessions/" session-id "/mode")
+                                      {:mode nil})
+            clear-body (json/parse-string (:body clear-response) true)
+            unknown-response (http-post (str base-url "/v1/sessions/" session-id "/mode")
+                                        {:mode "missing"})
+            unknown-body (json/parse-string (:body unknown-response) true)
+            missing-response (http-post (str base-url "/v1/sessions/missing/mode")
+                                        {:mode "code"})
+            missing-body (json/parse-string (:body missing-response) true)]
+        (is (= 200 (:status set-response)))
+        (is (= "code" (get-in set-body [:data :active_mode])))
+        (is (= "code" (get-in set-body [:data :state :active_mode])))
+        (is (= 200 (:status clear-response)))
+        (is (contains? (:data clear-body) :active_mode))
+        (is (nil? (get-in clear-body [:data :active_mode])))
+        (is (= 400 (:status unknown-response)))
+        (is (= "unknown_mode" (:error unknown-body)))
+        (is (= 11 (count (get-in unknown-body [:details :available_modes]))))
+        (is (= 404 (:status missing-response)))
+        (is (= "session_not_found" (:error missing-body))))
+      (finally
+        (api/stop-server! server)
+        (io/delete-file path true)))))
+
 (deftest api-tool-permissions-come-from-config-test
   (let [path (temp-db-path)
         port (free-port)

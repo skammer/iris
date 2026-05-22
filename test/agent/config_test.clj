@@ -33,6 +33,9 @@
       (is (true? (get-in cfg [:llm :providers :ollama :prompt-cache?])))
       (is (true? (get-in cfg [:llm :providers :ollama :stream-structured-output?])))
       (is (= "http://localhost:11434" (get-in cfg [:llm :providers :ollama :base-url])))
+      (is (= {:context-window 128000
+              :max-output-tokens 16384}
+             (get-in cfg [:llm :providers :openai-compatible :models "gpt-4o-mini"])))
       (is (true? (get-in cfg [:tools :http :enabled])))
       (is (= 6 (get-in cfg [:chat :max-steps])))
       (is (false? (get-in cfg [:tools :yolo?])))

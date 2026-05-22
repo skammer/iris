@@ -590,6 +590,10 @@
                   (llm-messages/messages->internal messages))
         recall (recall-memory system session-id prompt)
         iris-context (iris-context-message system)
+        active-mode (some-> (and session-id
+                                  (sqlite/get-session (:store system) session-id))
+                            :active-mode)
+        mode-messages (prompts/apply-mode [] active-mode)
         stream-content? (and (or stream? on-delta)
                              (not (false? (get-in system [:config :llm :stream-content?] true))))
         persisted (atom {})
@@ -604,6 +608,7 @@
         pack-context (context-pack-fn system)
         context-injectors (cond-> []
                             iris-context (conj (constantly [iris-context]))
+                            (seq mode-messages) (conj (constantly mode-messages))
                             true (conj (constantly [(memory-message recall)])))]
     (event-sink {:event-type :message-update
                  :entity-type :session

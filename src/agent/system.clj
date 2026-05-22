@@ -43,8 +43,9 @@
 
 (defn create-llm-provider
   [cfg]
-  (let [{:keys [provider type model base-url api-key site-url app-name prompt-cache?
-                stream-structured-output? embedding-model keep-alive]}
+  (let [{:keys [provider type model base-url stream-structured-output?
+                embedding-model keep-alive]
+         :as provider-cfg}
         (config/active-provider-config cfg)]
     (case type
       :ollama
@@ -57,23 +58,11 @@
 
       :openrouter
       (openai-compatible/create-openrouter-provider
-       {:api-key api-key
-        :base-url base-url
-        :model model
-        :site-url site-url
-        :app-name app-name
-        :prompt-cache? prompt-cache?
-        :stream-structured-output? stream-structured-output?})
+       provider-cfg)
 
       :openai-compatible
       (openai-compatible/create-openai-compatible-provider
-       {:api-key api-key
-        :base-url base-url
-        :default-model model
-        :site-url site-url
-        :app-name app-name
-        :prompt-cache? prompt-cache?
-        :stream-structured-output? stream-structured-output?})
+       (assoc provider-cfg :default-model model))
 
       (throw (ex-info (str "Unsupported provider type: " type)
                       {:provider provider

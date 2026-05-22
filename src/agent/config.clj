@@ -23,6 +23,8 @@
                      :openrouter {:type :openrouter
                                   :base-url "https://openrouter.ai/api/v1"
                                   :model "openai/gpt-4o-mini"
+                                  :models {"openai/gpt-4o-mini" {:context-window 128000
+                                                                 :max-output-tokens 16384}}
                                   :temperature 0.2
                                   :max-tokens 1024
                                   :stream? false
@@ -35,6 +37,8 @@
                      :openai-compatible {:type :openai-compatible
                                          :base-url "https://api.openai.com/v1"
                                          :model "gpt-4o-mini"
+                                         :models {"gpt-4o-mini" {:context-window 128000
+                                                                :max-output-tokens 16384}}
                                          :temperature 0.2
                                          :max-tokens 1024
                                          :stream? false

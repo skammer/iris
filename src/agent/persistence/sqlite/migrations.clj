@@ -5,7 +5,7 @@
    [ragtime.protocols :as ragtime-protocols]
    [ragtime.strategy :as ragtime-strategy]))
 
-(def latest-schema-version 18)
+(def latest-schema-version 19)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -533,7 +533,13 @@
     :checksum "f4d67d91a6c0e2b8"
     :irreversible? true
     :up ["ALTER TABLE messages ADD COLUMN metadata_json TEXT;"
-         "ALTER TABLE messages ADD COLUMN excluded_from_context INTEGER NOT NULL DEFAULT 0;"]}])
+         "ALTER TABLE messages ADD COLUMN excluded_from_context INTEGER NOT NULL DEFAULT 0;"]}
+   {:version 19
+    :id "19"
+    :name "session-active-mode"
+    :checksum "39ef97d9e734fca1"
+    :irreversible? true
+    :up ["ALTER TABLE sessions ADD COLUMN active_mode TEXT;"]}])
 
 (defn descriptor-by-version [version]
   (some #(when (= version (:version %)) %) migration-descriptors))

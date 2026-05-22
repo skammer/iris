@@ -3,6 +3,7 @@
    [agent.system :as system]
    [agent.config :as config]
    [agent.kernel]
+   [agent.llm.core :as llm-core]
    [agent.llm.providers.ollama :as ollama]
    [agent.llm.providers.openai-compatible :as openai-compatible]
    [agent.persistence.sqlite :as sqlite]
@@ -24,8 +25,26 @@
                                             :site-url "https://example.com"
                                             :app-name "iris-test"
                                             :base-url "https://openrouter.ai/api/v1"
+                                            :max-tokens 2048
                                             :api-key "or-key"}}})]
-    (is (instance? agent.llm.providers.openai_compatible.OpenAICompatibleProvider provider))))
+    (is (instance? agent.llm.providers.openai_compatible.OpenAICompatibleProvider provider))
+    (is (= 2048 (get-in (llm-core/get-config provider) [:config :max-tokens])))))
+
+(deftest create-llm-provider-keeps-openai-compatible-request-defaults
+  (let [provider (system/create-llm-provider
+                  {:active-provider :neuraldeep
+                   :providers {:neuraldeep {:type :openai-compatible
+                                            :model "qwen3.6-35b-a3b"
+                                            :base-url "https://api.neuraldeep.ru/v1"
+                                            :api-key "nd-key"
+                                            :max-tokens 6384
+                                            :extra-body {:chat_template_kwargs
+                                                         {:enable_thinking false}}}}})
+        provider-config (llm-core/get-config provider)]
+    (is (= "qwen3.6-35b-a3b" (:default-model provider-config)))
+    (is (= 6384 (get-in provider-config [:config :max-tokens])))
+    (is (= {:chat_template_kwargs {:enable_thinking false}}
+           (get-in provider-config [:config :extra-body])))))
 
 (deftest create-system-registers-default-tools
   (let [system (system/create-system)

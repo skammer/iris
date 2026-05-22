@@ -3,15 +3,20 @@ insert into sessions (id, title, created_at)
 values (:id, :title, :created_at)
 
 -- :name list-sessions :? :*
-select id, title, created_at
+select id, title, active_mode, created_at
 from sessions
 order by created_at desc
 
 -- :name get-session :? :1
-select id, title, created_at
+select id, title, active_mode, created_at
 from sessions
 where id = :id
 limit 1
+
+-- :name update-session-active-mode :! :n
+update sessions
+set active_mode = :active_mode
+where id = :id
 
 -- :name session-exists :? :1
 select 1 as present

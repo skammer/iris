@@ -82,16 +82,20 @@
          (common/execute! conn (create-session-sqlvec session))))
      {:id (:id session)
       :title title
+      :active-mode nil
       :created-at (:created_at session)})))
+
+(defn- row->session [{:keys [id title active_mode created_at]}]
+  {:id id
+   :title title
+   :active-mode active_mode
+   :created-at created_at})
 
 (defn list-sessions [store]
   (common/with-connection
     store
     (fn [conn]
-      (mapv (fn [{:keys [id title created_at]}]
-              {:id id
-               :title title
-               :created-at created_at})
+      (mapv row->session
             (common/select-many conn (list-sessions-sqlvec) identity)))))
 
 (defn get-session [store session-id]
@@ -99,10 +103,18 @@
     store
     (fn [conn]
       (some-> (common/select-one conn (get-session-sqlvec {:id session-id}) identity)
-              ((fn [{:keys [id title created_at]}]
-                 {:id id
-                  :title title
-                  :created-at created_at}))))))
+              row->session))))
+
+(defn set-session-active-mode!
+  [store session-id mode]
+  (common/with-connection
+    store
+    (fn [conn]
+      (common/execute! conn
+                       (update-session-active-mode-sqlvec
+                        {:id session-id
+                         :active_mode mode}))))
+  (get-session store session-id))
 
 (defn session-exists? [store session-id]
   (common/with-connection
