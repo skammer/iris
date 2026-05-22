@@ -5,7 +5,11 @@ values (:id, :title, :created_at)
 -- :name list-sessions :? :*
 select id, title, active_mode, created_at
 from sessions
-order by created_at desc
+order by coalesce((select max(messages.created_at)
+                   from messages
+                   where messages.session_id = sessions.id),
+                  created_at) desc,
+         created_at desc
 
 -- :name get-session :? :1
 select id, title, active_mode, created_at

@@ -18,6 +18,16 @@ Run rewritten CLI:
 clojure -M -m agent.core "hello"
 ```
 
+Headless CLI session flow:
+
+```bash
+clojure -M -m agent.core -p "start work"          # create persisted session
+clojure -M -m agent.core -c "continue latest"     # resume latest session
+clojure -M -m agent.core -r "continue selected"   # pick recent session
+clojure -M -m agent.core --session <id> "resume"  # resume exact session
+clojure -M -m agent.core --no-session "one shot"  # do not persist session
+```
+
 Run rewritten API:
 
 ```bash
