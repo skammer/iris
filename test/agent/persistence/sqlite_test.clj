@@ -61,6 +61,18 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest sqlite-session-list-follows-latest-message-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        first-session (sqlite/create-session! store "first")
+        second-session (sqlite/create-session! store "second")]
+    (try
+      (sqlite/append-message! store (:id first-session) "user" "latest activity")
+      (is (= [(:id first-session) (:id second-session)]
+             (mapv :id (sqlite/list-sessions store))))
+      (finally
+        (io/delete-file path true)))))
+
 (deftest sqlite-upgrades-unversioned-legacy-db-test
   (let [path (temp-db-path)]
     (Class/forName "org.sqlite.JDBC")
