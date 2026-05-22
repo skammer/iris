@@ -7,10 +7,12 @@
 (defn session->response [session]
   (cond-> {:id (:id session)
            :title (:title session)
+           :active_mode (:active-mode session)
            :created_at (:created-at session)}
     (:state session)
     (assoc :state {:working (boolean (get-in session [:state :working?]))
                    :queued_count (get-in session [:state :queued-count] 0)
+                   :active_mode (get-in session [:state :active-mode])
                    :active_provider (get-in session [:state :active-provider])
                    :active_model (get-in session [:state :active-model])
                    :active_request_id (get-in session [:state :active-request-id])

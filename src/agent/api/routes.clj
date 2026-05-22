@@ -18,6 +18,9 @@
    [:entry_id schemas/NonBlankString]
    [:branch_summary {:optional true} :boolean]])
 
+(def ^:private set-session-mode-body
+  [:map [:mode [:maybe schemas/NonBlankString]]])
+
 (def ^:private chat-completions-body
   [:map
    [:messages {:optional true} [:vector {:min 1} schemas/ChatMessage]]
@@ -418,6 +421,8 @@
                     :post {:handler/id :create-session
                            :parameters {:body create-session-body}}}]
    ["/v1/sessions/:session-id" {:get {:handler/id :get-session}}]
+   ["/v1/sessions/:session-id/mode" {:post {:handler/id :set-session-mode
+                                            :parameters {:body set-session-mode-body}}}]
    ["/v1/sessions/:session-id/messages" {:get {:handler/id :list-session-messages}}]
    ["/v1/sessions/:session-id/entries" {:get {:handler/id :list-session-entries}
                                         :post {:handler/id :append-session-entry

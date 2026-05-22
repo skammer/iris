@@ -2,7 +2,31 @@
   (:require
    [agent.llm.core :as llm]
    [agent.planner :as planner]
+   [agent.prompts :as prompts]
+   [clojure.string :as str]
    [clojure.test :refer :all]))
+
+(deftest bundled-prompt-modes-test
+  (is (= ["ask"
+          "brainstorm"
+          "code"
+          "debug"
+          "default"
+          "frontend-design"
+          "plan"
+          "review"
+          "review-security"
+          "simplify"
+          "write-prompt"]
+         (prompts/list-modes)))
+  (is (str/includes? (prompts/get-mode "code") "## Coding Mode"))
+  (is (= "## Read-Only Mode"
+         (first (str/split-lines (:content (first (prompts/apply-mode [] "ask")))))))
+  (is (= [{:role "user" :content "keep"}]
+         (prompts/apply-mode [{:role "user" :content "keep"}] nil)))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"Prompt mode not found"
+                        (prompts/get-mode "missing"))))
 
 (deftest planner-completes-from-text-content-test
   (let [provider (reify llm/ILLMProviderInvoke

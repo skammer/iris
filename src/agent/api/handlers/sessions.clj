@@ -1,15 +1,18 @@
 (ns agent.api.handlers.sessions
   (:require
+   [agent.api.errors :as errors]
    [agent.api.helpers :as h]
    [agent.api.responses :as responses]
    [agent.api.serializers :as ser]
    [agent.api.validation :as v]
    [agent.chat :as chat]
    [agent.persistence.sqlite :as sqlite]
+   [agent.prompts :as prompts]
    [agent.runtime.compaction :as compaction]))
 
 (defn- with-state [system session]
-  (assoc session :state (chat/session-state system (:id session))))
+  (assoc session :state (assoc (chat/session-state system (:id session))
+                               :active-mode (:active-mode session))))
 
 (defn create [system request]
   (let [{:keys [title]} (h/read-json-body request)
@@ -33,6 +36,21 @@
                            {:data (ser/session->response
                                    (with-state system
                                      (sqlite/get-session (:store system) session-id)))}))
+
+(defn set-mode [system request session-id]
+  (v/ensure-session-exists! system session-id)
+  (let [mode (:mode (h/read-json-body request))]
+    (when (and mode (not (some #{mode} (prompts/list-modes))))
+      (throw (errors/api-error 400
+                               "unknown_mode"
+                               "Unknown prompt mode"
+                               {:mode mode
+                                :available_modes (prompts/list-modes)})))
+    (responses/json-response
+     200
+     {:data (ser/session->response
+             (with-state system
+               (sqlite/set-session-active-mode! (:store system) session-id mode)))})))
 
 (defn list-messages [system _request session-id]
   (v/ensure-session-exists! system session-id)

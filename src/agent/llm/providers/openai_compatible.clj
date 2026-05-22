@@ -578,7 +578,13 @@
                         :prompt_cache_retention
                         :cache-control
                         :cache_control
-                        :stream-structured-output?])
+                        :stream-structured-output?
+                        :temperature
+                        :max-tokens
+                        :max_tokens
+                        :top-p
+                        :top_p
+                        :extra-body])
           {:base-url base-url
            :api-key api-key
            :default-model (or model "openai/gpt-4o-mini")

@@ -46,6 +46,21 @@
     (is (true? (get-in health [:details :up-to-date?])))
     (io/delete-file path true)))
 
+(deftest sqlite-session-active-mode-flow-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        session (sqlite/create-session! store "mode")]
+    (try
+      (is (nil? (:active-mode session)))
+      (is (nil? (:active-mode (sqlite/get-session store (:id session)))))
+      (is (nil? (:active-mode (first (sqlite/list-sessions store)))))
+      (is (= "code"
+             (:active-mode (sqlite/set-session-active-mode! store (:id session) "code"))))
+      (is (= "code" (:active-mode (sqlite/get-session store (:id session)))))
+      (is (nil? (:active-mode (sqlite/set-session-active-mode! store (:id session) nil))))
+      (finally
+        (io/delete-file path true)))))
+
 (deftest sqlite-upgrades-unversioned-legacy-db-test
   (let [path (temp-db-path)]
     (Class/forName "org.sqlite.JDBC")

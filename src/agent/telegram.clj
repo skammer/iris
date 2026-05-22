@@ -5,6 +5,7 @@
    [agent.chat :as chat]
    [agent.channels.core :as channels]
    [agent.persistence.sqlite :as sqlite]
+   [agent.prompts :as prompts]
    [agent.telegram.format :as fmt]
    [agent.tools.core :as tools]
    [agent.tools.display :as tool-display]
@@ -190,6 +191,30 @@
     {:command (str/lower-case (first parts))
      :rest (or (second parts) "")}))
 
+(defn- available-prompt-modes []
+  (str/join ", " (prompts/list-modes)))
+
+(defn- prompt-command-response [store session-id rest]
+  (let [requested (some-> rest str/trim str/lower-case not-empty)]
+    (cond
+      (nil? requested)
+      (str "Prompt mode: " (or (:active-mode (sqlite/get-session store session-id)) "off")
+           ". Available: " (available-prompt-modes) ".")
+
+      (= "off" requested)
+      (do
+        (sqlite/set-session-active-mode! store session-id nil)
+        "Prompt mode off.")
+
+      (some #{requested} (prompts/list-modes))
+      (do
+        (sqlite/set-session-active-mode! store session-id requested)
+        (str "Prompt mode: " requested "."))
+
+      :else
+      (str "Unknown prompt mode: " requested
+           ". Available: " (available-prompt-modes) "."))))
+
 (defn- split-caption [s]
   (let [parts (str/split s #"\s+" 2)
         url (first parts)
@@ -201,15 +226,16 @@
   (when (str/starts-with? command "/")
     (let [mapping (session-mapping! (:store system) chat)
           session-id (:session-id mapping)
-          command* (-> command str/lower-case (str/split #"\s+") first)]
-      (case command*
+          {:keys [command rest]} (parse-command-args command)]
+      (case command
         "/start" "Ready. Send message to chat."
-        "/help" "/start /help /stop /reset /memory /status /photo <url> [caption] /file <url> [caption]"
+        "/help" "/start /help /stop /reset /memory /status /prompt [name|off] /photo <url> [caption] /file <url> [caption]"
         "/reset" (do
                    (reset-session! (:store system) chat)
                    "Session reset.")
         "/memory" (memory-status system session-id)
         "/status" (status-text system session-id)
+        "/prompt" (prompt-command-response (:store system) session-id rest)
         nil))))
 
 (defn- stop-chat!

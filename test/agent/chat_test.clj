@@ -189,6 +189,28 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest chat-loop-injects-session-prompt-mode-before-memory-test
+  (let [path (temp-db-path)
+        responses (atom ["done"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider #(assoc-in % [:iris :context] nil))
+        session (system/create-session! system "mode")]
+    (try
+      (sqlite/set-session-active-mode! (:store system) (:id session) "code")
+      (chat/run! system {:session-id (:id session)
+                         :messages [{:role "user" :content "hello"}]})
+      (let [planner-messages (get-in (first @requests) [:request :messages])]
+        (is (str/includes? (message-text (first planner-messages))
+                           "tool-calling loop"))
+        (is (str/includes? (message-text (second planner-messages))
+                           "## Coding Mode"))
+        (is (str/starts-with? (message-text (nth planner-messages 2))
+                              "Relevant memory JSON: "))
+        (is (= "user" (:role (nth planner-messages 3)))))
+      (finally
+        (io/delete-file path true)))))
+
 (deftest chat-loop-executes-safe-tool-via-native-tool-call-test
   (let [path (temp-db-path)
         responses (atom [(tool-call-response :fs {:action "list" :path "."})

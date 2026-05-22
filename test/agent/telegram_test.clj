@@ -4,6 +4,7 @@
    [agent.persistence.sqlite :as sqlite]
    [agent.telegram :as telegram]
    [clojure.java.io :as io]
+   [clojure.string :as str]
    [clojure.test :refer :all]))
 
 (defn temp-db-path []
@@ -87,6 +88,36 @@
         (let [after (:session-id (sqlite/get-channel-session-mapping store :telegram 100))]
           (is (not= before after))
           (is (= "Session reset." (:text (last @sent))))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-prompt-command-manages-session-mode
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        sent (atom [])
+        system {:store store
+                :event-sink (fn [_] nil)}
+        config {:bot-token "token"
+                :allowlist {:allow-all? true}}
+        opts {:send-message-fn (fn [chat-id text]
+                                 (swap! sent conj {:chat-id chat-id
+                                                   :text text}))}]
+    (try
+      (telegram/process-update! system config opts (update-for 1 100 7 "/prompt"))
+      (telegram/process-update! system config opts (update-for 2 100 7 "/prompt code"))
+      (let [session-id (:session-id (sqlite/get-channel-session-mapping store :telegram 100))]
+        (is (= "code" (:active-mode (sqlite/get-session store session-id))))
+        (telegram/process-update! system config opts (update-for 3 100 7 "/prompt off"))
+        (is (nil? (:active-mode (sqlite/get-session store session-id))))
+        (telegram/process-update! system config opts (update-for 4 100 7 "/prompt missing"))
+        (telegram/process-update! system config opts (update-for 5 100 7 "/help"))
+        (is (str/includes? (:text (nth @sent 0)) "Prompt mode: off"))
+        (is (str/includes? (:text (nth @sent 0)) "Available: ask"))
+        (is (= "Prompt mode: code." (:text (nth @sent 1))))
+        (is (= "Prompt mode off." (:text (nth @sent 2))))
+        (is (str/includes? (:text (nth @sent 3)) "Unknown prompt mode: missing"))
+        (is (str/includes? (:text (nth @sent 4)) "/prompt [name|off]")))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))

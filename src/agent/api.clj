@@ -100,6 +100,7 @@
    :list-sessions (fn [r] (sessions/list-sessions (sys) r))
    :create-session (fn [r] (sessions/create (sys) r))
    :get-session (fn [r] (sessions/get-session (sys) r (path-param r :session-id)))
+   :set-session-mode (fn [r] (sessions/set-mode (sys) r (path-param r :session-id)))
    :list-session-messages (fn [r] (sessions/list-messages (sys) r (path-param r :session-id)))
    :append-session-entry (fn [r] (sessions/append-entry (sys) r (path-param r :session-id)))
    :list-session-entries (fn [r] (sessions/list-entries (sys) r (path-param r :session-id)))

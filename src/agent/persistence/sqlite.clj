@@ -52,6 +52,9 @@
 (defn get-session [store session-id]
   (sessions/get-session store session-id))
 
+(defn set-session-active-mode! [store session-id mode]
+  (sessions/set-session-active-mode! store session-id mode))
+
 (defn session-exists? [store session-id]
   (sessions/session-exists? store session-id))
 

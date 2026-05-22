@@ -114,6 +114,7 @@
                                  (:context-window provider-cfg)
                                  (:context-window defaults))
              :max-output-tokens (or (:max-output-tokens override)
+                                    (:max-output-tokens provider-cfg)
                                     (:max-tokens provider-cfg)
                                     (:max-output-tokens defaults))}
             override)

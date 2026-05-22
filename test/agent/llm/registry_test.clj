@@ -12,6 +12,8 @@
                             :base-url "https://openrouter.ai/api/v1"
                             :model "openai/gpt-4o-mini"
                             :api-key "k"
+                            :context-window 128000
+                            :max-output-tokens 16384
                             :max-tokens 2048}
                :local-compatible {:type :openai-compatible
                                   :base-url "http://localhost:8081/v1"
@@ -35,7 +37,8 @@
     (is (= :openrouter (:provider caps)))
     (is (= :openrouter (:api-kind caps)))
     (is (= "openai/gpt-4o-mini" (:model-id caps)))
-    (is (= 2048 (:max-output-tokens caps)))
+    (is (= 128000 (:context-window caps)))
+    (is (= 16384 (:max-output-tokens caps)))
     (is (contains? (:input-modalities caps) :text))
     (is (true? (get-in caps [:tool-support :native?])))))
 
