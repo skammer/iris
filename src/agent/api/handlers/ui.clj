@@ -381,6 +381,33 @@
          :error (.getMessage e)
          :details (ex-data e)})))))
 
+(defn- memory-reset-response [system surface reset!]
+  (try
+    (responses/html-response
+     200
+     (ui/memory-workspace-fragment system
+                                   {:ok? true
+                                    :surface surface
+                                    :result (reset!)}))
+    (catch Exception e
+      (responses/html-response
+       200
+       (ui/memory-workspace-fragment system
+                                     {:ok? false
+                                      :surface surface
+                                      :error (.getMessage e)
+                                      :details (ex-data e)})))))
+
+(defn memory-facts-reset [system _request]
+  (memory-reset-response system
+                         "Facts"
+                         #(memory/remove-all-memory-facts! (:memory-service system))))
+
+(defn memory-graph-reset [system _request]
+  (memory-reset-response system
+                         "Graph"
+                         #(memory/remove-all-graph-facts! (:memory-service system))))
+
 (defn- graph-query-opts [{:keys [mode entity from to as_of include_historical] :as body}]
   (cond-> {}
     (not (str/blank? (str mode))) (assoc :mode (keyword mode))

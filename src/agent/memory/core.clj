@@ -13,6 +13,7 @@
 (defprotocol IGraphMemoryBackend
   (save-fact! [this fact])
   (remove-fact! [this fact])
+  (remove-all-facts! [this])
   (merge-entities! [this canonical aliases])
   (query-facts [this query opts])
   (backend-health-check [this]))
@@ -27,6 +28,8 @@
   (save-fact! [_ _]
     (throw (ex-info "Graph memory backend is disabled" {:type :graph-memory-disabled})))
   (remove-fact! [_ _]
+    (throw (ex-info "Graph memory backend is disabled" {:type :graph-memory-disabled})))
+  (remove-all-facts! [_]
     (throw (ex-info "Graph memory backend is disabled" {:type :graph-memory-disabled})))
   (merge-entities! [_ _ _]
     (throw (ex-info "Graph memory backend is disabled" {:type :graph-memory-disabled})))
@@ -394,6 +397,9 @@
                                    :object (:object fact*)}})
      removed)))
 
+(defn remove-all-memory-facts! [memory-service]
+  (sqlite/remove-all-memory-facts! (:store memory-service)))
+
 (defn search-facts
   ([memory-service query] (search-facts memory-service query {}))
   ([memory-service query opts]
@@ -509,6 +515,9 @@
 (defn remove-graph-fact!
   [memory-service fact]
   (remove-fact! (:graph-backend memory-service) fact))
+
+(defn remove-all-graph-facts! [memory-service]
+  (remove-all-facts! (:graph-backend memory-service)))
 
 (defn merge-graph-entities!
   [memory-service canonical aliases]

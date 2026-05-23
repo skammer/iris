@@ -391,8 +391,10 @@
                                 :parameters {:form ui-memory-search-form}}}]
    ["/ui/memory/tool" {:post {:handler/id :ui-memory-tool
                               :parameters {:form ui-memory-tool-form}}}]
+   ["/ui/memory/facts/reset" {:post {:handler/id :ui-memory-facts-reset}}]
    ["/ui/memory/graph" {:post {:handler/id :ui-memory-graph
                                :parameters {:form ui-memory-graph-query-form}}}]
+   ["/ui/memory/graph/reset" {:post {:handler/id :ui-memory-graph-reset}}]
    ["/ui/memory/datalog" {:post {:handler/id :ui-memory-datalog
                                  :parameters {:form ui-memory-datalog-query-form}}}]
    ["/ui/runs" {:get {:handler/id :ui-runs}
