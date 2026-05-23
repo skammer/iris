@@ -51,6 +51,10 @@
    :storage {:sqlite {:path "data/agent.db"
                       :journal-mode "WAL"}}
    :chat {:max-steps 6
+          :guardrails {:doom-loop {:enabled? true
+                                   :threshold 3
+                                   :window-size 16
+                                   :action :stop}}
           :compaction {:max-context-tokens 8192
                        :reserve-output-tokens 1024
                        :keep-recent-tokens 2048

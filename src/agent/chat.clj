@@ -638,6 +638,7 @@
                      :context-pack-fn pack-context
                      :max-steps max-steps
                      :stream? stream-content?
+                     :doom-loop-config (get-in system [:config :chat :guardrails :doom-loop])
                      :cancellation-token cancelled?
                      :event-sink event-sink
                      :execute-step-fn (fn [executable-step]
