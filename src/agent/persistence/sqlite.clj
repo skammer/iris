@@ -161,6 +161,9 @@
 (defn remove-memory-fact! [store fact]
   (memory/remove-fact! store fact))
 
+(defn remove-all-memory-facts! [store]
+  (memory/remove-all-facts! store))
+
 (defn merge-memory-fact-source! [store existing fact]
   (memory/merge-fact-source! store existing fact))
 

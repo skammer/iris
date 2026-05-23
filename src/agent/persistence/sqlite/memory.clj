@@ -139,6 +139,16 @@
      :removed? (pos? (long removed))
      :updated-at now}))
 
+(defn remove-all-facts! [store]
+  (let [now (common/now-str)
+        removed (common/with-transaction
+                  store
+                  (fn [conn]
+                    (common/execute! conn (remove-all-facts-sqlvec {:updated_at now}))))]
+    {:removed-count removed
+     :removed? (pos? (long removed))
+     :updated-at now}))
+
 (defn search-facts
   ([store query] (search-facts store query {}))
   ([store query {:keys [limit include-global?] :or {limit 20 include-global? true} :as opts}]

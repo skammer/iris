@@ -96,6 +96,10 @@
                                                 :memory-service memory-service})]
         (is (str/includes? html "Memory Tool"))
         (is (str/includes? html "/ui/memory/tool"))
+        (is (str/includes? html "Reset facts"))
+        (is (str/includes? html "/ui/memory/facts/reset"))
+        (is (str/includes? html "Reset graph"))
+        (is (str/includes? html "/ui/memory/graph/reset"))
         (is (str/includes? html "Datalog DB"))
         (is (str/includes? html "/ui/memory/datalog"))
         (is (str/includes? html "workspace-grid memory-workspace")))

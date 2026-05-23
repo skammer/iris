@@ -892,6 +892,16 @@
          [:div.empty "No datalog rows."])]
       (error-result "Datalog Result" payload))]))
 
+(defn- memory-reset-result [{:keys [ok? surface result error details]}]
+  (if (nil? ok?)
+    [:div#memory-reset-output.empty "No reset output."]
+    [:div#memory-reset-output.result
+     [:strong (str surface " reset")]
+     (if ok?
+       [:pre.code (pretty-json result)]
+       [:pre.code (pretty-json {:error error
+                                :details details})])]))
+
 (defn memory-search-results-fragment [results]
   (render
    [:div#memory-search-results-panel
@@ -938,119 +948,130 @@
            [:div.meta created-at]]))]
       [:div.empty "No memory matches."])]))
 
-(defn memory-workspace-fragment [system]
-  (let [memory-service (:memory-service system)
-        health (memory/health-check memory-service)
-        surfaces (memory/list-surfaces memory-service)
-        graph-enabled? (some #(and (= :graph (:name %)) (:enabled %)) surfaces)
-        prompt (memory/read-prompt-memory memory-service)]
-    (render
-     [:section.workspace-grid.memory-workspace
-      [:section.panel.memory-overview
-       [:h2 "Memory"]
-       [:div.memory-stats
-        (memory-health-stat "prompt" (get-in health [:prompt :document-count] 0))
-        (memory-health-stat "facts" (get-in health [:facts :count] 0))
-        (memory-health-stat "graph" (if graph-enabled? "on" "off"))
-        (memory-health-stat "limit" (str (get-in health [:search :default-limit])
-                                         "/"
-                                         (get-in health [:search :max-limit])))]
-       [:table.memory-table
-        [:thead
-         [:tr
-          [:th "surface"]
-          [:th "type"]
-          [:th "write"]
-          [:th "on"]
-          [:th "limit"]
-          [:th "paths"]]]
-        [:tbody
-         (for [surface surfaces]
-           (memory-surface-row surface))]]
-       [:div#memory-prompt-panel.memory-docs
-        [:h3 "Prompt Memory"]
-        [:p.meta (str "documents: " (count (:documents prompt)))]
-        (if (seq (:documents prompt))
-          [:div.memory-result-list
-           (for [{:keys [path content]} (:documents prompt)]
-             [:details.result
-              [:summary [:strong path]]
-              [:pre.code content]])]
-          [:div.empty "No prompt memory files found."])]]
+(defn memory-workspace-fragment
+  ([system] (memory-workspace-fragment system nil))
+  ([system reset-result]
+   (let [memory-service (:memory-service system)
+         health (memory/health-check memory-service)
+         surfaces (memory/list-surfaces memory-service)
+         graph-enabled? (some #(and (= :graph (:name %)) (:enabled %)) surfaces)
+         prompt (memory/read-prompt-memory memory-service)]
+     (render
+      [:section#memory-workspace.workspace-grid.memory-workspace
+       [:section.panel.memory-overview
+        [:h2 "Memory"]
+        [:div.memory-stats
+         (memory-health-stat "prompt" (get-in health [:prompt :document-count] 0))
+         (memory-health-stat "facts" (get-in health [:facts :count] 0))
+         (memory-health-stat "graph" (if graph-enabled? "on" "off"))
+         (memory-health-stat "limit" (str (get-in health [:search :default-limit])
+                                          "/"
+                                          (get-in health [:search :max-limit])))]
+        [:div.actions
+         [:button {:type "button"
+                   "data-on:click" "@post('/ui/memory/facts/reset')"}
+          "Reset facts"]
+         [:button {:type "button"
+                   :disabled (not graph-enabled?)
+                   "data-on:click" "@post('/ui/memory/graph/reset')"}
+          "Reset graph"]]
+        (memory-reset-result reset-result)
+        [:table.memory-table
+         [:thead
+          [:tr
+           [:th "surface"]
+           [:th "type"]
+           [:th "write"]
+           [:th "on"]
+           [:th "limit"]
+           [:th "paths"]]]
+         [:tbody
+          (for [surface surfaces]
+            (memory-surface-row surface))]]
+        [:div#memory-prompt-panel.memory-docs
+         [:h3 "Prompt Memory"]
+         [:p.meta (str "documents: " (count (:documents prompt)))]
+         (if (seq (:documents prompt))
+           [:div.memory-result-list
+            (for [{:keys [path content]} (:documents prompt)]
+              [:details.result
+               [:summary [:strong path]]
+               [:pre.code content]])]
+           [:div.empty "No prompt memory files found."])]]
 
-      [:section.panel.memory-lab
-       [:h2 "Retrieval Lab"]
-       [:form#memory-tool-form.memory-tool-form
-        [:h3 "Memory Tool"]
-        [:div.memory-form-grid
-         [:select {:name "action"}
-          [:option {:value "search"} "search"]
-          [:option {:value "save-fact"} "save-fact"]
-          [:option {:value "read-vault"} "read-vault"]
-          [:option {:value "write-vault"} "write-vault"]]
-         [:input {:type "text" :name "query" :placeholder "query"}]
-         [:input {:type "text" :name "limit" :value "10" :placeholder "limit"}]
-         [:select {:name "scope_type"}
-          [:option {:value ""} "scope auto"]
-          [:option {:value "global"} "global"]
-          [:option {:value "session"} "session"]
-          [:option {:value "agent"} "agent"]]
-         [:input {:type "text" :name "scope_id" :placeholder "scope id"}]
-         [:input {:type "text" :name "subject" :placeholder "subject"}]
-         [:input {:type "text" :name "predicate" :placeholder "predicate"}]
-         [:input {:type "text" :name "object" :placeholder "object"}]
-         [:input {:type "text" :name "path" :placeholder "vault path"}]]
-        [:textarea {:name "content" :rows 4 :placeholder "vault content"}]
-        [:div.actions
-         [:button {:type "button"
-                   "data-on:click" "@post('/ui/memory/tool', {contentType: 'form', selector: '#memory-tool-form'})"}
-          "Run"]]]
-       [:div#memory-tool-output.empty "No memory tool output."]
-       [:form#memory-search-form.memory-tool-form
-        [:h3 "Hybrid Search"]
-        [:div.compact-form-row
-         [:input {:type "text" :name "query" :placeholder "search messages, events, facts, graph"}]
-         [:button {:type "button"
-                   "data-on:click" "@post('/ui/memory/search', {contentType: 'form', selector: '#memory-search-form'})"}
-          "Search"]]]
-       [:div#memory-search-results-panel.empty "No search output."]]
+       [:section.panel.memory-lab
+        [:h2 "Retrieval Lab"]
+        [:form#memory-tool-form.memory-tool-form
+         [:h3 "Memory Tool"]
+         [:div.memory-form-grid
+          [:select {:name "action"}
+           [:option {:value "search"} "search"]
+           [:option {:value "save-fact"} "save-fact"]
+           [:option {:value "read-vault"} "read-vault"]
+           [:option {:value "write-vault"} "write-vault"]]
+          [:input {:type "text" :name "query" :placeholder "query"}]
+          [:input {:type "text" :name "limit" :value "10" :placeholder "limit"}]
+          [:select {:name "scope_type"}
+           [:option {:value ""} "scope auto"]
+           [:option {:value "global"} "global"]
+           [:option {:value "session"} "session"]
+           [:option {:value "agent"} "agent"]]
+          [:input {:type "text" :name "scope_id" :placeholder "scope id"}]
+          [:input {:type "text" :name "subject" :placeholder "subject"}]
+          [:input {:type "text" :name "predicate" :placeholder "predicate"}]
+          [:input {:type "text" :name "object" :placeholder "object"}]
+          [:input {:type "text" :name "path" :placeholder "vault path"}]]
+         [:textarea {:name "content" :rows 4 :placeholder "vault content"}]
+         [:div.actions
+          [:button {:type "button"
+                    "data-on:click" "@post('/ui/memory/tool', {contentType: 'form', selector: '#memory-tool-form'})"}
+           "Run"]]]
+        [:div#memory-tool-output.empty "No memory tool output."]
+        [:form#memory-search-form.memory-tool-form
+         [:h3 "Hybrid Search"]
+         [:div.compact-form-row
+          [:input {:type "text" :name "query" :placeholder "search messages, events, facts, graph"}]
+          [:button {:type "button"
+                    "data-on:click" "@post('/ui/memory/search', {contentType: 'form', selector: '#memory-search-form'})"}
+           "Search"]]]
+        [:div#memory-search-results-panel.empty "No search output."]]
 
-      [:section.panel.memory-graph
-       [:h2 "Datalog DB"]
-       [:form#memory-graph-form.memory-tool-form
-        [:h3 "Graph Explorer"]
-        [:div.memory-form-grid
-         [:select {:name "mode"}
-          [:option {:value "facts"} "facts"]
-          [:option {:value "neighbors"} "neighbors"]
-          [:option {:value "paths"} "paths"]]
-         [:input {:type "text" :name "query" :placeholder "text query"}]
-         [:input {:type "text" :name "limit" :value "20" :placeholder "limit"}]
-         [:input {:type "text" :name "entity" :placeholder "entity"}]
-         [:input {:type "text" :name "depth" :value "1" :placeholder "depth"}]
-         [:input {:type "text" :name "from" :placeholder "from"}]
-         [:input {:type "text" :name "to" :placeholder "to"}]
-         [:input {:type "text" :name "max_depth" :value "4" :placeholder "max depth"}]
-         [:input {:type "text" :name "as_of" :placeholder "as-of instant"}]]
-        [:label.meta.memory-check
-         [:input {:type "checkbox" :name "include_historical"}]
-         " include historical"]
-        [:div.actions
-         [:button {:type "button"
-                   "data-on:click" "@post('/ui/memory/graph', {contentType: 'form', selector: '#memory-graph-form'})"}
-          "Query graph"]]]
-       [:div#memory-graph-results-panel.empty "No graph output."]
-       [:form#memory-datalog-form.memory-tool-form
-        [:h3 "Raw Datalog"]
-        [:textarea {:name "query" :rows 5}
-         "[:find ?ident\n :where\n [?e :db/ident ?ident]]"]
-        [:input {:type "text" :name "args" :value "[]" :placeholder "args EDN vector"}]
-        [:input {:type "text" :name "limit" :value "100" :placeholder "limit"}]
-        [:div.actions
-         [:button {:type "button"
-                   "data-on:click" "@post('/ui/memory/datalog', {contentType: 'form', selector: '#memory-datalog-form'})"}
-          "Run Datalog"]]]
-       [:div#memory-datalog-results-panel.empty "No datalog output."]]])))
+       [:section.panel.memory-graph
+        [:h2 "Datalog DB"]
+        [:form#memory-graph-form.memory-tool-form
+         [:h3 "Graph Explorer"]
+         [:div.memory-form-grid
+          [:select {:name "mode"}
+           [:option {:value "facts"} "facts"]
+           [:option {:value "neighbors"} "neighbors"]
+           [:option {:value "paths"} "paths"]]
+          [:input {:type "text" :name "query" :placeholder "text query"}]
+          [:input {:type "text" :name "limit" :value "20" :placeholder "limit"}]
+          [:input {:type "text" :name "entity" :placeholder "entity"}]
+          [:input {:type "text" :name "depth" :value "1" :placeholder "depth"}]
+          [:input {:type "text" :name "from" :placeholder "from"}]
+          [:input {:type "text" :name "to" :placeholder "to"}]
+          [:input {:type "text" :name "max_depth" :value "4" :placeholder "max depth"}]
+          [:input {:type "text" :name "as_of" :placeholder "as-of instant"}]]
+         [:label.meta.memory-check
+          [:input {:type "checkbox" :name "include_historical"}]
+          " include historical"]
+         [:div.actions
+          [:button {:type "button"
+                    "data-on:click" "@post('/ui/memory/graph', {contentType: 'form', selector: '#memory-graph-form'})"}
+           "Query graph"]]]
+        [:div#memory-graph-results-panel.empty "No graph output."]
+        [:form#memory-datalog-form.memory-tool-form
+         [:h3 "Raw Datalog"]
+         [:textarea {:name "query" :rows 5}
+          "[:find ?ident\n :where\n [?e :db/ident ?ident]]"]
+         [:input {:type "text" :name "args" :value "[]" :placeholder "args EDN vector"}]
+         [:input {:type "text" :name "limit" :value "100" :placeholder "limit"}]
+         [:div.actions
+          [:button {:type "button"
+                    "data-on:click" "@post('/ui/memory/datalog', {contentType: 'form', selector: '#memory-datalog-form'})"}
+           "Run Datalog"]]]
+        [:div#memory-datalog-results-panel.empty "No datalog output."]]]))))
 
 (defn tools-fragment [system]
   (let [tool-list (tools/list-tools (:tool-registry system))]

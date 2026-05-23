@@ -64,6 +64,12 @@ where scope_type = :scope_type
   and normalized_object = :normalized_object
   and status = 'active'
 
+-- :name remove-all-facts :! :n
+update memory_facts
+set status = 'removed',
+    updated_at = :updated_at
+where status = 'active'
+
 -- :name search-facts-scoped-like :? :*
 select id, scope_type, scope_id, subject, predicate, object,
        normalized_subject, normalized_predicate, normalized_object,

@@ -115,6 +115,57 @@
       (finally
         (io/delete-file db-path true)))))
 
+(deftest memory-reset-clears-facts-and-graph-without-clearing-messages-or-events-test
+  (let [db-path (temp-db-path)
+        graph-root (temp-dir)
+        graph-path (.getAbsolutePath (io/file graph-root "graph-store"))
+        store (sqlite/create-store {:path db-path})
+        session (sqlite/create-session! store "reset")
+        service (memory/create-memory-service
+                 {:prompt {:paths []}
+                  :search {:default-limit 10}
+                  :graph {:enabled true
+                          :backend :datahike
+                          :datahike {:path graph-path
+                                     :keep-history? true}}}
+                 store)]
+    (try
+      (sqlite/append-message! store (:id session) "user" "keep message")
+      (sqlite/log-event! store {:event-type :keep.event
+                                :entity-type :session
+                                :entity-id (:id session)
+                                :payload {:keep true}})
+      (memory/save-memory-fact! service
+                                {:subject "Alice"
+                                 :predicate "likes"
+                                 :object "Clojure"}
+                                {:scope {:type :global}})
+      (memory/save-memory-fact! service
+                                {:subject "Bob"
+                                 :predicate "uses"
+                                 :object "Datahike"}
+                                {:scope {:type :global}})
+      (memory/save-graph-fact! service
+                               {:subject "Graph"
+                                :predicate "stores"
+                                :object "edges"})
+      (let [message-count (count (sqlite/list-messages store (:id session)))
+            event-count (count (sqlite/list-events store {}))
+            fact-reset (memory/remove-all-memory-facts! service)
+            graph-reset (memory/remove-all-graph-facts! service)]
+        (is (= 2 (:removed-count fact-reset)))
+        (is (empty? (memory/search-facts service "" {:all-scopes? true})))
+        (is (pos? (:removed-count graph-reset)))
+        (is (empty? (memory/query-graph-memory service nil {:mode :facts})))
+        (is (seq (memory/query-graph-memory service nil {:mode :facts
+                                                         :include-historical? true})))
+        (is (= message-count (count (sqlite/list-messages store (:id session)))))
+        (is (= event-count (count (sqlite/list-events store {})))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file db-path true)
+        (io/delete-file graph-root true)))))
+
 (deftest memory-extraction-dedups-and-respects-scopes-test
   (let [db-path (temp-db-path)
         store (sqlite/create-store {:path db-path})

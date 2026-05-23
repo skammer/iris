@@ -456,6 +456,15 @@
                   :edge/valid-to observed-at
                   :edge/invalidated-by invalidated-by})))))
 
+(defn- remove-all-edge-tx [db observed-at]
+  (let [invalidated-by (str "reset:" (UUID/randomUUID))]
+    (->> (query-edges db)
+         (filter #(str/blank? (or (:edge/valid-to %) "")))
+         (mapv (fn [edge]
+                 {:db/id (:db/id edge)
+                  :edge/valid-to observed-at
+                  :edge/invalidated-by invalidated-by})))))
+
 (defn- merge-entity-tx [db canonical aliases observed-at]
   (let [canonical-id (canonical-entity-id db canonical)
         canonical-existing (query-entity-by-normalized db canonical)
@@ -523,6 +532,14 @@
        :predicate (:predicate fact)
        :object (:object fact)
        :removed-count (count tx)
+       :removed? (pos? (count tx))
+       :observed-at observed-at}))
+  (remove-all-facts! [_]
+    (let [observed-at (now)
+          tx (remove-all-edge-tx @conn observed-at)]
+      (when (seq tx)
+        (d/transact conn {:tx-data tx}))
+      {:removed-count (count tx)
        :removed? (pos? (count tx))
        :observed-at observed-at}))
   (merge-entities! [_ canonical aliases]
