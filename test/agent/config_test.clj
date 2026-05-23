@@ -38,6 +38,11 @@
              (get-in cfg [:llm :providers :openai-compatible :models "gpt-4o-mini"])))
       (is (true? (get-in cfg [:tools :http :enabled])))
       (is (= 6 (get-in cfg [:chat :max-steps])))
+      (is (= {:enabled? true
+              :threshold 3
+              :window-size 16
+              :action :stop}
+             (get-in cfg [:chat :guardrails :doom-loop])))
       (is (false? (get-in cfg [:tools :yolo?])))
       (is (= [:filesystem-read :filesystem-write :http-request :system-reload]
              (get-in cfg [:tools :permissions :api])))

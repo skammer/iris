@@ -47,6 +47,10 @@
  :storage {:sqlite {:path "data/agent.db"
                     :journal-mode "WAL"}}
  :chat {:max-steps 6
+        :guardrails {:doom-loop {:enabled? true
+                                 :threshold 3
+                                 :window-size 16
+                                 :action :stop}}
         ;; Keep context/output budgets aligned with active model limits.
         :compaction {:max-context-tokens 8192
                      :reserve-output-tokens 1024

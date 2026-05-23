@@ -2,6 +2,7 @@
   (:require
    [agent.kernel.schema :as kernel-schema]
    [agent.runtime.loop :as runtime-loop]
+   [cheshire.core :as json]
    [clojure.test :refer :all]))
 
 (defn- complete-step [content]
@@ -14,19 +15,21 @@
                   :tool-calls []
                   :usage {:tokens 1}}})
 
-(defn- tool-step []
+(defn- tool-step
+  ([] (tool-step "call_1" :fs {:action "list"}))
+  ([call-id tool-name input]
   {:schema-version kernel-schema/current-step-schema-version
    :state {}
    :directives [{:type :tool-call
-                 :payload {:tool-name :fs
-                           :input {:action "list"}
-                           :context {:provider-tool-call-id "call_1"}}}]
+                 :payload {:tool-name tool-name
+                           :input input
+                           :context {:provider-tool-call-id call-id}}}]
    :receipts []
    :llm-response {:content ""
-                  :tool-calls [{:id "call_1"
+                  :tool-calls [{:id call-id
                                 :type "function"
-                                :function {:name "fs"
-                                           :arguments "{\"action\":\"list\"}"}}]}})
+                                :function {:name (name tool-name)
+                                           :arguments (json/generate-string input)}}]}}))
 
 (defn- execute-step [step]
   (assoc step
@@ -36,12 +39,13 @@
                    :complete {:directive :complete
                               :status :completed
                               :result (get-in directive [:payload :result])}
-                   :tool-call {:directive :tool-call
-                               :status :ok
-                               :tool-name :fs
-                               :tool-call-id "call_1"
-                               :input {:action "list"}
-                               :result "listed"}))
+                   :tool-call (let [{:keys [tool-name input context]} (:payload directive)]
+                                {:directive :tool-call
+                                 :status :ok
+                                 :tool-name tool-name
+                                 :tool-call-id (:provider-tool-call-id context)
+                                 :input input
+                                 :result "listed"})))
                (:directives step))))
 
 (defn- run-loop [opts]
@@ -92,6 +96,65 @@
            (->> @events
                 (filter #(= :message-end (:event-type %)))
                 (mapv #(get-in % [:payload :role])))))))
+
+(deftest doom-loop-guard-blocks-third-identical-tool-call-test
+  (let [execute-count (atom 0)
+        steps (atom [(tool-step "call_1" :fs {:path "." :action "list"})
+                     (tool-step "call_2" :fs {:action "list" :path "."})
+                     (tool-step "call_3" :fs {:path "." :action "list"})])
+        {:keys [result events]}
+        (run-loop {:max-steps 4
+                   :planner-fn (fn [_ _]
+                                 (let [step (first @steps)]
+                                   (swap! steps rest)
+                                   step))
+                   :execute-step-fn (fn [step]
+                                      (swap! execute-count inc)
+                                      (execute-step step))})]
+    (is (= 2 @execute-count))
+    (is (= runtime-loop/doom-loop-content (:content result)))
+    (is (= :doom-loop (:stop-reason result)))
+    (is (some #(= :doom-loop-detected (get-in % [:payload :kind])) @events))
+    (is (= :doom-loop (get-in (last @events) [:payload :stop-reason])))))
+
+(deftest doom-loop-guard-allows-different-input-or-tool-test
+  (let [execute-count (atom 0)
+        steps (atom [(tool-step "call_1" :fs {:action "list"})
+                     (tool-step "call_2" :fs {:action "read"})
+                     (tool-step "call_3" :shell {:action "list"})
+                     (complete-step "done")])
+        {:keys [result]}
+        (run-loop {:max-steps 4
+                   :planner-fn (fn [_ _]
+                                 (let [step (first @steps)]
+                                   (swap! steps rest)
+                                   step))
+                   :execute-step-fn (fn [step]
+                                      (swap! execute-count inc)
+                                      (execute-step step))})]
+    (is (= 4 @execute-count))
+    (is (= "done" (:content result)))
+    (is (= :completed (:stop-reason result)))))
+
+(deftest doom-loop-guard-disabled-bypasses-repeat-check-test
+  (let [execute-count (atom 0)
+        steps (atom [(tool-step "call_1" :fs {:action "list"})
+                     (tool-step "call_2" :fs {:action "list"})
+                     (tool-step "call_3" :fs {:action "list"})
+                     (complete-step "done")])
+        {:keys [result]}
+        (run-loop {:max-steps 4
+                   :doom-loop-config {:enabled? false}
+                   :planner-fn (fn [_ _]
+                                 (let [step (first @steps)]
+                                   (swap! steps rest)
+                                   step))
+                   :execute-step-fn (fn [step]
+                                      (swap! execute-count inc)
+                                      (execute-step step))})]
+    (is (= 4 @execute-count))
+    (is (= "done" (:content result)))
+    (is (= :completed (:stop-reason result)))))
 
 (deftest context-pack-runs-before-planner-test
   (let [requests (atom [])

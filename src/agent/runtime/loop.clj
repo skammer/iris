@@ -4,6 +4,7 @@
   (:require
    [agent.llm.messages :as llm-messages]
    [agent.planner :as planner]
+   [agent.runtime.doom-loop :as doom-loop]
    [agent.runtime.schema :as runtime-schema]
    [cheshire.core :as json]
    [clojure.string :as str])
@@ -12,6 +13,7 @@
 
 (def stopped-content "Stopped.")
 (def max-steps-content "Stopped: max chat tool steps reached.")
+(def doom-loop-content "Stopped: repeated identical tool call detected.")
 (def max-tokens-content
   "[SYSTEM ERROR: Assistant response was truncated because it exceeded max output tokens. Truncated output was saved for audit but will not be reused as context. Retry with smaller, incremental changes.]")
 (def synthetic-tool-result-content "not executed; retry possible")
@@ -318,15 +320,17 @@
   [{:keys [messages context-injectors system-prompt tools model provider-config
            telemetry observer trace planner-fn context-pack-fn execute-step-fn approval-fn fallback-fn event-sink
            cancellation-token request-id session-id agent-id max-steps stream?
-           tool-output-max-chars]
+           tool-output-max-chars doom-loop-config]
     :or {planner-fn planner/plan-step!
          context-pack-fn identity
          max-steps 6
-         tool-output-max-chars 8000}}]
+         tool-output-max-chars 8000
+         doom-loop-config doom-loop/default-config}}]
   (let [base {:entity-type :session
               :entity-id session-id
               :request-id request-id}
         agent-id* (or agent-id session-id "chat")
+        doom-loop-config* (doom-loop/normalize-config doom-loop-config)
         messages* (apply-context-injectors (vec (or messages [])) context-injectors)
         stream?* (true? stream?)
         delta-emitted? (atom false)
@@ -346,7 +350,8 @@
              planner-messages messages*
              trace []
              final-messages []
-             usage {}]
+             usage {}
+             doom-loop-state (doom-loop/new-state)]
         (throw-if-cancelled! cancellation-token)
         (if (>= step-no max-steps)
           (do
@@ -436,13 +441,41 @@
                    :stop-reason :max-tokens
                    :stream? stream?*
                    :error? true})
-                (let [executed (execute-step-fn executable-step)
-                      _ (throw-if-cancelled! cancellation-token)
-                      receipts (:receipts executed)
-                      trace-entry {:step step-no
-                                   :directives (:directives step)
-                                   :receipts receipts}
-                      trace* (conj trace trace-entry)]
+                (let [doom-check (doom-loop/check-step doom-loop-state doom-loop-config* executable-step)
+                      doom-loop-state* (:state doom-check)]
+                  (if (:detected? doom-check)
+                    (let [call (:call doom-check)
+                          payload {:kind :doom-loop-detected
+                                   :tool-name (:tool-name call)
+                                   :input (:input call)
+                                   :fingerprint (:fingerprint call)
+                                   :count (:count doom-check)
+                                   :threshold (:threshold doom-loop-config*)
+                                   :window-size (:window-size doom-loop-config*)
+                                   :action (:action doom-loop-config*)}]
+                      (event! event-sink :tool-execution-update base payload)
+                      (emit-terminal-message! event-sink base doom-loop-content {:stop-reason :doom-loop
+                                                                                 :metadata payload})
+                      (event! event-sink :agent-end base {:steps (inc step-no)
+                                                          :stop-reason :doom-loop
+                                                          :stream stream?*})
+                      {:content doom-loop-content
+                       :request-id request-id
+                       :final-messages (conj final-messages {:role "assistant"
+                                                             :content doom-loop-content})
+                       :trace trace
+                       :usage usage*
+                       :stop-reason :doom-loop
+                       :stream? stream?*
+                       :guardrail? true
+                       :doom-loop payload})
+                    (let [executed (execute-step-fn executable-step)
+                          _ (throw-if-cancelled! cancellation-token)
+                          receipts (:receipts executed)
+                          trace-entry {:step step-no
+                                       :directives (:directives step)
+                                       :receipts receipts}
+                          trace* (conj trace trace-entry)]
                   (event! event-sink :turn-end base {:step step-no
                                                      :directives (:directives step)
                                                      :receipts receipts})
@@ -503,7 +536,8 @@
                                  (into planner-messages* protocol-messages)
                                  trace*
                                  final-messages*
-                                 usage*)))))))))))
+                                 usage*
+                                 doom-loop-state*)))))))))))))
       (catch Exception e
         (if (or (cancelled? cancellation-token)
                 (= :chat-cancelled (some-> e ex-data :type)))
