@@ -2,11 +2,13 @@
   (:require
    [agent.system :as system]
    [agent.config :as config]
+   [agent.health :as health]
    [agent.kernel]
    [agent.llm.core :as llm-core]
    [agent.llm.providers.ollama :as ollama]
    [agent.llm.providers.openai-compatible :as openai-compatible]
    [agent.persistence.sqlite :as sqlite]
+   [agent.runtime.core :as runtime]
    [clojure.java.io :as io]
    [clojure.test :refer :all]))
 
@@ -51,7 +53,8 @@
         tools (system/list-tools system)
         tool-names (set (map :name tools))
         adapters (system/list-channel-adapters system)
-        runner-keys (-> system :runner-registry keys set)]
+        runner-keys (-> system :runner-registry keys set)
+        system-health (system/health-check system)]
     (is (every? tool-names [:fs :http :memory :message_search :shell :system_reload]))
     (is (= ["Discord" "Slack" "Telegram"] (mapv :display-name adapters)))
     (is (contains? runner-keys :local-unsandboxed))
@@ -61,12 +64,34 @@
     (is (contains? runner-keys :seatbelt))
     (is (empty? (system/list-skills system)))
     (is (= 5 (count (system/memory-surfaces system))))
-    (is (false? (get-in (system/health-check system) [:logging :enabled])))
-    (is (= :local (get-in (system/health-check system) [:broker :backend])))
-    (is (<= 6 (get-in (system/health-check system) [:tools :count])))
-    (is (integer? (get-in (system/health-check system) [:runtime :run-count])))
-    (is (= 3 (get-in (system/health-check system) [:channel-adapters :count])))
-    (is (= 0 (get-in (system/health-check system) [:orchestrator :agent-count])))))
+    (is (false? (get-in system-health [:logging :enabled])))
+    (is (= :local (get-in system-health [:broker :backend])))
+    (is (<= 6 (get-in system-health [:tools :count])))
+    (is (integer? (get-in system-health [:runtime :run-count])))
+    (is (= 3 (get-in system-health [:channel-adapters :count])))
+    (is (= 0 (get-in system-health [:orchestrator :agent-count])))
+    (is (= "ok" (get-in system-health [:health-snapshot :components "sqlite" :status])))
+    (is (= "ok" (get-in system-health [:health-snapshot :components "runtime" :status])))))
+
+(deftest retry-run-bumps-runtime-restart-count-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        registry (health/create-registry)
+        service (system/create-runtime-service store (fn [_] nil))
+        system {:runtime-service service
+                :health-registry registry}
+        run (system/request-run! system
+                                 (runtime/create-run-request
+                                  {:name "restart-count-test"}))]
+    (try
+      (system/retry-run! system (:id run))
+      (is (= 1 (get-in (health/snapshot registry)
+                       [:components "runtime" :restart-count])))
+      (is (= "ok" (get-in (health/snapshot registry)
+                          [:components "runtime" :status])))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
 
 (deftest tool-policy-blocks-and-yolo-skips-approval-only
   (let [path (temp-db-path)

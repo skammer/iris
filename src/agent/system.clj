@@ -8,6 +8,7 @@
    [agent.api :as api]
    [agent.config :as config]
    [agent.federation.http :as federation-http]
+   [agent.health :as health]
    [agent.kernel :as kernel]
    [agent.kernel.ops :as kernel-ops]
    [agent.kernel.runtime :as kernel-runtime]
@@ -159,6 +160,37 @@
 (defn create-trace
   [cfg]
   (runtime-trace/create-trace (:trace cfg) (get-in cfg [:iris :data-dir])))
+
+(defn- with-component-health
+  [registry component f]
+  (try
+    (let [result (f)]
+      (health/mark-ok! registry component)
+      result)
+    (catch Exception e
+      (health/mark-error! registry component e)
+      (throw e))))
+
+(defn- unhealthy-message
+  [component result]
+  (or (:error result)
+      (:message result)
+      (get-in result [:details :error])
+      (get-in result [:details :message])
+      (str component " unhealthy")))
+
+(defn- checked-component-health
+  [registry component f]
+  (try
+    (let [result (f)]
+      (if (false? (:healthy result))
+        (health/mark-error! registry component (unhealthy-message component result))
+        (health/mark-ok! registry component))
+      result)
+    (catch Exception e
+      (health/mark-error! registry component e)
+      {:healthy false
+       :details {:error (.getMessage e)}})))
 
 (defn- observe-system-event!
   [telemetry-collector observer recorded]
@@ -475,17 +507,30 @@
    (let [cfg (config/load-config config-path)
          system-ref (atom nil)
          reload-state (atom {:status :idle})
+         health-registry (health/create-registry)
          _ (logging/start! (:logging cfg))
          llm-cfg (config/llm-config cfg)
-         store (create-store (:storage cfg))
-         telemetry-collector (create-telemetry (:telemetry cfg))
+         store (with-component-health health-registry :sqlite
+                 #(create-store (:storage cfg)))
+         telemetry-collector (with-component-health health-registry :telemetry
+                               #(create-telemetry (:telemetry cfg)))
          observer (create-observer telemetry-collector (:observer cfg))
          trace (create-trace cfg)
-         broker-instance (create-broker store)
+         broker-instance (with-component-health health-registry :broker
+                           #(create-broker store))
          event-sink (create-event-sink store broker-instance telemetry-collector observer trace)
          recorded-event-sink (create-recorded-event-sink broker-instance telemetry-collector observer trace)
-         runtime-service (create-runtime-service store event-sink broker-instance recorded-event-sink)
-         memory-service (create-memory-service (:memory cfg) (:tools cfg) store)]
+         runtime-service (with-component-health health-registry :runtime
+                           #(create-runtime-service store event-sink broker-instance recorded-event-sink))
+         memory-service (with-component-health health-registry :memory
+                          #(create-memory-service (:memory cfg) (:tools cfg) store))
+         llm-registry (llm-registry/create-registry llm-cfg)
+         llm-provider (with-component-health health-registry :llm-provider
+                        #(create-llm-provider llm-cfg))
+         fact-llm-provider (with-component-health health-registry :llm-provider
+                             #(create-fact-llm-provider cfg))
+         tool-registry (with-component-health health-registry :tools
+                         #(create-tool-registry (:tools cfg) event-sink store telemetry-collector memory-service (:channel-adapters cfg) system-ref observer trace))]
      (logging/log! :agent.system/created
                    {:config-path config-path
                     :provider (name (config/active-provider-key (:llm cfg)))
@@ -495,9 +540,10 @@
                    :config-path config-path
                    :system-ref system-ref
                    :reload-state reload-state
-                   :llm-registry (llm-registry/create-registry llm-cfg)
-                   :llm-provider (create-llm-provider llm-cfg)
-                   :fact-llm-provider (create-fact-llm-provider cfg)
+                   :health-registry health-registry
+                   :llm-registry llm-registry
+                   :llm-provider llm-provider
+                   :fact-llm-provider fact-llm-provider
                    :store store
                    :telemetry telemetry-collector
                    :observer observer
@@ -505,7 +551,7 @@
                    :broker broker-instance
                    :event-sink event-sink
                    :recorded-event-sink recorded-event-sink
-                   :tool-registry (create-tool-registry (:tools cfg) event-sink store telemetry-collector memory-service (:channel-adapters cfg) system-ref observer trace)
+                   :tool-registry tool-registry
                    :skills-registry (create-skills-registry (:skills cfg))
                    :memory-service memory-service
                    :runtime-service runtime-service
@@ -514,8 +560,10 @@
        (let [telegram-service (telegram/create-service base-system)
              system* (assoc base-system
                             :telegram-service telegram-service
-                            :channel-adapter-registry (create-channel-adapter-registry (:channel-adapters cfg)
-                                                                                       telegram-service))]
+                            :channel-adapter-registry
+                            (with-component-health health-registry :channel-adapters
+                              #(create-channel-adapter-registry (:channel-adapters cfg)
+                                                                telegram-service)))]
          (reset! system-ref system*)
          system*)))))
 
@@ -546,38 +594,51 @@
 
 (defn- rebuild-hot-system [old-system new-cfg]
   (let [system-ref (:system-ref old-system)
-        memory-service (create-memory-service (:memory new-cfg)
-                                              (:tools new-cfg)
-                                              (:store old-system))
+        health-registry (:health-registry old-system)
+        memory-service (with-component-health health-registry :memory
+                         #(create-memory-service (:memory new-cfg)
+                                                 (:tools new-cfg)
+                                                 (:store old-system)))
         observer (create-observer (:telemetry old-system) (:observer new-cfg))
         trace (create-trace new-cfg)
         base (assoc old-system
                     :config new-cfg
-                    :llm-provider (create-llm-provider (:llm new-cfg))
-                    :fact-llm-provider (create-fact-llm-provider new-cfg)
+                    :llm-provider (with-component-health health-registry :llm-provider
+                                    #(create-llm-provider (:llm new-cfg)))
+                    :fact-llm-provider (with-component-health health-registry :llm-provider
+                                         #(create-fact-llm-provider new-cfg))
                     :observer observer
                     :trace trace
                     :memory-service memory-service
                     :skills-registry (create-skills-registry (:skills new-cfg)))
         telegram-running? (some-> (:telegram-service old-system) running-adapter?)
-        _ (some-> (:telegram-service old-system) channel-adapters/stop-adapter!)
+        _ (when telegram-running?
+            (health/bump-restart! health-registry :channel-adapters))
+        _ (try
+            (some-> (:telegram-service old-system) channel-adapters/stop-adapter!)
+            (catch Exception e
+              (health/mark-error! health-registry :channel-adapters e)
+              (throw e)))
         telegram-service (telegram/create-service base)
         telegram-service* (if telegram-running?
-                            (channel-adapters/start-adapter! telegram-service)
+                            (with-component-health health-registry :channel-adapters
+                              #(channel-adapters/start-adapter! telegram-service))
                             telegram-service)]
     (assoc base
            :telegram-service telegram-service*
-           :tool-registry (create-tool-registry (:tools new-cfg)
-                                                (:event-sink old-system)
-                                                (:store old-system)
-                                                (:telemetry old-system)
-                                                memory-service
-                                                (:channel-adapters new-cfg)
-                                                system-ref
-                                                observer
-                                                trace)
-           :channel-adapter-registry (create-channel-adapter-registry (:channel-adapters new-cfg)
-                                                                      telegram-service*))))
+           :tool-registry (with-component-health health-registry :tools
+                            #(create-tool-registry (:tools new-cfg)
+                                                   (:event-sink old-system)
+                                                   (:store old-system)
+                                                   (:telemetry old-system)
+                                                   memory-service
+                                                   (:channel-adapters new-cfg)
+                                                   system-ref
+                                                   observer
+                                                   trace))
+           :channel-adapter-registry (with-component-health health-registry :channel-adapters
+                                       #(create-channel-adapter-registry (:channel-adapters new-cfg)
+                                                                         telegram-service*)))))
 
 (defn- soft-reload! [system opts]
   (let [system* (current-system system)
@@ -617,16 +678,26 @@
   (let [old-system (current-system system)
         system-ref (:system-ref old-system)
         reload-state (:reload-state old-system)
+        health-registry (:health-registry old-system)
         old-cfg (:config old-system)
         api-running? (some? (:api-server old-system))
-        new-system* (create-system (:config-path old-system))
+        _ (health/bump-restart! health-registry :runtime)
+        new-system* (try
+                      (create-system (:config-path old-system))
+                      (catch Exception e
+                        (health/mark-error! health-registry :runtime e)
+                        (throw e)))
         new-system** (assoc new-system*
                             :system-ref system-ref
-                            :reload-state reload-state)
+                            :reload-state reload-state
+                            :health-registry health-registry)
         new-system (if api-running?
                      (start-api! new-system**)
                      new-system**)
         result (reload-result :full old-cfg (:config new-system) :reloaded)]
+    (doseq [component [:llm-provider :sqlite :broker :telemetry :runtime
+                       :tools :memory :channel-adapters]]
+      (health/mark-ok! health-registry component))
     (reset! system-ref new-system)
     (reset! reload-state
             (assoc result
@@ -673,6 +744,7 @@
                        {:type :validation-failed
                         :mode mode})))
      (catch Exception e
+       (health/mark-error! (:health-registry (current-system system)) :runtime e)
        (when-let [reload-state (:reload-state (current-system system))]
          (reset! reload-state
                  {:mode (or mode :soft)
@@ -709,21 +781,32 @@
 
 (defn health-check
   [system]
-  {:llm (llm-core/health-check (:llm-provider system))
-   :llm-registry {:active-provider (:active-provider (:llm-registry system))
-                  :provider-count (count (:providers (:llm-registry system)))}
-   :storage (sqlite/health-check (:store system))
-   :logging (logging/health-check)
-   :broker (broker/health-check (:broker system))
-   :tools (tools/registry-health (:tool-registry system))
-   :skills (skills/registry-health (:skills-registry system))
-   :memory (memory/health-check (:memory-service system))
-   :telemetry (telemetry/health-check (:telemetry system))
-   :trace (runtime-trace/health-check (:trace system))
-   :runtime (runtime/runtime-health (:runtime-service system))
-   :channel-adapters (channel-adapters/registry-health (:channel-adapter-registry system))
-   :orchestrator (orchestrator/health-check (:orchestrator system))
-   :provider (config/active-provider-key (get-in system [:config :llm]))})
+  (let [registry (:health-registry system)]
+    {:llm (checked-component-health registry :llm-provider
+            #(llm-core/health-check (:llm-provider system)))
+     :llm-registry {:active-provider (:active-provider (:llm-registry system))
+                    :provider-count (count (:providers (:llm-registry system)))
+                    :providers (count (:providers (:llm-registry system)))}
+     :storage (checked-component-health registry :sqlite
+                #(sqlite/health-check (:store system)))
+     :logging (logging/health-check)
+     :broker (checked-component-health registry :broker
+               #(broker/health-check (:broker system)))
+     :tools (checked-component-health registry :tools
+              #(tools/registry-health (:tool-registry system)))
+     :skills (skills/registry-health (:skills-registry system))
+     :memory (checked-component-health registry :memory
+               #(memory/health-check (:memory-service system)))
+     :telemetry (checked-component-health registry :telemetry
+                  #(telemetry/health-check (:telemetry system)))
+     :trace (runtime-trace/health-check (:trace system))
+     :runtime (checked-component-health registry :runtime
+                #(runtime/runtime-health (:runtime-service system)))
+     :channel-adapters (checked-component-health registry :channel-adapters
+                         #(channel-adapters/registry-health (:channel-adapter-registry system)))
+     :orchestrator (orchestrator/health-check (:orchestrator system))
+     :provider (config/active-provider-key (get-in system [:config :llm]))
+     :health-snapshot (health/snapshot registry)}))
 
 (defn log-event!
   [system event]
@@ -976,11 +1059,22 @@
 
 (defn reclaim-stale-runs!
   [system]
-  (runtime/reclaim-stale-runs! (:runtime-service system)))
+  (let [results (runtime/reclaim-stale-runs! (:runtime-service system))]
+    (doseq [_ (filter :replacement results)]
+      (health/bump-restart! (:health-registry system) :runtime))
+    (health/mark-ok! (:health-registry system) :runtime)
+    results))
 
 (defn retry-run!
   [system run-id]
-  (runtime/retry-run! (:runtime-service system) run-id))
+  (try
+    (let [run (runtime/retry-run! (:runtime-service system) run-id)]
+      (health/bump-restart! (:health-registry system) :runtime)
+      (health/mark-ok! (:health-registry system) :runtime)
+      run)
+    (catch Exception e
+      (health/mark-error! (:health-registry system) :runtime e)
+      (throw e))))
 
 (defn acknowledge-run-command!
   [system run-id command-id]
@@ -1008,31 +1102,36 @@
 
 (defn launch-run!
   [system run-id]
-  (let [run (or (get-run system run-id)
-                (throw (ex-info "Run not found" {:type :run-not-found
-                                                 :run-id run-id})))
-        runner (or (get (:runner-registry system) (keyword (:substrate run)))
-                   (throw (ex-info "No runner for substrate"
-                                   {:type :runner-not-found
-                                    :substrate (:substrate run)})))
-        checkpoint-seq (or (get-in run [:checkpoint :sequence-no]) 0)
-        launch-result (runners/launch runner
-                                      (runners/create-run-spec
-                                       {:run-id (:id run)
-                                        :agent-id (:agent-id run)
-                                        :parent-run-id (:parent-run-id run)
-                                        :lease-id (:lease-id run)
-                                        :name (:name run)
-                                        :substrate (keyword (:substrate run))
-                                        :capabilities (:capabilities run)
-                                        :network-identity (:network-identity run)
-                                        :bootstrap-token (:bootstrap-token run)
-                                        :bootstrap-spec (assoc (:bootstrap-spec run)
-                                                              :checkpoint-seq checkpoint-seq)
-                                        :requested-by (:requested-by run)
-                                        :runner-options (prepare-runner-options system run)}))]
-    (transition-run! system run-id :launched {:runner-metadata launch-result})
-    (get-run system run-id)))
+  (try
+    (let [run (or (get-run system run-id)
+                  (throw (ex-info "Run not found" {:type :run-not-found
+                                                   :run-id run-id})))
+          runner (or (get (:runner-registry system) (keyword (:substrate run)))
+                     (throw (ex-info "No runner for substrate"
+                                     {:type :runner-not-found
+                                      :substrate (:substrate run)})))
+          checkpoint-seq (or (get-in run [:checkpoint :sequence-no]) 0)
+          launch-result (runners/launch runner
+                                        (runners/create-run-spec
+                                         {:run-id (:id run)
+                                          :agent-id (:agent-id run)
+                                          :parent-run-id (:parent-run-id run)
+                                          :lease-id (:lease-id run)
+                                          :name (:name run)
+                                          :substrate (keyword (:substrate run))
+                                          :capabilities (:capabilities run)
+                                          :network-identity (:network-identity run)
+                                          :bootstrap-token (:bootstrap-token run)
+                                          :bootstrap-spec (assoc (:bootstrap-spec run)
+                                                                :checkpoint-seq checkpoint-seq)
+                                          :requested-by (:requested-by run)
+                                          :runner-options (prepare-runner-options system run)}))]
+      (transition-run! system run-id :launched {:runner-metadata launch-result})
+      (health/mark-ok! (:health-registry system) :runtime)
+      (get-run system run-id))
+    (catch Exception e
+      (health/mark-error! (:health-registry system) :runtime e)
+      (throw e))))
 
 (defn signal-run!
   [system run-id command]
@@ -1180,15 +1279,29 @@
 (defn start-api!
   [system]
   (let [{:keys [host port]} (:api (:config system))
-        server (api/start-server! system (:api (:config system)))
-        telegram-service (some-> (:telegram-service system)
-                                 channel-adapters/start-adapter!)]
+        registry (:health-registry system)
+        server (try
+                 (api/start-server! system (:api (:config system)))
+                 (catch Exception e
+                   (health/mark-error! registry :api e)
+                   (throw e)))
+        telegram-service (try
+                           (some-> (:telegram-service system)
+                                   channel-adapters/start-adapter!)
+                           (catch Exception e
+                             (health/mark-error! registry :channel-adapters e)
+                             (throw e)))]
+    (health/mark-ok! registry :api)
+    (health/mark-ok! registry :channel-adapters)
     (logging/log! :agent.api/started
                   {:host host
                    :port port})
-    (assoc system
-           :api-server server
-           :telegram-service telegram-service)))
+    (let [system* (assoc system
+                         :api-server server
+                         :telegram-service telegram-service)]
+      (when-let [system-ref (:system-ref system*)]
+        (reset! system-ref system*))
+      system*)))
 
 (defn stop-api!
   [system]
