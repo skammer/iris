@@ -29,7 +29,8 @@
      :category :messaging
      :input-schema [:map {:closed true}
                     [:photo :string]
-                    [:caption {:optional true} :string]])
+                    [:caption {:optional true} :string]]
+     :operation :act)
     :execute-fn
     (fn [input context]
       (let [chat-id (require-chat-id! context :telegram_send_photo)
@@ -49,7 +50,8 @@
      :category :messaging
      :input-schema [:map {:closed true}
                     [:document :string]
-                    [:caption {:optional true} :string]])
+                    [:caption {:optional true} :string]]
+     :operation :act)
     :execute-fn
     (fn [input context]
       (let [chat-id (require-chat-id! context :telegram_send_document)

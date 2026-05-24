@@ -688,22 +688,20 @@
           "Send"]
          [:div#chat-status.meta.chat-status
           {:style (when-not (:working? state) "display:none")
-           "data-show" "$chatLoading"}
-          (if (pos? (:queued-count state))
-            (str "working, queued " (:queued-count state))
-            "thinking...")]]])))))
+           "data-show" (if (:working? state) "true" "$chatLoading")
+           :role "status"
+           :aria-label (if (pos? (:queued-count state))
+                         (str "Working, queued " (:queued-count state))
+                         "Working")}
+          [:span.chat-spinner {:aria-hidden true}]
+          (when (pos? (:queued-count state))
+            [:span.chat-status__text (str "queued " (:queued-count state))])]]])))))
 
 (defn- streaming-message [content]
   [:article.message.message--streaming
    [:div.message-role {:class "assistant"} "assistant"]
    (render-message-content content)
    [:div.meta "streaming…"]])
-
-(defn- working-message [state]
-  (streaming-message
-   (if (pos? (:queued-count state))
-     (str "working, queued " (:queued-count state))
-     "thinking...")))
 
 (defn session-messages-fragment
   ([system session-id]
@@ -726,7 +724,6 @@
              (render-message system message))
            (cond
              streaming* [(streaming-message streaming*)]
-             (:working? state) [(working-message state)]
              :else nil)))
          [:div.empty "No messages yet."])]))))
 

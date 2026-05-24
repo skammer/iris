@@ -15,6 +15,7 @@
    [agent.runtime.compaction :as compaction]
    [agent.runtime.context-pack :as context-pack]
    [agent.runtime.loop :as runtime-loop]
+   [agent.runtime.tools :as runtime-tools]
    [agent.telemetry :as telemetry]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
@@ -120,6 +121,7 @@
   ([system session-id role content extra]
    (let [message (sqlite/append-message! (:store system) session-id role content extra)
          payload (cond-> {:role role :content content}
+                   (:content-blocks extra) (assoc :content-blocks (:content-blocks extra))
                    (:tool-calls extra) (assoc :tool-calls (:tool-calls extra))
                    (:tool-call-id extra) (assoc :tool-call-id (:tool-call-id extra))
                    (:metadata extra) (assoc :metadata (:metadata extra))
@@ -130,11 +132,26 @@
                     :payload payload})
      message)))
 
+(defn- user-message? [message]
+  (= "user" (if (keyword? (:role message))
+              (name (:role message))
+              (:role message))))
+
+(defn- latest-user-message [messages]
+  (last (filter user-message? messages)))
+
+(def ^:private media-block-types #{:image :audio :video :file})
+
+(defn- media-block? [block]
+  (contains? media-block-types (:type block)))
+
+(defn- content-blocks-extra [message]
+  (let [blocks (seq (get (llm-messages/message->internal message) :content))]
+    (when (some media-block? blocks)
+      {:content-blocks (vec blocks)})))
+
 (defn- latest-user-prompt [messages]
-  (some-> (last (filter #(= "user" (if (keyword? (:role %))
-                                      (name (:role %))
-                                      (:role %)))
-                        messages))
+  (some-> (latest-user-message messages)
           llm-messages/content-text))
 
 (defn- truncate-text [text max-chars]
@@ -148,7 +165,7 @@
 
 (defn- db-message-content [role content]
   (let [content* (or content "")]
-    (if (= "tool" role)
+    (if (and (= "tool" role) (string? content*))
       (truncate-text content* history-message-max-chars)
       content*)))
 
@@ -163,9 +180,11 @@
     (llm-messages/messages->internal [])))
 
 (defn- persist-user-turn! [system session-id messages]
-  (when-let [content (and session-id (latest-user-prompt messages))]
-    (when-not (str/blank? content)
-      (append-message! system session-id "user" content))))
+  (when-let [message (and session-id (latest-user-message messages))]
+    (let [content (llm-messages/content-text message)
+          extra (content-blocks-extra message)]
+      (when (or (not (str/blank? content)) extra)
+        (append-message! system session-id "user" content extra)))))
 
 (defn- compact-memory-json
   "Serializes recalled memory to JSON, capped at memory-max-chars to keep
@@ -209,6 +228,18 @@
 (defn- all-tool-names [system]
   (set (map :name (tools/list-tools (:tool-registry system)))))
 
+(defn- chat-tool-context [system session-id request-id extra-context context]
+  (merge (or extra-context {})
+         context
+         {:user (or session-id "chat")
+          :session-id session-id
+          :request-id request-id
+          :permissions (profile-permissions system :chat)
+          :allowed-tools (all-tool-names system)
+          :yolo? (true? (get-in system [:config :tools :yolo?]))}
+         (select-keys extra-context [:allowed-tools])
+         (select-keys context [:allowed-tools])))
+
 (defrecord ChatKernelOps [system session-id request-id extra-context]
   kernel-ops/KernelOps
   (spawn-task-worker! [_ _]
@@ -218,22 +249,30 @@
     (tools/execute-tool (:tool-registry system)
                         tool-name
                         input
-                        (merge (or extra-context {})
-                               context
-                               {:user (or session-id "chat")
-                                :session-id session-id
-                                :request-id request-id
-                                :permissions (profile-permissions system :chat)
-                                :allowed-tools (all-tool-names system)
-                                :yolo? (true? (get-in system [:config :tools :yolo?]))}
-                               (select-keys extra-context [:allowed-tools])
-                               (select-keys context [:allowed-tools]))))
+                        (chat-tool-context system session-id request-id extra-context context)))
   (send-agent-message! [_ _ _]
     (throw (ex-info "Chat loop cannot send agent messages yet"
                     {:type :unsupported-directive})))
   (patch-agent-state! [_ _ patch] patch)
   (set-agent-status! [_ _ _] nil)
-  (emit-kernel-event! [_ event] (emit! system event)))
+  (emit-kernel-event! [_ event] (emit! system event))
+
+  kernel-ops/KernelToolBatchOps
+  (execute-agent-tool-batch! [_ _ calls context opts]
+    (let [calls* (mapv (fn [call]
+                         (update call :context #(chat-tool-context system
+                                                                   session-id
+                                                                   request-id
+                                                                   extra-context
+                                                                   (merge context (or % {})))))
+                       calls)]
+      (runtime-tools/execute-batch! (:tool-registry system)
+                                    calls*
+                                    {}
+                                    (select-keys opts [:mode
+                                                       :tool-execution-modes
+                                                       :cancellation-token
+                                                       :cancelled?])))))
 
 (defn- request-approval! [system session-id receipt]
   (let [tool-name (keyword (:tool-name receipt))
@@ -650,6 +689,7 @@
                                          (or session-id "chat")
                                          (kernel-schema/normalize-step executable-step)
                                          {:execute-safe-tools? true
+                                          :cancellation-token cancelled?
                                           :yolo? (true? (get-in system [:config :tools :yolo?]))}))
                      :approval-fn (fn [receipts]
                                     (mapv #(request-approval! system session-id %) receipts))
@@ -691,15 +731,18 @@
    :request-id request-id})
 
 (defn- persist-queued-user-turn! [system session-id messages request-id]
-  (when-let [content (and session-id (latest-user-prompt messages))]
-    (when-not (str/blank? content)
-      (append-message! system
-                       session-id
-                       "user"
-                       content
+  (when-let [message (and session-id (latest-user-message messages))]
+    (let [content (llm-messages/content-text message)
+          extra (merge (content-blocks-extra message)
                        {:metadata (queued-user-metadata request-id)
                         :excluded-from-context? true
-                        :select-leaf? false}))))
+                        :select-leaf? false})]
+      (when (or (not (str/blank? content)) (:content-blocks extra))
+        (append-message! system
+                         session-id
+                         "user"
+                         content
+                         extra)))))
 
 (defn- activate-queued-message! [system {:keys [queued-message request-id]}]
   (when queued-message

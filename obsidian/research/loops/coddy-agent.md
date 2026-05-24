@@ -46,6 +46,52 @@
 - UI syncs final assistant from `/coddy/sessions/:sid/messages` with retries.
 - Tool call store keeps args/result/meta so replay can reconstruct rich tool UI.
 
+## Code Pattern
+
+```go
+// tmp/coddy-agent/internal/agent/react.go
+maxTurns := a.cfg.Agent.MaxTurns
+if maxTurns <= 0 {
+	maxTurns = 30
+}
+
+for turn := 0; turn < maxTurns; turn++ {
+	if ctx.Err() != nil {
+		return string(acp.StopReasonCancelled), nil
+	}
+
+	if len(response.ToolCalls) == 0 {
+		stopReason := response.StopReason
+		if stopReason == "" || stopReason == "end_turn" {
+			return string(acp.StopReasonEndTurn), nil
+		}
+		if stopReason == "max_tokens" {
+			return string(acp.StopReasonMaxTokens), nil
+		}
+		return string(acp.StopReasonEndTurn), nil
+	}
+}
+
+return string(acp.StopReasonMaxTurns), nil
+```
+
+Pattern: conventional ReAct loop with hard turn cap, cancellation check, and no-tool final exit.
+
+```go
+// tmp/coddy-agent/internal/session/manager_replay.go
+for _, tc := range msg.ToolCalls {
+	_ = m.server.SendSessionUpdate(sessionID, acp.ToolCallUpdate{
+		SessionUpdate: acp.UpdateTypeToolCall,
+		ToolCallID:    tc.ID,
+		Title:         tc.Name,
+		Kind:          replayToolKind(tc.Name),
+		Status:        "pending",
+	})
+}
+```
+
+Pattern: persisted tool calls replay into UI events, so restore is richer than plain message history.
+
 ## Decision
 - Strongest choice: session directory as full replay artifact.
 - Weakest point: tool loop is simple sequential ReAct; less separation between loop and persistence than Iris/pi.

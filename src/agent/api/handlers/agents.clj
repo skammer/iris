@@ -10,6 +10,7 @@
    [agent.kernel.ops :as kernel-ops]
    [agent.kernel.runtime :as kernel-runtime]
    [agent.orchestrator :as orchestrator]
+   [agent.runtime.tools :as runtime-tools]
    [agent.tools.core :as tools]
    [clojure.string :as str]))
 
@@ -210,7 +211,30 @@
   (set-agent-status! [_ agent-id status]
     (orchestrator/set-agent-status! (:orchestrator system) agent-id status))
   (emit-kernel-event! [_ event]
-    ((:event-sink system) event)))
+    ((:event-sink system) event))
+
+  kernel-ops/KernelToolBatchOps
+  (execute-agent-tool-batch! [_ target-agent-id calls context opts]
+    (let [target-agent (orchestrator/get-agent (:orchestrator system) target-agent-id)]
+      (when-not target-agent
+        (throw (ex-info "Agent not found" {:type :agent-not-found :agent-id target-agent-id})))
+      (let [calls* (mapv (fn [call]
+                           (update call :context #(merge context
+                                                         (or % {})
+                                                         {:allowed-tools (set (:tool-access target-agent))
+                                                          :permissions (tools-h/configured-tool-permissions system :agent)
+                                                          :yolo? (true? (get-in system [:config :tools :yolo?]))
+                                                          :user (or (:user (or % {}))
+                                                                    (:user context)
+                                                                    (str "agent:" target-agent-id))})))
+                         calls)]
+        (runtime-tools/execute-batch! (:tool-registry system)
+                                      calls*
+                                      {}
+                                      (select-keys opts [:mode
+                                                         :tool-execution-modes
+                                                         :cancellation-token
+                                                         :cancelled?]))))))
 
 (defn step-execute [system request agent-id]
   (let [agent (orchestrator/get-agent (:orchestrator system) agent-id)

@@ -42,6 +42,49 @@
 - It removes orphan tool_results not matching immediately previous assistant message.
 - This repairs cancellation/crash/provider-history edge cases.
 
+## Code Pattern
+
+```go
+// tmp/shelley/loop/loop.go
+func (l *Loop) QueueUserMessage(message llm.Message) {
+	l.mu.Lock()
+	l.messageQueue = append(l.messageQueue, message)
+	l.logger.Debug("queued user message", "content_count", len(message.Content))
+	l.mu.Unlock()
+	select {
+	case l.notify <- struct{}{}:
+	default:
+	}
+}
+```
+
+Pattern: user input is queued and wakes the daemon loop; persistence remains outside the loop.
+
+```go
+// tmp/shelley/loop/loop.go
+for {
+	req := &llm.Request{
+		Messages: messages,
+		Tools:    tools,
+		System:   system,
+		OnStream: l.onStreamDelta,
+	}
+
+	l.insertMissingToolResults(req)
+
+	if resp.StopReason != llm.StopReasonToolUse {
+		l.checkGitStateChange(ctx)
+		return nil
+	}
+
+	if err := l.executeToolCalls(ctx, resp.Content); err != nil {
+		return err
+	}
+}
+```
+
+Pattern: repair provider history before each call, then loop only while provider explicitly asks for tool use.
+
 ## Decision
 - Simple, robust Go loop: queue plus repair function.
 - Best reusable idea: explicit interruption handling between tool batch and next LLM call.

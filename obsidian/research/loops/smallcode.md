@@ -45,6 +45,61 @@
 - Tool executor normalizes failed parse/validation into retryable tool feedback.
 - Context retriever fetches semantic file/symbol context via MCP with max files/hops.
 
+## Code Pattern
+
+```marrow
+// tmp/smallcode/src/core/session.ms
+while self.toolCallCount < MAX_TOOL_LOOPS {
+  let messages = self.buildMessages()
+
+  let request = CompletionRequest {
+    messages: messages,
+    tools: self.router.getSchemas(null),
+    temperature: 0.1,
+    max_tokens: self.model.profile().max_output_tokens,
+    stop: self.model.profile().stop_sequences,
+    stream: true,
+  }
+
+  let response = self.model.completeStream(request, StreamHandler.new(
+    onToken: |token| { self.eventBus.emit("model.token", { token: token }) },
+    onComplete: || { self.eventBus.emit("model.complete", {}) },
+    onEarlyStop: || { self.eventBus.emit("model.early_stop", {}) },
+    maxOutputTokens: self.model.profile().max_output_tokens,
+  ))
+}
+
+if self.toolCallCount >= MAX_TOOL_LOOPS {
+  finalResponse += "\n\n[Reached tool call limit (${MAX_TOOL_LOOPS}). Stopping.]"
+}
+```
+
+Pattern: small-model loop keeps temperature low, streams, caps tool recursion, and turns max-loop into visible assistant text.
+
+```marrow
+// tmp/smallcode/src/tools/router.ms
+pub fn getSchemas(self, category: String?): List<Map<String, Any>> {
+  match self.mode {
+    "direct" => {
+      return self.registry.schemas(null)
+    }
+    "two_stage" => {
+      if !category {
+        return [categoryTool()]
+      }
+      let tools = self.registry.byCategory(category)
+      return self.registry.schemas(tools.map(|t| t.id))
+    }
+    "text" => {
+      return []
+    }
+    _ => return []
+  }
+}
+```
+
+Pattern: two-stage routing shrinks schema load by asking for a category before exposing full tool schemas.
+
 ## Decision
 - Designed for small models: reduce schema load, ask clarifying questions, compact aggressively.
 - Best reusable ideas: two-stage tool routing and diff-first approval.

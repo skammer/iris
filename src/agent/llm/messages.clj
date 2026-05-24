@@ -52,7 +52,9 @@
                    (:content value)
                    value))))
 
-(defn- image-url [{:keys [source]}]
+(def ^:private media-block-types #{:image :audio :video :file})
+
+(defn- source-data-uri [{:keys [source]}]
   (case (:type source)
     :url (:value source)
     :base64 (str "data:"
@@ -61,15 +63,54 @@
                  (:value source))
     :file (:value source)))
 
+(defn- source-data [{:keys [source]}]
+  (case (:type source)
+    :base64 (:value source)
+    (source-data-uri {:source source})))
+
+(defn- extension [filename]
+  (some-> (re-find #"(?i)\.([a-z0-9]+)$" (or filename ""))
+          second
+          str/lower-case))
+
+(defn- audio-format [block]
+  (let [media-type (some-> (get-in block [:source :media-type]) str/lower-case)
+        filename (:filename block)]
+    (or (case media-type
+          "audio/wav" "wav"
+          "audio/x-wav" "wav"
+          "audio/mpeg" "mp3"
+          "audio/mp3" "mp3"
+          "audio/flac" "flac"
+          "audio/ogg" "ogg"
+          "audio/opus" "opus"
+          nil)
+        (extension filename)
+        "wav")))
+
+(defn- part-detail [value]
+  (cond
+    (nil? value) nil
+    (keyword? value) (name value)
+    :else (str value)))
+
+(defn- openai-content-part [block]
+  (case (:type block)
+    :text {:type "text" :text (:text block)}
+    :image (cond-> {:type "image_url"
+                    :image_url {:url (source-data-uri block)}}
+             (:detail block) (assoc-in [:image_url :detail] (part-detail (:detail block))))
+    :audio {:type "input_audio"
+            :input_audio {:data (source-data block)
+                          :format (audio-format block)}}
+    (:video :file) (cond-> {:type "file"
+                            :file {:file_data (source-data block)}}
+                     (:filename block) (assoc-in [:file :filename] (:filename block)))
+    {:type "text" :text (json-text block)}))
+
 (defn- openai-content [blocks]
-  (if (some #(= :image (:type %)) blocks)
-    (mapv (fn [block]
-            (case (:type block)
-              :text {:type "text" :text (:text block)}
-              :image {:type "image_url"
-                      :image_url {:url (image-url block)}}
-              {:type "text" :text (json-text block)}))
-          blocks)
+  (if (some #(contains? media-block-types (:type %)) blocks)
+    (mapv openai-content-part blocks)
     (text-content blocks)))
 
 (defn provider-tool-call->internal

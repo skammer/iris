@@ -85,6 +85,11 @@
                       [:replace-all? {:optional true} [:maybe :boolean]]]
        :prerequisites {:mutations [:read-same-path :list-parent-or-same-path]}
        :sensitive sensitive-action?
+       :operation :act
+       :approval-sensitive? false
+       :action-key :action
+       :read-only-actions #{:read :list}
+       :parallel-safe-actions #{:read :list}
        :source :builtin)
       :validate-fn validate-input
       :health-fn (fn []

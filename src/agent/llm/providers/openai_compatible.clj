@@ -420,7 +420,11 @@
     {:model model
      :supports-streaming true
      :supports-embedding true
-     :supports-tools true})
+     :supports-tools true
+     :supports-vision true
+     :supports-audio true
+     :supports-video true
+     :supports-files true})
 
   (estimate-cost [_ messages model]
     {:tokens (llm-core/count-tokens-estimate messages)

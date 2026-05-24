@@ -49,30 +49,41 @@
   (llm-core/retry-with-backoff
    #(checked-response (http/post url (assoc request :throw-exceptions false)))))
 
-(defn- stream-response->turn [body-stream]
-  (with-open [reader (io/reader body-stream)]
-    (loop [content []
-           prompt-tokens 0
-           completion-tokens 0
-           raw []]
-      (if-let [line (.readLine reader)]
-        (if (str/blank? line)
-          (recur content prompt-tokens completion-tokens raw)
-          (let [event (json/parse-string line true)]
-            (recur (cond-> content
-                     (-> event :message :content) (conj (-> event :message :content)))
-                   (or (:prompt_eval_count event) prompt-tokens)
-                   (or (:eval_count event) completion-tokens)
-                   (conj raw event))))
-        {:role "assistant"
-         :content (apply str content)
-         :tool-calls []
-         :usage {:prompt-tokens prompt-tokens
-                 :completion-tokens completion-tokens
-                 :cached-tokens 0
-                 :tokens (+ prompt-tokens completion-tokens)
-                 :cost-usd 0.0}
-         :raw raw}))))
+(defn- stream-response->turn
+  ([body-stream] (stream-response->turn body-stream nil))
+  ([body-stream on-content-delta]
+   (with-open [reader (io/reader body-stream)]
+     (loop [content []
+            tool-calls []
+            prompt-tokens 0
+            completion-tokens 0
+            raw []]
+       (if-let [line (.readLine reader)]
+         (if (str/blank? line)
+           (recur content tool-calls prompt-tokens completion-tokens raw)
+           (let [event (json/parse-string line true)
+                 message (:message event)
+                 chunk (:content message)
+                 tool-calls* (or (:tool_calls message)
+                                 (:tool-calls message))]
+             (when (and on-content-delta (string? chunk) (not= "" chunk))
+               (on-content-delta chunk))
+             (recur (cond-> content
+                      (string? chunk) (conj chunk))
+                    (cond-> tool-calls
+                      (seq tool-calls*) (into tool-calls*))
+                    (or (:prompt_eval_count event) prompt-tokens)
+                    (or (:eval_count event) completion-tokens)
+                    (conj raw event))))
+         {:role "assistant"
+          :content (apply str content)
+          :tool-calls tool-calls
+          :usage {:prompt-tokens prompt-tokens
+                  :completion-tokens completion-tokens
+                  :cached-tokens 0
+                  :tokens (+ prompt-tokens completion-tokens)
+                  :cost-usd 0.0}
+          :raw raw})))))
 
 (defrecord OllamaProvider [base-url default-model embedding-model keep-alive config]
   llm-core/ILLMProvider
@@ -140,7 +151,8 @@
     {:model model
      :supports-streaming true
      :supports-embedding true
-     :supports-tools true})
+     :supports-tools true
+     :supports-vision true})
 
   (estimate-cost [_ messages model]
     {:tokens (llm-core/count-tokens-estimate messages)
@@ -175,21 +187,25 @@
   llm-core/ILLMProviderInvoke
   (invoke [this request]
     (let [opts (llm-core/request->completion-opts request)
+          stream? (or (some? (:on-content-delta opts))
+                      (stream-structured-output? (:config this) opts))
           request* {:body (json/generate-string
                            (structured-chat-body (:default-model this)
                                                  (:keep-alive this)
                                                  (:messages request)
                                                  opts
-                                                 (stream-structured-output? (:config this) opts)))
+                                                 stream?))
                     :content-type :json
                     :accept :json}]
-      (if (stream-structured-output? (:config this) opts)
+      (if stream?
         (let [response (checked-response
                         (http/post (endpoint (:base-url this) "/api/chat")
                                    (assoc request*
                                           :throw-exceptions false
                                           :as :stream)))]
-          (llm-core/normalize-llm-response (stream-response->turn (:body response)) {}))
+          (llm-core/normalize-llm-response
+           (stream-response->turn (:body response) (:on-content-delta opts))
+           {}))
         (let [response (post-json (endpoint (:base-url this) "/api/chat")
                                   (assoc request* :as :json))
               body (:body response)

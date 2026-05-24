@@ -122,6 +122,73 @@ Best decision: reconcile at boundaries:
    - command queue/cancel
    - replay history
 
+## Online Best Practices
+
+- Prefer simple, composable workflows until autonomy is needed. Anthropic separates fixed workflows from agents; agent loops fit open-ended tasks where steps cannot be known up front, but need sandboxing, guardrails, max iterations, and human checkpoints. Source: https://www.anthropic.com/engineering/building-effective-agents
+- Treat the loop as a run with explicit exit conditions: final-output tool, no tool calls, error, or max turns. Source: https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/
+- Layer guardrails at the right boundary: input before first agent, output after final agent, tool guardrails around each tool call. Blocking guardrails are needed before side effects. Source: https://openai.github.io/openai-agents-python/guardrails/
+- Trace every run: LLM calls, tool calls, handoffs, guardrails, and custom events. Redact sensitive span data if traces leave the process. Source: https://openai.github.io/openai-agents-python/tracing/
+- Make long-running loops durable: checkpoint step state, use thread/run ids, isolate side effects in idempotent tasks, replay from persisted outcomes instead of redoing work. Source: https://docs.langchain.com/oss/python/langgraph/durable-execution
+- Build evals early: scoped task-specific evals, production-like cases, logs mined into regression cases, automated scoring where possible, human calibration for judge drift. Source: https://developers.openai.com/api/docs/guides/evaluation-best-practices
+
+## Code Pattern Index
+
+```clojure
+;; src/agent/runtime/tools.clj
+(defn- batches [preflights opts]
+  (cond
+    (<= (count preflights) 1)
+    (sequential-batches preflights)
+
+    (= :sequential (normalize-tool-name (:mode opts)))
+    (sequential-batches preflights)
+
+    (batch-forces-sequential? preflights)
+    (sequential-batches preflights)
+
+    :else
+    (loop [xs preflights
+           acc []]
+      (if (empty? xs)
+        acc
+        (if (parallel-safe-preflight? (first xs) opts)
+          (let [[safe* rest*] (split-with #(parallel-safe-preflight? % opts) xs)
+                safe* (vec safe*)]
+            (recur rest*
+                   (conj acc [(if (> (count safe*) 1) :parallel :sequential) safe*])))
+          (recur (rest xs) (conj acc [:sequential [(first xs)]])))))))
+```
+
+Pattern: execute independent safe tools in parallel, but force sequential mode for approval-sensitive or tool-activating calls. This is the right compromise for Iris: concurrency without breaking approval ordering or dynamic tool activation.
+
+```clojure
+;; /private/tmp/ayatori/src/ayatori/graph/executor.clj
+(defn inject
+  "Injects input into an agent's flow. Returns promise channel for result."
+  ([flow-state entry-key input]
+   (inject flow-state entry-key input false))
+  ([flow-state entry-key input streaming?]
+   (let [corr-id (str (random-uuid))
+         result-ch (if streaming?
+                     (async/chan 100)
+                     (async/promise-chan))]
+     (swap! (:result-registry flow-state) assoc corr-id {:ch result-ch})
+     (flow/inject (:flow flow-state)
+                  [entry-key :in]
+                  [{:data input
+                    :corr-id corr-id}])
+     result-ch)))
+```
+
+Pattern: request/reply over a graph runtime needs correlation IDs plus registry-owned result channels. If Iris ever uses graph execution for subflows, keep this idea and still persist run/session events outside the graph.
+
+## core.async.flow / Ayatori Fit
+
+- `core.async.flow` is alpha and explicitly separates ordinary step functions from topology, execution, lifecycle, error handling, and monitoring. Good fit for known process graphs, observable pipelines, fan-out/fan-in services, and long-lived dataflow subsystems. Source: https://clojure.github.io/core.async/clojure.core.async.flow.html
+- Ayatori uses `core.async.flow` seriously: graph nodes compile to `flow/process`, topology compiles to `flow/create-flow`, `start` returns report/error channels, `resume` starts processing, `inject` sends correlated work into entry ports, and an output collector resolves caller channels.
+- Ayatori is not production-ready by its own README. Treat it as a strong exercise/prototype for graph orchestration, not as a drop-in Iris loop manager.
+- Best Iris use: optional backend for bounded, graph-shaped subflows. Poor fit: replacing the central chat loop, because Iris needs branch restore, provider history repair, approval suspension, UI event persistence, child-run lifecycle, and exact LLM protocol reconciliation.
+
 ## Iris-Relevant Takeaways
 
 - Keep Iris pure loop plus wrapper split.
@@ -131,7 +198,8 @@ Best decision: reconcile at boundaries:
 - Borrow Coddy replay artifacts for richer tool-call restore.
 - Borrow Forge terminal-tool contract for bounded workflows.
 - Borrow SmallCode two-stage tool routing for small-model reliability.
+- Borrow Ayatori's graph-as-data/correlation-id approach only for explicit subgraphs, not for Iris' main loop.
 
 Confidence: 0.9
 
-Caveats: static architecture review; some repos delegate core behavior to external packages.
+Caveats: mixed static/local/online review; Ayatori reviewed at `13c35d9c7c405f4df493e9782f4f185a48f8b2f5`; some repos delegate core behavior to external packages.

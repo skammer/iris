@@ -43,6 +43,61 @@
 - Context manager reconciles token pressure by warning/compacting before inference.
 - No strong persisted replay reconciliation.
 
+## Code Pattern
+
+```python
+# tmp/forge/src/forge/core/runner.py
+while iteration < self.max_iterations:
+    if cancel_event is not None and cancel_event.is_set():
+        raise WorkflowCancelledError(
+            messages=messages,
+            completed_steps=step_enforcer.completed_steps,
+            iteration=iteration,
+        )
+
+    step_check = step_enforcer.check(tool_calls)
+
+    if step_check.needs_nudge:
+        if step_enforcer.premature_exhausted:
+            attempted = next(
+                tc.tool for tc in tool_calls
+                if tc.tool in workflow.terminal_tools
+            )
+            raise StepEnforcementError(
+                terminal_tool=attempted,
+                attempts=step_enforcer.premature_attempts,
+                pending_steps=step_enforcer.pending(),
+            )
+        nudge = step_check.nudge
+        nudge_type = _NUDGE_KIND_TO_TYPE[nudge.kind]
+        _emit(Message(
+            MessageRole.USER,
+            nudge.content,
+            MessageMeta(nudge_type, step_index=iteration),
+        ))
+        continue
+
+raise MaxIterationsError(
+    self.max_iterations, step_enforcer.completed_steps, step_enforcer.pending()
+)
+```
+
+Pattern: terminal-tool contract plus step enforcer turns premature completion into corrective user messages until retry budget exhausts.
+
+```python
+# tmp/forge/src/forge/tools/respond.py
+def respond_tool() -> ToolDef:
+    def _respond(message: str) -> str:
+        return message
+
+    return ToolDef(
+        spec=respond_spec(),
+        callable=_respond,
+    )
+```
+
+Pattern: synthetic terminal response keeps weak models inside tool-call protocol.
+
 ## Decision
 - Best for bounded workflows: strict validator plus terminal-tool contract.
 - Less suitable as general chat agent unless wrapped in session/event persistence.

@@ -7,7 +7,7 @@
   (:import
    (java.util.concurrent Callable ExecutorCompletionService Executors TimeUnit)))
 
-(def default-mode :parallel)
+(def default-mode :policy)
 
 (defn- now-ns [] (System/nanoTime))
 
@@ -25,6 +25,23 @@
 
 (defn- call-id [idx call]
   (str (or (:id call) (:tool-call-id call) (:tool_call_id call) (str "tool-call-" idx))))
+
+(defn- cancelled-error []
+  (ex-info "Chat stopped" {:type :chat-cancelled}))
+
+(defn- cancelled? [token]
+  (cond
+    (nil? token) false
+    (instance? clojure.lang.IDeref token) (true? @token)
+    (fn? token) (true? (token))
+    :else (true? token)))
+
+(defn- cancellation-token [opts]
+  (or (:cancellation-token opts) (:cancelled? opts)))
+
+(defn- throw-if-cancelled! [opts]
+  (when (cancelled? (cancellation-token opts))
+    (throw (cancelled-error))))
 
 (defn- event! [sink event]
   (when sink
@@ -86,6 +103,7 @@
 
 (defn preflight-tool-call
   [registry call context opts source-index]
+  (throw-if-cancelled! opts)
   (let [tool-name (normalize-tool-name (or (:tool-name call) (:name call)))
         tool (or (tools/get-tool registry tool-name)
                  (throw (tools/tool-error :tool-not-found
@@ -93,7 +111,7 @@
                                           {:tool-name tool-name})))
         description (tools/describe tool)
         input (call-input call)
-        context* (tools/create-execution-context context)]
+        context* (tools/create-execution-context (merge context (:context call)))]
     (when-not (allowed-tool? context* tool-name)
       (throw (tools/tool-error :tool-blocked
                                "Tool not allowed in this capability bundle"
@@ -101,25 +119,32 @@
                                 :allowed-tools (vec (:allowed-tools context*))})))
     (enforce-permissions! description context*)
     (let [validated-input ((:validate-fn tool) input)
+          preflight {:source-index source-index
+                     :tool-call-id (call-id source-index call)
+                     :tool-name tool-name
+                     :tool tool
+                     :description description
+                     :input validated-input
+                     :context context*
+                     :sensitive? (boolean ((:sensitive-fn tool) validated-input))
+                     :call call}
           hook-ctx {:tool description
                     :tool-call call
                     :input validated-input
                     :context context*}]
-      (enforce-approval-preflight! registry tool description validated-input context*)
-      (when-let [decision (when-let [before (:before-tool-call opts)]
-                            (before hook-ctx))]
-        (when (:block decision)
-          (throw (tools/tool-error :tool-blocked
-                                   (or (:reason decision) "Tool execution blocked")
-                                   {:tool-name tool-name}))))
-      {:source-index source-index
-       :tool-call-id (call-id source-index call)
-       :tool-name tool-name
-       :tool tool
-       :description description
-       :input validated-input
-       :context context*
-       :call call})))
+      (try
+        (enforce-approval-preflight! registry tool description validated-input context*)
+        (when-let [decision (when-let [before (:before-tool-call opts)]
+                              (before hook-ctx))]
+          (when (:block decision)
+            (throw (tools/tool-error :tool-blocked
+                                     (or (:reason decision) "Tool execution blocked")
+                                     {:tool-name tool-name}))))
+        preflight
+        (catch Exception e
+          (throw (ex-info (.getMessage e)
+                          (assoc (ex-data e) :preflight preflight)
+                          e)))))))
 
 (defn- update-fn [sink preflight]
   (fn [payload]
@@ -132,6 +157,7 @@
                                   (if (map? payload) payload {:value payload}))})))
 
 (defn- execute-preflight! [registry preflight opts]
+  (throw-if-cancelled! opts)
   (let [sink (:event-sink opts)
         start (now-ns)
         context* (assoc (:context preflight)
@@ -195,16 +221,20 @@
        (:mode opts)
        default-mode)))
 
+(defn- legacy-sequential? [preflight opts]
+  (= :sequential (execution-mode-for preflight opts)))
+
 (defn- preflight-or-error [registry call context opts idx]
   (try
     (preflight-tool-call registry call context opts idx)
     (catch Exception e
-      {:source-index idx
-       :tool-call-id (call-id idx call)
-       :tool-name (normalize-tool-name (or (:tool-name call) (:name call)))
-       :preflight-error e
-       :input (call-input call)
-       :call call})))
+      (merge {:source-index idx
+              :tool-call-id (call-id idx call)
+              :tool-name (normalize-tool-name (or (:tool-name call) (:name call)))
+              :input (call-input call)
+              :call call}
+             (:preflight (ex-data e))
+             {:preflight-error e}))))
 
 (defn- finalize-results [results]
   (let [ordered (sort-by :source-index results)]
@@ -214,6 +244,7 @@
 
 (defn- execute-sequential! [registry preflights opts]
   (mapv (fn [preflight]
+          (throw-if-cancelled! opts)
           (if-let [error (:preflight-error preflight)]
             (error-result preflight error)
             (execute-preflight! registry preflight opts)))
@@ -223,37 +254,83 @@
   (let [errors (filterv :preflight-error preflights)
         ready (remove :preflight-error preflights)
         pool (Executors/newFixedThreadPool (max 1 (count ready)))
-        ecs (ExecutorCompletionService. pool)]
+        ecs (ExecutorCompletionService. pool)
+        futures (atom [])]
     (try
       (doseq [preflight ready]
-        (.submit ecs ^Callable #(execute-preflight! registry preflight opts)))
+        (throw-if-cancelled! opts)
+        (swap! futures conj
+               (.submit ecs ^Callable #(execute-preflight! registry preflight opts))))
       (loop [remaining (count ready)
              results (mapv #(error-result % (:preflight-error %)) errors)]
         (if (zero? remaining)
           results
           (let [future (.take ecs)
+                _ (throw-if-cancelled! opts)
                 result (.get future)]
             (recur (dec remaining) (conj results result)))))
+      (catch Exception e
+        (when (or (= :chat-cancelled (some-> e ex-data :type))
+                  (cancelled? (cancellation-token opts)))
+          (doseq [future @futures]
+            (.cancel future true))
+          (.shutdownNow pool))
+        (throw e))
       (finally
-        (.shutdown pool)
+        (when-not (.isShutdown pool)
+          (.shutdown pool))
         (.awaitTermination pool 5 TimeUnit/SECONDS)))))
 
+(defn- approval-sensitive-call? [preflight]
+  (or (:sensitive? preflight)
+      (true? (get-in preflight [:description :approval-sensitive?]))))
+
+(defn- activates-tools-call? [preflight]
+  (true? (get-in preflight [:description :activates-tools?])))
+
+(defn- batch-forces-sequential? [preflights]
+  (some #(or (approval-sensitive-call? %)
+             (activates-tools-call? %))
+        preflights))
+
+(defn- parallel-safe-preflight? [preflight opts]
+  (and (not (:preflight-error preflight))
+       (not (legacy-sequential? preflight opts))
+       (not (approval-sensitive-call? preflight))
+       (not (activates-tools-call? preflight))
+       (tools/parallel-safe-call? (:description preflight) (:input preflight))))
+
+(defn- sequential-batches [preflights]
+  (mapv (fn [preflight] [:sequential [preflight]]) preflights))
+
 (defn- batches [preflights opts]
-  (let [global-mode (normalize-tool-name (or (:mode opts) default-mode))]
+  (cond
+    (<= (count preflights) 1)
+    (sequential-batches preflights)
+
+    (= :sequential (normalize-tool-name (:mode opts)))
+    (sequential-batches preflights)
+
+    (batch-forces-sequential? preflights)
+    (sequential-batches preflights)
+
+    :else
     (loop [xs preflights
            acc []]
       (if (empty? xs)
         acc
-        (let [mode (execution-mode-for (first xs) opts)]
-          (if (= :sequential mode)
-            (recur (rest xs) (conj acc [:sequential [(first xs)]]))
-            (let [[parallel* rest*] (split-with #(not= :sequential (execution-mode-for % (assoc opts :mode global-mode))) xs)]
-              (recur rest* (conj acc [:parallel (vec parallel*)])))))))))
+        (if (parallel-safe-preflight? (first xs) opts)
+          (let [[safe* rest*] (split-with #(parallel-safe-preflight? % opts) xs)
+                safe* (vec safe*)]
+            (recur rest*
+                   (conj acc [(if (> (count safe*) 1) :parallel :sequential) safe*])))
+          (recur (rest xs) (conj acc [:sequential [(first xs)]])))))))
 
 (defn execute-batch!
   ([registry calls context] (execute-batch! registry calls context {}))
   ([registry calls context opts]
    (let [opts* (update opts :mode #(normalize-tool-name (or % default-mode)))
+         _ (throw-if-cancelled! opts*)
          preflights (mapv (fn [[idx call]]
                             (preflight-or-error registry call context opts* idx))
                           (map-indexed vector calls))

@@ -47,7 +47,22 @@
               (send-agent-message! [_ _ _] nil)
               (patch-agent-state! [_ _ _] nil)
               (set-agent-status! [_ _ _] nil)
-              (emit-kernel-event! [_ _] nil))
+              (emit-kernel-event! [_ _] nil)
+              kernel-ops/KernelToolBatchOps
+              (execute-agent-tool-batch! [_ agent-id calls _context _opts]
+                {:results (mapv (fn [idx {:keys [tool-name input id context]}]
+                                   (swap! executed conj {:agent-id agent-id
+                                                         :tool-name tool-name
+                                                         :input input
+                                                         :context context})
+                                   {:source-index idx
+                                    :tool-call-id id
+                                    :tool-name tool-name
+                                    :input input
+                                    :status :ok
+                                    :result {:ok true}})
+                                 (range)
+                                 calls)}))
         directive {:type :tool-call
                    :payload {:tool-name "http"
                              :input {:url "https://example.com"}}}]

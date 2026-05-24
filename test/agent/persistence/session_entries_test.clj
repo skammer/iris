@@ -52,6 +52,27 @@
                 {:role "assistant" :content "ok"}]
                (sqlite/current-llm-context store (:id session))))))))
 
+(deftest message-entry-preserves-rich-content-blocks-test
+  (with-store
+    (fn [store]
+      (let [session (sqlite/create-session! store "media")
+            blocks [{:type :text :text "look"}
+                    {:type :image
+                     :source {:type :base64
+                              :media-type "image/jpeg"
+                              :value "abcd"}
+                     :alt "photo"}]
+            message (sqlite/append-message! store (:id session) "user" "look"
+                                            {:content-blocks blocks})]
+        (is (= "look\nphoto" (:content message)))
+        (is (= [{:role "user" :content [{:type "text" :text "look"}
+                                         {:type "image"
+                                          :source {:type "base64"
+                                                   :media-type "image/jpeg"
+                                                   :value "abcd"}
+                                          :alt "photo"}]}]
+               (sqlite/current-llm-context store (:id session))))))))
+
 (deftest labels-test
   (with-store
     (fn [store]

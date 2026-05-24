@@ -92,6 +92,8 @@
                       [:command {:optional true} :string]
                       [:working-dir {:optional true} :string]
                       [:timeout-ms {:optional true} [:int {:min 1}]]]
+       :operation :act
+       :approval-sensitive? true
        :sensitive true
        :source :builtin)
       :validate-fn validate-input

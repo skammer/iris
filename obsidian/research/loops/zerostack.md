@@ -44,6 +44,58 @@
 - On Done, assistant message appended, compaction maybe runs, session saved.
 - Compression keeps recent token budget, summarizes older messages with model, rebuilds agent.
 
+## Code Pattern
+
+```rust
+// tmp/zerostack/src/event.rs
+pub enum AgentEvent {
+    Token(CompactString),
+    Reasoning(CompactString),
+    ToolCall {
+        name: CompactString,
+        args: serde_json::Value,
+    },
+    ToolResult {
+        output: CompactString,
+    },
+    Error(CompactString),
+    Done {
+        response: CompactString,
+        tokens: u64,
+        cost: f64,
+    },
+}
+```
+
+Pattern: small event enum creates clean boundary between Rig stream and TUI/session logic.
+
+```rust
+// tmp/zerostack/src/agent/runner.rs
+pub fn convert_history(session: &Session) -> Vec<Message> {
+    let (summary, first_kept) = session.compacted_context();
+    let mut messages = Vec::new();
+
+    if let Some(summary) = summary {
+        messages.push(Message::system(format!(
+            "[Previous conversation summary]\n{}",
+            summary
+        )));
+    }
+
+    for msg in &session.messages[first_kept..] {
+        match msg.role {
+            MessageRole::User => messages.push(Message::user(msg.content.to_string())),
+            MessageRole::Assistant => messages.push(Message::assistant(msg.content.to_string())),
+            MessageRole::System => messages.push(Message::system(msg.content.to_string())),
+        }
+    }
+
+    messages
+}
+```
+
+Pattern: UI/session state is source of truth; provider context is rebuilt from saved session plus latest compaction.
+
 ## Decision
 - Minimal architecture: use Rig as loop engine; app owns UX/session.
 - Best reusable ideas: simple event enum, permission allowlist saved in session, optional external iterative loop.

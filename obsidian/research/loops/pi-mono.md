@@ -46,6 +46,57 @@
 - Auto compaction after agent_end can continue queued messages.
 - Branch context plus compaction summary reconciles durable state to active LLM context.
 
+## Code Pattern
+
+```ts
+// tmp/pi-mono/packages/coding-agent/src/core/agent-session.ts
+private _handleAgentEvent = (event: AgentEvent): void => {
+	this._createRetryPromiseForAgentEnd(event);
+
+	this._agentEventQueue = this._agentEventQueue.then(
+		() => this._processAgentEvent(event),
+		() => this._processAgentEvent(event),
+	);
+
+	this._agentEventQueue.catch(() => {});
+};
+```
+
+Pattern: serialize event handling through one promise chain before persistence, extension events, retry, and compaction side effects.
+
+```ts
+// tmp/pi-mono/packages/coding-agent/src/core/agent-session.ts
+private async _queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+	this._steeringMessages.push(text);
+	this._emitQueueUpdate();
+	const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
+	if (images) {
+		content.push(...images);
+	}
+	this.agent.steer({
+		role: "user",
+		content,
+		timestamp: Date.now(),
+	});
+}
+
+private async _queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+	this._followUpMessages.push(text);
+	this._emitQueueUpdate();
+	const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
+	if (images) {
+		content.push(...images);
+	}
+	this.agent.followUp({
+		role: "user",
+		content,
+		timestamp: Date.now(),
+	});
+}
+```
+
+Pattern: distinguish in-flight steering from post-turn follow-up instead of flattening all user input into one queue.
+
 ## Decision
 - Strongest choice: append-only session tree with steer/followUp queues.
 - Best reusable idea: expose loop as evented session object with middleware and deterministic event ordering.

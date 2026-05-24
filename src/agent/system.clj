@@ -26,6 +26,7 @@
    [agent.runners.options :as runner-options]
    [agent.runners.seatbelt :as seatbelt]
    [agent.runtime.core :as runtime]
+   [agent.runtime.tools :as runtime-tools]
    [agent.runtime.trace :as runtime-trace]
    [agent.skills :as skills]
    [agent.telegram :as telegram]
@@ -270,7 +271,8 @@
      :category :system
      :required-permissions #{:system-reload}
      :input-schema [:map
-                    [:mode {:optional true} [:enum "soft" "full"]]])
+                    [:mode {:optional true} [:enum "soft" "full"]]]
+     :operation :act)
     :execute-fn
     (fn [input context]
       (reload! @system-ref {:mode (keyword (or (:mode input) "soft"))
@@ -826,6 +828,13 @@
   [system profile]
   (set (get-in system [:config :tools :permissions profile] #{})))
 
+(defn- agent-tool-context [system agent agent-id context]
+  (merge context
+         {:user (or (:user context) agent-id)
+          :permissions (tool-permissions system :agent)
+          :yolo? (true? (get-in system [:config :tools :yolo?]))
+          :allowed-tools (set (:tool-access agent))}))
+
 (defn execute-tool
   ([system tool-name input]
    (execute-tool system tool-name input {}))
@@ -848,11 +857,7 @@
                                    {:type :agent-not-found
                                     :agent-id agent-id})))]
      (execute-tool system tool-name input
-                   (merge context
-                          {:user (or (:user context) agent-id)
-                           :permissions (tool-permissions system :agent)
-                           :yolo? (true? (get-in system [:config :tools :yolo?]))
-                           :allowed-tools (set (:tool-access agent))})))))
+                   (agent-tool-context system agent agent-id context)))))
 
 (defrecord SystemKernelOps [system]
   kernel-ops/KernelOps
@@ -867,7 +872,27 @@
   (set-agent-status! [_ agent-id status]
     (orchestrator/set-agent-status! (:orchestrator system) agent-id status))
   (emit-kernel-event! [_ event]
-    ((:event-sink system) event)))
+    ((:event-sink system) event))
+
+  kernel-ops/KernelToolBatchOps
+  (execute-agent-tool-batch! [_ agent-id calls context opts]
+    (let [agent (or (get-agent system agent-id)
+                    (throw (ex-info "Agent not found"
+                                    {:type :agent-not-found
+                                     :agent-id agent-id})))
+          calls* (mapv (fn [call]
+                         (update call :context #(agent-tool-context system
+                                                                    agent
+                                                                    agent-id
+                                                                    (merge context (or % {})))))
+                       calls)]
+      (runtime-tools/execute-batch! (:tool-registry system)
+                                    calls*
+                                    {}
+                                    (select-keys opts [:mode
+                                                       :tool-execution-modes
+                                                       :cancellation-token
+                                                       :cancelled?])))))
 
 (defn- kernel-ops [system]
   (->SystemKernelOps system))

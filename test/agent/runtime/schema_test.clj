@@ -7,6 +7,9 @@
   (doseq [block [{:type :text :text "hello"}
                  {:type :thinking :text "reasoning" :signature "sig"}
                  {:type :image :source {:type :url :value "https://example.com/a.png"} :alt "a"}
+                 {:type :audio :source {:type :base64 :media-type "audio/wav" :value "UklGRg=="} :filename "a.wav"}
+                 {:type :video :source {:type :base64 :media-type "video/mp4" :value "AAAA"} :filename "a.mp4"}
+                 {:type :file :source {:type :base64 :media-type "application/pdf" :value "JVBERi0="} :filename "a.pdf"}
                  {:type :tool-call :id "call-1" :name "fs" :arguments {:action "list"}}
                  {:type :tool-result :tool-call-id "call-1" :status :ok :content {:ok true}}
                  {:type :custom :kind :notice :data {:text "x"}}]]

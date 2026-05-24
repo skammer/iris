@@ -3,6 +3,7 @@
   (:require
    [cheshire.core :as json]
    [clojure.set :as set]
+   [clojure.string :as str]
    [malli.core :as m]
    [malli.error :as me]
    [malli.json-schema :as json-schema])
@@ -47,8 +48,83 @@
                                {:input-schema input-schema
                                 :error (.getMessage e)})))))
 
+(def ^:private act-permission-fragments
+  ["write" "exec" "reload" "send" "request" "call" "delete" "create" "mutate"])
+
+(defn- normalize-operation [operation]
+  (case operation
+    (:read "read") :read
+    (:act "act") :act
+    nil))
+
+(defn- action-set [actions]
+  (set (keep (fn [action]
+               (cond
+                 (keyword? action) action
+                 (string? action) (keyword (str/lower-case action))
+                 :else nil))
+             actions)))
+
+(defn- act-permission? [permission]
+  (let [value (str/lower-case (name permission))]
+    (some #(str/includes? value %) act-permission-fragments)))
+
+(defn- derived-operation [operation approval-sensitive? sensitive required-permissions]
+  (or (normalize-operation operation)
+      (if (or approval-sensitive?
+              (true? sensitive)
+              (some act-permission? required-permissions))
+        :act
+        :read)))
+
+(defn- action-value [input action-key]
+  (let [value (get input action-key)]
+    (cond
+      (keyword? value) value
+      (string? value) (keyword (str/lower-case value))
+      :else value)))
+
+(defn tool-execution-metadata
+  "Return public execution-safety metadata for a tool description."
+  [description]
+  (select-keys description
+               [:operation
+                :parallel-safe?
+                :approval-sensitive?
+                :activates-tools?
+                :action-key
+                :read-only-actions
+                :parallel-safe-actions]))
+
+(defn- call-operation [metadata input]
+  (let [action-key (:action-key metadata)
+        action (when action-key (action-value input action-key))]
+    (if (and action (contains? (:read-only-actions metadata) action))
+      :read
+      (:operation metadata))))
+
+(defn read-only-call?
+  [description input]
+  (= :read (call-operation (tool-execution-metadata description) input)))
+
+(defn parallel-safe-call?
+  [description input]
+  (let [metadata (tool-execution-metadata description)
+        action-key (:action-key metadata)
+        action (when action-key (action-value input action-key))
+        action-safe? (and action (contains? (:parallel-safe-actions metadata) action))
+        explicit-safe? (true? (:parallel-safe? metadata))
+        operation (call-operation metadata input)]
+    (and (not (:approval-sensitive? metadata))
+         (not (:activates-tools? metadata))
+         (or action-safe?
+             (and explicit-safe?
+                  (contains? #{:read :act} operation))))))
+
 (defn create-tool-description
-  [name description & {:keys [version category input-schema required-permissions timeout-ms source source-details sensitive execution-mode prerequisites]
+  [name description & {:keys [version category input-schema required-permissions timeout-ms source source-details sensitive execution-mode prerequisites
+                              operation parallel-safe? approval-sensitive? activates-tools?
+                              action-key read-only-actions parallel-safe-actions]
                        :or {version "1.0.0"
                             required-permissions #{}
                             timeout-ms 30000
@@ -56,20 +132,32 @@
                             sensitive false}}]
   (when-not input-schema
     (throw (validation-error "input-schema is required" {:tool-name name})))
-  {:name name
-   :description description
-   :version version
-   :category category
-   :input-schema (json-input-schema input-schema)
-   :malli-schema input-schema
-   :required-permissions required-permissions
-   :timeout-ms timeout-ms
-   :source source
-   :source-details source-details
-   :execution-mode execution-mode
-   :prerequisites prerequisites
-   :sensitive (if (ifn? sensitive) true (boolean sensitive))
-   :sensitive-predicate sensitive})
+  (let [sensitive? (if (ifn? sensitive) true (boolean sensitive))
+        approval-sensitive?* (if (some? approval-sensitive?)
+                               (boolean approval-sensitive?)
+                               sensitive?)
+        required-permissions* (set required-permissions)]
+    {:name name
+     :description description
+     :version version
+     :category category
+     :input-schema (json-input-schema input-schema)
+     :malli-schema input-schema
+     :required-permissions required-permissions*
+     :timeout-ms timeout-ms
+     :source source
+     :source-details source-details
+     :execution-mode execution-mode
+     :prerequisites prerequisites
+     :operation (derived-operation operation approval-sensitive?* sensitive? required-permissions*)
+     :parallel-safe? (boolean parallel-safe?)
+     :approval-sensitive? approval-sensitive?*
+     :activates-tools? (boolean activates-tools?)
+     :action-key (or action-key :action)
+     :read-only-actions (action-set read-only-actions)
+     :parallel-safe-actions (action-set parallel-safe-actions)
+     :sensitive sensitive?
+     :sensitive-predicate sensitive}))
 
 (defn- schema-validator [description]
   (let [schema (:malli-schema description)

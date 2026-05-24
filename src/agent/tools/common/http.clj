@@ -96,6 +96,7 @@
                        :max-response-bytes 1048576
                        :allow-private? false
                        :max-redirects 3
+                       :parallel-safe-read-methods? false
                        :resolve-host-fn default-resolve-host}
                       opts)]
     (tools/create-tool
@@ -117,6 +118,11 @@
                       [:params {:optional true} [:map-of :any :any]]
                       [:body {:optional true} :any]
                       [:timeout-ms {:optional true} [:int {:min 1}]]])
+       :operation :act
+       :approval-sensitive? false
+       :action-key :method
+       :read-only-actions (when (:parallel-safe-read-methods? config) #{:get :head})
+       :parallel-safe-actions (when (:parallel-safe-read-methods? config) #{:get :head})
       :validate-fn validate-input
       :health-fn (fn []
                    {:healthy true

@@ -16,7 +16,7 @@
     :display-name "Ollama"
     :context-window nil
     :max-output-tokens nil
-    :input-modalities #{:text}
+    :input-modalities #{:text :image}
     :tool-support {:native? true}
     :reasoning-levels #{}
     :cache-support {:prompt-cache? false}
@@ -28,7 +28,7 @@
     :display-name "OpenRouter"
     :context-window nil
     :max-output-tokens nil
-    :input-modalities #{:text :image}
+    :input-modalities #{:text :image :audio :video :file}
     :tool-support {:native? true}
     :reasoning-levels #{:off :low :medium :high}
     :cache-support {:prompt-cache? true :retention #{:ephemeral :in-memory}}
@@ -40,7 +40,7 @@
     :display-name "OpenAI compatible"
     :context-window nil
     :max-output-tokens nil
-    :input-modalities #{:text :image}
+    :input-modalities #{:text :image :audio :video :file}
     :tool-support {:native? true}
     :reasoning-levels #{:off :low :medium :high :xhigh}
     :cache-support {:prompt-cache? true :retention #{:ephemeral}}

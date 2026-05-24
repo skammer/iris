@@ -684,6 +684,23 @@ textarea {
 .chat-status {
   color: var(--warning);
   grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 18px;
+}
+
+.chat-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-visible);
+  border-top-color: var(--warning);
+  border-radius: 50%;
+  animation: chat-spin 0.8s linear infinite;
+}
+
+.chat-status__text {
+  color: var(--text-secondary);
 }
 
 #chat-form.is-loading button[type="submit"] {
@@ -692,8 +709,21 @@ textarea {
 }
 
 #chat-form.is-loading button[type="submit"]::after {
-  content: " ...";
-  color: var(--warning);
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-left: 6px;
+  border: 2px solid var(--border-visible);
+  border-top-color: var(--warning);
+  border-radius: 50%;
+  animation: chat-spin 0.8s linear infinite;
+}
+
+@keyframes chat-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .dual {

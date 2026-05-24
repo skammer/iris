@@ -68,3 +68,26 @@
         (is (true? (:stream @body*)))
         (is (= "{\"ok\":true}" (:content response)))
         (is (= 12 (get-in response [:usage :tokens])))))))
+
+(deftest ollama-invoke-streams-when-content-delta-callback-present-test
+  (let [body* (atom nil)
+        as* (atom nil)
+        deltas (atom [])]
+    (with-redefs [http/post (fn [_ request]
+                              (reset! body* (json/parse-string (:body request) true))
+                              (reset! as* (:as request))
+                              {:status 200
+                               :headers {"Content-Type" "application/x-ndjson"}
+                               :body (byte-stream
+                                      (str "{\"message\":{\"content\":\"hello\"},\"done\":false}\n"
+                                           "{\"message\":{\"content\":\" world\"},\"done\":true,\"prompt_eval_count\":3,\"eval_count\":2}\n"))})]
+      (let [llm (provider/create-ollama-provider {})
+            response (llm-core/invoke
+                      llm
+                      {:messages [{:role "user" :content "hi"}]
+                       :on-content-delta #(swap! deltas conj %)})]
+        (is (= :stream @as*))
+        (is (true? (:stream @body*)))
+        (is (= ["hello" " world"] @deltas))
+        (is (= "hello world" (:content response)))
+        (is (= 5 (get-in response [:usage :tokens])))))))
