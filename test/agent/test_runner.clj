@@ -10,6 +10,7 @@
    [clojure.test :as t]
    [agent.config-test]
    [agent.federation.http-test]
+   [agent.health-test]
    [agent.system-test]
    [agent.telegram.format-test]
    [agent.telegram-test]
@@ -63,6 +64,7 @@
     agent.chat-test
     agent.config-test
     agent.federation.http-test
+    agent.health-test
     agent.system-test
     agent.telegram.format-test
     agent.telegram-test

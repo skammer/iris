@@ -7,6 +7,7 @@
    [agent.api.streaming :as streaming]
    [agent.api.validation :as v]
    [agent.broker.core :as broker]
+   [agent.health :as health]
    [agent.persistence.sqlite :as sqlite]
    [agent.runners.core :as runners]
    [agent.runners.docker-podman :as docker-podman]
@@ -65,11 +66,16 @@
                                     #(runners/launch runner run-spec)))]
         (runtime/transition-run! (:runtime-service system) run-id :launched
                                  {:runner-metadata launch-result})
+        (health/mark-ok! (:health-registry system) :runtime)
         (get-run* system run-id))
       (catch clojure.lang.ExceptionInfo e
+        (health/mark-error! (:health-registry system) :runtime e)
         (case (:type (ex-data e))
           :validation-failed (throw (errors/api-error 400 "bad_request" (.getMessage e) (ex-data e)))
-          (throw e))))))
+          (throw e)))
+      (catch Exception e
+        (health/mark-error! (:health-registry system) :runtime e)
+        (throw e)))))
 
 (defn signal-run! [system run-id command]
   (let [run (or (get-run* system run-id)
@@ -309,14 +315,29 @@
 
 (defn recover [system _request run-id]
   (if-let [_ (get-run* system run-id)]
-    (responses/json-response 202
-                             {:data {:recovery (run-recovery system run-id)
-                                     :replacement_run (ser/run->response (runtime/retry-run! (:runtime-service system) run-id))}})
+    (try
+      (let [replacement (runtime/retry-run! (:runtime-service system) run-id)]
+        (health/bump-restart! (:health-registry system) :runtime)
+        (health/mark-ok! (:health-registry system) :runtime)
+        (responses/json-response 202
+                                 {:data {:recovery (run-recovery system run-id)
+                                         :replacement_run (ser/run->response replacement)}}))
+      (catch Exception e
+        (health/mark-error! (:health-registry system) :runtime e)
+        (throw e)))
     (throw (errors/api-error 404 "run_not_found" "Run not found"))))
 
 (defn reclaim-stale [system _request]
-  (responses/json-response 200
-                           {:data (mapv (fn [{:keys [reclaimed replacement]}]
-                                          {:reclaimed (ser/run->response reclaimed)
-                                           :replacement (some-> replacement ser/run->response)})
-                                        (runtime/reclaim-stale-runs! (:runtime-service system)))}))
+  (try
+    (let [results (runtime/reclaim-stale-runs! (:runtime-service system))]
+      (doseq [_ (filter :replacement results)]
+        (health/bump-restart! (:health-registry system) :runtime))
+      (health/mark-ok! (:health-registry system) :runtime)
+      (responses/json-response 200
+                               {:data (mapv (fn [{:keys [reclaimed replacement]}]
+                                              {:reclaimed (ser/run->response reclaimed)
+                                               :replacement (some-> replacement ser/run->response)})
+                                            results)}))
+    (catch Exception e
+      (health/mark-error! (:health-registry system) :runtime e)
+      (throw e))))
