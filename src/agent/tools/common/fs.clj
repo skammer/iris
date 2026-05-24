@@ -6,7 +6,7 @@
    [clojure.string :as str]))
 
 (def ^:private allowed-actions
-  #{:read :write :list :delete :mkdir})
+  #{:read :write :create :replace :list :delete :mkdir})
 
 (defn- normalize-action [action]
   (cond
@@ -36,7 +36,7 @@
     canonical))
 
 (defn- sensitive-action? [input]
-  (contains? #{:write :delete :mkdir} (:action input)))
+  (contains? #{:write :create :replace :delete :mkdir} (:action input)))
 
 (defn- ensure-permission! [context action]
   (let [permissions (:permissions context)]
@@ -45,15 +45,20 @@
               (throw (tools/permission-error #{:filesystem-read} permissions)))
       :list (when-not (contains? permissions :filesystem-read)
               (throw (tools/permission-error #{:filesystem-read} permissions)))
-      (:write :delete :mkdir) (when-not (contains? permissions :filesystem-write)
-                                (throw (tools/permission-error #{:filesystem-write} permissions)))
+      (:write :create :replace :delete :mkdir) (when-not (contains? permissions :filesystem-write)
+                                                 (throw (tools/permission-error #{:filesystem-write} permissions)))
       nil)))
 
 (defn- validate-input [input]
-  (let [action (normalize-action (:action input))]
+    (let [action (normalize-action (:action input))]
     (when-not (allowed-actions action)
-      (throw (tools/validation-error "action must be one of read/write/list/delete/mkdir"
+      (throw (tools/validation-error "action must be one of read/write/create/replace/list/delete/mkdir"
                                      {:action (:action input)})))
+    (when (= :replace action)
+      (when-not (string? (:old-string input))
+        (throw (tools/validation-error "old-string must be a string" {:old-string (:old-string input)})))
+      (when-not (string? (:new-string input))
+        (throw (tools/validation-error "new-string must be a string" {:new-string (:new-string input)}))))
     (assoc input :action action)))
 
 (defn create-fs-tool
@@ -71,10 +76,14 @@
        :category :system
        :input-schema [:map {:closed true}
                       [:action [:or
-                                [:enum :read :write :list :delete :mkdir]
-                                [:enum "read" "write" "list" "delete" "mkdir"]]]
+                                [:enum :read :write :create :replace :list :delete :mkdir]
+                                [:enum "read" "write" "create" "replace" "list" "delete" "mkdir"]]]
                       [:path :string]
-                      [:content {:optional true} [:maybe :string]]]
+                      [:content {:optional true} [:maybe :string]]
+                      [:old-string {:optional true} [:maybe :string]]
+                      [:new-string {:optional true} [:maybe :string]]
+                      [:replace-all? {:optional true} [:maybe :boolean]]]
+       :prerequisites {:mutations [:read-same-path :list-parent-or-same-path]}
        :sensitive sensitive-action?
        :source :builtin)
       :validate-fn validate-input
@@ -111,6 +120,55 @@
                        (spit path content))
                      {:path path
                       :written true})
+            :create (do
+                      (let [file (io/file path)
+                            content (or (:content input) "")
+                            size (alength (.getBytes content "UTF-8"))]
+                        (when (.exists file)
+                          (throw (tools/tool-error :already-exists "Path already exists" {:path path})))
+                        (when (> size (:max-write-bytes config))
+                          (throw (tools/tool-error :file-too-large "Content exceeds max-write-bytes"
+                                                   {:path path
+                                                    :size size
+                                                    :max-write-bytes (:max-write-bytes config)})))
+                        (spit file content))
+                      {:path path
+                       :created true})
+            :replace (let [file (io/file path)
+                           old (:old-string input)
+                           new (:new-string input)
+                           replace-all? (true? (:replace-all? input))]
+                       (when-not (.isFile file)
+                         (throw (tools/tool-error :not-found "File not found" {:path path})))
+                       (let [content (slurp file)
+                             matches (count (re-seq (java.util.regex.Pattern/compile
+                                                     (java.util.regex.Pattern/quote old))
+                                                    content))]
+                         (cond
+                           (zero? matches)
+                           (throw (tools/tool-error :not-found "old-string not found" {:path path}))
+
+                           (and (> matches 1) (not replace-all?))
+                           (throw (tools/tool-error :ambiguous-replace
+                                                    "old-string is not unique"
+                                                    {:path path
+                                                     :matches matches})))
+                         (let [content* (if replace-all?
+                                          (str/replace content old new)
+                                          (str/replace-first content
+                                                             (java.util.regex.Pattern/compile
+                                                              (java.util.regex.Pattern/quote old))
+                                                             (java.util.regex.Matcher/quoteReplacement new)))
+                               size (alength (.getBytes content* "UTF-8"))]
+                           (when (> size (:max-write-bytes config))
+                             (throw (tools/tool-error :file-too-large "Content exceeds max-write-bytes"
+                                                      {:path path
+                                                       :size size
+                                                       :max-write-bytes (:max-write-bytes config)})))
+                           (spit file content*)
+                           {:path path
+                            :replaced true
+                            :matches matches})))
             :list (let [file (io/file path)]
                     (when-not (.isDirectory file)
                       (throw (tools/tool-error :not-directory "Path is not a directory" {:path path})))

@@ -45,3 +45,45 @@
                                                             :content "hello"}
                                               {:permissions #{:filesystem-write}})))
     (.delete root)))
+
+(deftest fs-tool-create-refuses-existing-path-test
+  (let [root (temp-dir)
+        tool (fs-tool/create-fs-tool {:roots [(.getAbsolutePath root)]})
+        registry (-> (tools/create-registry {:approval-check (fn [_] nil)})
+                     (tools/register-tool tool))
+        file-path (.getAbsolutePath (io/file root "note.txt"))]
+    (tools/execute-tool registry :fs {:action :create
+                                      :path file-path
+                                      :content "hello"}
+                        {:permissions #{:filesystem-write}})
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"Path already exists"
+                          (tools/execute-tool registry :fs {:action :create
+                                                            :path file-path
+                                                            :content "again"}
+                                              {:permissions #{:filesystem-write}})))
+    (io/delete-file file-path true)
+    (.delete root)))
+
+(deftest fs-tool-replace-requires-unique-old-string-test
+  (let [root (temp-dir)
+        tool (fs-tool/create-fs-tool {:roots [(.getAbsolutePath root)]})
+        registry (-> (tools/create-registry {:approval-check (fn [_] nil)})
+                     (tools/register-tool tool))
+        file-path (.getAbsolutePath (io/file root "note.txt"))]
+    (spit file-path "one two one")
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"old-string is not unique"
+                          (tools/execute-tool registry :fs {:action :replace
+                                                            :path file-path
+                                                            :old-string "one"
+                                                            :new-string "three"}
+                                              {:permissions #{:filesystem-write}})))
+    (tools/execute-tool registry :fs {:action :replace
+                                      :path file-path
+                                      :old-string "two"
+                                      :new-string "four"}
+                        {:permissions #{:filesystem-write}})
+    (is (= "one four one" (slurp file-path)))
+    (io/delete-file file-path true)
+    (.delete root)))

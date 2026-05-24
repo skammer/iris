@@ -51,10 +51,51 @@
    :storage {:sqlite {:path "data/agent.db"
                       :journal-mode "WAL"}}
    :chat {:max-steps 6
+          :profiles {:default {:small-model? false
+                              :respond-tool? false
+                              :force-tool-choice? false
+                              :tool-routing? false
+                              :max-nudges 0
+                              :nudge-budgets {:unknown-tool 0
+                                              :bare-text 0
+                                              :malformed-args 0
+                                              :repeated-tool-call 0
+                                              :missing-prerequisite 0
+                                              :repeated-same-error 0
+                                              :premature-final 0
+                                              :max-token-truncation 0
+                                              :edit-failure 0}
+                              :context-card-budgets {:nudges 0}}
+                     :small-local {:provider :ollama
+                                   :model "llama3.2:3b"
+                                   :small-model? true
+                                   :respond-tool? true
+                                   :force-tool-choice? true
+                                   :tool-routing? true
+                                   :max-nudges 3
+                                   :tool-categories [:read :write :run :search :web :plan :respond]
+                                   :nudge-budgets {:bare-text 2
+                                                   :unknown-tool 2
+                                                   :malformed-args 2
+                                                   :repeated-tool-call 2
+                                                   :missing-prerequisite 2
+                                                   :repeated-same-error 2
+                                                   :premature-final 2
+                                                   :max-token-truncation 1
+                                                   :edit-failure 2}
+                                   :context-card-budgets {:nudges 2
+                                                         :tool 2
+                                                         :prereq 2}}
+                    }
           :guardrails {:doom-loop {:enabled? true
                                    :threshold 3
                                    :window-size 16
-                                   :action :stop}}
+                                   :action :stop}
+                        :enabled? true
+                        :max-retries 3
+                        :respond-tool? true
+                        :force-tool-choice? true
+                        :tool-routing? false}
           :compaction {:max-context-tokens 8192
                        :reserve-output-tokens 1024
                        :keep-recent-tokens 2048
@@ -765,3 +806,18 @@
 (defn active-model
   [llm-cfg]
   (:model (active-provider-config llm-cfg)))
+
+(defn chat-profile
+  "Resolve chat profile for active provider/model. Precedence:
+   per-model :chat-profile, selected named profile, then :default."
+  [cfg]
+  (let [llm-cfg (:llm cfg)
+        provider-cfg (active-provider-config llm-cfg)
+        model (:model provider-cfg)
+        model-profile (get-in provider-cfg [:models model :chat-profile])
+        profiles (get-in cfg [:chat :profiles])
+        selected (or (get-in cfg [:chat :active-profile])
+                     (get-in cfg [:chat :profile]))
+        default-profile (:default profiles)
+        selected-profile (get profiles selected)]
+    (merge default-profile selected-profile model-profile)))

@@ -225,7 +225,9 @@
                                 :request-id request-id
                                 :permissions (profile-permissions system :chat)
                                 :allowed-tools (all-tool-names system)
-                                :yolo? (true? (get-in system [:config :tools :yolo?]))})))
+                                :yolo? (true? (get-in system [:config :tools :yolo?]))}
+                               (select-keys extra-context [:allowed-tools])
+                               (select-keys context [:allowed-tools]))))
   (send-agent-message! [_ _ _]
     (throw (ex-info "Chat loop cannot send agent messages yet"
                     {:type :unsupported-directive})))
@@ -629,6 +631,7 @@
                      :tools (tools/list-tools (:tool-registry system))
                      :model (config/active-model (get-in system [:config :llm]))
                      :provider-config (:llm-provider system)
+                     :chat-profile (config/chat-profile (:config system))
                      :telemetry (:telemetry system)
                      :observer (:observer system)
                      :trace (:trace system)

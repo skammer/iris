@@ -33,7 +33,9 @@
    [agent.runtime.context-pack-test]
    [agent.runtime.core-test]
    [agent.runtime.loop-test]
+   [agent.runtime.nudge-test]
    [agent.runtime.schema-test]
+   [agent.runtime.tool-router-test]
    [agent.runtime.tools-test]
    [agent.runtime.trace-test]
    [agent.skills-test]
@@ -84,7 +86,9 @@
     agent.runtime.context-pack-test
     agent.runtime.core-test
     agent.runtime.loop-test
+    agent.runtime.nudge-test
     agent.runtime.schema-test
+    agent.runtime.tool-router-test
     agent.runtime.tools-test
     agent.runtime.trace-test
     agent.skills-test

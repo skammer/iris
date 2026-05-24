@@ -30,7 +30,7 @@
                                (or messages [])))]
     (cond-> (merge
              (select-keys request [:temperature :max-tokens :top-p :cache-control
-                                   :on-content-delta])
+                                   :tool-choice :on-content-delta])
              {:model model
               :messages messages*
               :metadata {:planner true

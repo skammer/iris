@@ -154,6 +154,32 @@
         (finally
           (io/delete-file file true))))))
 
+(deftest per-model-chat-profile-beats-named-and-default-profile-test
+  (with-isolated-config [root {}]
+    (let [file (java.io.File/createTempFile "iris-config-" ".edn")]
+      (spit file
+            "{:llm {:active-provider :neuraldeep
+                    :providers {:neuraldeep {:type :openai-compatible
+                                             :base-url \"https://api.example.test/v1\"
+                                             :api-key \"test-key\"
+                                             :model \"qwen3.6-35b-a3b\"
+                                             :models {\"qwen3.6-35b-a3b\"
+                                                      {:chat-profile {:small-model? true
+                                                                      :max-nudges 3}}}}}}
+              :chat {:active-profile :small-local
+                     :profiles {:default {:small-model? false :max-nudges 0}
+                                :small-local {:provider :neuraldeep
+                                              :model \"qwen3.6-35b-a3b\"
+                                              :small-model? false
+                                              :max-nudges 1}}}}")
+      (try
+        (let [cfg (config/load-config (.getAbsolutePath file))
+              profile (config/chat-profile cfg)]
+          (is (true? (:small-model? profile)))
+          (is (= 3 (:max-nudges profile))))
+        (finally
+          (io/delete-file file true))))))
+
 (deftest config-dir-resolution-test
   (with-isolated-config [root {"IRIS_CONFIG_DIR" (str (io/file root "custom"))}]
     (let [cfg (config/load-config)]

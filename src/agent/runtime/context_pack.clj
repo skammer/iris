@@ -105,6 +105,18 @@
        (str/includes? (llm-messages/content-text message)
                       "Relevant memory JSON:")))
 
+(defn- nudge-message? [message]
+  (and (= "system" (role message))
+       (str/starts-with? (llm-messages/content-text message) "NUDGE ")))
+
+(defn- drop-stale-nudges [messages]
+  (let [last-idx (dec (count messages))]
+    (vec (keep-indexed (fn [idx message]
+                         (when (or (not (nudge-message? message))
+                                   (= idx last-idx))
+                           message))
+                       messages))))
+
 (defn- system-token-count [messages system-prompt]
   (+ (estimate-tokens system-prompt)
      (messages-tokens (filter #(= "system" (role %)) messages))))
@@ -322,7 +334,7 @@
   (let [cfg (merge default-config config)
         cfg (assoc cfg :budgets (merge (:budgets default-config)
                                        (:budgets config)))
-        messages* (normalize-messages messages)
+        messages* (drop-stale-nudges (normalize-messages messages))
         tokens-before (total-context-tokens {:messages messages*
                                              :system-prompt system-prompt
                                              :tools tools
