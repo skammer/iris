@@ -328,6 +328,11 @@
                     [:tags {:optional true} [:maybe [:vector :string]]]
                     [:path {:optional true} [:maybe :string]]
                     [:content {:optional true} [:maybe :string]]]
+     :operation :act
+     :approval-sensitive? false
+     :action-key :action
+     :read-only-actions #{:search :datalog :read-vault}
+     :parallel-safe-actions #{:search :datalog :read-vault}
      :source :builtin)
     :validate-fn validate-input
     :execute-fn
@@ -427,6 +432,8 @@
                     [:limit {:optional true} [:maybe :int]]
                     [:session-id {:optional true} [:maybe :string]]
                     [:all-sessions? {:optional true} [:maybe :boolean]]]
+     :operation :read
+     :parallel-safe? true
      :source :builtin)
     :validate-fn validate-message-search-input
     :execute-fn

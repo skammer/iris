@@ -8,6 +8,7 @@
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.loop :as runtime-loop]
    [agent.system :as system]
+   [agent.tools.core :as tools]
    [cheshire.core :as json]
    [clojure.core.async :as async]
    [clojure.java.io :as io]
@@ -110,6 +111,22 @@
            :memory-service (memory/create-memory-service (:memory config) store)
            :config config)))
 
+(defn- custom-tool [name f metadata]
+  (tools/create-tool
+   {:description (tools/create-tool-description
+                  name
+                  (str name)
+                  :input-schema [:map [:value :int]]
+                  :required-permissions #{}
+                  :operation (:operation metadata)
+                  :parallel-safe? (:parallel-safe? metadata)
+                  :approval-sensitive? (:approval-sensitive? metadata)
+                  :activates-tools? (:activates-tools? metadata))
+    :execute-fn f}))
+
+(defn- custom-registry [& tools*]
+  (reduce tools/register-tool (tools/create-registry) tools*))
+
 (defn- eventually
   [pred]
   (loop [remaining 20]
@@ -140,6 +157,31 @@
         (is (some #{"chat.planner.step"} (map :event-type events)))
         (is (some #{"completion.completed"} (map :event-type events)))
         (is (= :invoke (:mode (first @requests)))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-preserves-rich-user-content-for-provider-test
+  (let [path (temp-db-path)
+        responses (atom ["done"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider identity)
+        session (system/create-session! system "media")
+        blocks [{:type :text :text "look"}
+                {:type :image
+                 :source {:type :base64
+                          :media-type "image/jpeg"
+                          :value "abcd"}
+                 :alt "photo"}]]
+    (try
+      (chat/run! system {:session-id (:id session)
+                         :messages [{:role "user" :content blocks}]})
+      (let [request-messages (get-in (first @requests) [:request :messages])
+            user-message (last (filter #(= "user" (:role %)) request-messages))]
+        (is (= [:text :image] (mapv :type (:content user-message))))
+        (is (= blocks (:content user-message)))
+        (is (= ["look\nphoto" "done"]
+               (mapv :content (sqlite/list-messages (:store system) (:id session))))))
       (finally
         (io/delete-file path true)))))
 
@@ -717,6 +759,77 @@
         (is (= "call_fs_1" (:tool-call-id tool-result)))
         (is (not-any? #(str/starts-with? (or (:content %) "") "Tool receipts JSON: ")
                       messages)))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-persists-multiple-tool-results-in-source-order-test
+  (let [path (temp-db-path)
+        responses (atom [{:tool-calls [{:id "call_slow"
+                                        :type "function"
+                                        :function {:name "slow_read"
+                                                   :arguments (json/generate-string {:value 1})}}
+                                       {:id "call_fast"
+                                        :type "function"
+                                        :function {:name "fast_read"
+                                                   :arguments (json/generate-string {:value 2})}}]}
+                         "done"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (assoc (test-system path provider identity)
+                      :tool-registry
+                      (custom-registry
+                       (custom-tool :slow_read
+                                    (fn [input _] (Thread/sleep 80) input)
+                                    {:operation :read :parallel-safe? true})
+                       (custom-tool :fast_read
+                                    (fn [input _] input)
+                                    {:operation :read :parallel-safe? true})))
+        session (system/create-session! system "multi-tool-order")]
+    (try
+      (let [result (chat/run! system {:session-id (:id session)
+                                      :messages [{:role "user" :content "read both"}]})
+            tool-messages (filter #(= "tool" (:role %))
+                                  (sqlite/list-messages (:store system) (:id session)))]
+        (is (= "done" (:content result)))
+        (is (= ["call_slow" "call_fast"] (mapv :tool-call-id tool-messages))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-mixed-safe-unsafe-tool-calls-preserve-boundaries-test
+  (let [path (temp-db-path)
+        order (atom [])
+        responses (atom [{:tool-calls [{:id "call_read_a"
+                                        :type "function"
+                                        :function {:name "read_a"
+                                                   :arguments (json/generate-string {:value 1})}}
+                                       {:id "call_write_b"
+                                        :type "function"
+                                        :function {:name "write_b"
+                                                   :arguments (json/generate-string {:value 2})}}
+                                       {:id "call_read_c"
+                                        :type "function"
+                                        :function {:name "read_c"
+                                                   :arguments (json/generate-string {:value 3})}}]}
+                         "done"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (assoc (test-system path provider identity)
+                      :tool-registry
+                      (custom-registry
+                       (custom-tool :read_a
+                                    (fn [input _] (swap! order conj :read-a) input)
+                                    {:operation :read :parallel-safe? true})
+                       (custom-tool :write_b
+                                    (fn [input _] (swap! order conj :write-b) input)
+                                    {:operation :act})
+                       (custom-tool :read_c
+                                    (fn [input _] (swap! order conj :read-c) input)
+                                    {:operation :read :parallel-safe? true})))
+        session (system/create-session! system "mixed-tool-boundaries")]
+    (try
+      (chat/run! system {:session-id (:id session)
+                         :messages [{:role "user" :content "mixed"}]})
+      (is (= [:read-a :write-b :read-c] @order))
       (finally
         (io/delete-file path true)))))
 

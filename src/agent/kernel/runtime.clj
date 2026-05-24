@@ -3,6 +3,88 @@
    [agent.kernel.ops :as ops]
    [agent.kernel.schema :as schema]))
 
+(declare execute-directive!)
+
+(defn- tool-directive? [directive]
+  (= :tool-call (:type directive)))
+
+(defn- directive-tool-context [directive]
+  (let [context (or (get-in directive [:payload :context]) {})]
+    (cond-> context
+      (:approval_id context) (assoc :approval-id (:approval_id context)))))
+
+(defn- executable-tool-directive? [directive {:keys [yolo? execute-safe-tools?]}]
+  (let [context (directive-tool-context directive)]
+    (or yolo?
+        execute-safe-tools?
+        (:approval-id context)
+        (:approval_id context))))
+
+(defn- directive->batch-call [directive]
+  (let [{:keys [tool-name input]} (:payload directive)
+        context (directive-tool-context directive)]
+    {:tool-name (keyword tool-name)
+     :input input
+     :id (:provider-tool-call-id context)
+     :context context}))
+
+(defn- blocked-tool-receipt [directive]
+  (let [{:keys [tool-name input]} (:payload directive)]
+    {:directive (:type directive)
+     :status :approval-required
+     :tool-name tool-name
+     :input input}))
+
+(defn- batch-result->receipt [result]
+  (let [base {:directive :tool-call
+              :tool-name (:tool-name result)
+              :tool-call-id (:tool-call-id result)
+              :input (:input result)}]
+    (if (= :ok (:status result))
+      (assoc base
+             :status :ok
+             :result (:result result))
+      (let [error-type (:error-type result)]
+        (case error-type
+          :approval-required
+          (assoc base
+                 :status :approval-required
+                 :reason (:error result))
+
+          (:tool-blocked :permission-denied :path-not-allowed)
+          (assoc base
+                 :status :denied
+                 :reason (:error result)
+                 :error-type error-type)
+
+          (assoc base
+                 :status :error
+                 :reason (:error result)
+                 :error-type error-type))))))
+
+(defn- execute-tool-directive-batch! [ops parent-agent-id directives opts]
+  (if-not (satisfies? ops/KernelToolBatchOps ops)
+    (mapv #(execute-directive! ops parent-agent-id % opts) directives)
+    (let [executable (filterv #(executable-tool-directive? % opts) directives)
+          blocked (keep-indexed (fn [idx directive]
+                                  (when-not (executable-tool-directive? directive opts)
+                                    [idx (blocked-tool-receipt directive)]))
+                                directives)
+          executed (if (seq executable)
+                     (let [calls (mapv directive->batch-call executable)
+                           batch (ops/execute-agent-tool-batch! ops parent-agent-id calls {} opts)]
+                       (mapv batch-result->receipt (:results batch)))
+                     [])
+          executable-receipts (atom executed)]
+      (mapv (fn [idx directive]
+              (if-let [[_ receipt] (some #(when (= idx (first %)) %) blocked)]
+                receipt
+                (let [receipt (first @executable-receipts)]
+                  (swap! executable-receipts subvec 1)
+                  receipt)))
+            (range)
+            directives))))
+
 (defn execute-directive!
   ([ops parent-agent-id directive]
    (execute-directive! ops parent-agent-id directive {}))
@@ -97,8 +179,18 @@
    (execute-step! ops parent-agent-id step {}))
   ([ops parent-agent-id step opts]
   (let [step (schema/validate-step! step)
-        receipts (mapv #(execute-directive! ops parent-agent-id % opts)
-                       (:directives step))]
+        receipts (loop [remaining (:directives step)
+                        acc []]
+                   (if (empty? remaining)
+                     acc
+                     (let [directive (first remaining)]
+                       (if (tool-directive? directive)
+                         (let [[tool-directives rest*] (split-with tool-directive? remaining)]
+                           (recur rest*
+                                  (into acc
+                                        (execute-tool-directive-batch! ops parent-agent-id (vec tool-directives) opts))))
+                         (recur (rest remaining)
+                                (conj acc (execute-directive! ops parent-agent-id directive opts)))))))]
     (ops/emit-kernel-event!
      ops
      {:event-type :agent.kernel.step.executed

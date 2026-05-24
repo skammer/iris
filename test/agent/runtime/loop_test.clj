@@ -81,6 +81,36 @@
                 (filter #(= :message-update (:event-type %)))
                 (mapv #(get-in % [:payload :delta])))))))
 
+(deftest streamed-completion-emits-during-plan-step-test
+  (let [events (atom [])
+        delta-sent (promise)
+        delta-visible (promise)
+        release-planner (promise)
+        result (future
+                 (runtime-loop/run!
+                  {:messages [{:role "user" :content "hi"}]
+                   :request-id "req-1"
+                   :session-id "session-1"
+                   :agent-id "session-1"
+                   :max-steps 3
+                   :stream? true
+                   :event-sink (fn [event]
+                                 (swap! events conj event)
+                                 (when (and (= :message-update (:event-type event))
+                                            (= "hel" (get-in event [:payload :delta])))
+                                   (deliver delta-visible "hel")))
+                   :execute-step-fn execute-step
+                   :planner-fn (fn [_ request]
+                                 ((:on-content-delta request) "hel")
+                                 (deliver delta-sent true)
+                                 (deref release-planner 1000 nil)
+                                 ((:on-content-delta request) "lo")
+                                 (complete-step "hello"))}))]
+    (is (true? (deref delta-sent 1000 false)))
+    (is (= "hel" (deref delta-visible 100 ::missing)))
+    (deliver release-planner true)
+    (is (= "hello" (:content @result)))))
+
 (deftest tool-call-then-completion-test
   (let [requests (atom [])
         steps (atom [(tool-step) (complete-step "listed")])

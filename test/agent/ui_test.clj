@@ -1,5 +1,6 @@
 (ns agent.ui-test
   (:require
+   [agent.chat :as chat]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.trace :as trace]
@@ -64,6 +65,24 @@
           (is (not (str/includes? html "<script")))
           (is (not (str/includes? html "<img")))
           (is (not (str/includes? html "onerror=\"alert(2)\"")))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest working-session-uses-status-spinner-not-thinking-message
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [session (sqlite/create-session! store "working")]
+        (with-redefs [chat/session-state (fn [_ _]
+                                           {:working? true
+                                            :queued-count 0})]
+          (let [messages-html (ui/session-messages-fragment {:store store} (:id session))
+                detail-html (ui/session-detail-fragment {:store store} (:id session))]
+            (is (not (str/includes? messages-html "thinking")))
+            (is (not (str/includes? messages-html "message--streaming")))
+            (is (str/includes? detail-html "chat-spinner"))
+            (is (not (str/includes? detail-html ">thinking"))))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))

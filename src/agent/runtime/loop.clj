@@ -414,6 +414,7 @@
         chat-profile* (nudge/normalize-profile chat-profile)
         delta-emitted? (atom false)
         pending-deltas (atom [])
+        buffer-deltas? (nudge/enabled? chat-profile*)
         emit-delta! (fn [chunk]
                       (when (and (string? chunk) (not= "" chunk))
                         (reset! delta-emitted? true)
@@ -427,7 +428,9 @@
                            (fn [chunk]
                              (throw-if-cancelled! cancellation-token)
                              (when (and (string? chunk) (not= "" chunk))
-                               (swap! pending-deltas conj chunk))))]
+                               (if buffer-deltas?
+                                 (swap! pending-deltas conj chunk)
+                                 (emit-delta! chunk)))))]
     (event! event-sink :agent-start base {:message-count (count messages*) :stream stream?*})
     (try
       (loop [step-no 0

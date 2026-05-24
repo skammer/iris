@@ -8,7 +8,7 @@
    (java.time Instant)))
 
 (def message-block-types
-  #{:text :thinking :image :tool-call :tool-result :custom})
+  #{:text :thinking :image :audio :video :file :tool-call :tool-result :custom})
 
 (def runtime-event-types
   #{:agent-start
@@ -44,6 +44,9 @@
     :text :text
     :thinking :thinking
     :image :image
+    :audio :audio
+    :video :video
+    :file :file
     :custom :custom
     (normalize-token value)))
 
@@ -59,17 +62,43 @@
    [:text :string]
    [:signature {:optional true} [:maybe :string]]])
 
-(def image-source-schema
+(def media-source-schema
   [:map {:closed true}
    [:type [:enum :url :base64 :file]]
    [:value :string]
    [:media-type {:optional true} [:maybe :string]]])
 
+(def image-source-schema media-source-schema)
+
 (def image-block-schema
   [:map {:closed true}
    [:type [:= :image]]
    [:source image-source-schema]
-   [:alt {:optional true} [:maybe :string]]])
+   [:alt {:optional true} [:maybe :string]]
+   [:detail {:optional true} [:maybe [:or :keyword :string]]]
+   [:filename {:optional true} [:maybe :string]]])
+
+(def audio-block-schema
+  [:map {:closed true}
+   [:type [:= :audio]]
+   [:source media-source-schema]
+   [:alt {:optional true} [:maybe :string]]
+   [:transcript {:optional true} [:maybe :string]]
+   [:filename {:optional true} [:maybe :string]]])
+
+(def video-block-schema
+  [:map {:closed true}
+   [:type [:= :video]]
+   [:source media-source-schema]
+   [:alt {:optional true} [:maybe :string]]
+   [:filename {:optional true} [:maybe :string]]])
+
+(def file-block-schema
+  [:map {:closed true}
+   [:type [:= :file]]
+   [:source media-source-schema]
+   [:alt {:optional true} [:maybe :string]]
+   [:filename {:optional true} [:maybe :string]]])
 
 (def tool-call-block-schema
   [:map {:closed true}
@@ -99,6 +128,9 @@
    [:text text-block-schema]
    [:thinking thinking-block-schema]
    [:image image-block-schema]
+   [:audio audio-block-schema]
+   [:video video-block-schema]
+   [:file file-block-schema]
    [:tool-call tool-call-block-schema]
    [:tool-result tool-result-block-schema]
    [:custom custom-block-schema]])
@@ -168,8 +200,22 @@
                       (assoc :signature (:signature block*))))
       :image (-> {:type :image
                   :source (update (:source block*) :type normalize-token)}
-                 (cond-> (contains? block* :alt)
-                   (assoc :alt (:alt block*))))
+                 (cond-> (contains? block* :alt) (assoc :alt (:alt block*))
+                         (contains? block* :detail) (assoc :detail (:detail block*))
+                         (contains? block* :filename) (assoc :filename (:filename block*))))
+      :audio (-> {:type :audio
+                  :source (update (:source block*) :type normalize-token)}
+                 (cond-> (contains? block* :alt) (assoc :alt (:alt block*))
+                         (contains? block* :transcript) (assoc :transcript (:transcript block*))
+                         (contains? block* :filename) (assoc :filename (:filename block*))))
+      :video (-> {:type :video
+                  :source (update (:source block*) :type normalize-token)}
+                 (cond-> (contains? block* :alt) (assoc :alt (:alt block*))
+                         (contains? block* :filename) (assoc :filename (:filename block*))))
+      :file (-> {:type :file
+                 :source (update (:source block*) :type normalize-token)}
+                (cond-> (contains? block* :alt) (assoc :alt (:alt block*))
+                        (contains? block* :filename) (assoc :filename (:filename block*))))
       :tool-call (cond-> {:type :tool-call
                           :name (or (:name block*) (:tool-name block*) (:tool_name block*))
                           :arguments (or (:arguments block*) (:input block*) (:args block*) {})}

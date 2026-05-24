@@ -46,6 +46,68 @@
 - Evidence compact re-injects preserved evidence after `session_compact`.
 - Tool gating reconciles requested calls against allowed-tool policy.
 
+## Code Pattern
+
+```ts
+// tmp/little-coder/.pi/extensions/quality-monitor/index.ts
+pi.on("turn_end", async (event, ctx) => {
+  const message = (event as any).message;
+  if (!message) return;
+
+  const content = Array.isArray(message.content) ? message.content : [];
+  const text = content
+    .filter((c: any) => c?.type === "text")
+    .map((c: any) => c.text ?? "")
+    .join("\n");
+  const currentCalls: ToolCall[] = content
+    .filter((c: any) => c?.type === "toolCall")
+    .map((c: any) => ({ name: c.name, input: c.arguments ?? c.input ?? {} }));
+
+  const verdict = assessResponse(text, currentCalls, previousToolCalls, knownTools);
+  previousToolCalls = currentCalls;
+
+  if (verdict.ok) {
+    consecutiveFailures = 0;
+    return;
+  }
+
+  consecutiveFailures++;
+  if (consecutiveFailures > MAX_CONSECUTIVE_CORRECTIONS) {
+    ctx.ui.notify(
+      `quality-monitor: ${verdict.reason} (suppressed after ${consecutiveFailures} in a row)`,
+      "warning",
+    );
+    return;
+  }
+
+  const correction = buildCorrectionMessage(verdict.reason);
+  ctx.ui.notify(
+    `quality-monitor: ${verdict.reason} → injecting correction`,
+    "warning",
+  );
+  pi.sendUserMessage(correction, { deliverAs: "steer" });
+});
+```
+
+Pattern: extension observes base-loop events and injects a bounded correction without forking Pi.
+
+```ts
+// tmp/little-coder/.pi/extensions/tool-gating/index.ts
+pi.on("tool_call", async (event) => {
+  const allowed = getAllowedTools();
+  if (!allowed) return;
+  const name = (event as any).toolName;
+  if (typeof name === "string" && !allowed.has(name)) {
+    return {
+      block: true,
+      reason: `tool '${name}' is not in _allowed_tools [${Array.from(allowed).join(", ")}]`,
+    };
+  }
+});
+```
+
+Pattern: schema filtering plus execution-time blocking gives defense in depth for benchmark/tool-surface constraints.
+
 ## Decision
 - Best pattern: extensions as loop middleware, not forks.
 - Useful when experimenting with guardrails without destabilizing base loop.

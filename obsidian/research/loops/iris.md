@@ -43,6 +43,35 @@
 - Context packer protects system/latest user/latest tool loop, drops stale nudges, compacts/truncates older tool results.
 - Persistence wrapper reconciles branch context, compaction summaries, excluded messages, queued turns.
 
+## Code Pattern
+
+```clojure
+;; src/agent/runtime/tools.clj
+(defn- parallel-safe-preflight? [preflight opts]
+  (and (not (:preflight-error preflight))
+       (not (legacy-sequential? preflight opts))
+       (not (approval-sensitive-call? preflight))
+       (not (activates-tools-call? preflight))
+       (tools/parallel-safe-call? (:description preflight) (:input preflight))))
+
+(defn execute-batch!
+  ([registry calls context] (execute-batch! registry calls context {}))
+  ([registry calls context opts]
+   (let [opts* (update opts :mode #(normalize-tool-name (or % default-mode)))
+         _ (throw-if-cancelled! opts*)
+         preflights (mapv (fn [[idx call]]
+                            (preflight-or-error registry call context opts* idx))
+                          (map-indexed vector calls))
+         results (mapcat (fn [[mode batch]]
+                           (case mode
+                             :sequential (execute-sequential! registry batch opts*)
+                             :parallel (execute-parallel! registry batch opts*)))
+                         (batches preflights opts*))]
+     (finalize-results results))))
+```
+
+Pattern: preflight decides execution policy before side effects. Approval-sensitive and tool-activating calls stay sequential; safe calls can batch.
+
 ## Decision
 - Strong boundary: pure loop emits events; outer chat/runtime owns persistence, transport, queues.
 - Best reusable ideas: dependency-injected loop, event sink as contract, branch-aware restore, child-run protocol.

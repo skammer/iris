@@ -20,6 +20,30 @@
                     :first_name "Test"}
              :text text}})
 
+(defn photo-update-for
+  [update-id chat-id user-id caption]
+  {:update_id update-id
+   :message {:message_id update-id
+             :from {:id user-id}
+             :chat {:id chat-id
+                    :type "private"
+                    :first_name "Test"}
+             :caption caption
+             :photo [{:file_id "small" :file_size 10 :width 10 :height 10}
+                     {:file_id "big" :file_size 20 :width 20 :height 20}]}})
+
+(defn voice-update-for
+  [update-id chat-id user-id]
+  {:update_id update-id
+   :message {:message_id update-id
+             :from {:id user-id}
+             :chat {:id chat-id
+                    :type "private"
+                    :first_name "Test"}
+             :voice {:file_id "voice-1"
+                     :file_size 12
+                     :mime_type "audio/ogg"}}})
+
 (deftest telegram-advertises-only-implemented-adapter-capabilities
   (let [service (telegram/create-service {:config {:channel-adapters {:telegram {:bot-token "token"}}}})
         caps (:capabilities (channels/describe-adapter service))]
@@ -408,6 +432,86 @@
              (telegram/process-update! system config opts
                                        (update-for 2 100 7 "/photo"))))
       (is (= "Usage: /photo <url> [caption]" (:text (last @sent))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-photo-message-downloads-and-sends-rich-content-to-chat-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        sent (atom [])
+        calls (atom [])
+        system {:store store
+                :event-sink (fn [_] nil)}
+        config {:bot-token "token"
+                :allowlist {:allow-all? true}
+                :max-download-bytes 1024}
+        opts {:send-message-fn (fn [chat-id text]
+                                 (swap! sent conj {:chat-id chat-id :text text}))
+              :get-file-fn (fn [token file-id]
+                             (swap! calls conj {:op :get-file
+                                                :token token
+                                                :file-id file-id})
+                             {:file_path "photos/big.jpg"
+                              :file_size 11})
+              :download-file-fn (fn [token file-path]
+                                  (swap! calls conj {:op :download
+                                                     :token token
+                                                     :file-path file-path})
+                                  (.getBytes "image-bytes" "UTF-8"))
+              :chat-fn (fn [_ {:keys [messages]}]
+                         (swap! calls conj {:op :chat
+                                            :messages messages})
+                         {:content "ok"})}]
+    (try
+      (is (= :processed
+             (telegram/process-update! system config opts
+                                       (photo-update-for 1 100 7 "what is this?"))))
+      (let [content (->> @calls (filter #(= :chat (:op %))) first :messages first :content)]
+        (is (= [{:type :text :text "what is this?"}
+                {:type :image
+                 :source {:type :base64
+                          :media-type "image/jpeg"
+                          :value "aW1hZ2UtYnl0ZXM="}
+                 :alt "Telegram photo"
+                 :filename "big.jpg"}]
+               content)))
+      (is (= [{:op :get-file :token "token" :file-id "big"}
+              {:op :download :token "token" :file-path "photos/big.jpg"}]
+             (take 2 @calls)))
+      (is (= [{:chat-id 100 :text "ok"}] @sent))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-voice-message-becomes-audio-content-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        seen (atom nil)
+        system {:store store
+                :event-sink (fn [_] nil)}
+        config {:bot-token "token"
+                :allowlist {:allow-all? true}
+                :max-download-bytes 1024}
+        opts {:send-message-fn (fn [_ _] nil)
+              :get-file-fn (fn [_ _] {:file_path "voice/file.ogg"
+                                      :file_size 12})
+              :download-file-fn (fn [_ _] (.getBytes "ogg" "UTF-8"))
+              :chat-fn (fn [_ {:keys [messages]}]
+                         (reset! seen (-> messages first :content))
+                         {:content "ok"})}]
+    (try
+      (is (= :processed
+             (telegram/process-update! system config opts
+                                       (voice-update-for 2 100 7))))
+      (is (= [{:type :text :text "Analyze attached audio."}
+              {:type :audio
+               :source {:type :base64
+                        :media-type "audio/ogg"
+                        :value "b2dn"}
+               :alt "Telegram voice message"
+               :filename "file.ogg"}]
+             @seen))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))

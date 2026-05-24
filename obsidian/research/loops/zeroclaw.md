@@ -56,6 +56,70 @@
 - Gateway sends `chunk_reset` before authoritative `done` so client discards speculative draft.
 - Cancellation persists partial assistant with `[interrupted by user]`.
 
+## Code Pattern
+
+```rust
+// tmp/zeroclaw/crates/zeroclaw-runtime/src/agent/tool_execution.rs
+pub fn should_execute_tools_in_parallel(
+    tool_calls: &[ParsedToolCall],
+    approval: Option<&ApprovalManager>,
+) -> bool {
+    if tool_calls.len() <= 1 {
+        return false;
+    }
+
+    if tool_calls.iter().any(|call| call.name == "tool_search") {
+        return false;
+    }
+
+    if let Some(mgr) = approval
+        && tool_calls.iter().any(|call| mgr.needs_approval(&call.name))
+    {
+        return false;
+    }
+
+    true
+}
+```
+
+Pattern: parallelism is opt-out for dependency-creating or approval-gated tools.
+
+```rust
+// tmp/zeroclaw/crates/zeroclaw-runtime/src/agent/loop_.rs
+let det_result = loop_detector.record(&tool_name, args, &outcome.output);
+match det_result {
+    crate::agent::loop_detector::LoopDetectionResult::Ok => {}
+    crate::agent::loop_detector::LoopDetectionResult::Warning(ref msg) => {
+        tracing::warn!(tool = %tool_name, %msg, "loop detector warning");
+        history.push(ChatMessage::system(format!("[Loop Detection] {msg}")));
+    }
+    crate::agent::loop_detector::LoopDetectionResult::Block(ref msg) => {
+        tracing::warn!(tool = %tool_name, %msg, "loop detector blocked tool call");
+        history.push(ChatMessage::system(format!(
+            "[Loop Detection — BLOCKED] {msg}"
+        )));
+    }
+    crate::agent::loop_detector::LoopDetectionResult::Break(msg) => {
+        runtime_trace::record_event(
+            "loop_detector_circuit_breaker",
+            Some(channel_name),
+            Some(provider_name),
+            Some(model),
+            Some(&turn_id),
+            Some(false),
+            Some(&msg),
+            serde_json::json!({
+                "iteration": iteration + 1,
+                "tool": tool_name,
+            }),
+        );
+        anyhow::bail!("Agent loop aborted by loop detector: {msg}");
+    }
+}
+```
+
+Pattern: loop detector can warn, block, or break; warnings feed back into context as system nudges.
+
 ## Decision
 - Most complete system: channel-first, daemon-ready, multi-provider, multimodal, strong observability.
 - Cost: many loop paths; same concepts exist in functional loop and Agent OO loop.

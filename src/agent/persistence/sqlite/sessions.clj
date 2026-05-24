@@ -33,10 +33,34 @@
    :payload (common/parse-json-string payload_json)
    :created-at created_at})
 
+(defn- content-block-preview [block]
+  (let [type (keyword (or (:type block) :custom))]
+    (case type
+      :text (:text block)
+      :thinking (:text block)
+      :image (or (:alt block) "[image]")
+      :audio (or (:transcript block) (:alt block) "[audio]")
+      :video (or (:alt block) "[video]")
+      :file (or (:alt block) (:filename block) "[file]")
+      :tool-result (some-> (:content block) str)
+      nil)))
+
+(defn- content-preview [content]
+  (cond
+    (nil? content) ""
+    (string? content) content
+    (sequential? content) (str/join "\n" (keep content-block-preview content))
+    :else (str content)))
+
 (defn- payload->message [payload]
-  (let [message (or (:message payload) payload)]
+  (let [message (or (:message payload) payload)
+        raw-content (or (:content message) "")
+        content-blocks (or (:content-blocks message)
+                           (when (sequential? raw-content)
+                             (vec raw-content)))]
     {:role (or (:role message) "user")
-     :content (or (:content message) "")
+     :content (content-preview (or content-blocks raw-content))
+     :content-blocks content-blocks
      :tool-calls (:tool-calls message)
      :tool-call-id (:tool-call-id message)
      :metadata (:metadata message)
@@ -125,13 +149,15 @@
 (defn append-message!
   ([store session-id role content]
    (append-message! store session-id role content nil))
-  ([store session-id role content {:keys [tool-calls tool-call-id metadata excluded-from-context? select-leaf?]
+  ([store session-id role content {:keys [tool-calls tool-call-id metadata excluded-from-context?
+                                          select-leaf? content-blocks]
                                    :or {select-leaf? true}}]
    (let [tool-calls-json (when (seq tool-calls) (common/json-string tool-calls))
          metadata-json (common/json-string metadata)
+         content-preview* (content-preview (or content-blocks content))
          message {:session_id session-id
                   :role role
-                  :content content
+                  :content content-preview*
                   :tool_calls tool-calls-json
                   :tool_call_id tool-call-id
                   :metadata_json metadata-json
@@ -147,7 +173,8 @@
                                                      :type :message
                                                      :payload (cond-> {:message-id message-id
                                                                        :role role
-                                                                       :content content}
+                                                                       :content content-preview*}
+                                                                content-blocks (assoc :content-blocks content-blocks)
                                                                 tool-calls (assoc :tool-calls tool-calls)
                                                                 tool-call-id (assoc :tool-call-id tool-call-id)
                                                                 metadata (assoc :metadata metadata)
@@ -159,8 +186,9 @@
      (cond-> {:id id
               :session-id session-id
               :role role
-              :content content
+              :content content-preview*
               :created-at (:created_at message)}
+       content-blocks (assoc :content-blocks content-blocks)
        tool-calls (assoc :tool-calls tool-calls)
        tool-call-id (assoc :tool-call-id tool-call-id)
        metadata (assoc :metadata metadata)
@@ -411,7 +439,8 @@
        (let [type* (valid-entry-type! type)
              now (or created-at (common/now-str))
              payload* (if (= :message type*)
-                        (let [{:keys [role content tool-calls tool-call-id metadata excluded-from-context?]} (payload->message payload)
+                        (let [{:keys [role content content-blocks tool-calls tool-call-id
+                                      metadata excluded-from-context?]} (payload->message payload)
                               tool-calls-json (when (seq tool-calls) (common/json-string tool-calls))
                               message {:session_id session-id
                                        :role role
@@ -426,6 +455,7 @@
                             (cond-> (assoc payload :message-id message-id
                                            :role role
                                            :content content)
+                              content-blocks (assoc :content-blocks content-blocks)
                               tool-calls (assoc :tool-calls tool-calls)
                               tool-call-id (assoc :tool-call-id tool-call-id)
                               metadata (assoc :metadata metadata)
@@ -544,7 +574,8 @@
     (case type
       :message (when-not (:excluded-from-context? payload)
                  (with-id (cond-> {:role (:role payload)
-                                   :content (:content payload)}
+                                   :content (or (:content-blocks payload)
+                                                (:content payload))}
                             (:tool-calls payload) (assoc :tool-calls (:tool-calls payload))
                             (:tool-call-id payload) (assoc :tool-call-id (:tool-call-id payload))
                             (:metadata payload) (assoc :metadata (:metadata payload)))))
