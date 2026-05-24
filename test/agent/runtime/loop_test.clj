@@ -278,3 +278,51 @@
                     first
                     :payload
                     :excluded-from-context?)))))
+
+(deftest small-profile-retries-bare-text-and-suppresses-stream-test
+  (let [steps (atom [(complete-step "bad")
+                     (tool-step "call_respond" :respond {:content "done"})])
+        {:keys [result events]}
+        (run-loop {:stream? true
+                   :chat-profile {:small-model? true
+                                  :respond-tool? true
+                                  :max-nudges 2
+                                  :nudge-budgets {:bare-text 2}}
+                   :planner-fn (fn [_ request]
+                                 (let [step (first @steps)]
+                                   (when (and (= "bad" (get-in step [:llm-response :content]))
+                                              (:on-content-delta request))
+                                     ((:on-content-delta request) "bad"))
+                                   (swap! steps rest)
+                                   step))})]
+    (is (= "done" (:content result)))
+    (is (= ["done"]
+           (->> @events
+                (filter #(= :message-update (:event-type %)))
+                (keep #(get-in % [:payload :delta]))
+                vec)))
+    (is (some #(= :nudge-injected (:event-type %)) @events))))
+
+(deftest small-profile-retries-max-token-once-test
+  (let [steps (atom [{:schema-version kernel-schema/current-step-schema-version
+                      :state {}
+                      :directives [{:type :complete
+                                    :payload {:result "too long"}}]
+                      :receipts []
+                      :llm-response {:content "partial"
+                                     :tool-calls []
+                                     :usage {:tokens 9}
+                                     :stop-reason "length"}}
+                     (tool-step "call_respond" :respond {:content "short"})])
+        {:keys [result events]}
+        (run-loop {:chat-profile {:small-model? true
+                                  :respond-tool? true
+                                  :max-nudges 2
+                                  :nudge-budgets {:max-token-truncation 1}}
+                   :planner-fn (fn [_ _]
+                                 (let [step (first @steps)]
+                                   (swap! steps rest)
+                                   step))})]
+    (is (= "short" (:content result)))
+    (is (= :completed (:stop-reason result)))
+    (is (some #(= "max-token-truncation" (get-in % [:payload :reason])) @events))))

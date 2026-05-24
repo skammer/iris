@@ -84,3 +84,16 @@
     (is (= "call_keep" (:id (first (llm-messages/message-tool-calls assistant)))))
     (is (= "call_keep" (get-in tool-msg [:content 0 :tool-call-id])))
     (is (= "latest" (text (last (:messages pack)))))))
+
+(deftest drops-stale-synthetic-nudges-before-real-context-test
+  (let [pack (context-pack/pack-context
+              {:messages [{:role "user" :content "first"}
+                          {:role "system" :content "NUDGE (bare-text): old"}
+                          {:role "tool" :content [{:type :tool-result
+                                                   :tool-call-id "call_1"
+                                                   :content "real tool"}]}
+                          {:role "system" :content "NUDGE (bare-text): current"}]
+               :tools []
+               :config {:max-context-tokens 10000}})]
+    (is (= ["first" "real tool" "NUDGE (bare-text): current"]
+           (mapv text (:messages pack))))))

@@ -18,6 +18,8 @@
     :message-start
     :message-update
     :message-end
+    :nudge-injected
+    :guardrail-blocked
     :tool-execution-start
     :tool-execution-update
     :tool-execution-end})

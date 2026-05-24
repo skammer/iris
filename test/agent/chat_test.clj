@@ -234,6 +234,88 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest chat-default-profile-leaves-bare-final-unchanged-test
+  (let [path (temp-db-path)
+        responses (atom ["plain"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider identity)
+        session (system/create-session! system "default-profile")]
+    (try
+      (let [result (chat/run! system {:session-id (:id session)
+                                      :messages [{:role "user" :content "hello"}]})]
+        (is (= "plain" (:content result)))
+        (is (= :completed (:stop-reason result)))
+        (is (= ["hello" "plain"]
+               (mapv :content (sqlite/list-messages (:store system) (:id session))))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-per-model-profile-enables-respond-nudge-test
+  (let [path (temp-db-path)
+        responses (atom ["bare"
+                         (tool-call-response "call_respond" :respond {:content "final"})])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider
+                            #(-> %
+                                 (assoc-in [:llm :active-provider] :ollama)
+                                 (assoc-in [:llm :providers :ollama :model] "llama3.2:3b")
+                                 (assoc-in [:llm :providers :ollama :models "llama3.2:3b" :chat-profile]
+                                           {:small-model? true
+                                            :respond-tool? true
+                                            :force-tool-choice? true
+                                            :tool-routing? true
+                                            :max-nudges 2
+                                            :nudge-budgets {:bare-text 2}})))
+        session (system/create-session! system "small-profile")]
+    (try
+      (let [result (chat/run! system {:session-id (:id session)
+                                      :messages [{:role "user" :content "hello"}]})
+            tools-sent (set (map #(get-in % [:function :name])
+                                 (get-in (first @requests) [:request :tools])))]
+        (is (= "final" (:content result)))
+        (is (contains? tools-sent "respond"))
+        (is (= ["hello" "final"]
+               (mapv :content (sqlite/list-messages (:store system) (:id session))))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-mixed-respond-and-real-tool-executes-real-tool-test
+  (let [path (temp-db-path)
+        responses (atom [{:tool-calls [{:id "call_fs"
+                                        :type "function"
+                                        :function {:name "fs"
+                                                   :arguments (json/generate-string {:action "list" :path "."})}}
+                                       {:id "call_respond"
+                                        :type "function"
+                                        :function {:name "respond"
+                                                   :arguments (json/generate-string {:content "too soon"})}}]}
+                         (tool-call-response "call_respond2" :respond {:content "listed"})])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider
+                            #(-> %
+                                 (assoc-in [:llm :active-provider] :ollama)
+                                 (assoc-in [:llm :providers :ollama :model] "llama3.2:3b")
+                                 (assoc-in [:llm :providers :ollama :models "llama3.2:3b" :chat-profile]
+                                           {:small-model? true
+                                            :respond-tool? true
+                                            :force-tool-choice? true
+                                            :tool-routing? false
+                                            :max-nudges 2
+                                            :nudge-budgets {}})))
+        session (system/create-session! system "mixed-respond")
+        tool-events (atom [])]
+    (try
+      (let [result (chat/run! system {:session-id (:id session)
+                                      :messages [{:role "user" :content "list files"}]
+                                      :on-tool-call #(swap! tool-events conj %)})]
+        (is (= "listed" (:content result)))
+        (is (= ["fs"] (mapv #(some-> (get-in % [:receipt :tool-name]) name) @tool-events))))
+      (finally
+        (io/delete-file path true)))))
+
 (deftest chat-loop-uses-configured-max-steps-test
   (let [path (temp-db-path)
         responses (atom [(tool-call-response :fs {:action "list" :path "."})
