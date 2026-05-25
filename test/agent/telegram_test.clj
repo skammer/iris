@@ -146,6 +146,41 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest telegram-skills-command-and-slash-skill-ack-test
+  (let [path (temp-db-path)
+        root (.toFile (java.nio.file.Files/createTempDirectory "iris-telegram-skills-" (make-array java.nio.file.attribute.FileAttribute 0)))
+        skill-dir (io/file root "review")
+        _ (.mkdirs skill-dir)
+        _ (spit (io/file skill-dir "SKILL.md")
+                "---\nname: review\ndescription: Review code\n---\n# Review\n\nUse review checklist.")
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        sent (atom [])
+        prompts (atom [])
+        system {:store store
+                :skills-registry {:dirs [(.getAbsolutePath root)]}
+                :event-sink (fn [_] nil)}
+        config {:bot-token "token"
+                :allowlist {:allow-all? true}}
+        opts {:send-message-fn (fn [chat-id text]
+                                 (swap! sent conj {:chat-id chat-id :text text}))
+              :send-chat-action-fn (fn [& _] nil)
+              :send-message-draft-fn (fn [& _] nil)
+              :chat-fn (fn [_ opts]
+                         (swap! prompts conj (get-in opts [:messages 0 :content]))
+                         {:content "ok"})}]
+    (try
+      (telegram/process-update! system config opts (update-for 1 100 7 "/skills rev"))
+      (telegram/process-update! system config opts (update-for 2 100 7 "/review this"))
+      (is (str/includes? (:text (first @sent)) "/review - Review code"))
+      (is (= "Skills: /review" (:text (second @sent))))
+      (is (= "/review this" (first @prompts)))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file (io/file skill-dir "SKILL.md") true)
+        (.delete skill-dir)
+        (.delete root)
+        (io/delete-file path true)))))
+
 (deftest telegram-stop-cancels-active-chat
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path :evict-on-close? true})

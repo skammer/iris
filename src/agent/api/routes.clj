@@ -206,6 +206,12 @@
   [:map
    [:mode {:optional true} [:enum "soft" "full"]]])
 
+(def ^:private slash-commands-query
+  [:map
+   [:prefix {:optional true} :string]
+   [:page {:optional true} :int]
+   [:page_size {:optional true} :int]])
+
 (def ^:private signal-body
   [:map [:command_type schemas/NonBlankString]])
 
@@ -484,6 +490,8 @@
    ["/v1/tool-approvals/:approval-id/deny" {:post {:handler/id :deny-tool-approval
                                                    :parameters {:body tool-approval-decision-body}}}]
    ["/v1/skills" {:get {:handler/id :list-skills}}]
+   ["/v1/slash-commands" {:get {:handler/id :slash-commands
+                                :parameters {:query slash-commands-query}}}]
    ["/v1/channel-adapters" {:get {:handler/id :list-channel-adapters}}]
    ["/v1/events" {:get {:handler/id :list-events}}]
    ["/v1/events/stream" {:get {:handler/id :events-stream}}]

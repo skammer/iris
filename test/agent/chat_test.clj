@@ -7,6 +7,7 @@
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.loop :as runtime-loop]
+   [agent.skills :as skills]
    [agent.system :as system]
    [agent.tools.core :as tools]
    [cheshire.core :as json]
@@ -80,6 +81,9 @@
 
 (defn- temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-chat-" ".db")))
+
+(defn- temp-dir []
+  (.toFile (java.nio.file.Files/createTempDirectory "iris-chat-" (make-array java.nio.file.attribute.FileAttribute 0))))
 
 (defn- tool-call-response
   ([tool-name args] (tool-call-response (str "call_" (name tool-name)) tool-name args))
@@ -251,6 +255,36 @@
                               "Relevant memory JSON: "))
         (is (= "user" (:role (nth planner-messages 3)))))
       (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-injects-slash-skill-body-and-preserves-raw-user-text-test
+  (let [path (temp-db-path)
+        root (temp-dir)
+        skill-dir (io/file root "review")
+        _ (.mkdirs skill-dir)
+        _ (spit (io/file skill-dir "SKILL.md")
+                "---\nname: review\ndescription: Review code\n---\n# Review\n\nUse review checklist.")
+        responses (atom ["done"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system0 (test-system path provider #(-> %
+                                                (assoc-in [:iris :context] nil)
+                                                (assoc-in [:skills :dirs] [(.getAbsolutePath root)])))
+        system (assoc system0 :skills-registry (system/create-skills-registry (:skills (:config system0))))
+        session (system/create-session! system "skill")]
+    (try
+      (chat/run! system {:session-id (:id session)
+                         :messages [{:role "user" :content "please /review this"}]})
+      (let [planner-messages (get-in (first @requests) [:request :messages])
+            stored (sqlite/list-messages (:store system) (:id session))]
+        (is (some #(str/includes? (message-text %) "Use review checklist.")
+                  planner-messages))
+        (is (= "please /review this" (:content (first stored)))))
+      (finally
+        (sqlite/close-store! (:store system))
+        (io/delete-file (io/file skill-dir "SKILL.md") true)
+        (.delete skill-dir)
+        (.delete root)
         (io/delete-file path true)))))
 
 (deftest chat-loop-executes-safe-tool-via-native-tool-call-test
@@ -860,7 +894,7 @@
 
 (deftest chat-loop-creates-approval-for-sensitive-tool-test
   (let [path (temp-db-path)
-        responses (atom [(tool-call-response :shell {:argv ["printf" "hi"]})])
+        responses (atom [(tool-call-response :shell {:argv ["uname" "-a"]})])
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path

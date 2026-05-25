@@ -138,9 +138,42 @@
                    :working-dir "."
                    :timeout-ms 30000
                    :max-timeout-ms 30000
-                   :deny-by-default? true
-                   :allowed-commands ["printf" "pwd" "ls" "echo" "cat" "rg" "git" "df"]
-                   :blocked-commands []
+                   :default-action :ask
+                   :rules [{:argv ["pwd"] :action :allow}
+                           {:argv ["printf" "**"] :action :allow}
+                           {:argv ["echo" "**"] :action :allow}
+                           {:argv ["which" "**"] :action :allow}
+                           {:argv ["type" "**"] :action :allow}
+                           {:argv ["ls" "**"] :action :allow}
+                           {:argv ["cat" "**"] :action :allow}
+                           {:argv ["head" "**"] :action :allow}
+                           {:argv ["tail" "**"] :action :allow}
+                           {:argv ["wc" "**"] :action :allow}
+                           {:argv ["df" "**"] :action :allow}
+                           {:argv ["sort" "**"] :action :allow}
+                           {:argv ["uniq" "**"] :action :allow}
+                           {:argv ["cut" "**"] :action :allow}
+                           {:argv ["diff" "**"] :action :allow}
+                           {:argv ["rg" "**"] :action :allow}
+                           {:argv ["grep" "**"] :action :allow}
+                           {:argv ["find" "**"] :action :allow}
+                           {:argv ["git" "status" "**"] :action :allow}
+                           {:argv ["git" "log" "**"] :action :allow}
+                           {:argv ["git" "diff" "**"] :action :allow}
+                           {:argv ["git" "show" "**"] :action :allow}
+                           {:argv ["git" "branch" "**"] :action :allow}
+                           {:argv ["cargo" "check" "**"] :action :allow}
+                           {:argv ["cargo" "build" "**"] :action :allow}
+                           {:argv ["cargo" "test" "**"] :action :allow}
+                           {:argv ["cargo" "fmt" "**"] :action :allow}
+                           {:argv ["cargo" "clippy" "**"] :action :allow}
+                           {:argv ["npm" "run" "**"] :action :allow}
+                           {:argv ["rm" "-rf" "/*"] :action :deny}
+                           {:argv ["sudo" "rm" "-rf" "/*"] :action :deny}
+                           {:argv ["dd" "**"] :action :deny}
+                           {:argv ["mkfs" "**"] :action :deny}
+                           {:argv ["fdisk" "**"] :action :deny}
+                           {:argv ["mkswap" "**"] :action :deny}]
                    :max-output-bytes 65536}
            :display {:web {:show-tool-calls? true
                            :collapsed? true

@@ -49,6 +49,7 @@
    [agent.llm.messages-test]
    [agent.llm.dsml-test]
    [agent.llm.providers.openai-compatible-test]
+   [agent.loop-test]
    [agent.tools.common.http-test]
    [agent.tools.common.telegram-test]
    [agent.tools.common.todo-test]
@@ -104,6 +105,7 @@
     agent.llm.messages-test
     agent.llm.dsml-test
     agent.llm.providers.openai-compatible-test
+    agent.loop-test
     agent.tools.common.http-test
     agent.tools.common.telegram-test
     agent.tools.common.todo-test

@@ -313,6 +313,138 @@ class AgentRunPanel extends ScrollBottom {
   }
 }
 
+const inMarkdownFenceBeforeCaret = (text, caret) => {
+  const head = text.slice(0, caret);
+  let inFence = false;
+  for (const line of head.split(/\r?\n/)) {
+    if (line.replace(/^[\t ]+/, "").startsWith("```")) inFence = !inFence;
+  }
+  return inFence;
+};
+
+const slashDraftAtCaret = (text, caret) => {
+  if (caret < 0 || caret > text.length || inMarkdownFenceBeforeCaret(text, caret)) {
+    return null;
+  }
+  const lineStart = text.lastIndexOf("\n", caret - 1) + 1;
+  const lineEndAt = text.indexOf("\n", caret);
+  const lineEnd = lineEndAt < 0 ? text.length : lineEndAt;
+  const line = text.slice(lineStart, lineEnd);
+  if (/^[\t ]*>/.test(line)) return null;
+  const beforeCaret = line.slice(0, caret - lineStart);
+  for (let i = beforeCaret.length - 1; i >= 0; i--) {
+    if (beforeCaret[i] !== "/") continue;
+    const after = beforeCaret.slice(i + 1);
+    if (!/^[A-Za-z0-9_-]*$/.test(after)) continue;
+    if (i > 0 && !/[\t ]/.test(beforeCaret[i - 1])) continue;
+    return { from: lineStart + i, to: caret, prefix: after };
+  }
+  return null;
+};
+
+const attachSkillAutocomplete = (form) => {
+  if (!(form instanceof HTMLFormElement) || form.dataset.skillAutocompleteReady === "true") return;
+  const textarea = form.querySelector("textarea[data-skill-input]");
+  if (!(textarea instanceof HTMLTextAreaElement)) return;
+  form.dataset.skillAutocompleteReady = "true";
+  const menu = document.createElement("div");
+  menu.className = "skill-menu";
+  menu.hidden = true;
+  form.append(menu);
+  let replaceRange = null;
+  let fetchGeneration = 0;
+
+  const close = () => {
+    menu.hidden = true;
+    replaceRange = null;
+  };
+
+  const choose = (row) => {
+    if (!replaceRange) return;
+    const value = textarea.value;
+    const next = `${value.slice(0, replaceRange.from)}/${row.name} ${value.slice(replaceRange.to)}`;
+    const caret = replaceRange.from + row.name.length + 2;
+    textarea.value = next;
+    textarea.setSelectionRange(caret, caret);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    textarea.focus();
+    close();
+  };
+
+  const render = (items) => {
+    menu.replaceChildren();
+    if (!items.length) {
+      close();
+      return;
+    }
+    for (const row of items) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "skill-menu__row";
+      button.innerHTML = `<span class="skill-menu__name"></span><span class="skill-menu__desc"></span>`;
+      button.querySelector(".skill-menu__name").textContent = `/${row.name}`;
+      button.querySelector(".skill-menu__desc").textContent = row.description || "";
+      button.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        choose(row);
+      });
+      menu.append(button);
+    }
+    menu.hidden = false;
+  };
+
+  const refresh = async () => {
+    const draft = slashDraftAtCaret(textarea.value, textarea.selectionStart ?? 0);
+    if (!draft) {
+      close();
+      return;
+    }
+    replaceRange = draft;
+    const generation = ++fetchGeneration;
+    const params = new URLSearchParams({
+      prefix: draft.prefix,
+      page: "1",
+      page_size: "20",
+    });
+    try {
+      const response = await fetch(`/v1/slash-commands?${params.toString()}`, {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok || generation !== fetchGeneration) return;
+      const body = await response.json();
+      render(Array.isArray(body.items) ? body.items : []);
+    } catch (_error) {
+      if (generation === fetchGeneration) close();
+    }
+  };
+
+  textarea.addEventListener("input", refresh);
+  textarea.addEventListener("click", refresh);
+  textarea.addEventListener("keyup", refresh);
+  textarea.addEventListener("keydown", (event) => {
+    if (menu.hidden) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key === "Enter" || event.key === "Tab") {
+      const first = menu.querySelector(".skill-menu__row");
+      if (first instanceof HTMLButtonElement) {
+        event.preventDefault();
+        first.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      }
+    }
+  });
+  document.addEventListener("click", (event) => {
+    if (!form.contains(event.target)) close();
+  });
+};
+
+const attachSkillAutocompletes = () => {
+  document.querySelectorAll("form[data-skill-autocomplete]").forEach(attachSkillAutocomplete);
+};
+
 if (!customElements.get("theme-toggle")) customElements.define("theme-toggle", ThemeToggle);
 if (!customElements.get("auto-grow-textarea")) customElements.define("auto-grow-textarea", AutoGrowTextarea);
 if (!customElements.get("scroll-bottom")) customElements.define("scroll-bottom", ScrollBottom);
@@ -326,4 +458,7 @@ routerObserver.observe(document.body, {
   attributes: true,
   attributeFilter: ["data-route-path"],
 });
+const skillAutocompleteObserver = new MutationObserver(attachSkillAutocompletes);
+skillAutocompleteObserver.observe(document.body, { childList: true, subtree: true });
+attachSkillAutocompletes();
 requestAnimationFrame(syncRouterState);
