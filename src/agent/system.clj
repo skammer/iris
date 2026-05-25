@@ -37,6 +37,7 @@
    [agent.tools.common.memory :as memory-tool]
    [agent.tools.common.shell :as shell-tool]
    [agent.tools.common.telegram :as telegram-tool]
+   [agent.tools.common.todo :as todo-tool]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [clojure.set :as set]))
@@ -327,6 +328,7 @@
    (let [http-cfg (get cfg :http)
          fs-cfg (get cfg :fs)
          shell-cfg (get cfg :shell)
+         todo-cfg (get cfg :todo)
          telegram-cfg (get channel-adapters-cfg :telegram)
          policy-hook (create-tool-policy-hook cfg)
          registry (tools/create-registry
@@ -375,6 +377,9 @@
        memory-service
        (-> (tools/register-tool (memory-tool/create-memory-tool memory-service))
            (tools/register-tool (memory-tool/create-message-search-tool memory-service)))
+
+       (and store (not= false (:enabled todo-cfg)))
+       (tools/register-tool (todo-tool/create-todo-tool store))
 
        (not= false (:enabled shell-cfg))
        (tools/register-tool (shell-tool/create-shell-tool shell-cfg))

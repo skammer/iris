@@ -5,7 +5,7 @@
    [ragtime.protocols :as ragtime-protocols]
    [ragtime.strategy :as ragtime-strategy]))
 
-(def latest-schema-version 19)
+(def latest-schema-version 20)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -539,7 +539,43 @@
     :name "session-active-mode"
     :checksum "39ef97d9e734fca1"
     :irreversible? true
-    :up ["ALTER TABLE sessions ADD COLUMN active_mode TEXT;"]}])
+    :up ["ALTER TABLE sessions ADD COLUMN active_mode TEXT;"]}
+   {:version 20
+    :id "20"
+    :name "todo-lists"
+    :checksum "c4b48d06d3b5a820"
+    :irreversible? true
+    :up ["CREATE TABLE IF NOT EXISTS todo_lists (
+            id TEXT PRIMARY KEY,
+            thread_id TEXT NOT NULL,
+            slug TEXT NOT NULL,
+            description TEXT NOT NULL,
+            todos_json TEXT NOT NULL,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );"
+         "CREATE UNIQUE INDEX IF NOT EXISTS idx_todo_lists_thread_slug
+          ON todo_lists(thread_id, slug);"
+         "CREATE INDEX IF NOT EXISTS idx_todo_lists_thread_updated
+          ON todo_lists(thread_id, updated_at DESC);"
+         "CREATE VIRTUAL TABLE IF NOT EXISTS todo_lists_fts
+          USING fts5(description, todos_json, metadata_json, content='todo_lists');"
+         "INSERT INTO todo_lists_fts(todo_lists_fts) VALUES('rebuild');"
+         "CREATE TRIGGER IF NOT EXISTS todo_lists_fts_ai AFTER INSERT ON todo_lists BEGIN
+            INSERT INTO todo_lists_fts(rowid, description, todos_json, metadata_json)
+            VALUES (new.rowid, new.description, new.todos_json, new.metadata_json);
+          END;"
+         "CREATE TRIGGER IF NOT EXISTS todo_lists_fts_ad AFTER DELETE ON todo_lists BEGIN
+            INSERT INTO todo_lists_fts(todo_lists_fts, rowid, description, todos_json, metadata_json)
+            VALUES('delete', old.rowid, old.description, old.todos_json, old.metadata_json);
+          END;"
+         "CREATE TRIGGER IF NOT EXISTS todo_lists_fts_au AFTER UPDATE ON todo_lists BEGIN
+            INSERT INTO todo_lists_fts(todo_lists_fts, rowid, description, todos_json, metadata_json)
+            VALUES('delete', old.rowid, old.description, old.todos_json, old.metadata_json);
+            INSERT INTO todo_lists_fts(rowid, description, todos_json, metadata_json)
+            VALUES (new.rowid, new.description, new.todos_json, new.metadata_json);
+          END;"]}])
 
 (defn descriptor-by-version [version]
   (some #(when (= version (:version %)) %) migration-descriptors))

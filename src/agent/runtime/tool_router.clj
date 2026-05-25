@@ -36,6 +36,7 @@
     :http #{:web :read}
     :memory #{:search :read}
     :message_search #{:search :read}
+    :todo #{:read :write :search :plan}
     :system_reload #{:run}
     (case (:category tool)
       :respond #{:respond}

@@ -99,10 +99,10 @@
                 :max-redirects 3
                 :default-headers {"User-Agent" "iris/0.1"}}
          :yolo? false
-         :permissions {:api [:filesystem-read :filesystem-write :http-request :system-reload]
-                       :ui [:filesystem-read :filesystem-write :http-request :system-reload]
-                       :agent [:http-request :memory-read :memory-write]
-                       :chat [:filesystem-read :http-request :memory-read :memory-write :system-reload]}
+         :permissions {:api [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write]
+                       :ui [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write]
+                       :agent [:http-request :memory-read :memory-write :todo-read :todo-write]
+                       :chat [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write]}
          :policy {:allowlist []
                   :blocklist []
                   :tool-scopes {}}
@@ -111,6 +111,7 @@
               :roots ["."]
               :max-read-bytes 1048576
               :max-write-bytes 1048576}
+         :todo {:enabled true}
          :shell {:enabled true
                  :roots ["."]
                  :working-dir "."

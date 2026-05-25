@@ -51,6 +51,7 @@
    [agent.llm.providers.openai-compatible-test]
    [agent.tools.common.http-test]
    [agent.tools.common.telegram-test]
+   [agent.tools.common.todo-test]
    [agent.tools.common.shell-test]
    [agent.tools.core-test]
    [clojure.java.io :as io]))
@@ -105,6 +106,7 @@
     agent.llm.providers.openai-compatible-test
     agent.tools.common.http-test
     agent.tools.common.telegram-test
+    agent.tools.common.todo-test
     agent.tools.common.shell-test
     agent.tools.core-test])
 

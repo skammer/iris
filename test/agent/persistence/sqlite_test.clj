@@ -131,3 +131,42 @@
              (mapv :object (sqlite/search-memory-facts store "epsilon zeta"))))
       (finally
         (io/delete-file path true)))))
+
+(deftest sqlite-todo-list-flow-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [saved (sqlite/save-todo-list!
+                   store
+                   {:thread-id "thread-1"
+                    :description "Implementation checklist"
+                    :todos [{:content "Add migration"
+                             :description "Include FTS for item notes"
+                             :status :pending
+                             :priority :high}]
+                    :metadata {:source "test"}})
+            before-updated-at (:updated-at saved)
+            _ (Thread/sleep 2)
+            updated (sqlite/save-todo-list!
+                     store
+                     {:thread-id "thread-1"
+                      :slug "default"
+                      :description "Updated checklist"
+                      :todos [{:content "Add migration"
+                               :description "FTS note retained"
+                               :status "completed"
+                               :priority "high"}]
+                      :metadata {:source "updated"}})
+            found (sqlite/get-todo-list store {:thread-id "thread-1"
+                                               :slug "default"})
+            search-results (sqlite/search-todo-lists store "retained" {:thread-id "thread-1"})]
+        (is (:created? saved))
+        (is (false? (:created? updated)))
+        (is (= (:id saved) (:id updated)))
+        (is (not= before-updated-at (:updated-at updated)))
+        (is (= "FTS note retained" (get-in found [:todos 0 :description])))
+        (is (= ["default"] (mapv :slug search-results)))
+        (is (= 1 (sqlite/count-todo-lists store))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
