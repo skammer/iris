@@ -176,6 +176,7 @@
                       :event-bus event-bus
                       :event-sink event-sink
                       :tool-registry (system/create-tool-registry (:tools config) event-sink store)
+                      :skills-registry (system/create-skills-registry (:skills config))
                       :memory-service (memory/create-memory-service (:memory config) store)
                       :runtime-service runtime-service
                       :runner-registry (system/create-runner-registry runtime-service)
@@ -250,6 +251,31 @@
         (is (= "session_not_found" (:error missing-body))))
       (finally
         (api/stop-server! server)
+        (io/delete-file path true)))))
+
+(deftest slash-commands-api-lists-skill-catalog-test
+  (let [path (temp-db-path)
+        port (free-port)
+        base-url (str "http://127.0.0.1:" port)
+        root (.toFile (java.nio.file.Files/createTempDirectory "iris-api-skills-" (make-array java.nio.file.attribute.FileAttribute 0)))
+        skill-dir (io/file root "review")
+        _ (.mkdirs skill-dir)
+        _ (spit (io/file skill-dir "SKILL.md")
+                "---\nname: review\ndescription: Review code\n---\n# Review\n")
+        {:keys [system server]} (started-test-system path port #(assoc-in % [:skills :dirs] [(.getAbsolutePath root)]))]
+    (try
+      (let [response (http-get (str base-url "/v1/slash-commands?prefix=rev&page=1&page_size=10"))
+            body (json/parse-string (:body response) true)]
+        (is (= 200 (:status response)))
+        (is (= "iris.slash_commands_page" (:object body)))
+        (is (= 1 (:total body)))
+        (is (= "review" (get-in body [:items 0 :name]))))
+      (finally
+        (api/stop-server! server)
+        (sqlite/close-store! (:store system))
+        (io/delete-file (io/file skill-dir "SKILL.md") true)
+        (.delete skill-dir)
+        (.delete root)
         (io/delete-file path true)))))
 
 (deftest api-tool-permissions-come-from-config-test

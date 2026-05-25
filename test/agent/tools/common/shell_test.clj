@@ -14,7 +14,7 @@
         tool (shell-tool/create-shell-tool {:roots [(.getAbsolutePath root)]
                                             :working-dir (.getAbsolutePath root)
                                             :timeout-ms 5000})
-        registry (-> (tools/create-registry {:approval-check (fn [_] nil)})
+        registry (-> (tools/create-registry)
                      (tools/register-tool tool))
         result (tools/execute-tool registry :shell {:argv ["printf" "hello"]}
                                    {:permissions #{:shell-exec}})]
@@ -49,6 +49,62 @@
                           #"blocklist"
                           (tools/execute-tool registry :shell {:argv ["printf" "hello"]}
                                               {:permissions #{:shell-exec}})))
+    (.delete root)))
+
+(deftest shell-tool-asks-for-unknown-rule-test
+  (let [root (temp-dir)
+        tool (shell-tool/create-shell-tool {:roots [(.getAbsolutePath root)]
+                                            :working-dir (.getAbsolutePath root)
+                                            :timeout-ms 5000})
+        registry (-> (tools/create-registry)
+                     (tools/register-tool tool))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"approval policy"
+                          (tools/execute-tool registry :shell {:argv ["uname" "-a"]}
+                                              {:permissions #{:shell-exec}})))
+    (.delete root)))
+
+(deftest shell-tool-denies-destructive-rule-before-approval-test
+  (let [root (temp-dir)
+        tool (shell-tool/create-shell-tool {:roots [(.getAbsolutePath root)]
+                                            :working-dir (.getAbsolutePath root)
+                                            :timeout-ms 5000})
+        registry (-> (tools/create-registry)
+                     (tools/register-tool tool))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"denied by shell rule"
+                          (tools/execute-tool registry :shell {:argv ["rm" "-rf" "/tmp/iris-shell-deny-test"]}
+                                              {:permissions #{:shell-exec}})))
+    (.delete root)))
+
+(deftest shell-tool-yolo-does-not-bypass-deny-rule-test
+  (let [root (temp-dir)
+        tool (shell-tool/create-shell-tool {:roots [(.getAbsolutePath root)]
+                                            :working-dir (.getAbsolutePath root)
+                                            :timeout-ms 5000})
+        registry (-> (tools/create-registry)
+                     (tools/register-tool tool))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"denied by shell rule"
+                          (tools/execute-tool registry :shell {:argv ["dd" "if=/dev/zero" "of=/tmp/iris-shell-deny-test"]}
+                                              {:permissions #{:shell-exec}
+                                               :yolo? true})))
+    (.delete root)))
+
+(deftest shell-tool-later-rule-overrides-broad-rule-test
+  (let [root (temp-dir)
+        tool (shell-tool/create-shell-tool {:roots [(.getAbsolutePath root)]
+                                            :working-dir (.getAbsolutePath root)
+                                            :timeout-ms 5000
+                                            :default-action :ask
+                                            :rules [{:argv ["printf" "**"] :action :ask}
+                                                    {:argv ["printf" "ok"] :action :allow}]})
+        registry (-> (tools/create-registry)
+                     (tools/register-tool tool))
+        result (tools/execute-tool registry :shell {:argv ["printf" "ok"]}
+                                   {:permissions #{:shell-exec}})]
+    (is (= 0 (:exit result)))
+    (is (= "ok" (:stdout result)))
     (.delete root)))
 
 (deftest shell-tool-normalizes-command-string-test

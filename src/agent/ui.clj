@@ -35,6 +35,29 @@
   ;; Markdown intentionally disabled; Hiccup escapes LLM/user text here.
   [:div.code (str content)])
 
+(def ^:private slash-chip-re #"(^|[\t ])\/([A-Za-z0-9][A-Za-z0-9_-]*)")
+
+(defn- render-user-message-content [content]
+  (let [text (str content)
+        matches (re-seq slash-chip-re text)]
+    (if (empty? matches)
+      (render-message-content text)
+      (loop [idx 0
+             remaining matches
+             nodes []]
+        (if-let [[match lead name] (first remaining)]
+          (let [start (.indexOf text match idx)
+                slash-start (+ start (count lead))
+                end (+ start (count match))]
+            (recur end
+                   (rest remaining)
+                   (cond-> nodes
+                     (< idx slash-start) (conj (subs text idx slash-start))
+                     true (conj [:span.skill-chip (str "/" name)]))))
+          (into [:div.code.message-content--user]
+                (cond-> nodes
+                  (< idx (count text)) (conj (subs text idx)))))))))
+
 (defn- keyword-label [value]
   (if-let [ns (namespace value)]
     (str ns "/" (name value))
@@ -186,7 +209,9 @@
      :else
      [:article.message
       [:div.message-role {:class role} role]
-      (render-message-content content)
+      (if (= "user" role)
+        (render-user-message-content content)
+        (render-message-content content))
       [:div.meta meta-text]]))))
 
 (defn- now-ms []
@@ -671,13 +696,15 @@
         [:form#chat-form
          {"data-on:submit" "@post('/ui/chat', {contentType: 'form'})"
           "data-indicator" "chatLoading"
-          "data-class:is-loading" "$chatLoading"}
+          "data-class:is-loading" "$chatLoading"
+          "data-skill-autocomplete" "true"}
          [:input {:id (str "chat-session-id-" (:id session))
                   :type "hidden"
                   :name "session_id"
                   :value (:id session)}]
          [:auto-grow-textarea {:submit-on-enter true}
           [:textarea.chat-input {:name "prompt"
+                                 :data-skill-input "true"
                                  :rows 1
                                  :placeholder "Ask model something concrete"}]]
          [:button {:type "button"

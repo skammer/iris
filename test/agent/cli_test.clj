@@ -3,6 +3,7 @@
    [agent.cli :as cli]
    [agent.logging :as logging]
    [agent.system :as system]
+   [clojure.string :as str]
    [clojure.test :refer :all]))
 
 (deftest parse-headless-session-flags-test
@@ -21,6 +22,39 @@
           :prompt "--literal flag"}
          (select-keys (cli/parse-args ["--no-session" "--" "--literal" "flag"])
                       [:no-session? :prompt]))))
+
+(deftest parse-loop-command-flags-test
+  (is (= {:command "loop"
+          :loop-prompt "fix bug"
+          :loop-plan "PLAN.md"
+          :loop-max 3
+          :loop-run "clojure -M:test"
+          :prompt ""}
+         (select-keys (cli/parse-args ["loop"
+                                       "--prompt" "fix bug"
+                                       "--plan" "PLAN.md"
+                                       "--max" "3"
+                                       "--run" "clojure -M:test"])
+                      [:command :loop-prompt :loop-plan :loop-max :loop-run :prompt]))))
+
+(deftest loop-cli-runs-one-iteration-test
+  (let [calls (atom [])]
+    (with-redefs [system/create-system (fn [_] ::system)
+                  system/create-session! (fn [_ title]
+                                           (swap! calls conj [:create title])
+                                           {:id "loop-session"})
+                  system/complete! (fn [_ messages opts]
+                                     (swap! calls conj [:complete (:content (first messages)) (:session-id opts)])
+                                     ((:on-delta opts) "done")
+                                     {:content "done"})
+                  logging/log! (fn [& _] nil)]
+      (is (= "done\n"
+             (with-out-str
+               (binding [*err* (java.io.StringWriter.)]
+                 (cli/main ["loop" "--prompt" "fix bug" "--max" "1"])))))
+      (is (= :create (ffirst @calls)))
+      (is (str/includes? (second (second @calls)) "Loop Context"))
+      (is (= "loop-session" (nth (second @calls) 2))))))
 
 (deftest prompt-cli-creates-session-and-streams-test
   (let [calls (atom [])]

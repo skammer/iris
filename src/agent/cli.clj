@@ -1,7 +1,9 @@
 (ns agent.cli
   "Command-line parsing and dispatch."
   (:require
+   [agent.loop :as loop]
    [agent.logging :as logging]
+   [agent.skills :as skills]
    [agent.nrepl :as nrepl]
    [agent.system :as system]
    [clojure.string :as str]))
@@ -18,6 +20,8 @@
     "  clojure -M -m agent.core -r \"pick session\""
     "  clojure -M -m agent.core --session session-id \"continue session\""
     "  clojure -M -m agent.core --no-session \"ephemeral prompt\""
+    "  clojure -M -m agent.core skills [prefix]"
+    "  clojure -M -m agent.core loop --prompt \"task\" --plan LOOP_PLAN.md --max 10 --run \"clojure -M:test\""
     "  clojure -M -m agent.core serve"
     "  clojure -M -m agent.core --config path/to/config.edn \"prompt text\""]))
 
@@ -42,6 +46,22 @@
           "--config"
           (recur (nnext remaining)
                  (assoc parsed :config-path (require-option-value arg remaining)))
+
+          "--prompt"
+          (recur (nnext remaining)
+                 (assoc parsed :loop-prompt (require-option-value arg remaining)))
+
+          "--plan"
+          (recur (nnext remaining)
+                 (assoc parsed :loop-plan (require-option-value arg remaining)))
+
+          "--max"
+          (recur (nnext remaining)
+                 (assoc parsed :loop-max (Long/parseLong (require-option-value arg remaining))))
+
+          "--run"
+          (recur (nnext remaining)
+                 (assoc parsed :loop-run (require-option-value arg remaining)))
 
           "-p"
           (recur (next remaining) (assoc parsed :print? true))
@@ -68,10 +88,10 @@
           "--no-session"
           (recur (next remaining) (assoc parsed :no-session? true))
 
-          (if (and (= "serve" arg)
+          (if (and (contains? #{"serve" "loop" "skills"} arg)
                    (empty? (:prompt-parts parsed))
                    (nil? (:command parsed)))
-            (recur (next remaining) (assoc parsed :command "serve"))
+            (recur (next remaining) (assoc parsed :command arg))
             (recur (next remaining) (update parsed :prompt-parts conj arg))))))))
 
 (defn- prompt-title [prompt]
@@ -155,6 +175,43 @@
     (println)
     result))
 
+(defn- print-skills! [system prefix]
+  (let [catalog (skills/filter-catalog (skills/skill-catalog (:skills-registry system))
+                                       prefix)]
+    (if (seq catalog)
+      (doseq [{:keys [name description]} catalog]
+        (println (str "/" name " - " description)))
+      (println "No skills found."))))
+
+(defn- loop-prompt [parsed]
+  (or (some-> (:loop-prompt parsed) str/trim not-empty)
+      (some-> (:prompt parsed) str/trim not-empty)))
+
+(defn- run-loop! [system parsed]
+  (let [prompt (or (loop-prompt parsed)
+                   (throw (ex-info "loop requires --prompt or prompt text"
+                                   {:type :invalid-cli-args})))
+        session-id (session-id-for-prompt system parsed (str "Loop: " prompt))
+        initial-state (loop/new-state {:prompt prompt
+                                       :plan-file (:loop-plan parsed)
+                                       :max-iterations (:loop-max parsed)
+                                       :run-cmd (:loop-run parsed)})]
+    (loop [state initial-state]
+      (if (loop/should-stop? state)
+        state
+        (let [state* (update state :iteration inc)]
+          (binding [*out* *err*]
+            (println (str "=== " (loop/iteration-label state*) " ===")))
+          (let [result (stream-prompt! system (loop/build-prompt state*) session-id)
+                validation (loop/run-validation (:run-cmd state*))]
+            (when validation
+              (binding [*out* *err*]
+                (println "--- validation ---")
+                (println validation)))
+            (recur (assoc state*
+                          :last-summary (loop/summarize (:content result))
+                          :last-run-output validation))))))))
+
 (defn main [args]
   (let [{:keys [config-path command prompt no-session?] :as parsed} (parse-args args)]
     (cond
@@ -168,6 +225,14 @@
           (println (str "nREPL listening on " (:bind nrepl-server) ":" (:port nrepl-server)
                         " (" (:port-file nrepl-server) ")")))
         @(promise))
+
+      (= "skills" command)
+      (let [system (system/create-system config-path)]
+        (print-skills! system prompt))
+
+      (= "loop" command)
+      (let [system (system/create-system config-path)]
+        (run-loop! system parsed))
 
       (str/blank? prompt)
       (do

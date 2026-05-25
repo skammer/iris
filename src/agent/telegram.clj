@@ -6,6 +6,7 @@
    [agent.channels.core :as channels]
    [agent.persistence.sqlite :as sqlite]
    [agent.prompts :as prompts]
+   [agent.skills :as skills]
    [agent.telegram.format :as fmt]
    [agent.tools.core :as tools]
    [agent.tools.display :as tool-display]
@@ -395,6 +396,25 @@
       (str "Unknown prompt mode: " requested
            ". Available: " (available-prompt-modes) "."))))
 
+(defn- skills-command-response [system rest]
+  (let [prefix (some-> rest str/trim not-empty)
+        page (skills/slash-commands-page (:skills-registry system)
+                                         {:prefix prefix :page 1 :page-size 20})
+        items (:items page)]
+    (if (seq items)
+      (str "Skills:\n"
+           (str/join "\n"
+                     (map (fn [{:keys [name description]}]
+                            (str "/" name " - " description))
+                          items)))
+      "No skills found.")))
+
+(defn- invoked-skill-names [system text]
+  (let [catalog (set (map :name (skills/skill-catalog (:skills-registry system))))]
+    (->> (skills/parse-invoked-skill-names text)
+         (filter catalog)
+         vec)))
+
 (defn- split-caption [s]
   (let [parts (str/split s #"\s+" 2)
         url (first parts)
@@ -409,13 +429,14 @@
           {:keys [command rest]} (parse-command-args command)]
       (case command
         "/start" "Ready. Send message to chat."
-        "/help" "/start /help /stop /reset /memory /status /prompt [name|off] /photo <url> [caption] /file <url> [caption]"
+        "/help" "/start /help /stop /reset /memory /status /prompt [name|off] /skills [prefix] /photo <url> [caption] /file <url> [caption]"
         "/reset" (do
                    (reset-session! (:store system) chat)
                    "Session reset.")
         "/memory" (memory-status system session-id)
         "/status" (status-text system session-id)
         "/prompt" (prompt-command-response (:store system) session-id rest)
+        "/skills" (skills-command-response system rest)
         nil))))
 
 (defn- stop-chat!
@@ -715,6 +736,9 @@
                                     (send! chat-id (str "Media processing failed: " (.getMessage e)))
                                     ::media-processing-failed))]
                     (when-not (= ::media-processing-failed content)
+                      (when-let [invoked (seq (invoked-skill-names system (or text "")))]
+                        (send! chat-id (str "Skills: "
+                                            (str/join ", " (map #(str "/" %) invoked)))))
                       (if (:async-chat? opts)
                         (run-chat-async! system config opts chat chat-id
                                          (:session-id mapping) content)

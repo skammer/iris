@@ -147,6 +147,7 @@
    :approve-tool-approval (fn [r] (tool-approvals/decide (sys) r (path-param r :approval-id) :approved))
    :deny-tool-approval (fn [r] (tool-approvals/decide (sys) r (path-param r :approval-id) :denied))
    :list-skills (fn [r] (skills/list-skills (sys) r))
+   :slash-commands (fn [r] (skills/slash-commands (sys) r))
    :list-channel-adapters (fn [r] (channel-adapters/list-adapters (sys) r))
    :list-events (fn [r] (events/list-events (sys) r))
    :events-stream (fn [r] (events/stream-response (sys) r))

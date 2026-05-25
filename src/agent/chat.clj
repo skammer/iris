@@ -16,6 +16,7 @@
    [agent.runtime.context-pack :as context-pack]
    [agent.runtime.loop :as runtime-loop]
    [agent.runtime.tools :as runtime-tools]
+   [agent.skills :as skills]
    [agent.telemetry :as telemetry]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
@@ -216,6 +217,13 @@
 (defn- iris-context-message [system]
   (when-let [context (some-> (get-in system [:config :iris :context]) str/trim not-empty)]
     {:role "system" :content context}))
+
+(defn- skill-context-message [system prompt]
+  (when-let [registry (:skills-registry system)]
+    (when-let [section (some-> (skills/invoked-skills-section registry prompt)
+                               str/trim
+                               not-empty)]
+      {:role "system" :content section})))
 
 (defn- approval-expires-at [system]
   (str (.plusSeconds (Instant/now)
@@ -635,6 +643,7 @@
                                   (sqlite/get-session (:store system) session-id))
                             :active-mode)
         mode-messages (prompts/apply-mode [] active-mode)
+        skill-message (skill-context-message system prompt)
         stream-content? (and (or stream? on-delta)
                              (not (false? (get-in system [:config :llm :stream-content?] true))))
         persisted (atom {})
@@ -650,6 +659,7 @@
         context-injectors (cond-> []
                             iris-context (conj (constantly [iris-context]))
                             (seq mode-messages) (conj (constantly mode-messages))
+                            skill-message (conj (constantly [skill-message]))
                             true (conj (constantly [(memory-message recall)])))]
     (event-sink {:event-type :message-update
                  :entity-type :session
