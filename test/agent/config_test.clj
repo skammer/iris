@@ -44,9 +44,9 @@
               :action :stop}
              (get-in cfg [:chat :guardrails :doom-loop])))
       (is (false? (get-in cfg [:tools :yolo?])))
-      (is (= [:filesystem-read :filesystem-write :http-request :system-reload]
+      (is (= [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write]
              (get-in cfg [:tools :permissions :api])))
-      (is (= [:filesystem-read :http-request :memory-read :memory-write :system-reload]
+      (is (= [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write]
              (get-in cfg [:tools :permissions :chat])))
       (is (= {:allowlist []
               :blocklist []
@@ -67,6 +67,7 @@
               :bot-token nil
               :poll-timeout-seconds 30
               :poll-limit 100
+              :max-download-bytes 20971520
               :allowlist {:allow-all? false
                           :user-ids []
                           :chat-ids []}}

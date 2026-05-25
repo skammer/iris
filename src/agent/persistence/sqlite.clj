@@ -9,6 +9,7 @@
    [agent.persistence.sqlite.runs :as runs]
    [agent.persistence.sqlite.schema :as schema]
    [agent.persistence.sqlite.sessions :as sessions]
+   [agent.persistence.sqlite.todos :as todos]
    [agent.persistence.sqlite.tools :as tools]))
 
 (def latest-schema-version migrations/latest-schema-version)
@@ -173,6 +174,23 @@
 
 (defn count-memory-facts [store]
   (memory/count-facts store))
+
+(defn save-todo-list! [store todo-list]
+  (todos/save-list! store todo-list))
+
+(defn get-todo-list [store opts]
+  (todos/get-list store opts))
+
+(defn list-todo-lists
+  ([store] (todos/list-lists store))
+  ([store opts] (todos/list-lists store opts)))
+
+(defn search-todo-lists
+  ([store query] (todos/search-lists store query))
+  ([store query opts] (todos/search-lists store query opts)))
+
+(defn count-todo-lists [store]
+  (todos/count-lists store))
 
 (defn create-tool-approval! [store approval]
   (tools/create-tool-approval! store approval))

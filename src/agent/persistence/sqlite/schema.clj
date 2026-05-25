@@ -6,6 +6,7 @@
    [agent.persistence.sqlite.memory :as memory]
    [agent.persistence.sqlite.migrations :as migrations]
    [agent.persistence.sqlite.runs :as runs]
+   [agent.persistence.sqlite.todos :as todos]
    [agent.persistence.sqlite.tools :as tools]
    [hugsql.core :as hugsql]))
 
@@ -25,6 +26,7 @@
                :event-count (events/count-events store)
                :tool-approval-count (tools/count-tool-approvals store)
                :memory-fact-count (memory/count-facts store)
+               :todo-list-count (todos/count-lists store)
                :agent-run-count (runs/count-agent-runs store)
                :federation-peer-key-count (federation/count-peer-keys store)
                :federation-outbox-count (federation/count-outbox store)

@@ -55,7 +55,7 @@
         adapters (system/list-channel-adapters system)
         runner-keys (-> system :runner-registry keys set)
         system-health (system/health-check system)]
-    (is (every? tool-names [:fs :http :memory :message_search :shell :system_reload]))
+    (is (every? tool-names [:fs :http :memory :message_search :shell :system_reload :todo]))
     (is (= ["Discord" "Slack" "Telegram"] (mapv :display-name adapters)))
     (is (contains? runner-keys :local-unsandboxed))
     (is (contains? runner-keys :bubblewrap))
@@ -66,7 +66,7 @@
     (is (= 5 (count (system/memory-surfaces system))))
     (is (false? (get-in system-health [:logging :enabled])))
     (is (= :local (get-in system-health [:broker :backend])))
-    (is (<= 6 (get-in system-health [:tools :count])))
+    (is (<= 7 (get-in system-health [:tools :count])))
     (is (integer? (get-in system-health [:runtime :run-count])))
     (is (= 3 (get-in system-health [:channel-adapters :count])))
     (is (= 0 (get-in system-health [:orchestrator :agent-count])))
