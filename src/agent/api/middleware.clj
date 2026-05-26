@@ -56,6 +56,9 @@
       (str/starts-with? path "/ui/")
       (= path "/ui")))
 
+(defn- run-control-path? [path]
+  (boolean (re-matches #"^/v1/runs/[^/]+/control(?:/.*)?$" (or path ""))))
+
 (defn- bearer-token [authorization]
   (when (and authorization
              (str/starts-with? (str/lower-case authorization) "bearer "))
@@ -87,6 +90,7 @@
     (fn [request]
       (if (and api-key
                (protected-path? (:uri request))
+               (not (run-control-path? (:uri request)))
                (not (constant-time= api-key (or (request-api-key request) ""))))
         (responses/json-response 401
                                  {:error "unauthorized"

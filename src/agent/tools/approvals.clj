@@ -13,7 +13,7 @@
   [tool-name input]
   (case tool-name
     :shell true
-    :fs (contains? #{:write :delete :mkdir}
+    :fs (contains? #{:write :create :replace :delete :mkdir}
                    (cond
                      (keyword? (:action input)) (:action input)
                      (string? (:action input)) (keyword (str/lower-case (:action input)))
@@ -28,7 +28,7 @@
                 (keyword? (:action input)) (:action input)
                 (string? (:action input)) (keyword (str/lower-case (:action input)))
                 :else nil)
-          (:write :delete :mkdir) #{:filesystem-write}
+          (:write :create :replace :delete :mkdir) #{:filesystem-write}
           #{:filesystem-read})
     #{}))
 
@@ -129,6 +129,7 @@
       (when (approval-required? tool-name input)
         (let [approval-id (:approval-id context)
               approval (when approval-id (get-request store approval-id))]
-          (when-not (valid-approval? approval tool-name input context)
+          (if (valid-approval? approval tool-name input context)
+            {:allow true}
             {:block true
              :reason "Sensitive tool requires approved request"}))))))

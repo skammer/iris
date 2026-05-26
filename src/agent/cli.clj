@@ -21,7 +21,7 @@
     "  clojure -M -m agent.core --session session-id \"continue session\""
     "  clojure -M -m agent.core --no-session \"ephemeral prompt\""
     "  clojure -M -m agent.core skills [prefix]"
-    "  clojure -M -m agent.core loop --prompt \"task\" --plan LOOP_PLAN.md --max 10 --run \"clojure -M:test\""
+    "  clojure -M -m agent.core loop --prompt \"task\" --plan LOOP_PLAN.md --max 10"
     "  clojure -M -m agent.core serve"
     "  clojure -M -m agent.core --config path/to/config.edn \"prompt text\""]))
 

@@ -2,7 +2,6 @@
   "Task-list-driven self-iteration prompt support."
   (:require
    [clojure.java.io :as io]
-   [clojure.java.shell :as shell]
    [clojure.string :as str]))
 
 (def default-plan-file "LOOP_PLAN.md")
@@ -164,10 +163,10 @@
 (defn run-validation
   ([cmd] (run-validation cmd {}))
   ([cmd {:keys [validation-max-chars]}]
-  (when-not (str/blank? (or cmd ""))
-    (let [{:keys [out err exit]} (shell/sh "sh" "-c" cmd)]
-      (truncate (str "exit " exit "\n" out (when-not (str/blank? err) (str "\n" err)))
-                (or validation-max-chars default-validation-max-chars))))))
+   (when-not (str/blank? (or cmd ""))
+     (truncate (str "validation skipped: /loop validation commands no longer execute shell. "
+                    "Run checks through approved shell/tool paths.")
+               (or validation-max-chars default-validation-max-chars)))))
 
 (defn control-command [text]
   (let [text* (str/trim (or text ""))]
@@ -201,7 +200,7 @@
          (if (str/blank? (or last-run-output ""))
            "none"
            (first (str/split-lines last-run-output))))
-    "No active loop. Usage: /loop <prompt> | /loop status | /loop stop | /loop run <cmd> | /loop plan <path>."))
+    "No active loop. Usage: /loop <prompt> | /loop status | /loop stop | /loop plan <path>."))
 
 (defn start!
   [session-id cfg prompt]
@@ -233,10 +232,8 @@
   [session-id cmd]
   (locking state-lock
     (if (and (active-state session-id) (not (str/blank? cmd)))
-      (do
-        (swap! loop-states assoc-in [session-id :run-cmd] cmd)
-        {:content (str "Loop validation command: " cmd ".")})
-      {:content "Usage: /loop run <cmd>."})))
+      {:content "Loop validation commands are disabled. Use approved shell/tool execution outside /loop."}
+      {:content "Loop validation commands are disabled."})))
 
 (defn update-plan!
   [session-id path]

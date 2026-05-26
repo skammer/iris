@@ -18,6 +18,27 @@
 (defn- absolute-path [path]
   (.getAbsolutePath (io/file path)))
 
+(defn host-default-substrate
+  []
+  (let [os-name (.toLowerCase (System/getProperty "os.name" ""))]
+    (cond
+      (.contains os-name "mac") :seatbelt
+      (.contains os-name "linux") :bubblewrap
+      :else (throw (ex-info "No safe default runner substrate for this OS"
+                            {:type :runner-default-unavailable
+                             :os-name os-name})))))
+
+(defn default-substrate
+  [system]
+  (let [configured (get-in system [:config :runners :default-substrate] :auto)
+        substrate (cond
+                    (keyword? configured) configured
+                    (string? configured) (keyword configured)
+                    :else :auto)]
+    (case substrate
+      :auto (host-default-substrate)
+      substrate)))
+
 (defn- root-user? [user]
   (contains? #{"0" "0:0" "root" "root:root"} user))
 

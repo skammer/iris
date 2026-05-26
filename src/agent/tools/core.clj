@@ -240,11 +240,15 @@
         (throw (tool-error :approval-required
                            "Sensitive tool requires approval policy"
                            {:tool-name (:name tool-description)})))
-      (when-let [decision (approval-check (hook-context tool-description input context))]
-        (when (:block decision)
-          (throw (tool-error :approval-required
-                             (or (:reason decision) "Sensitive tool requires approved request")
-                             {:tool-name (:name tool-description)})))))))
+      (let [decision (approval-check (hook-context tool-description input context))]
+        (cond
+          (:allow decision) nil
+          (:block decision) (throw (tool-error :approval-required
+                                               (or (:reason decision) "Sensitive tool requires approved request")
+                                               {:tool-name (:name tool-description)}))
+          :else (throw (tool-error :approval-required
+                                   "Sensitive tool approval policy did not allow execution"
+                                   {:tool-name (:name tool-description)})))))))
 
 (defn- sha256-hex [value]
   (let [digest (.digest (MessageDigest/getInstance "SHA-256")

@@ -65,9 +65,10 @@
         runner (docker-podman/create-docker-podman-runner {:delegate delegate
                                                            :engine-binary "docker"})
         run-spec (runners/create-run-spec
-                  {:run-id "run-1"
-                   :agent-id "agent-1"
-                   :bootstrap-token "token-1"
+	                  {:run-id "run-1"
+	                   :agent-id "agent-1"
+	                   :substrate :docker
+	                   :bootstrap-token "token-1"
                    :bootstrap-spec {:run-id "run-1"}
                    :runner-options {:image "iris:test"
                                     :command ["clojure" "-M" "-m" "agent.runtime.child"]}})]

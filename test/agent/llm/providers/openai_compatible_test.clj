@@ -325,3 +325,15 @@
         (is (= "json_schema" (get-in @body* [:response_format :type])))
         (is (= "{\"ok\":true}" (:content response)))
         (is (= 8 (get-in response [:usage :cached-tokens])))))))
+
+(deftest capabilities-use-model-metadata-test
+  (let [llm (provider/create-openai-compatible-provider
+             {:api-key "oa-key"
+              :config {:models {"plain" {}
+                                "vision" {:supports-vision true
+                                          :supports-audio true}}}})]
+    (is (false? (:supports-vision (llm-core/get-capabilities llm "plain"))))
+    (is (false? (:supports-audio (llm-core/get-capabilities llm "plain"))))
+    (is (true? (:supports-tools (llm-core/get-capabilities llm "plain"))))
+    (is (true? (:supports-vision (llm-core/get-capabilities llm "vision"))))
+    (is (true? (:supports-audio (llm-core/get-capabilities llm "vision"))))))

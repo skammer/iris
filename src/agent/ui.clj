@@ -10,6 +10,7 @@
    [agent.runtime.trace :as runtime-trace]
    [agent.runners.core :as runners]
    [agent.runners.docker-podman :as docker-podman]
+   [agent.runners.options :as runner-options]
    [agent.runtime.core :as runtime]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
@@ -1186,7 +1187,8 @@
       [:div.empty "No tool approvals yet."])]))
 
 (defn runs-fragment [system]
-  (let [runs (runtime/list-runs (:runtime-service system) {:limit 50})]
+  (let [runs (runtime/list-runs (:runtime-service system) {:limit 50})
+        default-substrate (name (runner-options/default-substrate system))]
     (render
      [:section#runs-panel.panel
       {"data-on-interval__duration.10s.leading" "@get('/ui/runs')"}
@@ -1207,11 +1209,10 @@
        [:input {:type "text" :name "name" :placeholder "optional name"}]
        [:input {:type "text" :name "agent_id" :placeholder "agent id"}]
        [:select {:name "substrate"}
-        [:option {:value "local-unsandboxed"} "local-unsandboxed"]
-       [:option {:value "bubblewrap"} "bubblewrap"]
-       [:option {:value "docker"} "docker"]
-       [:option {:value "podman"} "podman"]
-       [:option {:value "seatbelt"} "seatbelt"]]
+        (for [substrate ["seatbelt" "bubblewrap" "docker" "podman" "local-unsandboxed"]]
+          [:option (cond-> {:value substrate}
+                     (= substrate default-substrate) (assoc :selected "selected"))
+           substrate])]
        [:input {:type "text" :name "image" :placeholder "container image for docker/podman"}]
        [:input {:type "text" :name "command" :placeholder "printf hello or leave blank for child shim"}]
        [:input {:type "text" :name "working_dir" :value "." :placeholder "working dir"}]

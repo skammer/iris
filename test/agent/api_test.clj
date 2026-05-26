@@ -6,6 +6,7 @@
    [agent.llm.messages :as llm-messages]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
+   [agent.runtime.core :as runtime]
    [cheshire.core :as json]
    [clojure.core.async :as async]
    [clojure.java.io :as io]
@@ -189,7 +190,7 @@
   (let [path (temp-db-path)
         port (free-port)
         base-url (str "http://127.0.0.1:" port)
-        {:keys [server]} (started-test-system path port #(assoc-in % [:api :key] "secret"))]
+        {:keys [system server]} (started-test-system path port #(assoc-in % [:api :key] "secret"))]
     (try
       (is (= 200 (:status (http-get (str base-url "/health")))))
       (is (= 401 (:status (http-get (str base-url "/v1/tools")))))
@@ -206,12 +207,24 @@
                                             {"Authorization" "Bearer secret"}))))
       (is (= 200 (:status (http-get-headers
                            (str base-url "/ui/dashboard")
-                           {"Authorization"
-                            (str "Basic "
-                                 (.encodeToString
-                                  (java.util.Base64/getEncoder)
-                                  (.getBytes "operator:secret" "UTF-8")))}))))
-      (is (= 401 (:status (http-get (str base-url "/ui/dashboard")))))
+	                           {"Authorization"
+	                            (str "Basic "
+	                                 (.encodeToString
+	                                  (java.util.Base64/getEncoder)
+	                                  (.getBytes "operator:secret" "UTF-8")))}))))
+	      (let [run (runtime/request-run!
+	                 (:runtime-service system)
+	                 (runtime/create-run-request {:agent-id "auth-child"
+	                                              :substrate :local-unsandboxed}))
+	            token (:bootstrap-token run)]
+	        (is (= 200 (:status (http-post-headers
+	                              (str base-url "/v1/runs/" (:id run) "/control/heartbeat")
+	                              {:sequence_no 1 :status "running"}
+	                              {"Authorization" (str "Bearer " token)}))))
+	        (is (= 401 (:status (http-get-headers
+	                              (str base-url "/v1/tools")
+	                              {"Authorization" (str "Bearer " token)})))))
+	      (is (= 401 (:status (http-get (str base-url "/ui/dashboard")))))
       (finally
         (api/stop-server! server)
         (io/delete-file path true)))))

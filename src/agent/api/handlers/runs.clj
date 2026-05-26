@@ -30,7 +30,8 @@
 
 (defn request-run! [system req]
   (runtime/request-run! (:runtime-service system)
-                        (runtime/create-run-request req)))
+                        (runtime/create-run-request
+                         (update req :substrate #(or % (runner-options/default-substrate system))))))
 
 (defn- runner-status [system run-id]
   (when-let [run (get-run* system run-id)]
@@ -101,7 +102,7 @@
    :parent-run-id (:parent_run_id body)
    :idempotency-key (:idempotency_key body)
    :name (:name body)
-   :substrate (or (some-> (:substrate body) keyword) :local-unsandboxed)
+   :substrate (some-> (:substrate body) keyword)
    :capabilities (or (:capabilities body) [])
    :network-identity (:network_identity body)
    :runner-options (:runner_options body)

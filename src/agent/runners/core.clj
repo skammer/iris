@@ -32,8 +32,9 @@
 (defn create-run-spec
   [{:keys [run-id agent-id parent-run-id lease-id name substrate capabilities
            network-identity bootstrap-token bootstrap-spec requested-by runner-options]
-    :or {substrate :local-unsandboxed
-         capabilities []}}]
+    :or {capabilities []}}]
+  (when-not substrate
+    (throw (ex-info "Run substrate is required" {:type :runner-substrate-required})))
   {:run-id run-id
    :agent-id agent-id
    :parent-run-id parent-run-id

@@ -47,6 +47,15 @@
 
 (def stopped-content runtime-loop/stopped-content)
 
+(defn stop-all!
+  []
+  (doseq [worker (vals @loop-workers)]
+    (future-cancel worker))
+  (reset! loop-workers {})
+  (reset! session-runtimes {})
+  (reset! streaming-state {})
+  {:stopped true})
+
 (defn active-run
   [session-id]
   (when-let [run (and session-id (get-in @session-runtimes [session-id :active]))]
