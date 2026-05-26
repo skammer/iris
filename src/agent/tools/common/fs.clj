@@ -14,8 +14,16 @@
     (string? action) (keyword (str/lower-case action))
     :else nil))
 
+(defn- expand-home [path]
+  (let [path (if (instance? java.io.File path) (.getPath path) (str path))
+        home (System/getProperty "user.home")]
+    (cond
+      (= path "~") home
+      (str/starts-with? path "~/") (str home (subs path 1))
+      :else path)))
+
 (defn- canonical-path [path]
-  (.getCanonicalPath (io/file path)))
+  (.getCanonicalPath (io/file (expand-home path))))
 
 (defn- within-root? [roots path]
   (let [target (canonical-path path)]

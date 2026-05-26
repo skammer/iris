@@ -6,7 +6,8 @@
 (def tools
   [{:name :fs :category :system}
    {:name :shell :category :system}
-   {:name :http :category :system}])
+   {:name :http :category :system}
+   {:name :telegram_send_document :category :messaging}])
 
 (deftest route-tools-adds-respond-and-shrinks-schema-test
   (let [routed (tool-router/route-tools
@@ -16,10 +17,28 @@
                  :messages [{:role "user" :content "read file"}]})]
     (is (= #{:fs :http :respond} (:allowed-tools routed)))))
 
+(deftest route-tools-keeps-telegram-document-for-russian-send-request-test
+  (let [routed (tool-router/route-tools
+                {:tools tools
+                 :profile {:respond-tool? true
+                           :tool-routing? true}
+                 :messages [{:role "user"
+                             :content "попробуем ещё раз. А отправь мне какой-нибудь документ."}]})]
+    (is (= #{:telegram_send_document :respond} (:allowed-tools routed)))))
+
+(deftest route-tools-keeps-read-and-telegram-for-russian-find-and-send-request-test
+  (let [routed (tool-router/route-tools
+                {:tools tools
+                 :profile {:respond-tool? true
+                           :tool-routing? true}
+                 :messages [{:role "user"
+                             :content "попробуем ещё раз. А отправь мне какой-нибудь документ. Ну типа найди в ~ и отправь"}]})]
+    (is (= #{:fs :http :telegram_send_document :respond} (:allowed-tools routed)))))
+
 (deftest route-tools-fallback-all-test
   (let [routed (tool-router/route-tools
                 {:tools tools
                  :profile {:respond-tool? true
                            :tool-routing? false}
                  :messages []})]
-    (is (= #{:fs :shell :http :respond} (:allowed-tools routed)))))
+    (is (= #{:fs :shell :http :telegram_send_document :respond} (:allowed-tools routed)))))

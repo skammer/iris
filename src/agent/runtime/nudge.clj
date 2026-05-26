@@ -67,6 +67,12 @@
 (defn- blank-content? [llm-response]
   (str/blank? (or (:content llm-response) "")))
 
+(defn- internal-stop-content? [content]
+  (and (string? content)
+       (let [content* (str/trim content)]
+         (or (str/starts-with? content* "Stopped:")
+             (str/starts-with? content* "I couldn't complete this after guardrail retries.")))))
+
 (defn- directive-type [directive]
   (keyword (:type directive)))
 
@@ -128,6 +134,11 @@
       max-token?
       {:reason :max-token-truncation
        :fingerprint {:stop-reason (some-> (:stop-reason llm-response) name)}}
+
+      (and (some complete-directive? directives)
+           (internal-stop-content? (:content llm-response)))
+      {:reason :premature-final
+       :fingerprint {:internal-stop true}}
 
       (and (:respond-tool? profile*)
            (not (:synthetic-respond? llm-response))
@@ -217,11 +228,18 @@
      :reason (:reason classification)
      :fingerprint (:fingerprint classification)
      :content (retry-content classification)}
-    {:action :fatal
-     :reason (:reason classification)
-     :fingerprint (:fingerprint classification)
-     :content "Stopped: guardrail retry budget exhausted."
-     :stop-reason :guardrail-exhausted}))
+    (let [reason (:reason classification)
+          tool-name (some-> classification :fingerprint :tool-name name)]
+      {:action :fatal
+       :reason reason
+       :fingerprint (:fingerprint classification)
+       :content (str "I couldn't complete this after guardrail retries. Last issue: "
+                     (name reason)
+                     (when tool-name
+                       (str " on " tool-name))
+                     ". "
+                     (retry-content classification))
+       :stop-reason :guardrail-exhausted})))
 
 (defn check-before-exec [profile state ctx]
   (if-not (enabled? profile)

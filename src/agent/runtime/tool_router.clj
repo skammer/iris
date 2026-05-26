@@ -18,6 +18,8 @@
    :source :synthetic
    :sensitive false})
 
+(def all-categories #{:respond :read :write :run :search :web :plan :messaging})
+
 (defn- tool-name [tool]
   (keyword (:name tool)))
 
@@ -37,26 +39,31 @@
     :memory #{:search :read}
     :message_search #{:search :read}
     :todo #{:read :write :search :plan}
+    :telegram_send_photo #{:messaging}
+    :telegram_send_document #{:messaging}
     :system_reload #{:run}
     (case (:category tool)
       :respond #{:respond}
       :system #{:run}
+      :messaging #{:messaging}
       :memory #{:search :read}
       #{:read})))
 
 (defn infer-categories [messages]
   (let [text (haystack messages)
         categories (cond-> #{:respond}
-                     (re-find #"\b(read|open|show|list|inspect|find|search)\b" text)
+                     (re-find #"\b(read|open|show|list|inspect|find|search)\b|найд|поищ|ищи|найти|найди|список|покаж" text)
                      (into [:read :search])
                      (re-find #"\b(write|edit|replace|create|delete|mkdir|fix|implement|patch)\b" text)
                      (conj :write)
                      (re-find #"\b(run|test|command|shell|exec|build)\b" text)
                      (conj :run)
                      (re-find #"\b(http|url|web|fetch|download|browser)\b" text)
-                     (conj :web))]
+                     (conj :web)
+                     (re-find #"\b(send|message|telegram|attach|upload)\b|отправ|пришл|скинь|телеграм" text)
+                     (conj :messaging))]
     (if (= categories #{:respond})
-      #{:respond :read :write :run :search :web :plan}
+      all-categories
       categories)))
 
 (defn route-tools
@@ -66,7 +73,7 @@
         categories (set (or (:tool-categories profile)
                             (when (:tool-routing? profile)
                               (infer-categories messages))
-                            [:respond :read :write :run :search :web :plan]))
+                            all-categories))
         selected (if (:tool-routing? profile)
                    (filterv (fn [tool]
                               (seq (clojure.set/intersection categories
