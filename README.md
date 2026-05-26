@@ -13,7 +13,7 @@ Current canonical runtime lives under `src`:
 - `agent.runtime.*`
 - `agent.runners.*`
 
-Default classpath is `src` + `resources`. `legacy_src` is available only through the `:legacy` alias. Some compatibility adapters still live in `src`; new work should use `agent.runtime.*`, `agent.runners.*`, and typed API handlers as source of truth.
+Default classpath is `src` + `resources`. `legacy_src` is available only through the `:legacy` alias. New work should use `agent.runtime.*`, `agent.runners.*`, and typed API handlers as source of truth.
 
 Run rewritten CLI:
 

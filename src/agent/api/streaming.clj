@@ -1,23 +1,9 @@
 (ns agent.api.streaming
-  "Server-Sent Events helpers — both legacy JDK-stream writers (used by old
-   exchange-based handlers) and ring/http-kit channel writers (used by new
-   *-response handlers). The legacy writers will be deleted in P2."
+  "Server-Sent Events helpers for http-kit channels."
   (:require
    [cheshire.core :as json]
    [clojure.string :as str]
-   [org.httpkit.server :as http-kit])
-  (:import
-   (java.nio.charset StandardCharsets)))
-
-(defn write-sse-bytes! [stream text]
-  (.write stream (.getBytes text StandardCharsets/UTF_8))
-  (.flush stream))
-
-(defn write-sse-chunk! [stream payload]
-  (write-sse-bytes! stream (str "data: " (json/generate-string payload) "\n\n")))
-
-(defn write-sse-done! [stream]
-  (write-sse-bytes! stream "data: [DONE]\n\n"))
+   [org.httpkit.server :as http-kit]))
 
 (defn datastar-patch-frame [html]
   (let [lines (str/split (str html) #"\n" -1)]
@@ -26,9 +12,6 @@
               (map #(str "data: elements " %))
               (str/join "\n"))
          "\n\n")))
-
-(defn write-datastar-patch! [stream html]
-  (write-sse-bytes! stream (datastar-patch-frame html)))
 
 (defn sse-response
   ([request on-open on-close]

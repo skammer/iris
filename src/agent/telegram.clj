@@ -598,8 +598,7 @@
 (defn- terminal-session-event? [event session-id]
   (and (= "session" (:entity-type event))
        (= session-id (:entity-id event))
-       (contains? #{"agent-end" "chat.completed" "chat.cancelled" "chat.failed"}
-                  (:event-type event))))
+       (= "agent-end" (:event-type event))))
 
 (defn- run-chat-callbacks!
   [system opts chat-id session-id user-text stream-controls on-tool-call]

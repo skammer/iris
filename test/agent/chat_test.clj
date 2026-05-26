@@ -158,9 +158,9 @@
         (is (= "done" (:content result)))
         (is (= ["user" "assistant"] (mapv :role messages)))
         (is (= ["hello" "done"] (mapv :content messages)))
-        (is (some #{"chat.memory.recalled"} (map :event-type events)))
-        (is (some #{"chat.planner.step"} (map :event-type events)))
-        (is (some #{"completion.completed"} (map :event-type events)))
+        (is (some #{"message-update"} (map :event-type events)))
+        (is (some #{"turn-end"} (map :event-type events)))
+        (is (some #{"message-end"} (map :event-type events)))
         (is (= :invoke (:mode (first @requests)))))
       (finally
         (io/delete-file path true)))))
@@ -304,7 +304,7 @@
             native-tool-names (set (map #(get-in % [:function :name]) (:tools first-request)))]
         (is (= "listed" (:content result)))
         (is (contains? native-tool-names "fs"))
-        (is (some #{"tool.execution.succeeded"} (map :event-type events)))
+        (is (some #{"tool-execution-end"} (map :event-type events)))
         (is (some (fn [{:keys [request]}]
                     (some #(= "tool" (:role %)) (:messages request)))
                   (rest @requests))))
@@ -986,7 +986,7 @@
         (is (= "cannot use fs" (:content result)))
         (is (some #(= :denied (keyword (:status %))) receipts))
         (is (some #(= :tool-blocked (:error-type %)) receipts))
-        (is (some #{"chat.planner.step"} (map :event-type events)))
+        (is (some #{"turn-end"} (map :event-type events)))
         (is (not (:fallback? result))))
       (finally
         (io/delete-file path true)))))
@@ -1010,7 +1010,9 @@
         (is (re-find #"approval_id=" (:content result)))
         (is (= 1 (count approvals)))
         (is (= "shell" (:tool-name (first approvals))))
-        (is (some #{"chat.tool.approval_required"} (map :event-type events))))
+        (is (some #(and (= "tool-execution-update" (:event-type %))
+                        (= "approval-required" (name (get-in % [:payload :kind]))))
+                  events)))
       (finally
         (io/delete-file path true)))))
 
@@ -1099,6 +1101,8 @@
         (is (:error? result))
         (is (str/includes? (:content result) "Chat failed: LLM request failed: 400"))
         (is (= ["user" "assistant"] (mapv :role messages)))
-        (is (some #{"chat.failed"} (map :event-type events))))
+        (is (some #(and (= "agent-end" (:event-type %))
+                        (= "error" (get-in % [:payload :stop-reason])))
+                  events)))
       (finally
         (io/delete-file path true)))))

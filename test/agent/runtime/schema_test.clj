@@ -53,25 +53,3 @@
               :request-id "request-1"
               :timestamp "2026-05-19T00:00:00Z"
               :payload {:ok true}}))))))
-
-(deftest maps-legacy-events-to-canonical-events-test
-  (is (= :agent-start
-         (runtime-schema/legacy-event-type->canonical "chat.started")))
-  (is (= :message-end
-         (runtime-schema/legacy-event-type->canonical :completion.completed)))
-  (is (= :tool-execution-start
-         (runtime-schema/legacy-event-type->canonical "tool.execution.requested")))
-  (is (= {:event-type :tool-execution-end
-          :entity-type "session"
-          :entity-id "s1"
-          :request-id "r1"
-          :timestamp "2026-05-19T00:00:00Z"
-          :payload {:status :ok
-                    :legacy-event-type "tool.execution.succeeded"}}
-         (runtime-schema/legacy-event->canonical
-          {:event-type "tool.execution.succeeded"
-           :entity-type "session"
-           :entity-id "s1"
-           :request-id "r1"
-           :created-at "2026-05-19T00:00:00Z"
-           :payload {:status :ok}}))))

@@ -3,9 +3,7 @@
   (:require
    [clojure.string :as str]
    [malli.core :as m]
-   [malli.error :as me])
-  (:import
-   (java.time Instant)))
+   [malli.error :as me]))
 
 (def message-block-types
   #{:text :thinking :image :audio :video :file :tool-call :tool-result :custom})
@@ -23,8 +21,6 @@
     :tool-execution-start
     :tool-execution-update
     :tool-execution-end})
-
-(defn- now-str [] (str (Instant/now)))
 
 (defn- normalize-token [value]
   (cond
@@ -239,43 +235,3 @@
           (vector? content) content
           (sequential? content) (vec content)
           :else [content])))
-
-(def legacy-event-type-map
-  {"chat.started" :agent-start
-   "chat.memory.recalled" :message-update
-   "chat.delta" :message-update
-   "chat.planner.step" :turn-end
-   "chat.tool.approval_required" :tool-execution-update
-   "chat.fallback_completion" :message-start
-   "chat.completed" :agent-end
-   "chat.cancelled" :agent-end
-   "chat.failed" :agent-end
-   "chat.error" :agent-end
-   "message.appended" :message-end
-   "completion.completed" :message-end
-   "tool.execution.requested" :tool-execution-start
-   "tool.execution.blocked" :tool-execution-end
-   "tool.execution.succeeded" :tool-execution-end
-   "tool.execution.failed" :tool-execution-end})
-
-(defn legacy-event-type->canonical [event-type]
-  (get legacy-event-type-map
-       (cond
-         (keyword? event-type) (name event-type)
-         (string? event-type) event-type
-         :else (str event-type))))
-
-(defn legacy-event->canonical
-  [{:keys [event-type entity-type entity-id request-id payload created-at] :as event}]
-  (when-let [canonical-type (legacy-event-type->canonical event-type)]
-    (validate-runtime-event!
-     {:event-type canonical-type
-      :entity-type entity-type
-      :entity-id entity-id
-      :request-id request-id
-      :timestamp (or created-at (:timestamp event) (now-str))
-      :payload (assoc (if (map? payload) payload {:value payload})
-                      :legacy-event-type (cond
-                                           (keyword? event-type) (name event-type)
-                                           (string? event-type) event-type
-                                           :else (str event-type)))})))

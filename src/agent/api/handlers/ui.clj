@@ -84,7 +84,10 @@
 (defn- relevant-session-event? [event session-id]
   (and (= "session" (:entity-type event))
        (= session-id (:entity-id event))
-       (or (contains? #{"message.appended" "message.updated" "completion.completed" "session.created"}
+       (or (contains? #{"message.updated"
+                        "session.created"
+                        "session-state-changed"
+                        "turn-queued"}
                       (:event-type event))
            (contains? #{"agent-start"
                         "agent-end"
@@ -93,16 +96,15 @@
                         "message-start"
                         "message-update"
                         "message-end"
+                        "tool-execution-start"
                         "tool-execution-update"
                         "tool-execution-end"}
-                      (:event-type event))
-           (str/starts-with? (or (:event-type event) "") "chat."))))
+                      (:event-type event)))))
 
 (defn- terminal-session-event? [event session-id]
   (and (= "session" (:entity-type event))
        (= session-id (:entity-id event))
-       (contains? #{"agent-end" "chat.completed" "chat.cancelled" "chat.failed"}
-                  (:event-type event))))
+       (= "agent-end" (:event-type event))))
 
 (defn- message-delta-event? [event session-id]
   (and (= "session" (:entity-type event))
