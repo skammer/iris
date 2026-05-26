@@ -56,6 +56,26 @@
       (is (str/includes? (second (second @calls)) "Loop Context"))
       (is (= "loop-session" (nth (second @calls) 2))))))
 
+(deftest loop-cli-uses-configured-max-and-rejects-invalid-max-test
+  (let [calls (atom [])]
+    (with-redefs [system/create-system (fn [_] {:config {:loop {:max-iterations 1}}})
+                  system/create-session! (fn [_ title]
+                                           (swap! calls conj [:create title])
+                                           {:id "loop-session"})
+                  system/complete! (fn [_ messages opts]
+                                     (swap! calls conj [:complete (:content (first messages)) (:session-id opts)])
+                                     {:content "done"})
+                  logging/log! (fn [& _] nil)]
+      (is (= "done\n"
+             (with-out-str
+               (binding [*err* (java.io.StringWriter.)]
+                 (cli/main ["loop" "--prompt" "fix bug"])))))
+      (is (= 1 (count (filter #(= :complete (first %)) @calls))))))
+  (with-redefs [system/create-system (fn [_] {:config {}})]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"loop max iterations must be positive"
+                          (cli/main ["loop" "--prompt" "fix bug" "--max" "0"])))))
+
 (deftest prompt-cli-creates-session-and-streams-test
   (let [calls (atom [])]
     (with-redefs [system/create-system (fn [_] ::system)

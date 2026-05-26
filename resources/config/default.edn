@@ -91,6 +91,10 @@
                      :reserve-output-tokens 1024
                      :keep-recent-tokens 2048
                      :max-summary-input-tokens 8192}}
+ :loop {:max-iterations 10
+        :plan-file "LOOP_PLAN.md"
+        :summary-max-chars 1200
+        :validation-max-chars 12000}
  :tools {:http {:enabled true
                 :timeout-ms 30000
                 :max-timeout-ms 30000

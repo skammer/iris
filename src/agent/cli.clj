@@ -191,11 +191,16 @@
   (let [prompt (or (loop-prompt parsed)
                    (throw (ex-info "loop requires --prompt or prompt text"
                                    {:type :invalid-cli-args})))
+        loop-opts (loop/options (:config system)
+                                {:plan-file (:loop-plan parsed)
+                                 :max-iterations (:loop-max parsed)
+                                 :run-cmd (:loop-run parsed)})
+        max-iterations (loop/validate-max-iterations! (:max-iterations loop-opts))
         session-id (session-id-for-prompt system parsed (str "Loop: " prompt))
         initial-state (loop/new-state {:prompt prompt
-                                       :plan-file (:loop-plan parsed)
-                                       :max-iterations (:loop-max parsed)
-                                       :run-cmd (:loop-run parsed)})]
+                                       :plan-file (:plan-file loop-opts)
+                                       :max-iterations max-iterations
+                                       :run-cmd (:run-cmd loop-opts)})]
     (loop [state initial-state]
       (if (loop/should-stop? state)
         state
@@ -203,13 +208,17 @@
           (binding [*out* *err*]
             (println (str "=== " (loop/iteration-label state*) " ===")))
           (let [result (stream-prompt! system (loop/build-prompt state*) session-id)
-                validation (loop/run-validation (:run-cmd state*))]
+                validation (loop/run-validation (:run-cmd state*) loop-opts)
+                summary (loop/progress-summary {:response (:content result)
+                                                :validation-output validation
+                                                :plan-file (:plan-file state*)
+                                                :summary-max-chars (:summary-max-chars loop-opts)})]
             (when validation
               (binding [*out* *err*]
                 (println "--- validation ---")
                 (println validation)))
             (recur (assoc state*
-                          :last-summary (loop/summarize (:content result))
+                          :last-summary summary
                           :last-run-output validation))))))))
 
 (defn main [args]

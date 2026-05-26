@@ -38,6 +38,11 @@
              (get-in cfg [:llm :providers :openai-compatible :models "gpt-4o-mini"])))
       (is (true? (get-in cfg [:tools :http :enabled])))
       (is (= 6 (get-in cfg [:chat :max-steps])))
+      (is (= {:max-iterations 10
+              :plan-file "LOOP_PLAN.md"
+              :summary-max-chars 1200
+              :validation-max-chars 12000}
+             (:loop cfg)))
       (is (= {:enabled? true
               :threshold 3
               :window-size 16
@@ -272,6 +277,10 @@
   (with-isolated-config [root {"AGENT_LLM_PROVIDER" "ollama"
                                "AGENT_LLM_MODEL" "env-model"
                                "AGENT_CHAT_MAX_STEPS" "12"
+                               "AGENT_LOOP_MAX_ITERATIONS" "4"
+                               "AGENT_LOOP_PLAN_FILE" "WORK.md"
+                               "AGENT_LOOP_SUMMARY_MAX_CHARS" "300"
+                               "AGENT_LOOP_VALIDATION_MAX_CHARS" "900"
                                "AGENT_MEMORY_SEARCH_DEFAULT_LIMIT" "7"
                                "AGENT_MEMORY_SEARCH_MAX_LIMIT" "9"
                                "AGENT_MEMORY_SEARCH_MIN_SCORE" "0.45"}]
@@ -286,6 +295,11 @@
         (is (= :ollama (config/active-provider-key (:llm cfg))))
         (is (= "env-model" (config/active-model (:llm cfg))))
         (is (= 12 (get-in cfg [:chat :max-steps])))
+        (is (= {:max-iterations 4
+                :plan-file "WORK.md"
+                :summary-max-chars 300
+                :validation-max-chars 900}
+               (:loop cfg)))
         (is (= {:default-limit 7
                 :max-limit 9
                 :min-score 0.45}

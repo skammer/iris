@@ -91,3 +91,32 @@
         (is (= ["hello" " world"] @deltas))
         (is (= "hello world" (:content response)))
         (is (= 5 (get-in response [:usage :tokens])))))))
+
+(deftest ollama-invoke-suppresses-streamed-tool-call-tags-test
+  (let [deltas (atom [])]
+    (with-redefs [http/post (fn [_ _]
+                              {:status 200
+                               :headers {"Content-Type" "application/x-ndjson"}
+                               :body (byte-stream
+                                      (str "{\"message\":{\"content\":\"<tool_call>\\n<function=fs>\\n\"},\"done\":false}\n"
+                                           "{\"message\":{\"content\":\"<parameter=action>\\nwrite\\n</parameter>\\n\"},\"done\":false}\n"
+                                           "{\"message\":{\"content\":\"<parameter=path>\\n/tmp/test_document.txt\\n</parameter>\\n\"},\"done\":false}\n"
+                                           "{\"message\":{\"content\":\"<parameter=content>\\nПривет! Это тестовый документ.\\nСоздан автоматически.\\n</parameter>\\n\"},\"done\":false}\n"
+                                           "{\"message\":{\"content\":\"</function>\\n</tool_call>\",\"tool_calls\":null},\"done\":true}\n"))})]
+      (let [llm (provider/create-ollama-provider {})
+            response (llm-core/invoke
+                      llm
+                      {:messages [{:role "user" :content "write file"}]
+                       :tools [{:type "function"
+                                :function {:name "fs"
+                                           :description "Filesystem"
+                                           :parameters {:type "object"}}}]
+                       :on-content-delta #(swap! deltas conj %)})
+            tc (first (:tool-calls response))]
+        (is (empty? @deltas))
+        (is (= "" (:content response)))
+        (is (= "fs" (:name tc)))
+        (is (= {:action "write"
+                :path "/tmp/test_document.txt"
+                :content "Привет! Это тестовый документ.\nСоздан автоматически."}
+               (:arguments tc)))))))

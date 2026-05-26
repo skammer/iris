@@ -4,6 +4,7 @@
    [agent.kernel.runtime :as kernel-runtime]
    [agent.llm.core :as llm-core]
    [agent.llm.messages :as llm-messages]
+   [agent.loop :as loop]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.loop :as runtime-loop]
@@ -325,6 +326,56 @@
         (is (= ["hello" "plain"]
                (mapv :content (sqlite/list-messages (:store system) (:id session))))))
       (finally
+        (io/delete-file path true)))))
+
+(deftest chat-blocks-normal-message-while-loop-active-test
+  (let [path (temp-db-path)
+        responses (atom ["unexpected"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider identity)
+        session (system/create-session! system "loop-block")]
+    (try
+      (loop/start! (:id session) (:config system) "work plan")
+      (let [result (chat/run! system {:session-id (:id session)
+                                      :messages [{:role "user" :content "hello"}]})
+            messages (sqlite/list-messages (:store system) (:id session))]
+        (is (= "Loop active. Use /loop status or /loop stop." (:content result)))
+        (is (empty? @requests))
+        (is (= ["hello" "Loop active. Use /loop status or /loop stop."]
+               (mapv :content messages))))
+      (finally
+        (loop/stop! (:id session))
+        (io/delete-file path true)))))
+
+(deftest chat-loop-slash-starts-worker-and-stops-at-max-test
+  (let [path (temp-db-path)
+        plan (java.io.File/createTempFile "iris-loop-chat-" ".md")
+        responses (atom ["iteration done src/agent/loop.clj"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider
+                            #(-> %
+                                 (assoc :loop {:max-iterations 1
+                                               :plan-file (.getAbsolutePath plan)
+                                               :summary-max-chars 400
+                                               :validation-max-chars 400})
+                                 (assoc-in [:memory :facts :extractor :enabled] false)))
+        session (system/create-session! system "loop-start")]
+    (try
+      (spit plan "- [ ] one")
+      (let [result (chat/run! system {:session-id (:id session)
+                                      :messages [{:role "user" :content "/loop fix bug"}]})]
+        (is (str/starts-with? (:content result) "Loop started: LOOP 0/1"))
+        (is (eventually #(some (fn [message]
+                                 (str/includes? (:content message) "Loop complete: LOOP 1/1"))
+                               (sqlite/list-messages (:store system) (:id session)))))
+        (is (= 1 (count @requests)))
+        (is (some #(str/includes? (message-text %) "Loop Context")
+                  (get-in (first @requests) [:request :messages]))))
+      (finally
+        (loop/stop! (:id session))
+        (io/delete-file plan true)
         (io/delete-file path true)))))
 
 (deftest chat-per-model-profile-enables-respond-nudge-test

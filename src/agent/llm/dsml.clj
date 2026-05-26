@@ -24,6 +24,52 @@
 (def ^:private parameter-re
   #"(?s)<parameter\s*=\s*\"?([^>\"]+?)\"?\s*>(.*?)</parameter>")
 
+(def ^:private tool-markup-openers
+  ["<｜DSML｜tool_calls>" "<tool_call>"])
+
+(defn- starts-with-tool-markup? [text]
+  (let [trimmed (str/triml (str text))]
+    (some #(str/starts-with? trimmed %) tool-markup-openers)))
+
+(defn- possible-tool-markup-prefix? [text]
+  (let [trimmed (str/triml (str text))]
+    (or (str/blank? trimmed)
+        (some #(or (str/starts-with? % trimmed)
+                   (str/starts-with? trimmed %))
+              tool-markup-openers))))
+
+(defn guard-content-delta
+  "Suppress streamed leaked tool markup while still allowing normal text.
+   Only enable when tools were sent; otherwise markup is ordinary content."
+  [on-content-delta tools]
+  (cond
+    (nil? on-content-delta) nil
+    (empty? tools) on-content-delta
+    :else
+    (let [mode (atom :undecided)
+          buffered (atom "")]
+      (fn [chunk]
+        (case @mode
+          :streaming
+          (on-content-delta chunk)
+
+          :suppressing
+          nil
+
+          :undecided
+          (let [text (swap! buffered str chunk)]
+            (cond
+              (starts-with-tool-markup? text)
+              (reset! mode :suppressing)
+
+              (possible-tool-markup-prefix? text)
+              nil
+
+              :else
+              (do
+                (reset! mode :streaming)
+                (on-content-delta text)))))))))
+
 (defn- parse-parameters [re invoke-body]
   (->> (re-seq re invoke-body)
        (reduce (fn [acc [_ k v]]

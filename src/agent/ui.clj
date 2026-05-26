@@ -638,11 +638,12 @@
             [:button.session-link
              {:type "button"
               :class (when (= id active-id) "session-link--active")
-              "data-route" (route-path {:tab :chat :session-id id})
-              "data-on:click" (str "@get('/ui/session-detail?session_id=" id "')")}
+             "data-route" (route-path {:tab :chat :session-id id})
+             "data-on:click" (str "@get('/ui/session-detail?session_id=" id "')")}
              [:strong (or title "Untitled session")]
              [:div.session-meta
               (str created-at
+                   (when (:loop-active? state) " | loop")
                    (when (:working? state) " | working")
                    (when (pos? (:queued-count state))
                      (str " | queued " (:queued-count state))))]])]
@@ -665,64 +666,72 @@
        [:section#session-detail-panel.panel
         [:h2 "Transcript"]
         [:div.empty "Create session to start chatting."]]
-       (let [state (chat/session-state system (:id session))]
-       [:agent-chat-panel#session-detail-panel.panel
-        {:data-session-id (:id session)
-         "data-init" (str "@get('/ui/session/live?session_id=" (:id session) "', {openWhenHidden: true})")}
-        [:div.chat-titlebar
-         [:h2 (or (:title session) "Untitled session")]
-         [:span.meta.code (:id session)]
-         [:span.meta (str (or (:active-provider state) "-")
-                          "/"
-                          (or (:active-model state) "-")
-                          (when (:working? state) " | working")
-                          (when (pos? (:queued-count state))
-                            (str " | queued " (:queued-count state))))]]
-        (trusted-fragment (session-messages-fragment system (:id session)))
-        [:aside#tool-detail-sidebar.tool-detail-sidebar
-         {:hidden true
-          :aria-label "Tool detail"}
-         [:div.tool-detail-sidebar__head
-          [:div
-           [:h2#tool-detail-sidebar-title "Tool detail"]
-           [:div#tool-detail-sidebar-status.meta ""]]
-          [:button.tool-detail-sidebar__close
-           {:type "button"
-            "data-tool-detail-close" true
-            :aria-label "Close tool detail"}
-           "Close"]]
-         [:div#tool-detail-sidebar-body.tool-detail-sidebar__body
-          [:div.empty "Select tool row."]]]
-        [:form#chat-form
-         {"data-on:submit" "@post('/ui/chat', {contentType: 'form'})"
-          "data-indicator" "chatLoading"
-          "data-class:is-loading" "$chatLoading"
-          "data-skill-autocomplete" "true"}
-         [:input {:id (str "chat-session-id-" (:id session))
-                  :type "hidden"
-                  :name "session_id"
-                  :value (:id session)}]
-         [:auto-grow-textarea {:submit-on-enter true}
-          [:textarea.chat-input {:name "prompt"
-                                 :data-skill-input "true"
-                                 :rows 1
-                                 :placeholder "Ask model something concrete"}]]
-         [:button {:type "button"
-                   "data-on:click" "@post('/ui/chat/stop', {contentType: 'form', selector: '#chat-form'})"}
-          "Stop"]
-         [:button {:type "submit"
-                   "data-attr:disabled" "$chatLoading"}
-          "Send"]
-         [:div#chat-status.meta.chat-status
-          {:style (when-not (:working? state) "display:none")
-           "data-show" (if (:working? state) "true" "$chatLoading")
-           :role "status"
-           :aria-label (if (pos? (:queued-count state))
-                         (str "Working, queued " (:queued-count state))
-                         "Working")}
-          [:span.chat-spinner {:aria-hidden true}]
-          (when (pos? (:queued-count state))
-            [:span.chat-status__text (str "queued " (:queued-count state))])]]])))))
+       (let [state (chat/session-state system (:id session))
+             status-visible? (or (:working? state) (:loop-active? state))
+             status-label (cond
+                            (:loop-active? state) (str "Loop active, " (:loop-label state))
+                            (pos? (:queued-count state)) (str "Working, queued " (:queued-count state))
+                            :else "Working")
+             status-text (cond
+                           (:loop-active? state) (:loop-label state)
+                           (pos? (:queued-count state)) (str "queued " (:queued-count state))
+                           :else "")]
+         [:agent-chat-panel#session-detail-panel.panel
+          {:data-session-id (:id session)
+           "data-init" (str "@get('/ui/session/live?session_id=" (:id session) "', {openWhenHidden: true})")}
+          [:div.chat-titlebar
+           [:h2 (or (:title session) "Untitled session")]
+           [:span.meta.code (:id session)]
+           [:span.meta (str (or (:active-provider state) "-")
+                            "/"
+                            (or (:active-model state) "-")
+                            (when (:loop-active? state)
+                              (str " | " (:loop-label state)))
+                            (when (:working? state) " | working")
+                            (when (pos? (:queued-count state))
+                              (str " | queued " (:queued-count state))))]]
+          (trusted-fragment (session-messages-fragment system (:id session)))
+          [:aside#tool-detail-sidebar.tool-detail-sidebar
+           {:hidden true
+            :aria-label "Tool detail"}
+           [:div.tool-detail-sidebar__head
+            [:div
+             [:h2#tool-detail-sidebar-title "Tool detail"]
+             [:div#tool-detail-sidebar-status.meta ""]]
+            [:button.tool-detail-sidebar__close
+             {:type "button"
+              "data-tool-detail-close" true
+              :aria-label "Close tool detail"}
+             "Close"]]
+           [:div#tool-detail-sidebar-body.tool-detail-sidebar__body
+            [:div.empty "Select tool row."]]]
+          [:form#chat-form
+           {"data-on:submit" "@post('/ui/chat', {contentType: 'form'})"
+            "data-indicator" "chatLoading"
+            "data-class:is-loading" "$chatLoading"
+            "data-skill-autocomplete" "true"}
+           [:input {:id (str "chat-session-id-" (:id session))
+                    :type "hidden"
+                    :name "session_id"
+                    :value (:id session)}]
+           [:auto-grow-textarea {:submit-on-enter true}
+            [:textarea.chat-input {:name "prompt"
+                                   :data-skill-input "true"
+                                   :rows 1
+                                   :placeholder "Ask model something concrete"}]]
+           [:button {:type "button"
+                     "data-on:click" "@post('/ui/chat/stop', {contentType: 'form', selector: '#chat-form'})"}
+            "Stop"]
+           [:button {:type "submit"
+                     "data-attr:disabled" "$chatLoading"}
+            "Send"]
+           [:div#chat-status.meta.chat-status
+            {:style (when-not status-visible? "display:none")
+             "data-show" (if status-visible? "true" "$chatLoading")
+             :role "status"
+             :aria-label status-label}
+            [:span.chat-spinner {:aria-hidden true}]
+            [:span.chat-status__text status-text]]]])))))
 
 (defn- streaming-message [content]
   [:article.message.message--streaming

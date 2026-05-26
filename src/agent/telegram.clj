@@ -429,7 +429,7 @@
           {:keys [command rest]} (parse-command-args command)]
       (case command
         "/start" "Ready. Send message to chat."
-        "/help" "/start /help /stop /reset /memory /status /prompt [name|off] /skills [prefix] /photo <url> [caption] /file <url> [caption]"
+        "/help" "/start /help /stop /reset /memory /status /prompt [name|off] /loop [prompt|status|stop|run|plan] /skills [prefix] /photo <url> [caption] /file <url> [caption]"
         "/reset" (do
                    (reset-session! (:store system) chat)
                    "Session reset.")

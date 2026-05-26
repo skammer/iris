@@ -8,6 +8,7 @@
    [agent.kernel.schema :as kernel-schema]
    [agent.llm.core :as llm-core]
    [agent.llm.messages :as llm-messages]
+   [agent.loop :as loop-support]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.planner :as planner]
@@ -39,9 +40,10 @@
 
 (defonce ^:private streaming-state (atom {}))
 (defonce ^:private session-runtimes (atom {}))
+(defonce ^:private loop-workers (atom {}))
 (def ^:private manager-lock (Object.))
 
-(declare emit-session-state!)
+(declare emit-session-state! run!)
 
 (def stopped-content runtime-loop/stopped-content)
 
@@ -60,13 +62,17 @@
 (defn session-state
   [system session-id]
   (let [{:keys [active queue]} (get @session-runtimes session-id)
-        llm (when system (active-llm system))]
+        llm (when system (active-llm system))
+        loop-state (loop-support/active-state session-id)]
     (cond-> {:working? (boolean active)
              :queued-count (count queue)
              :active-provider (some-> (:provider llm) name)
              :active-model (:model llm)}
       active (assoc :active-request-id (:request-id active)
-                    :active-started-at (:started-at active)))))
+                    :active-started-at (:started-at active))
+      loop-state (assoc :loop-active? true
+                        :loop-label (loop-support/iteration-label loop-state)
+                        :loop-plan (:plan-file loop-state)))))
 
 (defn cancel-session!
   ([session-id]
@@ -132,6 +138,79 @@
                     :entity-id session-id
                     :payload payload})
      message)))
+
+(defn- append-control-turn! [system session-id user-text content metadata]
+  (when-not (str/blank? (or user-text ""))
+    (append-message! system session-id "user" user-text {:metadata metadata}))
+  (append-message! system session-id "assistant" content {:metadata metadata})
+  (emit-session-state! system session-id :loop)
+  {:content content
+   :stop-reason :loop-control})
+
+(defn- loop-worker-running? [session-id]
+  (when-let [worker (get @loop-workers session-id)]
+    (not (future-done? worker))))
+
+(defn- loop-complete-message [record]
+  (or (:content record)
+      "Loop stopped."))
+
+(defn- run-loop-worker! [system session-id]
+  (try
+    (loop []
+      (when-let [state (loop-support/prepare-iteration! session-id)]
+        (let [result (run! system
+                           {:messages [{:role "user"
+                                        :content (loop-support/build-prompt state)}]
+                            :session-id session-id
+                            :loop-turn? true})
+              loop-opts (loop-support/options (:config system) {})
+              validation (loop-support/run-validation (:run-cmd state) loop-opts)
+              record (loop-support/record-result! session-id
+                                                  (:content result)
+                                                  validation
+                                                  (:config system))]
+          (when (:stopped? record)
+            (append-message! system session-id "assistant" (loop-complete-message record)
+                             {:metadata {:loop-control true}}))
+          (when (loop-support/active? session-id)
+            (recur)))))
+    (catch Throwable t
+      (when (loop-support/active? session-id)
+        (loop-support/stop! session-id)
+        (append-message! system session-id "assistant"
+                         (str "Loop stopped: " (.getMessage t))
+                         {:metadata {:loop-control true :error true}})))
+    (finally
+      (swap! loop-workers dissoc session-id)
+      (emit-session-state! system session-id :loop))))
+
+(defn- start-loop-worker! [system session-id]
+  (when-not (loop-worker-running? session-id)
+    (let [worker (future (run-loop-worker! system session-id))]
+      (swap! loop-workers assoc session-id worker))))
+
+(defn loop-command!
+  [system session-id text]
+  (when-let [{:keys [content started? stopped?] :as result}
+             (loop-support/handle-control! session-id (:config system) text)]
+    (when stopped?
+      (cancel-session! system session-id))
+    (let [response (append-control-turn! system
+                                         session-id
+                                         text
+                                         content
+                                         {:loop-control true})]
+      (when started?
+        (start-loop-worker! system session-id))
+      (assoc response :loop-control result))))
+
+(defn- block-while-loop-active! [system session-id text]
+  (append-control-turn! system
+                        session-id
+                        text
+                        "Loop active. Use /loop status or /loop stop."
+                        {:loop-control true :blocked-by-loop true}))
 
 (defn- user-message? [message]
   (= "user" (if (keyword? (:role message))
@@ -864,20 +943,32 @@
 (defn run!
   "Run or queue a chat turn for `session-id`."
   [system {:keys [session-id] :as opts}]
-  (if-not session-id
-    (run-turn! system opts)
-    (let [request-id* (or (:request-id opts) (request-id))
-          cancelled? (atom false)
-          result (promise)
-          mode (begin-managed-run! system opts request-id* cancelled? result)]
-      (case mode
-        :active
-        (run-active-item! system {:opts opts
-                                  :request-id request-id*
-                                  :cancelled? cancelled?})
+  (let [prompt (latest-user-prompt (:messages opts))]
+    (cond
+      (not session-id)
+      (run-turn! system opts)
 
-        :queued
-        (let [{:keys [result error]} @result]
-          (if error
-            (throw error)
-            result)))))) 
+      (and (not (:loop-turn? opts))
+           (loop-support/control-command prompt))
+      (loop-command! system session-id prompt)
+
+      (and (not (:loop-turn? opts))
+           (loop-support/active? session-id))
+      (block-while-loop-active! system session-id prompt)
+
+      :else
+      (let [request-id* (or (:request-id opts) (request-id))
+            cancelled? (atom false)
+            result (promise)
+            mode (begin-managed-run! system opts request-id* cancelled? result)]
+        (case mode
+          :active
+          (run-active-item! system {:opts opts
+                                    :request-id request-id*
+                                    :cancelled? cancelled?})
+
+          :queued
+          (let [{:keys [result error]} @result]
+            (if error
+              (throw error)
+              result)))))))

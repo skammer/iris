@@ -2,6 +2,7 @@
   "Native Ollama provider."
   (:require
    [agent.llm.core :as llm-core]
+   [agent.llm.dsml :as dsml]
    [agent.llm.messages :as llm-messages]
    [cheshire.core :as json]
    [clj-http.client :as http]
@@ -204,7 +205,9 @@
                                           :throw-exceptions false
                                           :as :stream)))]
           (llm-core/normalize-llm-response
-           (stream-response->turn (:body response) (:on-content-delta opts))
+           (stream-response->turn (:body response)
+                                  (dsml/guard-content-delta (:on-content-delta opts)
+                                                            (:tools opts)))
            {}))
         (let [response (post-json (endpoint (:base-url this) "/api/chat")
                                   (assoc request* :as :json))
