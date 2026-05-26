@@ -15,9 +15,12 @@ Verification:
 
 ## Executive Verdict
 
-Security/control-plane bugs are fixed. Public process-local orchestrator APIs are now disabled by default. Remaining support cost is architectural:
+Security/control-plane bugs are fixed. Public process-local orchestrator APIs are now disabled by default. Latest remediation:
 
-- chat state is still process-global instead of a system component
+- chat state moved into a system-owned `chat-service`
+
+Remaining support cost is architectural:
+
 - runtime migration still has compatibility adapters and legacy event shapes
 - `agent.system`, `agent.chat`, `agent.ui`, `agent.config`, and `agent.orchestrator` are still too large
 - streaming/SSE still relies on repeated raw future/catch/close mechanics
@@ -28,24 +31,19 @@ Weighted confidence: 0.88.
 
 ## Priority Findings
 
-### 1. `agent.chat` still owns process-global runtime state
+### 1. Chat runtime state now system-owned
 
-Evidence:
+Status: Fixed 2026-05-26.
 
-- `src/agent/chat.clj` still keeps `defonce` atoms for streaming state, session runtimes, loop workers, and manager lock.
-- `src/agent/chat.clj` still starts queue/loop work with raw `future`.
-- `src/agent/system.clj` calls `chat/stop-all!` on reload/close, but chat manager state is not created, supervised, or injected as a normal system component.
+Evidence after fix:
 
-Reasoning:
+- `src/agent/chat.clj` creates explicit `chat-service` state for streaming, session runtimes, loop workers, and manager lock.
+- `src/agent/system.clj` injects `:chat-service`, reports chat health, and stops/reloads chat state through system lifecycle.
+- UI/API/Telegram now pass `system` into chat state/cancel/streaming access instead of one-arg namespace-global calls.
 
-The stale-worker reload bug is mitigated, not architecturally solved. Chat runtime ownership still sits outside `create-system`, so lifecycle, test isolation, cancellation, and reload semantics remain harder than needed.
+Remaining caveat:
 
-Fix direction:
-
-- Create explicit `chat-service` component in `create-system`.
-- Move streaming state, session runtimes, and loop workers into that component.
-- Give it `start!`, `stop!`, `reload!`, `cancel-session!`, and `session-state` API.
-- Inject it into API/UI/Telegram instead of reaching into namespace globals.
+- Chat still starts queue/loop work with raw `future`; broader runtime supervision remains part of later runtime cleanup.
 
 Confidence: 0.9.
 

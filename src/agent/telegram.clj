@@ -441,7 +441,7 @@
 
 (defn- stop-chat!
   [system opts chat-id session-id]
-  (chat/cancel-session! session-id)
+  (chat/cancel-session! system session-id)
   (when-let [task (:future (get @(:active-tasks opts) chat-id))]
     (future-cancel task)
     (swap! (:active-tasks opts) dissoc chat-id))

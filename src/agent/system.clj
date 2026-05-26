@@ -536,7 +536,9 @@
          fact-llm-provider (with-component-health health-registry :llm-provider
                              #(create-fact-llm-provider cfg))
          tool-registry (with-component-health health-registry :tools
-                         #(create-tool-registry (:tools cfg) event-sink store telemetry-collector memory-service (:channel-adapters cfg) system-ref observer trace))]
+                         #(create-tool-registry (:tools cfg) event-sink store telemetry-collector memory-service (:channel-adapters cfg) system-ref observer trace))
+         chat-service (with-component-health health-registry :chat
+                        #(chat/create-service))]
      (logging/log! :agent.system/created
                    {:config-path config-path
                     :provider (name (config/active-provider-key (:llm cfg)))
@@ -558,6 +560,7 @@
                    :event-sink event-sink
                    :recorded-event-sink recorded-event-sink
                    :tool-registry tool-registry
+                   :chat-service chat-service
                    :skills-registry (create-skills-registry (:skills cfg))
                    :memory-service memory-service
                    :runtime-service runtime-service
@@ -609,6 +612,8 @@
         trace (create-trace new-cfg)
         base (assoc old-system
                     :config new-cfg
+                    :chat-service (with-component-health health-registry :chat
+                                    #(chat/create-service))
                     :llm-provider (with-component-health health-registry :llm-provider
                                     #(create-llm-provider (:llm new-cfg)))
                     :fact-llm-provider (with-component-health health-registry :llm-provider
@@ -653,7 +658,7 @@
         new-cfg (config/load-config (:config-path system*))
         new-system (rebuild-hot-system system* new-cfg)
         result (reload-result :soft old-cfg new-cfg :reloaded)]
-    (chat/stop-all!)
+    (chat/stop! (:chat-service system*))
     (logging/start! (:logging new-cfg))
     (reset! system-ref new-system)
     (reset! (:reload-state new-system)
@@ -669,7 +674,7 @@
 
 (defn- close-system! [system]
   (try
-    (chat/stop-all!)
+    (chat/stop! (:chat-service system))
     (catch Exception e
       (logging/log-error! :agent.system/chat-stop-failed e {})))
   (try
@@ -706,8 +711,8 @@
                      (start-api! new-system**)
                      new-system**)
         result (reload-result :full old-cfg (:config new-system) :reloaded)]
-    (chat/stop-all!)
-    (doseq [component [:llm-provider :sqlite :broker :telemetry :runtime
+    (chat/stop! (:chat-service old-system))
+    (doseq [component [:llm-provider :sqlite :broker :telemetry :runtime :chat
                        :tools :memory :channel-adapters]]
       (health/mark-ok! health-registry component))
     (reset! system-ref new-system)
@@ -814,6 +819,8 @@
      :trace (runtime-trace/health-check (:trace system))
      :runtime (checked-component-health registry :runtime
                 #(runtime/runtime-health (:runtime-service system)))
+     :chat (checked-component-health registry :chat
+             #(chat/health-check (:chat-service system)))
      :channel-adapters (checked-component-health registry :channel-adapters
                          #(channel-adapters/registry-health (:channel-adapter-registry system)))
      :orchestrator (orchestrator/health-check (:orchestrator system))

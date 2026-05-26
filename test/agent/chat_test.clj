@@ -473,14 +473,62 @@
                        (chat/run! system {:session-id (:id session)
                                           :messages [{:role "user" :content "wait"}]}))]
         (is (true? (deref started 1000 false)))
-        (is (:cancelled? (chat/cancel-session! (:id session))))
+        (is (:cancelled? (chat/cancel-session! system (:id session))))
         (deliver response "late answer")
         (is (= chat/stopped-content (:content (deref result-f 1000 nil))))
-        (is (eventually #(false? (chat/active? (:id session)))))
+        (is (eventually #(false? (chat/active? system (:id session)))))
         (is (= ["wait" chat/stopped-content]
                (mapv :content (sqlite/list-messages (:store system) (:id session))))))
       (finally
         (io/delete-file path true)))))
+
+(deftest chat-service-state-is-system-local-test
+  (let [path-a (temp-db-path)
+        path-b (temp-db-path)
+        release (promise)
+        entered (promise)
+        provider-a (->PlannerProvider (atom ["unused"]) (atom []))
+        provider-b (->PlannerProvider (atom ["unused"]) (atom []))
+        system-a (test-system path-a provider-a #(assoc-in % [:memory :facts :extractor :enabled] false))
+        system-b (test-system path-b provider-b #(assoc-in % [:memory :facts :extractor :enabled] false))
+        session-a (system/create-session! system-a "a")]
+    (try
+      (with-redefs [runtime-loop/run!
+                    (fn [{:keys [event-sink session-id request-id]}]
+                      (event-sink {:event-type "message-update"
+                                   :entity-type "session"
+                                   :entity-id session-id
+                                   :request-id request-id
+                                   :payload {:delta "partial"}})
+                      (deliver entered true)
+                      @release
+                      (event-sink {:event-type "message-end"
+                                   :entity-type "session"
+                                   :entity-id session-id
+                                   :request-id request-id
+                                   :payload {:role "assistant"
+                                             :content "done"
+                                             :final? true}})
+                      {:content "done"
+                       :stop-reason :completed})]
+        (let [result-f (future
+                         (chat/run! system-a {:session-id (:id session-a)
+                                              :messages [{:role "user" :content "go"}]
+                                              :stream? true}))]
+          (is (true? (deref entered 1000 false)))
+          (is (eventually #(chat/active? system-a (:id session-a))))
+          (is (false? (chat/active? system-b (:id session-a))))
+          (is (eventually #(= "partial"
+                              (chat/streaming-content system-a (:id session-a)))))
+          (is (nil? (chat/streaming-content system-b (:id session-a))))
+          (deliver release true)
+          (is (= "done" (:content (deref result-f 1000 nil))))
+          (is (eventually #(false? (chat/active? system-a (:id session-a)))))
+          (is (nil? (chat/streaming-content system-a (:id session-a))))))
+      (finally
+        (deliver release true)
+        (io/delete-file path-a true)
+        (io/delete-file path-b true)))))
 
 (deftest chat-loop-queues-rapid-sequential-session-messages-test
   (let [path (temp-db-path)
@@ -582,7 +630,7 @@
                          (chat/run! system {:session-id (:id session)
                                             :messages [{:role "user" :content "after cancel"}]}))]
           (is (eventually #(= 2 (count (sqlite/list-messages (:store system) (:id session))))))
-          (is (:cancelled? (chat/cancel-session! (:id session))))
+          (is (:cancelled? (chat/cancel-session! system (:id session))))
           (deliver first-response "late answer")
           (is (= chat/stopped-content (:content (deref first-f 2000 nil))))
           (is (= "after cancel answer" (:content (deref second-f 2000 nil))))
