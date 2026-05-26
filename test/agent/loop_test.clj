@@ -35,3 +35,26 @@
       (is (false? (loop/should-stop? {:iteration 1 :max-iterations 2})))
       (finally
         (io/delete-file plan true)))))
+
+(deftest loop-progress-summary-is-structured-test
+  (let [plan (java.io.File/createTempFile "iris-loop-" ".md")]
+    (try
+      (spit plan "- [x] done\n- [ ] next task")
+      (let [summary (loop/progress-summary
+                     {:response "Changed src/agent/loop.clj and test/agent/loop_test.clj."
+                      :validation-output "exit 0\n\nTesting agent.loop-test\n\nRan 3 tests containing 8 assertions.\n0 failures, 0 errors."
+                      :plan-file (.getAbsolutePath plan)
+                      :summary-max-chars 200})
+            rendered (loop/render-progress summary)]
+        (is (= ["src/agent/loop.clj" "test/agent/loop_test.clj"]
+               (:changed-files summary)))
+        (is (= "next task" (:next-plan-item summary)))
+        (is (str/includes? rendered "changed_files: src/agent/loop.clj"))
+        (is (str/includes? rendered "validation: exit 0")))
+      (finally
+        (io/delete-file plan true)))))
+
+(deftest loop-validation-output-is-capped-test
+  (let [output (loop/run-validation "printf 1234567890" {:validation-max-chars 8})]
+    (is (str/starts-with? output "exit 0"))
+    (is (str/includes? output "[truncated"))))

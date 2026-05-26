@@ -112,6 +112,10 @@
                                  :pending-tool-result 800
                                  :referenced-file 2400
                                  :output-reserve 1024}}}
+   :loop {:max-iterations 10
+          :plan-file "LOOP_PLAN.md"
+          :summary-max-chars 1200
+          :validation-max-chars 12000}
    :tools {:http {:enabled true
                   :timeout-ms 30000
                   :max-timeout-ms 30000
@@ -297,7 +301,7 @@
 (def template-file-names (conj context-file-names memory-file-name))
 (def app-config-keys
   [:llm :storage :tools :skills :memory :channel-adapters :runners
-   :orchestrator :telemetry :observer :trace :logging :api :chat])
+   :orchestrator :telemetry :observer :trace :logging :api :chat :loop])
 
 (def default-config-edn
   {:iris/config-version 1
@@ -509,6 +513,12 @@
          {:path [:llm :providers provider k]
           :message (str "active LLM provider " provider " missing required key " k)})))))
 
+(defn- positive-number-error [cfg path]
+  (let [value (get-in cfg path)]
+    (when (and (some? value) (not (pos? (long value))))
+      {:path path
+       :message (str (str/join "/" (map name path)) " must be positive")})))
+
 (defn- config-validation-errors [cfg]
   (let [llm-cfg (normalize-llm-config (:llm cfg))
         provider (:active-provider llm-cfg)
@@ -523,7 +533,13 @@
              :message "missing required key :llm/:active-provider"})
 
       provider
-      (into (missing-provider-keys provider provider-cfg)))))
+      (into (missing-provider-keys provider provider-cfg))
+
+      true
+      (into (keep #(positive-number-error cfg %)
+                  [[:loop :max-iterations]
+                   [:loop :summary-max-chars]
+                   [:loop :validation-max-chars]])))))
 
 (defn- validate-config! [cfg]
   (let [errors (config-validation-errors cfg)]
@@ -630,6 +646,10 @@
         openai-base-url (getenv "OPENAI_BASE_URL")
         sqlite-path (getenv "AGENT_SQLITE_PATH")
         chat-max-steps (parse-long* (getenv "AGENT_CHAT_MAX_STEPS"))
+        loop-max-iterations (parse-long* (getenv "AGENT_LOOP_MAX_ITERATIONS"))
+        loop-plan-file (getenv "AGENT_LOOP_PLAN_FILE")
+        loop-summary-max-chars (parse-long* (getenv "AGENT_LOOP_SUMMARY_MAX_CHARS"))
+        loop-validation-max-chars (parse-long* (getenv "AGENT_LOOP_VALIDATION_MAX_CHARS"))
         memory-prompt-paths (parse-csv (getenv "AGENT_MEMORY_PROMPT_PATHS"))
         memory-search-limit (parse-long* (getenv "AGENT_MEMORY_SEARCH_DEFAULT_LIMIT"))
         memory-search-max-limit (parse-long* (getenv "AGENT_MEMORY_SEARCH_MAX_LIMIT"))
@@ -756,6 +776,11 @@
                 sqlite-path (assoc :sqlite {:path sqlite-path}))
      :chat (cond-> {}
              (some? chat-max-steps) (assoc :max-steps chat-max-steps))
+     :loop (cond-> {}
+             (some? loop-max-iterations) (assoc :max-iterations loop-max-iterations)
+             loop-plan-file (assoc :plan-file loop-plan-file)
+             (some? loop-summary-max-chars) (assoc :summary-max-chars loop-summary-max-chars)
+             (some? loop-validation-max-chars) (assoc :validation-max-chars loop-validation-max-chars))
      :nrepl (cond-> {}
               (some? nrepl-enabled) (assoc :enabled nrepl-enabled)
               nrepl-bind (assoc :bind nrepl-bind)
