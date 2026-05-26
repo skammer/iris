@@ -1,6 +1,7 @@
 (ns agent.runtime.nudge-test
   (:require
    [agent.runtime.nudge :as nudge]
+   [clojure.string :as str]
    [clojure.test :refer :all]))
 
 (def profile
@@ -20,7 +21,20 @@
     (is (= :retry (:action verdict)))
     (is (= :bare-text (:reason verdict)))
     (is (= :fatal (:action fatal)))
-    (is (= :guardrail-exhausted (:stop-reason fatal)))))
+    (is (= :guardrail-exhausted (:stop-reason fatal)))
+    (is (str/includes? (:content fatal) "Last issue: bare-text"))))
+
+(deftest internal-stop-text-is-retried-test
+  (let [step {:directives [{:type :complete
+                            :payload {:result "Stopped: guardrail retry budget exhausted."}}]}
+        verdict (nudge/check-before-exec
+                 (assoc profile :nudge-budgets {:premature-final 1})
+                 (nudge/new-state)
+                 {:step step
+                  :llm-response {:content "Stopped: guardrail retry budget exhausted."}
+                  :allowed-tools #{:fs :telegram_send_document}})]
+    (is (= :retry (:action verdict)))
+    (is (= :premature-final (:reason verdict)))))
 
 (deftest repeated-tool-call-fingerprint-test
   (let [step {:directives [{:type :tool-call

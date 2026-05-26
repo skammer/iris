@@ -34,6 +34,16 @@
     (io/delete-file file-path true)
     (.delete root)))
 
+(deftest fs-tool-expands-home-root-and-path-test
+  (let [tool (fs-tool/create-fs-tool {:roots ["~"]})
+        registry (approved-registry tool)
+        home (.getCanonicalPath (io/file (System/getProperty "user.home")))
+        health (tools/health-check tool)
+        result (tools/execute-tool registry :fs {:action :list :path "~"}
+                                   {:permissions #{:filesystem-read}})]
+    (is (= [home] (get-in health [:details :roots])))
+    (is (= home (:path result)))))
+
 (deftest fs-tool-enforces-write-quota-test
   (let [root (temp-dir)
         tool (fs-tool/create-fs-tool {:roots [(.getAbsolutePath root)]

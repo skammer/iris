@@ -12,6 +12,7 @@
    [agent.tools.display :as tool-display]
    [cheshire.core :as json]
    [clj-http.client :as http]
+   [clojure.java.io :as io]
    [clojure.core.async :as async]
    [clojure.string :as str])
   (:import
@@ -43,6 +44,24 @@
   (let [response (http/post (api-url token method)
                             {:body (json/generate-string body)
                              :content-type :json
+                             :accept :json
+                             :as :json
+                             :throw-exceptions false
+                             :socket-timeout 70000
+                             :conn-timeout 10000})
+        payload (parse-body (:body response))]
+    (if (and (<= 200 (:status response) 299) (true? (:ok payload)))
+      (:result payload)
+      (throw (ex-info "Telegram API request failed"
+                      {:type :telegram-api-error
+                       :method method
+                       :status (:status response)
+                       :body payload})))))
+
+(defn api-multipart-request!
+  [token method parts]
+  (let [response (http/post (api-url token method)
+                            {:multipart parts
                              :accept :json
                              :as :json
                              :throw-exceptions false
@@ -158,6 +177,20 @@
   ([token chat-id document] (send-document! token chat-id document nil))
   ([token chat-id document caption]
    (api-request! token "sendDocument" (attachment-payload chat-id :document document caption))))
+
+(defn send-document-file!
+  "Uploads a local file as a Telegram document. Caption is optional."
+  ([token chat-id file] (send-document-file! token chat-id file nil))
+  ([token chat-id file caption]
+   (let [caption-payload (when-not (str/blank? caption)
+                           (text-payload caption))
+         parts (cond-> [{:name "chat_id" :content (str chat-id)}
+                        {:name "document" :content (io/file file)}]
+                 (:text caption-payload)
+                 (conj {:name "caption" :content (:text caption-payload)})
+                 (:parse_mode caption-payload)
+                 (conj {:name "parse_mode" :content (:parse_mode caption-payload)}))]
+     (api-multipart-request! token "sendDocument" parts))))
 
 (defn- id-set [ids]
   (set (map str (or ids []))))

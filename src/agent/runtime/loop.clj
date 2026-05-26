@@ -22,6 +22,11 @@
 (def synthetic-tool-result-content "not executed; retry possible")
 (def empty-assistant-content "(no response)")
 
+(defn- internal-stop-content? [content]
+  (let [content* (str/trim (llm-messages/content-text content))]
+    (or (str/starts-with? content* "Stopped:")
+        (str/starts-with? content* "I couldn't complete this after guardrail retries."))))
+
 (defn- now-str [] (str (Instant/now)))
 
 (defn- event!
@@ -198,11 +203,16 @@
                   acc** (cond-> (update acc* :messages conj message*)
                           (and (not= message message*) (seq rest-messages))
                           (update-in [:repairs :placeholder-assistant-messages] (fnil inc 0)))]
-              (recur rest-messages
-                     acc**
-                     (when (seq tool-calls)
-                       {:ids (set (keep :id tool-calls))
-                        :order (vec (filter :id tool-calls))})))
+              (if (and (internal-stop-content? (:content message*))
+                       (empty? tool-calls))
+                (recur rest-messages
+                       (update-in acc* [:repairs :removed-internal-stop-messages] (fnil inc 0))
+                       nil)
+                (recur rest-messages
+                       acc**
+                       (when (seq tool-calls)
+                         {:ids (set (keep :id tool-calls))
+                          :order (vec (filter :id tool-calls))}))))
 
             "tool"
             (if pending

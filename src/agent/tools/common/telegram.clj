@@ -6,6 +6,7 @@
   (:require
    [agent.telegram :as telegram]
    [agent.tools.core :as tools]
+   [clojure.java.io :as io]
    [clojure.string :as str]))
 
 (defn- require-chat-id! [context tool-name]
@@ -18,6 +19,40 @@
   (when (or (not (string? value)) (str/blank? value))
     (throw (tools/validation-error (str (name tool-name) " requires non-blank " (name field))
                                    {:tool-name tool-name :field field}))))
+
+(def ^:private sample-document-url
+  "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf")
+
+(defn- expand-home [path]
+  (let [home (System/getProperty "user.home")]
+    (cond
+      (= path "~") home
+      (str/starts-with? path "~/") (str home (subs path 1))
+      :else path)))
+
+(defn- canonical-path [path]
+  (.getCanonicalPath (io/file (expand-home path))))
+
+(defn- within-root? [roots path]
+  (let [target (canonical-path path)]
+    (some #(or (= target %)
+               (str/starts-with? target (str % java.io.File/separator)))
+          roots)))
+
+(defn- local-file [roots document]
+  (when (and (string? document)
+             (or (str/starts-with? document "/")
+                 (str/starts-with? document ".")
+                 (str/starts-with? document "~")))
+    (let [path (canonical-path document)
+          file (io/file path)]
+      (when-not (within-root? roots path)
+        (throw (tools/tool-error :path-not-allowed
+                                 "Document path is outside allowed roots"
+                                 {:path path :roots roots})))
+      (when-not (.isFile file)
+        (throw (tools/tool-error :not-found "Document file not found" {:path path})))
+      file)))
 
 (defn create-send-photo-tool
   [{:keys [bot-token]}]
@@ -41,25 +76,40 @@
         {:sent true :chat-id chat-id :photo photo :caption caption}))}))
 
 (defn create-send-document-tool
-  [{:keys [bot-token]}]
-  (tools/create-tool
-   {:description
-    (tools/create-tool-description
-     :telegram_send_document
-     "Send a document/file to the current Telegram chat. Accepts a public URL or a previously-uploaded file_id."
-     :category :messaging
-     :input-schema [:map {:closed true}
-                    [:document :string]
-                    [:caption {:optional true} :string]]
-     :operation :act)
-    :execute-fn
-    (fn [input context]
-      (let [chat-id (require-chat-id! context :telegram_send_document)
-            document (:document input)
-            caption (:caption input)]
-        (require-non-blank! :telegram_send_document :document document)
-        (telegram/send-document! bot-token chat-id document caption)
-        {:sent true :chat-id chat-id :document document :caption caption}))}))
+  [{:keys [bot-token document-roots max-document-bytes]
+    :or {document-roots ["."]
+         max-document-bytes (* 20 1024 1024)}}]
+  (let [roots (mapv canonical-path document-roots)]
+    (tools/create-tool
+     {:description
+      (tools/create-tool-description
+       :telegram_send_document
+       "Send a document/file to the current Telegram chat. Accepts public URL, Telegram file_id, or local path under allowed document roots. If the user asks for any/example document and gives no source, omit document to send a small sample PDF."
+       :category :messaging
+       :input-schema [:map {:closed true}
+                      [:document {:optional true} [:maybe :string]]
+                      [:caption {:optional true} :string]]
+       :operation :act)
+      :execute-fn
+      (fn [input context]
+        (let [chat-id (require-chat-id! context :telegram_send_document)
+              document (if (str/blank? (or (:document input) ""))
+                         sample-document-url
+                         (:document input))
+              caption (:caption input)]
+          (if-let [file (local-file roots document)]
+            (do
+              (when (> (.length file) max-document-bytes)
+                (throw (tools/tool-error :file-too-large
+                                         "Document exceeds max-document-bytes"
+                                         {:path (.getCanonicalPath file)
+                                          :size (.length file)
+                                          :max-document-bytes max-document-bytes})))
+              (telegram/send-document-file! bot-token chat-id file caption)
+              {:sent true :chat-id chat-id :document (.getCanonicalPath file) :caption caption :uploaded? true})
+            (do
+              (telegram/send-document! bot-token chat-id document caption)
+              {:sent true :chat-id chat-id :document document :caption caption}))))})))
 
 (defn enabled?
   [{:keys [bot-token]}]

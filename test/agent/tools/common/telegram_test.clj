@@ -49,6 +49,39 @@
         (is (= "https://example.com/a.pdf" (-> @calls first :body :document)))
         (is (not (contains? (-> @calls first :body) :caption)))))))
 
+(deftest send-document-tool-defaults-sample-document
+  (let [calls (atom [])]
+    (with-redefs [telegram/api-request! (fn [_ method body]
+                                          (swap! calls conj {:method method :body body})
+                                          {:ok true})]
+      (let [tool (t-tool/create-send-document-tool {:bot-token "t"})]
+        (tools/execute tool {} {:telegram-chat-id 200})
+        (is (= "sendDocument" (-> @calls first :method)))
+        (is (= 200 (-> @calls first :body :chat_id)))
+        (is (= "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+               (-> @calls first :body :document)))))))
+
+(deftest send-document-tool-uploads-local-file-inside-root
+  (let [tmp (java.nio.file.Files/createTempDirectory "iris-telegram-doc" (make-array java.nio.file.attribute.FileAttribute 0))
+        file (.resolve tmp "sample.txt")
+        calls (atom [])]
+    (spit (.toFile file) "hello")
+    (with-redefs [telegram/send-document-file! (fn [_ chat-id document caption]
+                                                 (swap! calls conj {:chat-id chat-id
+                                                                    :document document
+                                                                    :caption caption})
+                                                 {:ok true})]
+      (let [tool (t-tool/create-send-document-tool {:bot-token "t"
+                                                    :document-roots [(str tmp)]})
+            result (tools/execute tool
+                                  {:document (str file) :caption "local"}
+                                  {:telegram-chat-id 200})]
+        (is (= true (:uploaded? result)))
+        (is (= 200 (-> @calls first :chat-id)))
+        (is (= (.getCanonicalPath (.toFile file))
+               (.getCanonicalPath (-> @calls first :document))))
+        (is (= "local" (-> @calls first :caption)))))))
+
 (deftest send-photo-tool-validates-input
   (let [tool (t-tool/create-send-photo-tool {:bot-token "t"})
         ex (try (tools/execute tool {:photo ""} {:telegram-chat-id 100})

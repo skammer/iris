@@ -261,6 +261,14 @@
     (is (= runtime-loop/empty-assistant-content
            (get-in messages [0 :content 0 :text])))))
 
+(deftest normalize-chat-history-removes-internal-stop-assistant-test
+  (let [{:keys [messages repairs]}
+        (runtime-loop/normalize-chat-history
+         [{:role "assistant" :content "Stopped: guardrail retry budget exhausted."}
+          {:role "user" :content "next"}])]
+    (is (= 1 (:removed-internal-stop-messages repairs)))
+    (is (= ["user"] (mapv :role messages)))))
+
 (deftest cancellation-test
   (let [cancelled? (atom true)
         {:keys [result events]} (run-loop {:cancellation-token cancelled?
