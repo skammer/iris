@@ -1,6 +1,7 @@
 (ns agent.api-test
   (:require
    [agent.api :as api]
+   [agent.config :as cfg]
    [agent.system :as system]
    [agent.llm.core :as llm-core]
    [agent.llm.messages :as llm-messages]
@@ -168,6 +169,10 @@
         event-sink (system/create-event-sink store event-bus)
         runtime-service (system/create-runtime-service store event-sink)
         config (-> (:config base-system)
+                   (assoc :llm (:llm cfg/default-config)
+                          :chat (:chat cfg/default-config))
+                   (assoc-in [:orchestrator :enabled] false)
+                   (assoc-in [:memory :graph :enabled] false)
                    (assoc :api {:host "127.0.0.1" :port port}
                           :storage {:sqlite {:path path}})
                    config-fn)
@@ -205,6 +210,12 @@
                                              {"X-Api-Key" "secret"}))))
       (is (= 200 (:status (http-get-headers (str base-url "/v1/tools")
                                             {"Authorization" "Bearer secret"}))))
+      (let [disabled-agents (http-get-headers (str base-url "/v1/agents")
+                                              {"Authorization" "Bearer secret"})
+            disabled-body (json/parse-string (:body disabled-agents) true)]
+        (is (= 404 (:status disabled-agents)))
+        (is (= "not_found" (:error disabled-body)))
+        (is (str/includes? (:message disabled-body) "Orchestrator API disabled")))
       (is (= 200 (:status (http-get-headers
                            (str base-url "/ui/dashboard")
 	                           {"Authorization"
@@ -361,7 +372,12 @@
         event-bus (system/create-event-bus)
         event-sink (system/create-event-sink store event-bus)
         runtime-service (system/create-runtime-service store event-sink)
-        config (assoc-in (:config base-system) [:memory :facts :extractor :enabled] false)
+        config (-> (:config base-system)
+                   (assoc :llm (:llm cfg/default-config)
+                          :chat (:chat cfg/default-config))
+                   (assoc-in [:memory :facts :extractor :enabled] false)
+                   (assoc-in [:memory :graph :enabled] false)
+                   (assoc-in [:orchestrator :enabled] true))
         system (assoc base-system
                       :llm-provider (->TestProvider messages*)
                       :store store

@@ -2,23 +2,27 @@
 
 Date: 2026-05-26
 
-Scope: current `/Users/skammer/Code/tmp/clj-agent` after remediation pass.
+Scope: current `/Users/skammer/Code/tmp/clj-agent` after latest remediation pass.
 
 Verification:
 
-- `clojure -M:test -e "(require 'agent.test-runner) (agent.test-runner/run-all-tests)"`
-- Result: 374 tests, 1508 assertions, 0 failures, 0 errors.
-- Caveat: tests are green; remaining items are structural/supportability debt.
+- Focused changed tests pass:
+  `clojure -M:test -e "(require '[clojure.test :as t] 'agent.config-test 'agent.system-test 'agent.api-test 'agent.memory.core-test) (t/run-tests 'agent.config-test 'agent.system-test 'agent.api-test 'agent.memory.core-test)"`
+- Result: 52 tests, 462 assertions, 0 failures, 0 errors.
+- Full suite passes:
+  `clojure -M:test -e "(require 'agent.test-runner) (agent.test-runner/run-all-tests)"`
+- Result: 376 tests, 1518 assertions, 0 failures, 0 errors.
 
 ## Executive Verdict
 
-Security/control-plane bugs from the first report are fixed. Remaining support cost is architectural:
+Security/control-plane bugs are fixed. Public process-local orchestrator APIs are now disabled by default. Remaining support cost is architectural:
 
 - chat state is still process-global instead of a system component
 - runtime migration still has compatibility adapters and legacy event shapes
-- `agent.system`, `agent.chat`, `agent.ui`, `agent.config`, and `agent.orchestrator` are too large
-- streaming/SSE and memory graph failures still rely on best-effort futures/catches
-- orchestrator/federation APIs still expose process-local state as product API
+- `agent.system`, `agent.chat`, `agent.ui`, `agent.config`, and `agent.orchestrator` are still too large
+- streaming/SSE still relies on repeated raw future/catch/close mechanics
+- config loading still mutates disk and normalizes legacy shapes in live path
+- memory graph failures are now visible, but graph reconciliation/noisy Datahike behavior remains unfinished
 
 Weighted confidence: 0.88.
 
@@ -28,18 +32,18 @@ Weighted confidence: 0.88.
 
 Evidence:
 
-- `src/agent/chat.clj:41-44` keeps `defonce` atoms for streaming state, session runtimes, loop workers, and manager lock.
+- `src/agent/chat.clj` still keeps `defonce` atoms for streaming state, session runtimes, loop workers, and manager lock.
 - `src/agent/chat.clj` still starts queue/loop work with raw `future`.
-- `src/agent/system.clj` now calls `chat/stop-all!` on reload/close, but chat manager state is not created, supervised, or injected as a normal system component.
+- `src/agent/system.clj` calls `chat/stop-all!` on reload/close, but chat manager state is not created, supervised, or injected as a normal system component.
 
 Reasoning:
 
-The stale-worker reload bug is mitigated, not architecturally solved. Chat runtime ownership still sits outside `create-system`. That keeps lifecycle, test isolation, cancellation, and reload semantics harder than needed.
+The stale-worker reload bug is mitigated, not architecturally solved. Chat runtime ownership still sits outside `create-system`, so lifecycle, test isolation, cancellation, and reload semantics remain harder than needed.
 
 Fix direction:
 
 - Create explicit `chat-service` component in `create-system`.
-- Move `streaming-state`, `session-runtimes`, and `loop-workers` into that component.
+- Move streaming state, session runtimes, and loop workers into that component.
 - Give it `start!`, `stop!`, `reload!`, `cancel-session!`, and `session-state` API.
 - Inject it into API/UI/Telegram instead of reaching into namespace globals.
 
@@ -49,12 +53,12 @@ Confidence: 0.9.
 
 Evidence:
 
-- `README.md:16` now correctly says compatibility adapters still live in `src`.
+- `README.md` still says compatibility adapters live in `src`.
 - `src/agent/chat.clj` still requires `agent.loop`.
-- `src/agent/system.clj:21`, `src/agent/ui.clj:8`, and `src/agent/api/handlers/agents.clj:12` still require `agent.orchestrator`.
-- `src/agent/api/streaming.clj:2-4` still says legacy stream writers will be deleted later.
-- `src/agent/runtime/schema.clj:243-278` still keeps legacy event mapping.
-- `src/agent/api/serializers.clj:141` still maps legacy events through `legacy-event->canonical`.
+- `src/agent/system.clj`, `src/agent/ui.clj`, and API handlers still require `agent.orchestrator`.
+- `src/agent/api/streaming.clj` still says legacy stream writers will be deleted later.
+- `src/agent/runtime/schema.clj` still keeps legacy event mapping.
+- `src/agent/api/serializers.clj` still maps legacy events through `legacy-event->canonical`.
 
 Reasoning:
 
@@ -65,7 +69,7 @@ Fix direction:
 - Declare `agent.runtime.*` event/directive schema as only internal contract.
 - Move compatibility adapters into one boundary namespace.
 - Delete legacy event emission once API/UI consume canonical events only.
-- Decide whether `agent.orchestrator` is product runtime or experimental module.
+- Keep explicitly experimental modules behind config until persistence/contracts exist.
 
 Confidence: 0.9.
 
@@ -73,14 +77,14 @@ Confidence: 0.9.
 
 Evidence:
 
-- `src/agent/system.clj` is 1324 lines.
-- It builds config, SQLite, telemetry, trace, broker, runtime, memory, LLM, tools, skills, runners, orchestrator, Telegram, channel adapters, API lifecycle.
+- `src/agent/system.clj` is still over 1300 lines.
+- It builds config, SQLite, telemetry, trace, broker, runtime, memory, LLM, tools, skills, runners, orchestrator, Telegram, channel adapters, and API lifecycle.
 - It exposes a broad facade for runtime, runners, orchestrator, chat, API lifecycle, config reload, and health.
 - Run launch/control behavior still exists in both `src/agent/system.clj` and `src/agent/api/handlers/runs.clj`.
 
 Reasoning:
 
-System construction and domain behavior are fused. That makes reload, test setup, and runtime changes require edits in a central high-blast-radius namespace.
+System construction and domain behavior are fused. Reload, test setup, and runtime changes still require edits in a central high-blast-radius namespace.
 
 Fix direction:
 
@@ -94,11 +98,11 @@ Confidence: 0.88.
 
 Evidence:
 
-- `src/agent/runtime/loop.clj:27-37` emits validated runtime events.
+- `src/agent/runtime/loop.clj` emits validated runtime events.
 - `src/agent/chat.clj` translates canonical runtime events into legacy chat events.
 - `src/agent/api/handlers/chat.clj` accepts both old names and new names in stream filters.
-- `src/agent/api/serializers.clj:141` still maps legacy events.
-- `src/agent/runtime/schema.clj:243-278` still has legacy event maps.
+- `src/agent/api/serializers.clj` still maps legacy events.
+- `src/agent/runtime/schema.clj` still has legacy event maps.
 
 Reasoning:
 
@@ -116,10 +120,10 @@ Confidence: 0.88.
 
 Evidence:
 
-- `src/agent/api/handlers/ui.clj:151-229` starts futures, subscribes to events, catches `Throwable`, prints errors, and closes channel manually.
-- `src/agent/api/handlers/chat.clj:97-180` starts futures for streaming chat.
-- `src/agent/api/handlers/runs.clj:276-294` starts a future for run event streaming.
-- `src/agent/api/responses.clj:95-101` still ignores stream writer exceptions.
+- `src/agent/api/handlers/ui.clj` starts futures, subscribes to events, catches `Throwable`, prints errors, and closes channels manually.
+- `src/agent/api/handlers/chat.clj` starts futures for streaming chat.
+- `src/agent/api/handlers/runs.clj` starts a future for run event streaming.
+- `src/agent/api/responses.clj` still ignores stream writer exceptions.
 
 Reasoning:
 
@@ -138,10 +142,10 @@ Confidence: 0.86.
 
 Evidence:
 
-- `src/agent/config.clj:421` starts `bootstrap-global-config!`, which creates config/context files.
-- `src/agent/config.clj:851` calls bootstrap during `load-config`.
-- `src/agent/config.clj:450-490` still normalizes legacy LLM provider shapes in live load path.
-- `src/agent/config.clj:635-830` manually maps many env vars.
+- `src/agent/config.clj` starts `bootstrap-global-config!`, which creates config/context files.
+- `src/agent/config.clj` calls bootstrap during `load-config`.
+- `src/agent/config.clj` still normalizes legacy LLM provider shapes in live load path.
+- `src/agent/config.clj` manually maps many env vars.
 
 Reasoning:
 
@@ -155,56 +159,33 @@ Fix direction:
 
 Confidence: 0.88.
 
-### 7. Memory graph remains best-effort and silent on failure
+### 7. Memory graph remains experimental without reconciliation
 
 Evidence:
 
-- `src/agent/memory/datahike.clj:2` calls the Datahike backend a prototype.
-- `src/agent/memory/core.clj:339` catches graph query exceptions and returns `[]`.
-- `src/agent/memory/core.clj:362` catches graph save exceptions and ignores them.
-- `src/agent/memory/core.clj:385` catches graph remove exceptions and ignores them.
-- Full test output still includes noisy Datahike debug logs.
+- `src/agent/memory/datahike.clj` still calls the Datahike backend a prototype.
+- Graph failures are now recorded in health and `memory.graph.failed` events, but there is no reconciliation command for SQLite facts vs graph facts.
+- Focused/full tests still print noisy Datahike debug logs.
 
 Reasoning:
 
-SQLite facts and graph facts can diverge silently. Search completeness becomes unknowable when graph errors disappear.
+Failure visibility is fixed, but graph completeness is still not auditable. SQLite facts and graph facts can drift without an operator command to compare and repair them.
 
 Fix direction:
 
 - Keep graph backend experimental/off by default.
-- Record graph failures in health and events.
 - Add reconciliation command: SQLite facts vs graph facts.
-- Quiet Datahike test logging.
+- Quiet Datahike test/runtime logging.
 
-Confidence: 0.86.
+Confidence: 0.84.
 
-### 8. Public orchestrator/federation API is still process-local
-
-Evidence:
-
-- `src/agent/orchestrator.clj:2` says "Rewritten in-memory orchestrator/subagent runtime."
-- `src/agent/orchestrator.clj:117-125` creates state as an atom.
-- `src/agent/api/handlers/agents.clj` exposes agents, interop, worker spawn, federation, and channel operations over `/v1`.
-
-Reasoning:
-
-API shape implies durable product behavior, but restart/reload loses agents, channels, peers, deliveries, and messages.
-
-Fix direction:
-
-- Hide endpoints behind `:orchestrator {:enabled false}` until persistence exists, or mark as experimental in API response.
-- Persist orchestrator entities and interop deliveries in SQLite.
-- Add restart/reload tests for agents, channels, federation peers, and interop messages.
-
-Confidence: 0.9.
-
-### 9. Namespace size and hidden failure patterns remain high
+### 8. Namespace size and hidden failure patterns remain high
 
 Evidence:
 
-- Large namespaces: `src/agent/ui.clj` 1371 lines, `src/agent/system.clj` 1324, `src/agent/chat.clj` 983, `src/agent/orchestrator.clj` 934, `src/agent/config.clj` 899, `src/agent/telegram.clj` 871, `src/agent/runtime/loop.clj` 744.
+- Large namespaces remain: `src/agent/ui.clj`, `src/agent/system.clj`, `src/agent/chat.clj`, `src/agent/orchestrator.clj`, `src/agent/config.clj`, `src/agent/telegram.clj`, `src/agent/runtime/loop.clj`.
 - `src` still contains many `defonce`, raw `future`, broad `catch`, `Thread/sleep`, `legacy`, and `println` hits.
-- `src/agent/ui.clj`, `src/agent/memory/core.clj`, `src/agent/tools/common/http.clj`, `src/agent/mcp/core.clj`, and `src/agent/telegram.clj` still swallow exceptions in multiple paths.
+- `src/agent/ui.clj`, `src/agent/tools/common/http.clj`, `src/agent/mcp/core.clj`, and `src/agent/telegram.clj` still swallow exceptions in multiple paths.
 
 Reasoning:
 
@@ -218,32 +199,15 @@ Fix direction:
 
 Confidence: 0.87.
 
-### 10. Minor repo hygiene debt remains
-
-Evidence:
-
-- `scripts/iris-ioslated-rebuild.sh` still exists as typo compatibility shim to `scripts/iris-isolated-rebuild.sh`.
-
-Reasoning:
-
-Small duplicate entrypoints are low risk, but they keep stale names alive.
-
-Fix direction:
-
-- Delete typo shim or add explicit deprecation comment and test.
-
-Confidence: 0.82.
-
 ## Recommended Order
 
 1. Make chat a real system component.
 2. Pick one event contract; delete legacy event adapters.
 3. Split `agent.system` into lifecycle components.
 4. Build shared SSE service.
-5. Decide orchestrator fate: persist or hide.
-6. Make config load pure.
-7. Surface memory graph failures.
-8. Split largest namespaces.
+5. Make config load pure.
+6. Add memory graph reconciliation and quiet Datahike logs.
+7. Split largest namespaces.
 
 ## Test Gaps
 
@@ -251,15 +215,9 @@ Confidence: 0.82.
 - Canonical-only event stream contract.
 - Shared SSE terminal/error/cleanup behavior.
 - Pure config load without filesystem writes.
-- Orchestrator restart/reload behavior.
-- Memory graph failure surfaces in health/events.
+- Memory graph reconciliation behavior.
+- Typed-error coverage for broad-catch paths.
 
 ## Final Confidence
 
 Overall confidence: 0.88.
-
-Key caveats:
-
-- Current full test suite passes.
-- This report intentionally excludes fixed items from the first report.
-- Remaining issues are mostly maintainability/architecture, not known failing tests.

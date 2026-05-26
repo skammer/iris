@@ -54,6 +54,48 @@
     (responses/json-response (if (= :scheduled (:status result)) 202 200)
                              {:data result})))
 
+(def ^:private orchestrator-handler-ids
+  #{:list-agents
+    :create-agent
+    :agent-messages
+    :agent-message
+    :agent-tool-execute
+    :orchestrator-spawn-worker
+    :agent-step-execute
+    :consume-agent-inbox
+    :agent-interop
+    :agent-interop-capabilities
+    :agent-interop-message
+    :agent-interop-messages
+    :agent-interop-ack
+    :agent-interop-retry
+    :list-federated-peers
+    :create-federated-peer
+    :federation-inbox
+    :list-channels
+    :create-channel
+    :channel-messages
+    :channel-message})
+
+(defn- orchestrator-enabled?
+  [system]
+  (true? (get-in (current-system system) [:config :orchestrator :enabled])))
+
+(defn- orchestrator-disabled-response []
+  (responses/json-response
+   404
+   {:error "not_found"
+    :message "Orchestrator API disabled; set AGENT_ORCHESTRATOR_ENABLED=true or :orchestrator {:enabled true}."}))
+
+(defn- maybe-orchestrator-handler
+  [system handler-id handler]
+  (if (contains? orchestrator-handler-ids handler-id)
+    (fn [request]
+      (if (orchestrator-enabled? system)
+        (handler request)
+        (orchestrator-disabled-response)))
+    handler))
+
 (defn- handler-map
   "Map of {handler-id → ring handler fn}. Each fn receives a ring request and
    returns a ring response map (or an http-kit channel for streaming)."
@@ -195,7 +237,10 @@
        (if (and (map? node) (contains? node :handler/id))
          (-> node
              (dissoc :handler/id)
-             (assoc :handler (get handlers (:handler/id node))))
+             (assoc :handler
+                    (maybe-orchestrator-handler system
+                                                (:handler/id node)
+                                                (get handlers (:handler/id node)))))
          node))
      routes/routes)))
 
