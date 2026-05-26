@@ -748,7 +748,7 @@
          state (chat/session-state system session-id)
          streaming (if (contains? opts :streaming)
                      (:streaming opts)
-                     (chat/streaming-content session-id))
+                     (chat/streaming-content system session-id))
          streaming* (when-not (str/blank? (str streaming))
                       (str streaming))]
      (render

@@ -38,31 +38,60 @@
 (defn- request-id []
   (str (UUID/randomUUID)))
 
-(defonce ^:private streaming-state (atom {}))
-(defonce ^:private session-runtimes (atom {}))
-(defonce ^:private loop-workers (atom {}))
-(def ^:private manager-lock (Object.))
-
 (declare emit-session-state! run!)
 
 (def stopped-content runtime-loop/stopped-content)
 
-(defn stop-all!
+(defn create-service
   []
-  (doseq [worker (vals @loop-workers)]
-    (future-cancel worker))
-  (reset! loop-workers {})
-  (reset! session-runtimes {})
-  (reset! streaming-state {})
-  {:stopped true})
+  {:streaming-state (atom {})
+   :session-runtimes (atom {})
+   :loop-workers (atom {})
+   :manager-lock (Object.)})
+
+(defn- require-service [system]
+  (or (:chat-service system)
+      (throw (ex-info "chat-service missing from system"
+                      {:type :chat-service-missing}))))
+
+(defn stop!
+  [service]
+  (if service
+    (do
+      (doseq [worker (vals @(:loop-workers service))]
+        (future-cancel worker))
+      (reset! (:loop-workers service) {})
+      (reset! (:session-runtimes service) {})
+      (reset! (:streaming-state service) {})
+      {:stopped true})
+    {:stopped false}))
+
+(defn reload!
+  [service]
+  (stop! service)
+  (create-service))
+
+(defn health-check
+  [service]
+  (if service
+    (let [runtimes @(:session-runtimes service)]
+      {:healthy true
+       :active-session-count (count (filter :active (vals runtimes)))
+       :queued-count (reduce + (map #(count (:queue %)) (vals runtimes)))
+       :loop-worker-count (count @(:loop-workers service))
+       :streaming-session-count (count @(:streaming-state service))})
+    {:healthy false
+     :reason "chat-service missing"}))
 
 (defn active-run
-  [session-id]
-  (when-let [run (and session-id (get-in @session-runtimes [session-id :active]))]
+  [system session-id]
+  (when-let [run (and session-id
+                      (some-> system :chat-service :session-runtimes deref
+                              (get-in [session-id :active])))]
     (select-keys run [:request-id :started-at])))
 
-(defn active? [session-id]
-  (boolean (active-run session-id)))
+(defn active? [system session-id]
+  (boolean (active-run system session-id)))
 
 (defn- active-llm
   [system]
@@ -70,7 +99,8 @@
 
 (defn session-state
   [system session-id]
-  (let [{:keys [active queue]} (get @session-runtimes session-id)
+  (let [{:keys [active queue]} (some-> system :chat-service :session-runtimes deref
+                                       (get session-id))
         llm (when system (active-llm system))
         loop-state (loop-support/active-state session-id)]
     (cond-> {:working? (boolean active)
@@ -84,30 +114,35 @@
                         :loop-plan (:plan-file loop-state)))))
 
 (defn cancel-session!
-  ([session-id]
-   (locking manager-lock
-     (if-let [{:keys [cancelled? request-id]} (and session-id (get-in @session-runtimes [session-id :active]))]
-       (do
-         (reset! cancelled? true)
-         {:cancelled? true
-          :session-id session-id
-          :request-id request-id})
-       {:cancelled? false
-        :session-id session-id})))
-  ([system session-id]
-   (let [result (cancel-session! session-id)]
-     (when (:cancelled? result)
-       (emit-session-state! system session-id :cancel))
-     result)))
+  [system session-id]
+  (if-let [service (:chat-service system)]
+    (let [result (locking (:manager-lock service)
+                   (if-let [{:keys [cancelled? request-id]}
+                            (and session-id
+                                 (get-in @(:session-runtimes service) [session-id :active]))]
+                     (do
+                       (reset! cancelled? true)
+                       {:cancelled? true
+                        :session-id session-id
+                        :request-id request-id})
+                     {:cancelled? false
+                      :session-id session-id}))]
+      (when (:cancelled? result)
+        (emit-session-state! system session-id :cancel))
+      result)
+    {:cancelled? false
+     :session-id session-id}))
 
 (defn streaming-content
   "Returns in-progress assistant text accumulated for `session-id`, or nil."
-  [session-id]
-  (when session-id (get @streaming-state session-id)))
-
-(defn- clear-streaming! [session-id]
+  [system session-id]
   (when session-id
-    (swap! streaming-state dissoc session-id)))
+    (some-> system :chat-service :streaming-state deref (get session-id))))
+
+(defn- clear-streaming! [system session-id]
+  (when session-id
+    (when-let [state (some-> system :chat-service :streaming-state)]
+      (swap! state dissoc session-id))))
 
 (defn- emit! [system event]
   (if-let [sink (:event-sink system)]
@@ -156,8 +191,8 @@
   {:content content
    :stop-reason :loop-control})
 
-(defn- loop-worker-running? [session-id]
-  (when-let [worker (get @loop-workers session-id)]
+(defn- loop-worker-running? [system session-id]
+  (when-let [worker (get @(-> system require-service :loop-workers) session-id)]
     (not (future-done? worker))))
 
 (defn- loop-complete-message [record]
@@ -191,13 +226,13 @@
                          (str "Loop stopped: " (.getMessage t))
                          {:metadata {:loop-control true :error true}})))
     (finally
-      (swap! loop-workers dissoc session-id)
+      (swap! (:loop-workers (require-service system)) dissoc session-id)
       (emit-session-state! system session-id :loop))))
 
 (defn- start-loop-worker! [system session-id]
-  (when-not (loop-worker-running? session-id)
+  (when-not (loop-worker-running? system session-id)
     (let [worker (future (run-loop-worker! system session-id))]
-      (swap! loop-workers assoc session-id worker))))
+      (swap! (:loop-workers (require-service system)) assoc session-id worker))))
 
 (defn loop-command!
   [system session-id text]
@@ -566,7 +601,7 @@
             (append-message! system session-id "tool" content {:tool-call-id tool-call-id})))))))
 
 (defn- streaming-subscriber
-  [session-id on-delta]
+  [system session-id on-delta]
   (fn [event]
     (let [payload (event-payload event)]
       (cond
@@ -575,13 +610,14 @@
              (not= "" (:delta payload)))
         (do
           (when session-id
-            (swap! streaming-state update session-id (fnil str "") (:delta payload)))
+            (swap! (:streaming-state (require-service system))
+                   update session-id (fnil str "") (:delta payload)))
           (when on-delta
             (on-delta (:delta payload))))
 
         (and (same-event-type? event :message-end)
              (or (:final? payload) (:tool-turn? payload)))
-        (clear-streaming! session-id)))))
+        (clear-streaming! system session-id)))))
 
 (defn- tool-call-subscriber
   [on-tool-call]
@@ -736,7 +772,7 @@
                              (not (false? (get-in system [:config :llm :stream-content?] true))))
         persisted (atom {})
         subscribers [(persistence-subscriber system session-id prompt request-id persisted)
-                     (streaming-subscriber session-id on-delta)
+                     (streaming-subscriber system session-id on-delta)
                      (tool-call-subscriber on-tool-call)
                      (legacy-subscriber system)]
         event-sink* (loop-event-sink system subscribers)
@@ -868,20 +904,21 @@
 (declare run-queued-item!)
 
 (defn- start-next-queued! [system session-id request-id terminal-reason]
-  (let [{:keys [item cleared?]} (locking manager-lock
-                                  (let [{:keys [active queue]} (get @session-runtimes session-id)]
+  (let [service (require-service system)
+        {:keys [item cleared?]} (locking (:manager-lock service)
+                                  (let [{:keys [active queue]} (get @(:session-runtimes service) session-id)]
                                     (when (= request-id (:request-id active))
                                       (if (seq queue)
                                         (let [item (peek queue)
                                               queue* (pop queue)]
-                                          (swap! session-runtimes assoc session-id
+                                          (swap! (:session-runtimes service) assoc session-id
                                                  {:active (active-turn (:request-id item)
                                                                        (:cancelled? item)
                                                                        (get-in item [:opts :stream?]))
                                                   :queue queue*})
                                           {:item item})
                                         (do
-                                          (swap! session-runtimes dissoc session-id)
+                                          (swap! (:session-runtimes service) dissoc session-id)
                                           {:cleared? true})))))]
     (cond
       item
@@ -925,29 +962,30 @@
   (run-active-item! system item))
 
 (defn- begin-managed-run! [system {:keys [session-id stream?] :as opts} request-id cancelled? result]
-  (locking manager-lock
-    (if (get-in @session-runtimes [session-id :active])
-      (let [queued-message (persist-queued-user-turn! system session-id (:messages opts) request-id)
-            item {:opts opts
-                  :request-id request-id
-                  :cancelled? cancelled?
-                  :queued-message queued-message
-                  :result result}]
-        (swap! session-runtimes update session-id enqueue-item item)
-        (emit! system {:event-type :chat.queued
-                       :entity-type :session
-                       :entity-id session-id
-                       :request-id request-id
-                       :payload {:message-id (:id queued-message)
-                                 :queued-count (get-in (session-state system session-id)
-                                                       [:queued-count])}})
-        (emit-session-state! system session-id :queued)
-        :queued)
-      (do
-        (swap! session-runtimes assoc-in [session-id :active]
-               (active-turn request-id cancelled? stream?))
-        (emit-session-state! system session-id :start)
-        :active))))
+  (let [service (require-service system)]
+    (locking (:manager-lock service)
+      (if (get-in @(:session-runtimes service) [session-id :active])
+        (let [queued-message (persist-queued-user-turn! system session-id (:messages opts) request-id)
+              item {:opts opts
+                    :request-id request-id
+                    :cancelled? cancelled?
+                    :queued-message queued-message
+                    :result result}]
+          (swap! (:session-runtimes service) update session-id enqueue-item item)
+          (emit! system {:event-type :chat.queued
+                         :entity-type :session
+                         :entity-id session-id
+                         :request-id request-id
+                         :payload {:message-id (:id queued-message)
+                                   :queued-count (get-in (session-state system session-id)
+                                                         [:queued-count])}})
+          (emit-session-state! system session-id :queued)
+          :queued)
+        (do
+          (swap! (:session-runtimes service) assoc-in [session-id :active]
+                 (active-turn request-id cancelled? stream?))
+          (emit-session-state! system session-id :start)
+          :active)))))
 
 (defn run!
   "Run or queue a chat turn for `session-id`."
