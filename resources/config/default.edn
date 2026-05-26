@@ -243,7 +243,7 @@
          :bind "127.0.0.1"
          :port 0
          :port-file ".nrepl-port"}
- :orchestrator {:enabled true
+ :orchestrator {:enabled false
                 :federation {:timeout-ms 10000
                              :inbox-path "/v1/federation/inbox"
                              :retry-policy {:max-attempts 3

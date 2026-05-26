@@ -116,8 +116,10 @@
 
 (defn create-orchestrator
   ([] (create-orchestrator {}))
-  ([{:keys [event-sink federation-deliver telemetry observer trace]}]
+  ([{:keys [event-sink federation-deliver telemetry observer trace enabled?]
+     :or {enabled? true}}]
    {:state (atom (initial-state))
+    :enabled? (boolean enabled?)
     :federation-deliver federation-deliver
     :event-sink event-sink
     :telemetry telemetry
@@ -141,6 +143,7 @@
   [orchestrator]
   (let [{:keys [agents channels federated-peers interop]} (snapshot orchestrator)]
     {:healthy true
+     :enabled (:enabled? orchestrator)
      :agent-count (count agents)
      :channel-count (count channels)
      :federated-peer-count (count federated-peers)

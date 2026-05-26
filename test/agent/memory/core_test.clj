@@ -26,6 +26,22 @@
   (generate [this messages opts]
     (llm-core/invoke this (assoc opts :messages messages))))
 
+(defrecord FailingGraphBackend []
+  memory/IGraphMemoryBackend
+  (save-fact! [_ _]
+    (throw (ex-info "graph save failed" {:type :graph-save-failed})))
+  (remove-fact! [_ _]
+    (throw (ex-info "graph remove failed" {:type :graph-remove-failed})))
+  (remove-all-facts! [_]
+    (throw (ex-info "graph reset failed" {:type :graph-reset-failed})))
+  (merge-entities! [_ _ _]
+    (throw (ex-info "graph merge failed" {:type :graph-merge-failed})))
+  (query-facts [_ _ _]
+    (throw (ex-info "graph query failed" {:type :graph-query-failed})))
+  (backend-health-check [_]
+    {:healthy true
+     :details {:enabled true}}))
+
 (defn temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-memory-" ".db")))
 
@@ -112,6 +128,35 @@
         (is (= 1 (count same-scope)))
         (is (= [1 2] (:source-message-ids (first same-scope))))
         (is (empty? other-scope)))
+      (finally
+        (io/delete-file db-path true)))))
+
+(deftest graph-failures-are-visible-in-health-and-events-test
+  (let [db-path (temp-db-path)
+        store (sqlite/create-store {:path db-path})
+        service (-> (memory/create-memory-service
+                     {:prompt {:paths []}
+                      :search {:default-limit 10}
+                      :facts {:extractor {:enabled false}}
+                      :graph {:enabled false}}
+                     store)
+                    (assoc :graph-backend (->FailingGraphBackend))
+                    (assoc-in [:config :graph :enabled] true))]
+    (try
+      (memory/save-memory-fact! service
+                                {:subject "Alice"
+                                 :predicate "likes"
+                                 :object "Clojure"})
+      (is (empty? (:graph (memory/search-memory service "Alice"))))
+      (let [health (memory/health-check service)
+            events (sqlite/list-events store {:limit 10})]
+        (is (false? (:healthy health)))
+        (is (= 2 (get-in health [:graph :failures :count])))
+        (is (= [:save :query]
+               (mapv :op (get-in health [:graph :failures :recent]))))
+        (is (= ["memory.graph.failed" "memory.graph.failed"]
+               (mapv :event-type
+                     (filter #(= "memory.graph.failed" (:event-type %)) events)))))
       (finally
         (io/delete-file db-path true)))))
 

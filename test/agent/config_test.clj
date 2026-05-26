@@ -96,7 +96,13 @@
               :port 0
               :port-file ".nrepl-port"}
              (:nrepl cfg)))
+      (is (false? (get-in cfg [:orchestrator :enabled])))
       (is (= "65532:65532" (get-in cfg [:runners :docker :user]))))))
+
+(deftest orchestrator-env-enables-experimental-api-test
+  (with-isolated-config [_root {"AGENT_ORCHESTRATOR_ENABLED" "true"}]
+    (let [cfg (config/load-config)]
+      (is (true? (get-in cfg [:orchestrator :enabled]))))))
 
 (deftest default-data-paths-use-global-data-dir-test
   (with-isolated-config [root {}]

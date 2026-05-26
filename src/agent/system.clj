@@ -400,6 +400,7 @@
    (create-orchestrator cfg event-sink telemetry-collector store nil nil))
   ([cfg event-sink telemetry-collector store observer trace]
    (orchestrator/create-orchestrator {:event-sink event-sink
+                                      :enabled? (true? (:enabled cfg))
                                       :telemetry telemetry-collector
                                       :observer observer
                                       :trace trace
@@ -818,6 +819,10 @@
      :orchestrator (orchestrator/health-check (:orchestrator system))
      :provider (config/active-provider-key (get-in system [:config :llm]))
      :health-snapshot (health/snapshot registry)}))
+
+(defn orchestrator-enabled?
+  [system]
+  (true? (get-in system [:config :orchestrator :enabled])))
 
 (defn log-event!
   [system event]

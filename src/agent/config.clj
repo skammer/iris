@@ -245,7 +245,7 @@
                       :user "65532:65532"
                       :host-working-dir "."
                       :share-network? true}}
-   :orchestrator {:enabled true}
+   :orchestrator {:enabled false}
    :nrepl {:enabled true
            :bind "127.0.0.1"
            :port 0
@@ -710,6 +710,7 @@
         api-host (getenv "AGENT_API_HOST")
         api-key (getenv "AGENT_API_KEY")
         api-port (parse-long* (getenv "AGENT_API_PORT"))
+        orchestrator-enabled (parse-bool (getenv "AGENT_ORCHESTRATOR_ENABLED"))
         runner-default-substrate (keyword-env "AGENT_RUNNER_DEFAULT_SUBSTRATE")
         nrepl-enabled (parse-bool (getenv "AGENT_NREPL_ENABLED"))
         nrepl-bind (getenv "AGENT_NREPL_BIND")
@@ -843,7 +844,9 @@
      :api (cond-> {}
             api-host (assoc :host api-host)
             api-key (assoc :key api-key)
-            (some? api-port) (assoc :port api-port))}))
+            (some? api-port) (assoc :port api-port))
+     :orchestrator (cond-> {}
+                     (some? orchestrator-enabled) (assoc :enabled orchestrator-enabled))}))
 
 (defn load-config
   ([] (load-config nil))

@@ -276,7 +276,31 @@
      :vault-writable? (true? (:writable? vault))
      :fs-roots (canonical-roots (or fs-roots []))
      :graph-backend (create-graph-backend graph)
+     :graph-failures (atom {:count 0 :recent []})
      :store store}))
+
+(defn- graph-failure-entry
+  [op e]
+  {:op op
+   :type (:type (ex-data e))
+   :message (.getMessage e)
+   :at (str (java.time.Instant/now))})
+
+(defn- record-graph-failure!
+  [memory-service op e]
+  (let [entry (graph-failure-entry op e)]
+    (swap! (:graph-failures memory-service)
+           (fn [{:keys [count recent]}]
+             {:count (inc (long (or count 0)))
+              :recent (vec (take-last 10 (conj (or recent []) entry)))}))
+    (try
+      (sqlite/log-event! (:store memory-service)
+                         {:event-type :memory.graph.failed
+                          :entity-type :memory
+                          :entity-id "graph"
+                          :payload (update entry :op name)})
+      (catch Exception _ nil))
+    entry))
 
 (defn list-surfaces
   [memory-service]
@@ -336,7 +360,9 @@
                       (sort-by :score >)
                       (take limit)
                       vec)
-                 (catch Exception _ []))]
+                 (catch Exception e
+                   (record-graph-failure! memory-service :query e)
+                   []))]
      (let [results {:query query
                     :messages messages
                     :events events
@@ -359,7 +385,9 @@
                            (merge fact*
                                   {:id (:id saved)
                                    :session-id (:source-session-id saved)}))
-         (catch Exception _ nil)))
+         (catch Exception e
+           (record-graph-failure! memory-service :save e)
+           nil)))
      (sqlite/log-event! (:store memory-service)
                         {:event-type :memory.fact.saved
                          :entity-type :memory
@@ -382,7 +410,9 @@
                 (true? (get-in memory-service [:config :graph :enabled])))
        (try
          (remove-graph-fact! memory-service fact*)
-         (catch Exception _ nil)))
+         (catch Exception e
+           (record-graph-failure! memory-service :remove e)
+           nil)))
      (sqlite/log-event! (:store memory-service)
                         {:event-type :memory.fact.removed
                          :entity-type :memory
@@ -633,8 +663,15 @@
 
 (defn health-check
   [memory-service]
-  (let [prompt (prompt-documents (:prompt-paths memory-service))]
-    {:healthy true
+  (let [prompt (prompt-documents (:prompt-paths memory-service))
+        graph-health (backend-health-check (:graph-backend memory-service))
+        graph-failures (or (some-> memory-service :graph-failures deref)
+                           {:count 0 :recent []})
+        graph-failed? (pos? (:count graph-failures))
+        graph-health* (cond-> graph-health
+                        graph-failed? (assoc :healthy false
+                                             :failures graph-failures))]
+    {:healthy (not graph-failed?)
      :prompt {:document-count (count prompt)
               :paths (mapv :path prompt)}
      :search {:healthy true
@@ -645,4 +682,4 @@
      :vault {:healthy true
              :paths (:vault-roots memory-service)
              :writable (:vault-writable? memory-service)}
-     :graph (backend-health-check (:graph-backend memory-service))}))
+     :graph graph-health*}))
