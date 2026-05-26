@@ -81,8 +81,9 @@
         system {:runtime-service service
                 :health-registry registry}
         run (system/request-run! system
-                                 (runtime/create-run-request
-                                  {:name "restart-count-test"}))]
+	                                 (runtime/create-run-request
+	                                  {:name "restart-count-test"
+	                                   :substrate :local-unsandboxed}))]
     (try
       (system/retry-run! system (:id run))
       (is (= 1 (get-in (health/snapshot registry)
@@ -164,15 +165,16 @@
                                           {:action "list" :path "."}
                                           {:permissions #{:filesystem-read}
                                            :tool-scopes [:workspace]}))))
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                            #"approved request"
-                            (system/execute-tool {:tool-registry write-registry
-                                                  :config {:tools (:tools config/default-config)}}
-                                                 :fs
-                                                 {:action "write"
-                                                  :path target
-                                                  :content "blocked"}
-                                                 {:permissions #{:filesystem-write}})))
+      (doseq [input [{:action "write" :path target :content "blocked"}
+                     {:action "create" :path target :content "blocked"}
+                     {:action "replace" :path target :old-string "old" :new-string "new"}]]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                              #"approved request"
+                              (system/execute-tool {:tool-registry write-registry
+                                                    :config {:tools (:tools config/default-config)}}
+                                                   :fs
+                                                   input
+                                                   {:permissions #{:filesystem-write}}))))
       (is (:written (system/execute-tool {:tool-registry write-registry
                                           :config {:tools (assoc (:tools config/default-config) :yolo? true)}}
                                          :fs

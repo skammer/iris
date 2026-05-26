@@ -56,5 +56,13 @@
 
 (deftest loop-validation-output-is-capped-test
   (let [output (loop/run-validation "printf 1234567890" {:validation-max-chars 8})]
-    (is (str/starts-with? output "exit 0"))
+    (is (str/starts-with? output "validati"))
     (is (str/includes? output "[truncated"))))
+
+(deftest loop-run-command-does-not-change-validation-command-test
+  (let [session-id (str "loop-test-" (java.util.UUID/randomUUID))]
+    (loop/start! session-id {} "ship")
+    (let [result (loop/handle-control! session-id {} "/loop run rm -rf /")]
+      (is (str/includes? (:content result) "disabled"))
+      (is (nil? (:run-cmd (loop/active-state session-id)))))
+    (loop/stop! session-id)))

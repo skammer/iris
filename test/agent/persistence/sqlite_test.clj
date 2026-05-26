@@ -110,6 +110,54 @@
       (is (string? (:id session))))
     (io/delete-file path true)))
 
+(deftest sqlite-migration-drift-reports-reset-files-test
+  (let [path (temp-db-path)]
+    (Class/forName "org.sqlite.JDBC")
+    (with-open [conn (DriverManager/getConnection (sqlite/jdbc-url path))
+                stmt (.createStatement conn)]
+      (.execute stmt "CREATE TABLE schema_migration_meta (
+                        version INTEGER PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        checksum TEXT NOT NULL,
+                        irreversible INTEGER NOT NULL,
+                        applied_at TEXT NOT NULL
+                      );")
+      (.execute stmt "INSERT INTO schema_migration_meta
+                      (version, name, checksum, irreversible, applied_at)
+                      VALUES (999, 'drift', 'bad', 1, '2026-01-01T00:00:00Z');"))
+    (let [err (try
+                (sqlite/create-store {:path path})
+                nil
+                (catch clojure.lang.ExceptionInfo e
+                  e))]
+      (is (some? err))
+      (is (re-find #"SQLite migration drift detected" (.getMessage err)))
+      (is (= :migration-drift (:type (ex-data err))))
+      (is (some #(= path %) (:files-to-delete (ex-data err)))))
+    (io/delete-file path true)))
+
+(deftest sqlite-migration-drift-can-reset-destructively-test
+  (let [path (temp-db-path)]
+    (Class/forName "org.sqlite.JDBC")
+    (with-open [conn (DriverManager/getConnection (sqlite/jdbc-url path))
+                stmt (.createStatement conn)]
+      (.execute stmt "CREATE TABLE schema_migration_meta (
+                        version INTEGER PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        checksum TEXT NOT NULL,
+                        irreversible INTEGER NOT NULL,
+                        applied_at TEXT NOT NULL
+                      );")
+      (.execute stmt "INSERT INTO schema_migration_meta
+                      (version, name, checksum, irreversible, applied_at)
+                      VALUES (999, 'drift', 'bad', 1, '2026-01-01T00:00:00Z');"))
+    (let [store (sqlite/create-store {:path path
+                                      :destructive-reset-on-drift? true})]
+      (is (= sqlite/latest-schema-version (sqlite/schema-version store)))
+      (is (true? (:healthy (sqlite/health-check store))))
+      (sqlite/close-store! store))
+    (io/delete-file path true)))
+
 (deftest sqlite-memory-search-uses-fts-test
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})

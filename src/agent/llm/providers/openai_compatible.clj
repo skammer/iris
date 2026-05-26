@@ -50,6 +50,12 @@
     (or (str/starts-with? value "anthropic/")
         (str/includes? value "claude"))))
 
+(defn- capability
+  [model-cfg key default]
+  (if (contains? model-cfg key)
+    (true? (get model-cfg key))
+    default))
+
 (defn- prompt-cache-enabled? [config opts]
   (not (false? (if (contains? opts :prompt-cache?)
                  (:prompt-cache? opts)
@@ -373,14 +379,15 @@
         [])))
 
   (get-capabilities [_ model]
-    {:model model
-     :supports-streaming true
-     :supports-embedding true
-     :supports-tools true
-     :supports-vision true
-     :supports-audio true
-     :supports-video true
-     :supports-files true})
+    (let [model-cfg (get-in config [:models model] {})]
+      {:model model
+       :supports-streaming (capability model-cfg :supports-streaming true)
+       :supports-embedding (capability model-cfg :supports-embedding false)
+       :supports-tools (capability model-cfg :supports-tools true)
+       :supports-vision (capability model-cfg :supports-vision false)
+       :supports-audio (capability model-cfg :supports-audio false)
+       :supports-video (capability model-cfg :supports-video false)
+       :supports-files (capability model-cfg :supports-files false)}))
 
   (estimate-cost [_ messages model]
     {:tokens (llm-core/count-tokens-estimate messages)

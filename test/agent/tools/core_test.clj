@@ -118,7 +118,7 @@
                :execute-fn (fn [input _context] input)})
         registry (-> (tools/create-registry)
                      (tools/register-tool tool))
-        approved-registry (tools/with-approval registry (fn [_] nil))]
+        approved-registry (tools/with-approval registry (fn [_] {:allow true}))]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"requires approval policy"
                           (tools/execute-tool registry :sensitive-echo {:message "hi"}

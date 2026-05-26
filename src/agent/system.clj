@@ -652,6 +652,7 @@
         new-cfg (config/load-config (:config-path system*))
         new-system (rebuild-hot-system system* new-cfg)
         result (reload-result :soft old-cfg new-cfg :reloaded)]
+    (chat/stop-all!)
     (logging/start! (:logging new-cfg))
     (reset! system-ref new-system)
     (reset! (:reload-state new-system)
@@ -666,6 +667,10 @@
     result))
 
 (defn- close-system! [system]
+  (try
+    (chat/stop-all!)
+    (catch Exception e
+      (logging/log-error! :agent.system/chat-stop-failed e {})))
   (try
     (some-> (:telegram-service system) channel-adapters/stop-adapter!)
     (catch Exception e
@@ -700,6 +705,7 @@
                      (start-api! new-system**)
                      new-system**)
         result (reload-result :full old-cfg (:config new-system) :reloaded)]
+    (chat/stop-all!)
     (doseq [component [:llm-provider :sqlite :broker :telemetry :runtime
                        :tools :memory :channel-adapters]]
       (health/mark-ok! health-registry component))

@@ -10,7 +10,8 @@
    [agent.persistence.sqlite.schema :as schema]
    [agent.persistence.sqlite.sessions :as sessions]
    [agent.persistence.sqlite.todos :as todos]
-   [agent.persistence.sqlite.tools :as tools]))
+   [agent.persistence.sqlite.tools :as tools]
+   [clojure.java.io :as io]))
 
 (def latest-schema-version migrations/latest-schema-version)
 (def default-busy-timeout-ms common/default-busy-timeout-ms)
@@ -18,7 +19,29 @@
 (defn jdbc-url [path]
   (common/jdbc-url path))
 
-(defn init-store!
+(defn- sqlite-files [path]
+  (mapv #(io/file (str path %)) ["" "-wal" "-shm" "-journal"]))
+
+(defn- delete-sqlite-files! [path]
+  (doseq [file (sqlite-files path)]
+    (when (.exists file)
+      (io/delete-file file true))))
+
+(defn- drift? [e]
+  (= :migration-drift (:type (ex-data e))))
+
+(defn- drift-recovery-error [path cause]
+  (ex-info
+   (str "SQLite migration drift detected. Delete the database files listed in ex-data, "
+        "or set :storage :sqlite :destructive-reset-on-drift? true to rebuild them automatically.")
+   (merge (ex-data cause)
+          {:type :migration-drift
+           :path path
+           :files-to-delete (mapv #(.getAbsolutePath %) (sqlite-files path))
+           :config-option [:storage :sqlite :destructive-reset-on-drift?]})
+   cause))
+
+(defn- open-store!
   [{:keys [path busy-timeout-ms] :as config}]
   (Class/forName "org.sqlite.JDBC")
   (let [store {:path path
@@ -27,9 +50,26 @@
                :tx-lock (Object.)
                :evict-on-close? (true? (:evict-on-close? config))
                :journal-mode (or (:journal-mode config) "WAL")}]
-    (common/apply-journal-mode! store)
-    (migrations/migrate! store)
-    store))
+    (try
+      (common/apply-journal-mode! store)
+      (migrations/migrate! store)
+      store
+      (catch Exception e
+        (common/close-store! store)
+        (throw e)))))
+
+(defn init-store!
+  [{:keys [path destructive-reset-on-drift?] :as config}]
+  (try
+    (open-store! config)
+    (catch Exception e
+      (if (drift? e)
+        (if destructive-reset-on-drift?
+          (do
+            (delete-sqlite-files! path)
+            (open-store! config))
+          (throw (drift-recovery-error path e)))
+        (throw e)))))
 
 (defn create-store [config]
   (init-store! config))

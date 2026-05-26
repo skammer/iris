@@ -1,6 +1,6 @@
 # iris: Isolated Reasoning & Intelligence Substrate
 
-Current canonical runtime is rewritten slice:
+Current canonical runtime lives under `src`:
 
 - `agent.core`
 - `agent.api`
@@ -9,8 +9,11 @@ Current canonical runtime is rewritten slice:
 - `agent.llm.core`
 - `agent.llm.providers.ollama`
 - `agent.llm.providers.openai-compatible`
+- `agent.chat`
+- `agent.runtime.*`
+- `agent.runners.*`
 
-Default path now excludes legacy runtime/modules. Legacy code was quarantined under `legacy_src/`.
+Default classpath is `src` + `resources`. `legacy_src` is available only through the `:legacy` alias. Some compatibility adapters still live in `src`; new work should use `agent.runtime.*`, `agent.runners.*`, and typed API handlers as source of truth.
 
 Run rewritten CLI:
 
@@ -92,19 +95,22 @@ Notes:
   - `AGENT_API_PORT`
 - SQLite env var:
   - `AGENT_SQLITE_PATH`
+  - `AGENT_SQLITE_DESTRUCTIVE_RESET_ON_DRIFT=true`: delete and rebuild SQLite files if migration metadata drift is detected. Default is false; otherwise Iris prints exact files to delete.
+- Runner env var:
+  - `AGENT_RUNNER_DEFAULT_SUBSTRATE=auto|seatbelt|bubblewrap|docker|podman|local-unsandboxed`. `auto` means Seatbelt on macOS, Bubblewrap on Linux.
 - Isolated child runtime env vars:
   - `AGENT_CONTROL_URL`: parent API URL used by container children.
   - `AGENT_BOOTSTRAP_TOKEN`: per-run token; injected by runner.
   - `AGENT_CHILD_SQLITE_PATH`: child-owned SQLite path; not the parent DB.
 - SSE chat streaming is available on rewritten `/v1/chat/completions` with `{\"stream\": true}`.
-- `API.md`, `USAGE.md`, `PROJECT_SUMMARY.md` describe archived legacy system unless rewritten later.
+- `/loop run` and CLI loop `--run` no longer execute shell validation commands. Run checks through approved shell/tool paths.
 
 Runtime isolation note:
 
 - Parent owns durable SQLite run/session state.
 - Docker/Podman children do not mount the parent DB.
-- Container children communicate with parent through `/v1/runs/:run-id/control/*` using the bootstrap token.
-- Local-process children may still use direct SQLite for dev/local compatibility.
+- Child runners communicate with parent through `/v1/runs/:run-id/control/*` using the bootstrap token. These endpoints accept only the run bootstrap token; normal API keys do not authorize run-control calls.
+- API/UI run creation defaults to safe isolation: Seatbelt on macOS, Bubblewrap on Linux. `local-unsandboxed` is explicit dev mode.
 
 ## Run Iris isolated
 
@@ -216,14 +222,16 @@ curl http://localhost:8080/health
 
 Required/important env:
 
-- `AGENT_API_KEY`: required for 0.1 API auth work; set now for deploy parity.
+- `AGENT_API_KEY`: protects `/v1/*` and `/ui/*`, except `/v1/runs/:run-id/control/*`, which uses the per-run bootstrap token.
 - `AGENT_API_HOST=0.0.0.0`: required inside container.
 - `IRIS_DATA_DIR=~/.config/iris/data`: default host data dir. `AGENT_SQLITE_PATH` and `AGENT_MEMORY_GRAPH_PATH` override individual stores.
 - `AGENT_SQLITE_PATH=/app/data/agent.db`: persisted SQLite path.
+- `AGENT_SQLITE_DESTRUCTIVE_RESET_ON_DRIFT=false`: keep false in production unless data loss is acceptable; true rebuilds drifted DB files.
+- `AGENT_RUNNER_DEFAULT_SUBSTRATE=auto`: Seatbelt on macOS, Bubblewrap on Linux.
 - `JAVA_TOOL_OPTIONS=--enable-native-access=ALL-UNNAMED`: suppresses sqlite-jdbc native access warning.
 - Tool permissions/policy: `AGENT_API_TOOL_PERMISSIONS`, `AGENT_UI_TOOL_PERMISSIONS`, `AGENT_AGENT_TOOL_PERMISSIONS`, `AGENT_TOOL_ALLOWLIST`, `AGENT_TOOL_BLOCKLIST`, `AGENT_TOOL_APPROVAL_TTL_SECONDS`, `AGENT_TOOLS_YOLO`.
 - LLM: `AGENT_LLM_PROVIDER`, `AGENT_LLM_MODEL`, plus `OLLAMA_BASE_URL`, `OPENROUTER_API_KEY`, or `OPENAI_API_KEY`.
-- Telegram: see [docs/telegram.md](docs/telegram.md) for setup. Env: `AGENT_TELEGRAM_ENABLED`, `AGENT_TELEGRAM_BOT_TOKEN`, `AGENT_TELEGRAM_ALLOWED_USER_IDS`, `AGENT_TELEGRAM_ALLOWED_CHAT_IDS`, `AGENT_TELEGRAM_ALLOW_ALL`. Empty allowlist denies by default. Telegram chats appear in the Sessions sidebar as `Telegram: <name>`.
+- Telegram: env `AGENT_TELEGRAM_ENABLED`, `AGENT_TELEGRAM_BOT_TOKEN`, `AGENT_TELEGRAM_ALLOWED_USER_IDS`, `AGENT_TELEGRAM_ALLOWED_CHAT_IDS`, `AGENT_TELEGRAM_ALLOW_ALL`. Empty allowlist denies by default. Telegram chats appear in the Sessions sidebar as `Telegram: <name>`.
 - Memory: `AGENT_MEMORY_PROMPT_PATHS`, `AGENT_MEMORY_SEARCH_DEFAULT_LIMIT`, `AGENT_MEMORY_SEARCH_MAX_LIMIT`, `AGENT_MEMORY_GRAPH_ENABLED`, `AGENT_MEMORY_GRAPH_PATH`.
 - Fact extraction: `AGENT_FACT_EXTRACTOR_ENABLED`, `AGENT_FACT_EXTRACTOR_PROVIDER`, `AGENT_FACT_EXTRACTOR_MODEL`.
 - nREPL: `AGENT_NREPL_ENABLED`, `AGENT_NREPL_BIND`, `AGENT_NREPL_PORT`, `AGENT_NREPL_PORT_FILE`. `serve` writes the selected port to `.nrepl-port`.

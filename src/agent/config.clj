@@ -24,7 +24,10 @@
                                   :base-url "https://openrouter.ai/api/v1"
                                   :model "openai/gpt-4o-mini"
                                   :models {"openai/gpt-4o-mini" {:context-window 128000
-                                                                 :max-output-tokens 16384}}
+                                                                 :max-output-tokens 16384
+                                                                 :supports-streaming true
+                                                                 :supports-tools true
+                                                                 :supports-vision true}}
                                   :temperature 0.2
                                   :max-tokens 1024
                                   :stream? false
@@ -38,7 +41,10 @@
                                          :base-url "https://api.openai.com/v1"
                                          :model "gpt-4o-mini"
                                          :models {"gpt-4o-mini" {:context-window 128000
-                                                                :max-output-tokens 16384}}
+                                                                :max-output-tokens 16384
+                                                                :supports-streaming true
+                                                                :supports-tools true
+                                                                :supports-vision true}}
                                          :temperature 0.2
                                          :max-tokens 1024
                                          :stream? false
@@ -49,7 +55,8 @@
                                          :app-name "iris"
                                          :api-key nil}}}
    :storage {:sqlite {:path "data/agent.db"
-                      :journal-mode "WAL"}}
+                      :journal-mode "WAL"
+                      :destructive-reset-on-drift? false}}
    :chat {:max-steps 6
           :profiles {:default {:small-model? false
                               :respond-tool? false
@@ -219,7 +226,8 @@
                                               :chat-ids []}}
                       :discord {:enabled false}
                       :slack {:enabled false}}
-   :runners {:docker {:image "clojure:temurin-21-alpine"
+   :runners {:default-substrate :auto
+             :docker {:image "clojure:temurin-21-alpine"
                       :image-mode :mounted-dev
                       :pull-policy :missing
                       :container-working-dir "/workspace"
@@ -645,6 +653,7 @@
         embedding-model (getenv "OLLAMA_EMBEDDING_MODEL")
         openai-base-url (getenv "OPENAI_BASE_URL")
         sqlite-path (getenv "AGENT_SQLITE_PATH")
+        sqlite-reset-on-drift? (parse-bool (getenv "AGENT_SQLITE_DESTRUCTIVE_RESET_ON_DRIFT"))
         chat-max-steps (parse-long* (getenv "AGENT_CHAT_MAX_STEPS"))
         loop-max-iterations (parse-long* (getenv "AGENT_LOOP_MAX_ITERATIONS"))
         loop-plan-file (getenv "AGENT_LOOP_PLAN_FILE")
@@ -701,6 +710,7 @@
         api-host (getenv "AGENT_API_HOST")
         api-key (getenv "AGENT_API_KEY")
         api-port (parse-long* (getenv "AGENT_API_PORT"))
+        runner-default-substrate (keyword-env "AGENT_RUNNER_DEFAULT_SUBSTRATE")
         nrepl-enabled (parse-bool (getenv "AGENT_NREPL_ENABLED"))
         nrepl-bind (getenv "AGENT_NREPL_BIND")
         nrepl-port (parse-long* (getenv "AGENT_NREPL_PORT"))
@@ -773,7 +783,13 @@
                      (getenv "OPENAI_API_KEY")
                      (assoc :api-key (getenv "OPENAI_API_KEY")))))
      :storage (cond-> {}
-                sqlite-path (assoc :sqlite {:path sqlite-path}))
+                (or sqlite-path (some? sqlite-reset-on-drift?))
+                (assoc :sqlite (cond-> {}
+                                 sqlite-path (assoc :path sqlite-path)
+                                 (some? sqlite-reset-on-drift?)
+                                 (assoc :destructive-reset-on-drift? sqlite-reset-on-drift?))))
+     :runners (cond-> {}
+                runner-default-substrate (assoc :default-substrate runner-default-substrate))
      :chat (cond-> {}
              (some? chat-max-steps) (assoc :max-steps chat-max-steps))
      :loop (cond-> {}

@@ -49,8 +49,12 @@
 
 (defn create-run-request
   [{:keys [idempotency-key agent-id parent-run-id name substrate capabilities network-identity runner-options requested-by]
-    :or {substrate :local-unsandboxed
-         capabilities []}}]
+    :or {capabilities []}}]
+  (when-not substrate
+    (throw (ex-info "Run substrate is required"
+                    {:type :runner-substrate-required
+                     :safe-defaults {:macos :seatbelt
+                                     :linux :bubblewrap}})))
   {:idempotency-key idempotency-key
    :agent-id (or agent-id (str "agent-" (UUID/randomUUID)))
    :parent-run-id parent-run-id

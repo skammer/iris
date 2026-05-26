@@ -12,6 +12,7 @@
    [agent.chat :as chat]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
+   [agent.runners.options :as runner-options]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [agent.ui :as ui]
@@ -479,7 +480,8 @@
         run (runs/request-run! system
                                {:agent-id (not-empty (:agent_id body))
                                 :name (not-empty (:name body))
-                                :substrate (keyword (or (:substrate body) "local-unsandboxed"))
+                                :substrate (or (some-> (:substrate body) keyword)
+                                               (runner-options/default-substrate system))
                                 :runner-options (cond-> {:working-dir (or (:working_dir body) ".")}
                                                   (tools-h/split-command-optional (:command body))
                                                   (assoc :command (tools-h/split-command-optional (:command body)))
