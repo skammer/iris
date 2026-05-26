@@ -62,7 +62,7 @@
     (is (= {:echoed "hi"}
            (tools/execute-tool registry :echo {:message "hi"} {:permissions #{:echo}})))
     (is (= [[:before :echo] [:after :echo]] @hooks))
-    (is (= ["tool.execution.requested" "tool.execution.succeeded"]
+    (is (= ["tool-execution-start" "tool-execution-end"]
            (mapv (comp name :event-type) @events)))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"Insufficient permissions"

@@ -160,27 +160,35 @@
 
 (defn- emit-session-state! [system session-id reason]
   (when (and system session-id)
-    (emit! system {:event-type :chat.state.changed
+    (emit! system {:event-type :session-state-changed
                    :entity-type :session
                    :entity-id session-id
                    :payload (state-event-payload (session-state system session-id)
                                                  reason)})))
 
+(defn- message-end-payload [role content extra]
+  (cond-> {:role role :content content}
+    (:content-blocks extra) (assoc :content-blocks (:content-blocks extra))
+    (:tool-calls extra) (assoc :tool-calls (:tool-calls extra))
+    (:tool-call-id extra) (assoc :tool-call-id (:tool-call-id extra))
+    (:metadata extra) (assoc :metadata (:metadata extra))
+    (:excluded-from-context? extra) (assoc :excluded-from-context? true)))
+
+(defn- append-message-record!
+  ([system session-id role content]
+   (append-message-record! system session-id role content nil))
+  ([system session-id role content extra]
+   (sqlite/append-message! (:store system) session-id role content extra)))
+
 (defn- append-message!
   ([system session-id role content]
    (append-message! system session-id role content nil))
   ([system session-id role content extra]
-   (let [message (sqlite/append-message! (:store system) session-id role content extra)
-         payload (cond-> {:role role :content content}
-                   (:content-blocks extra) (assoc :content-blocks (:content-blocks extra))
-                   (:tool-calls extra) (assoc :tool-calls (:tool-calls extra))
-                   (:tool-call-id extra) (assoc :tool-call-id (:tool-call-id extra))
-                   (:metadata extra) (assoc :metadata (:metadata extra))
-                   (:excluded-from-context? extra) (assoc :excluded-from-context? true))]
-     (emit! system {:event-type :message.appended
+   (let [message (append-message-record! system session-id role content extra)]
+     (emit! system {:event-type :message-end
                     :entity-type :session
                     :entity-id session-id
-                    :payload payload})
+                    :payload (message-end-payload role content extra)})
      message)))
 
 (defn- append-control-turn! [system session-id user-text content metadata]
@@ -308,7 +316,7 @@
     (let [content (llm-messages/content-text message)
           extra (content-blocks-extra message)]
       (when (or (not (str/blank? content)) extra)
-        (append-message! system session-id "user" content extra)))))
+        (append-message-record! system session-id "user" content extra)))))
 
 (defn- compact-memory-json
   "Serializes recalled memory to JSON, capped at memory-max-chars to keep
@@ -414,35 +422,21 @@
                    :requested-by (or session-id "chat")
                    :reason "chat tool call"
                    :expires-at (approval-expires-at system)})]
-    (emit! system {:event-type :chat.tool.approval_required
-                   :entity-type :session
-                   :entity-id session-id
-                   :request-id (:id approval)
-                   :payload {:tool-name (name tool-name)
-                             :approval-id (:id approval)
-                             :input (:input receipt)
-                             :reason (:reason receipt)}})
     approval))
 
 (defn- persist-completion!
   ([system session-id prompt content request-id]
    (persist-completion! system session-id prompt content request-id nil))
-  ([system session-id prompt content request-id extra]
+  ([system session-id prompt content _request-id extra]
   (let [llm (active-llm system)
         assistant-message (when session-id
-                            (append-message! system session-id "assistant" content extra))]
+                            (append-message-record! system session-id "assistant" content extra))]
     (sqlite/log-completion! (:store system)
                             {:session-id session-id
                              :provider (:provider llm)
                              :model (:model llm)
                              :prompt prompt
                              :response content})
-    (emit! system {:event-type :completion.completed
-                   :entity-type :session
-                   :entity-id session-id
-                   :request-id request-id
-                   :payload {:provider (name (:provider llm))
-                             :model (:model llm)}})
     assistant-message)))
 
 (defn- extract-turn-memory! [system session-id user-message assistant-message request-id]
@@ -459,11 +453,12 @@
         :source-request-id request-id
         :model (config/active-model (get-in system [:config :llm]))})
       (catch Exception e
-        (emit! system {:event-type :chat.memory.extract_failed
+        (emit! system {:event-type :message-update
                        :entity-type :session
                        :entity-id session-id
                        :request-id request-id
-                       :payload {:message (.getMessage e)
+                       :payload {:kind :memory-extract-failed
+                                 :message (.getMessage e)
                                  :type (some-> e ex-data :type)}})))))
 
 (defn- error-content [error]
@@ -592,13 +587,13 @@
               (swap! persisted assoc :assistant-message message))
 
             (and session-id (= "assistant" role) audit?)
-            (append-message! system session-id "assistant" content (message-extra payload))
+            (append-message-record! system session-id "assistant" content (message-extra payload))
 
             (and session-id (= "assistant" role) tool-turn?)
-            (append-message! system session-id "assistant" content {:tool-calls tool-calls})
+            (append-message-record! system session-id "assistant" content {:tool-calls tool-calls})
 
             (and session-id (= "tool" role) tool-turn?)
-            (append-message! system session-id "tool" content {:tool-call-id tool-call-id})))))))
+            (append-message-record! system session-id "tool" content {:tool-call-id tool-call-id})))))))
 
 (defn- streaming-subscriber
   [system session-id on-delta]
@@ -628,53 +623,6 @@
         (try
           (on-tool-call {:tool-call tool-call :receipt receipt})
           (catch Exception _ nil))))))
-
-(defn- legacy-event
-  [event event-type payload]
-  {:event-type event-type
-   :entity-type (:entity-type event)
-   :entity-id (:entity-id event)
-   :request-id (:request-id event)
-   :payload payload})
-
-(defn- legacy-subscriber
-  [system]
-  (fn [event]
-    (let [payload (event-payload event)]
-      (case (canonical-event-type event)
-        :agent-start
-        (emit! system (legacy-event event :chat.started payload))
-
-        :message-update
-        (cond
-          (= :memory-recalled (:kind payload))
-          (emit! system (legacy-event event :chat.memory.recalled payload))
-
-          (contains? payload :delta)
-          (emit! system (legacy-event event "chat.delta" {:delta (:delta payload)})))
-
-        :turn-end
-        (emit! system (legacy-event event :chat.planner.step payload))
-
-        :tool-execution-update
-        (when (= :approval-required (:kind payload))
-          (emit! system (legacy-event event :chat.tool.approval_required payload)))
-
-        :message-start
-        (when (:fallback? payload)
-          (emit! system (legacy-event event :chat.fallback_completion payload)))
-
-        :agent-end
-        (case (keyword (:stop-reason payload))
-          :planner-error (emit! system (legacy-event event :chat.error payload))
-          :cancelled (emit! system (legacy-event event :chat.cancelled payload))
-          :max-tokens (emit! system (legacy-event event :chat.failed payload))
-          :error (emit! system (legacy-event event :chat.failed payload))
-          (:completed :approval-required :max-steps)
-          (emit! system (legacy-event event :chat.completed payload))
-          nil)
-
-        nil))))
 
 (defn- consume-llm-stream-with!
   [ch emit-delta]
@@ -740,7 +688,7 @@
 
 (defn- run-turn!
   "Run a chat turn for `session-id`. Public wrapper keeps persistence, transport
-   callbacks, and legacy events around the evented runtime loop."
+   callbacks, and runtime events around the evented runtime loop."
   [system {:keys [messages session-id max-steps context on-delta on-tool-call stream?
                   cancellation-token persist-user? user-message]
            :or {persist-user? true}
@@ -773,8 +721,7 @@
         persisted (atom {})
         subscribers [(persistence-subscriber system session-id prompt request-id persisted)
                      (streaming-subscriber system session-id on-delta)
-                     (tool-call-subscriber on-tool-call)
-                     (legacy-subscriber system)]
+                     (tool-call-subscriber on-tool-call)]
         event-sink* (loop-event-sink system subscribers)
         flusher (stream-delta-flusher event-sink*)
         event-sink (:emit! flusher)
@@ -872,11 +819,11 @@
                         :excluded-from-context? true
                         :select-leaf? false})]
       (when (or (not (str/blank? content)) (:content-blocks extra))
-        (append-message! system
-                         session-id
-                         "user"
-                         content
-                         extra)))))
+        (append-message-record! system
+                                session-id
+                                "user"
+                                content
+                                extra)))))
 
 (defn- activate-queued-message! [system {:keys [queued-message request-id]}]
   (when queued-message
@@ -972,7 +919,7 @@
                     :queued-message queued-message
                     :result result}]
           (swap! (:session-runtimes service) update session-id enqueue-item item)
-          (emit! system {:event-type :chat.queued
+          (emit! system {:event-type :turn-queued
                          :entity-type :session
                          :entity-id session-id
                          :request-id request-id

@@ -1,7 +1,7 @@
 (ns agent.api.serializers
   "Pure transforms from internal entity maps to JSON-shaped response maps."
   (:require
-   [agent.runtime.schema :as runtime-schema]
+   [agent.api.event-compat :as event-compat]
    [clojure.string :as str]))
 
 (defn session->response [session]
@@ -120,26 +120,14 @@
    :created_at (:created-at message)})
 
 (defn event->response [event]
-  {:id (:id event)
-   :event_type (:event-type event)
-   :entity_type (:entity-type event)
-   :entity_id (:entity-id event)
-   :request_id (:request-id event)
-   :payload (:payload event)
-   :created_at (:created-at event)})
-
-(defn canonical-event->response [event]
-  {:event_type (some-> (:event-type event) name)
-   :entity_type (:entity-type event)
-   :entity_id (:entity-id event)
-   :request_id (:request-id event)
-   :payload (:payload event)
-   :timestamp (:timestamp event)})
-
-(defn event->canonical-response [event]
-  (some-> event
-          runtime-schema/legacy-event->canonical
-          canonical-event->response))
+  (let [event* (event-compat/canonicalize-event event)]
+    {:id (:id event*)
+     :event_type (:event-type event*)
+     :entity_type (:entity-type event*)
+     :entity_id (:entity-id event*)
+     :request_id (:request-id event*)
+     :payload (:payload event*)
+     :created_at (:created-at event*)}))
 
 (defn approval->response [approval]
   {:id (:id approval)

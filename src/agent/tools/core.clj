@@ -316,7 +316,7 @@
          (throw (permission-error required actual)))
        (let [validated-input ((:validate-fn tool) input)]
          (emit-event! registry
-                      {:event-type :tool.execution.requested
+                      {:event-type :tool-execution-start
                        :entity-type :tool
                        :entity-id (name tool-name)
                        :request-id (:request-id context*)
@@ -328,11 +328,12 @@
                                (before-execute (hook-context tool-description validated-input context*)))]
            (when (:block decision)
              (emit-event! registry
-                          {:event-type :tool.execution.blocked
+                          {:event-type :tool-execution-end
                            :entity-type :tool
                            :entity-id (name tool-name)
                            :request-id (:request-id context*)
                            :payload {:tool-name (name tool-name)
+                                     :status "blocked"
                                      :reason (:reason decision)}})
              (throw (tool-error :tool-blocked
                                 (or (:reason decision) "Tool execution blocked")
@@ -341,11 +342,12 @@
            (enforce-approval! registry tool tool-description validated-input context*)
            (catch Exception e
              (emit-event! registry
-                          {:event-type :tool.execution.blocked
+                          {:event-type :tool-execution-end
                            :entity-type :tool
                            :entity-id (name tool-name)
                            :request-id (:request-id context*)
                            :payload {:tool-name (name tool-name)
+                                     :status "blocked"
                                      :reason (.getMessage e)}})
              (throw e)))
          (let [start-ns (System/nanoTime)]
@@ -365,11 +367,12 @@
                                     (or (:result hook-result) result))
                                   result)]
                (emit-event! registry
-                            {:event-type :tool.execution.succeeded
+                            {:event-type :tool-execution-end
                              :entity-type :tool
                              :entity-id (name tool-name)
                              :request-id (:request-id context*)
                              :payload {:tool-name (name tool-name)
+                                       :status "succeeded"
                                        :source (name (:source tool-description))
                                        :input validated-input
                                        :result final-result}})
@@ -382,11 +385,12 @@
                                        :duration-ms duration-ms
                                        :is-error true)))
                  (emit-event! registry
-                              {:event-type :tool.execution.failed
+                              {:event-type :tool-execution-end
                                :entity-type :tool
                                :entity-id (name tool-name)
                                :request-id (:request-id context*)
                                :payload {:tool-name (name tool-name)
+                                         :status "failed"
                                          :source (name (:source tool-description))
                                          :input validated-input
                                          :error (.getMessage e)}})

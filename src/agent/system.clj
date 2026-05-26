@@ -213,7 +213,10 @@
     :turn-id (:request-id recorded)
     :channel (when (= "channel" entity-type)
                (:entity-id recorded))
-    :success (not (or (contains? #{"chat.failed" "telegram.error"} (:event-type recorded))
+    :success (not (or (= "telegram.error" (:event-type recorded))
+                      (and (= "agent-end" (:event-type recorded))
+                           (contains? #{"error" "planner-error" "max-tokens"}
+                                      (some-> (get-in recorded [:payload :stop-reason]) name)))
                       (= "failed" (get-in recorded [:payload :status]))))
     :error-message (or (get-in recorded [:payload :message])
                        (get-in recorded [:payload :error]))
@@ -834,17 +837,6 @@
 (defn log-event!
   [system event]
   ((:event-sink system) event))
-
-(defn- append-session-message!
-  [system session-id role content]
-  (let [message (sqlite/append-message! (:store system) session-id role content)]
-    (log-event! system
-                {:event-type :message.appended
-                 :entity-type :session
-                 :entity-id session-id
-                 :payload {:role role
-                           :content content}})
-    message))
 
 (defn- prepare-runner-options
   [system run]

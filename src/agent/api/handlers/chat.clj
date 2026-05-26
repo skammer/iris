@@ -17,19 +17,14 @@
 (defn- chat-stream-progress-event? [event session-id]
   (and (= "session" (:entity-type event))
        (= session-id (:entity-id event))
-       (contains? #{"chat.started"
-                    "chat.memory.recalled"
-                    "chat.planner.step"
-                    "chat.tool.approval_required"
-                    "chat.fallback_completion"
-                    "chat.state.changed"
-                    "tool.execution.succeeded"
-                    "tool.execution.failed"
-                    "agent-start"
+       (contains? #{"agent-start"
                     "turn-start"
                     "turn-end"
                     "message-start"
                     "message-end"
+                    "session-state-changed"
+                    "turn-queued"
+                    "tool-execution-start"
                     "tool-execution-update"
                     "tool-execution-end"}
                   (:event-type event))))
@@ -43,8 +38,7 @@
 (defn- chat-stream-terminal-event? [event session-id]
   (and (= "session" (:entity-type event))
        (= session-id (:entity-id event))
-       (contains? #{"agent-end" "chat.completed" "chat.cancelled" "chat.failed"}
-                  (:event-type event))))
+       (= "agent-end" (:event-type event))))
 
 (defn- openai-style-completion [system session-id content]
   (let [llm (config/active-provider-config (get-in system [:config :llm]))]
