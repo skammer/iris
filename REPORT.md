@@ -6,9 +6,15 @@ Scope: current `/Users/skammer/Code/tmp/clj-agent` after latest remediation pass
 
 Verification:
 
-- Latest focused SSE/API tests pass:
-  `IRIS_CONFIG_DIR=/private/tmp/iris-sse-refactor-config IRIS_DATA_DIR=/private/tmp/iris-sse-refactor-data clojure -M:test -e "(require 'agent.api-test :reload 'agent.ui-test :reload 'agent.system-test :reload 'agent.chat-test :reload 'agent.runtime.child-test :reload) (clojure.test/run-tests 'agent.api-test 'agent.ui-test 'agent.system-test 'agent.chat-test 'agent.runtime.child-test)"`
-- Result: 67 tests, 505 assertions, 0 failures, 0 errors.
+- Latest large-namespace refactor seam tests pass:
+  `IRIS_CONFIG_DIR=/private/tmp/iris-refactor-config IRIS_DATA_DIR=/private/tmp/iris-refactor-data clojure -M:test -e "(require 'agent.config-test :reload 'agent.ui-test :reload 'agent.runtime.loop-test :reload 'agent.chat-test :reload) (clojure.test/run-tests 'agent.config-test 'agent.ui-test 'agent.runtime.loop-test 'agent.chat-test)"`
+- Result: 93 tests, 364 assertions, 0 failures, 0 errors.
+- Latest changed-file lint passes:
+  `clj-kondo --lint src/agent/config.clj src/agent/config/env.clj src/agent/runtime/loop.clj src/agent/runtime/messages.clj src/agent/ui.clj src/agent/ui/memory.clj`
+- Result: 0 errors, 0 warnings.
+- Latest focused API/UI/system tests pass:
+  `IRIS_CONFIG_DIR=/private/tmp/iris-refactor-api-config IRIS_DATA_DIR=/private/tmp/iris-refactor-api-data clojure -M:test -e "(require 'agent.api-test :reload 'agent.api-smoke-test :reload 'agent.system-test :reload 'agent.ui-test :reload 'agent.chat-test :reload 'agent.runtime.child-test :reload) (clojure.test/run-tests 'agent.api-test 'agent.api-smoke-test 'agent.system-test 'agent.ui-test 'agent.chat-test 'agent.runtime.child-test)"`
+- Result: 78 tests, 542 assertions, 0 failures, 0 errors.
 - Latest memory reconciliation tests pass:
   `clojure -M:test -e "(require 'agent.memory.core-test :reload 'agent.cli-test :reload 'agent.tools.common.memory-test :reload) (clojure.test/run-tests 'agent.memory.core-test 'agent.cli-test 'agent.tools.common.memory-test)"`
 - Result: 28 tests, 122 assertions, 0 failures, 0 errors.
@@ -22,11 +28,12 @@ Security/control-plane bugs are fixed. Public process-local orchestrator APIs ar
 - chat state moved into a system-owned `chat-service`
 - runtime/chat/API event contract is now canonical; historical event conversion moved to one API boundary
 - SSE lifecycle/error/cleanup mechanics moved into one managed streaming service
+- UI memory rendering, runtime message repair, and config env overrides moved into owner namespaces
 
 Remaining support cost is architectural:
 
 - `agent.chat`, `agent.ui`, `agent.config`, and `agent.orchestrator` are still too large
-- config loading still mutates disk and normalizes legacy shapes in live path
+- config still concentrates defaults, migration, validation, and path finalization in one namespace
 - memory graph remains experimental/off by default, but SQLite-vs-graph reconciliation and Datahike log noise are fixed
 
 Weighted confidence: 0.88.
@@ -147,7 +154,7 @@ Evidence:
 - `src/agent/config.clj` now exposes explicit `init-config!` for writing missing global files.
 - `src/agent/config.clj` `load-config` only reads, merges, applies env overrides, finalizes paths, and validates.
 - Legacy LLM provider-shape conversion moved to `migrate-legacy-config` / `migrate-config-file`; live load rejects legacy keys.
-- Env overrides are declared in one `env-overrides` table.
+- Env overrides are declared in `src/agent/config/env.clj`.
 - `src/agent/cli.clj` adds `config init` and `config migrate path/to/config.edn`.
 
 Reasoning:
@@ -181,10 +188,13 @@ Status: partially fixed.
 
 Evidence:
 
-- Large namespaces remain: `src/agent/ui.clj`, `src/agent/system.clj`, `src/agent/chat.clj`, `src/agent/orchestrator.clj`, `src/agent/config.clj`, `src/agent/telegram.clj`, `src/agent/runtime/loop.clj`.
-- Current large namespace line counts: `src/agent/ui.clj` 1153 plus `src/agent/ui/render.clj` 224 extracted, `src/agent/chat.clj` 985, `src/agent/orchestrator.clj` 937, `src/agent/telegram.clj` 919, `src/agent/config.clj` 817, `src/agent/runtime/loop.clj` 754.
+- Large namespaces remain: `src/agent/chat.clj`, `src/agent/orchestrator.clj`, `src/agent/telegram.clj`, `src/agent/memory/core.clj`, `src/agent/config.clj`, `src/agent/persistence/sqlite/migrations.clj`, and `src/agent/runtime/loop.clj`.
+- Current large namespace line counts after this refactor: `src/agent/chat.clj` 985, `src/agent/orchestrator.clj` 937, `src/agent/telegram.clj` 919, `src/agent/memory/core.clj` 835, `src/agent/config.clj` 682 plus `src/agent/config/env.clj` 140 extracted, `src/agent/runtime/loop.clj` 591 plus `src/agent/runtime/messages.clj` 182 extracted, `src/agent/ui.clj` 879 plus `src/agent/ui/render.clj` 224 and `src/agent/ui/memory.clj` 289 extracted.
 - `src` still contains many `defonce`, raw `future`, broad `catch`, `Thread/sleep`, `legacy`, and `println` hits.
 - UI message/tool/run rendering helpers moved from `src/agent/ui.clj` to `src/agent/ui/render.clj`, reducing the biggest namespace by 218 lines while keeping route/panel ownership in `agent.ui`.
+- UI memory workspace/results moved from `src/agent/ui.clj` to `src/agent/ui/memory.clj`; `agent.ui` keeps compatibility facade vars for API handlers/tests.
+- Runtime tool-protocol history repair and synthetic tool-result construction moved from `src/agent/runtime/loop.clj` to `src/agent/runtime/messages.clj`; `agent.runtime.loop` keeps its public constants/functions as aliases.
+- Config environment parsing and override dispatch moved from `src/agent/config.clj` to `src/agent/config/env.clj`; `agent.config/load-config` remains the single public load path.
 - Chat stream callbacks, tool-call callbacks, persistence subscribers, and auto-compaction failures now emit `:chat.operation.failed` instead of disappearing inside catch blocks.
 - Telegram draft, tool-summary, and typing delivery failures now emit `:telegram.operation.failed` events instead of disappearing silently.
 - MCP initialized-notification failure is preserved on the returned client as `:initialized-notification-error`.
@@ -194,7 +204,7 @@ Evidence:
 
 Reasoning:
 
-The codebase remains hard to support because ownership is not visually obvious. Large namespaces hide local invariants; broad catches hide causality. This pass split one clear UI ownership seam and made the highest-risk callback, compaction, Telegram delivery, MCP initialization, and HTTP JSON parse failures observable. It did not split `chat`, `orchestrator`, `config`, or `runtime/loop`.
+The codebase remains hard to support because ownership is not visually obvious. Large namespaces hide local invariants; broad catches hide causality. This pass split UI memory rendering, runtime message/protocol repair, and config env override ownership while preserving public facades. Earlier work split one UI rendering seam and made the highest-risk callback, compaction, Telegram delivery, MCP initialization, and HTTP JSON parse failures observable. It did not split `chat`, `orchestrator`, `telegram`, or memory core.
 
 Fix direction:
 
