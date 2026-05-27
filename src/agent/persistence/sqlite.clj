@@ -215,6 +215,10 @@
 (defn count-memory-facts [store]
   (memory/count-facts store))
 
+(defn list-memory-facts
+  ([store] (memory/list-facts store))
+  ([store opts] (memory/list-facts store opts)))
+
 (defn save-todo-list! [store todo-list]
   (todos/save-list! store todo-list))
 
