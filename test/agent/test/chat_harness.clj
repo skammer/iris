@@ -3,8 +3,12 @@
    [agent.api :as api]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
+   [agent.runs.service :as runs]
    [agent.system :as system]
+   [agent.system.components :as components]
+   [agent.system.events :as events]
    [agent.test.predictable :as predictable]
+   [agent.tools.service :as tool-service]
    [cheshire.core :as json]
    [clojure.java.io :as io]
    [clojure.string :as str])
@@ -45,9 +49,9 @@
         base-url (str "http://127.0.0.1:" port)
         base-system (system/create-system)
         store (sqlite/create-store {:path path})
-        event-bus (system/create-event-bus)
-        event-sink (system/create-event-sink store event-bus)
-        runtime-service (system/create-runtime-service store event-sink)
+        event-bus (events/create-event-bus)
+        event-sink (events/create-event-sink store event-bus)
+        runtime-service (runs/create-runtime-service store event-sink)
         provider (predictable/create-provider)
         config (-> (:config base-system)
                    (assoc :api {:host "127.0.0.1" :port port}
@@ -64,11 +68,11 @@
                       :store store
                       :event-bus event-bus
                       :event-sink event-sink
-                      :tool-registry (system/create-tool-registry (:tools config) event-sink store)
+                      :tool-registry (tool-service/create-tool-registry (:tools config) event-sink store)
                       :memory-service (memory/create-memory-service (:memory config) store)
                       :runtime-service runtime-service
-                      :runner-registry (system/create-runner-registry runtime-service)
-                      :orchestrator (system/create-orchestrator (:orchestrator config) event-sink)
+                      :runner-registry (runs/create-runner-registry runtime-service)
+                      :orchestrator (components/create-orchestrator (:orchestrator config) event-sink)
                       :config config)
         server (api/start-server! system {:host "127.0.0.1" :port port})]
     {:path path

@@ -2,6 +2,8 @@
   (:require
    [agent.system :as system]
    [agent.persistence.sqlite :as sqlite]
+   [agent.runs.service :as runs]
+   [agent.system.events :as events]
    [clojure.java.io :as io]
    [clojure.java.shell :as sh]
    [clojure.test :refer :all])
@@ -46,9 +48,9 @@
         port (free-port)
         store (sqlite/create-store {:path path
                                     :journal-mode "DELETE"})
-        event-bus (system/create-event-bus)
-        event-sink (system/create-event-sink store event-bus)
-        runtime-service (system/create-runtime-service store event-sink)
+        event-bus (events/create-event-bus)
+        event-sink (events/create-event-sink store event-bus)
+        runtime-service (runs/create-runtime-service store event-sink)
         base-system {:config {:api {:host "0.0.0.0"
                                     :port port}
                               :storage {:sqlite {:path path
@@ -63,43 +65,43 @@
                      :event-bus event-bus
                      :event-sink event-sink
                      :runtime-service runtime-service
-                     :runner-registry (system/create-runner-registry runtime-service)}
+                     :runner-registry (runs/create-runner-registry runtime-service)}
         system (system/start-api! base-system)
-        run (system/request-run! system {:agent-id (str engine "-child-agent")
+        run (runs/request-run! system {:agent-id (str engine "-child-agent")
                                        :name (str engine "-child-runtime")
                                        :substrate (keyword engine)
                                        :requested-by "tester"})
         run-id (:id run)]
     (try
-      (system/launch-run! system run-id)
+      (runs/launch-run! system run-id)
       ;; Docker Desktop bind-mounted SQLite can throw transient VFS write errors
       ;; if the parent polls while the child is still opening the database.
       (Thread/sleep 6000)
-      (is (wait-until #(when (= "running" (:status (system/get-run system run-id)))
-                         (system/get-run system run-id))
+      (is (wait-until #(when (= "running" (:status (runs/get-run system run-id)))
+                         (runs/get-run system run-id))
                       60000))
-        (let [_ (system/enqueue-run-command! system run-id {:command-type :ping
+        (let [_ (runs/enqueue-run-command! system run-id {:command-type :ping
                                                           :payload {}})
-              _ (system/enqueue-run-command! system run-id {:command-type :run-task
+              _ (runs/enqueue-run-command! system run-id {:command-type :run-task
                                                           :payload {:task engine
                                                                     :sleep-ms 25}})
               _ (is (wait-until #(when (and (some (fn [command]
                                                     (= "completed" (:status command)))
-                                                  (system/list-run-commands system run-id))
+                                                  (runs/list-run-commands system run-id))
                                           (some (fn [checkpoint]
                                                   (= "task" (:checkpoint-type checkpoint)))
-                                                (system/list-run-checkpoints system run-id {:limit 20})))
+                                                (runs/list-run-checkpoints system run-id {:limit 20})))
                                    true)
                                 60000))
-            commands (system/list-run-commands system run-id)
-            checkpoints (system/list-run-checkpoints system run-id {:limit 20})
+            commands (runs/list-run-commands system run-id)
+            checkpoints (runs/list-run-checkpoints system run-id {:limit 20})
             output-events (sqlite/list-events store {:entity-type :agent_run
                                                      :entity-id run-id
                                                      :limit 100})
-            _ (system/enqueue-run-command! system run-id {:command-type :cancel
+            _ (runs/enqueue-run-command! system run-id {:command-type :cancel
                                                         :payload {:reason "test"}})
-            cancelled-run (wait-until #(when (= "cancelled" (:status (system/get-run system run-id)))
-                                         (system/get-run system run-id))
+            cancelled-run (wait-until #(when (= "cancelled" (:status (runs/get-run system run-id)))
+                                         (runs/get-run system run-id))
                                       30000)]
         (is (some #(= "completed" (:status %)) commands))
         (is (some #(= "task" (:checkpoint-type %)) checkpoints))
@@ -108,8 +110,8 @@
                   output-events))
         (is cancelled-run))
       (finally
-        (when (get-in (system/runner-status system run-id) [:alive])
-          (system/signal-run! system run-id {:command-type :kill}))
+        (when (get-in (runs/runner-status system run-id) [:alive])
+          (runs/signal-run! system run-id {:command-type :kill}))
         (system/stop-api! system)
         (io/delete-file path true)))))
 

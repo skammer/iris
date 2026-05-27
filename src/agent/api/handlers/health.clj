@@ -7,5 +7,5 @@
   (health/mark-ok! (:health-registry system) :api)
   (responses/json-response
    200
-   (assoc ((requiring-resolve 'agent.system/health-check) system)
+   (assoc ((get-in system [:system-control :health-check]) system)
           :ok true)))

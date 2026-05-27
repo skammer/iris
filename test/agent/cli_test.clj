@@ -1,7 +1,9 @@
 (ns agent.cli-test
   (:require
+   [agent.chat :as chat]
    [agent.cli :as cli]
    [agent.logging :as logging]
+   [agent.sessions.service :as sessions]
    [agent.system :as system]
    [clojure.string :as str]
    [clojure.test :refer :all]))
@@ -40,13 +42,13 @@
 (deftest loop-cli-runs-one-iteration-test
   (let [calls (atom [])]
     (with-redefs [system/create-system (fn [_] ::system)
-                  system/create-session! (fn [_ title]
+                  sessions/create-session! (fn [_ title]
                                            (swap! calls conj [:create title])
                                            {:id "loop-session"})
-                  system/complete! (fn [_ messages opts]
-                                     (swap! calls conj [:complete (:content (first messages)) (:session-id opts)])
-                                     ((:on-delta opts) "done")
-                                     {:content "done"})
+                  chat/run! (fn [_ opts]
+                              (swap! calls conj [:complete (:content (first (:messages opts))) (:session-id opts)])
+                              ((:on-delta opts) "done")
+                              {:content "done"})
                   logging/log! (fn [& _] nil)]
       (is (= "done\n"
              (with-out-str
@@ -59,12 +61,12 @@
 (deftest loop-cli-uses-configured-max-and-rejects-invalid-max-test
   (let [calls (atom [])]
     (with-redefs [system/create-system (fn [_] {:config {:loop {:max-iterations 1}}})
-                  system/create-session! (fn [_ title]
+                  sessions/create-session! (fn [_ title]
                                            (swap! calls conj [:create title])
                                            {:id "loop-session"})
-                  system/complete! (fn [_ messages opts]
-                                     (swap! calls conj [:complete (:content (first messages)) (:session-id opts)])
-                                     {:content "done"})
+                  chat/run! (fn [_ opts]
+                              (swap! calls conj [:complete (:content (first (:messages opts))) (:session-id opts)])
+                              {:content "done"})
                   logging/log! (fn [& _] nil)]
       (is (= "done\n"
              (with-out-str
@@ -79,13 +81,13 @@
 (deftest prompt-cli-creates-session-and-streams-test
   (let [calls (atom [])]
     (with-redefs [system/create-system (fn [_] ::system)
-                  system/create-session! (fn [_ title]
+                  sessions/create-session! (fn [_ title]
                                            (swap! calls conj [:create title])
                                            {:id "new-session"})
-                  system/complete! (fn [_ messages opts]
-                                     (swap! calls conj [:complete messages (:session-id opts)])
-                                     ((:on-delta opts) "streamed")
-                                     {:content "final"})
+                  chat/run! (fn [_ opts]
+                              (swap! calls conj [:complete (:messages opts) (:session-id opts)])
+                              ((:on-delta opts) "streamed")
+                              {:content "final"})
                   logging/log! (fn [& _] nil)]
       (is (= "streamed\n"
              (with-out-str
@@ -99,13 +101,13 @@
                   {:id "older" :title "Older"}]
         session-ids (atom [])]
     (with-redefs [system/create-system (fn [_] ::system)
-                  system/list-sessions (fn [_] sessions)
-                  system/create-session! (fn [& _]
+                  sessions/list-sessions (fn [_] sessions)
+                  sessions/create-session! (fn [& _]
                                            (throw (ex-info "unexpected create" {})))
-                  system/complete! (fn [_ _ opts]
-                                     (swap! session-ids conj (:session-id opts))
-                                     ((:on-delta opts) "ok")
-                                     {:content "ok"})
+                  chat/run! (fn [_ opts]
+                              (swap! session-ids conj (:session-id opts))
+                              ((:on-delta opts) "ok")
+                              {:content "ok"})
                   logging/log! (fn [& _] nil)]
       (is (= "ok\n"
              (with-out-str
@@ -120,13 +122,13 @@
                   {:id "session-b" :title "B"}]
         session-ids (atom [])]
     (with-redefs [system/create-system (fn [_] ::system)
-                  system/list-sessions (fn [_] sessions)
-                  system/session-exists? (fn [_ session-id]
+                  sessions/list-sessions (fn [_] sessions)
+                  sessions/session-exists? (fn [_ session-id]
                                            (= "session-b" session-id))
-                  system/complete! (fn [_ _ opts]
-                                     (swap! session-ids conj (:session-id opts))
-                                     ((:on-delta opts) "ok")
-                                     {:content "ok"})
+                  chat/run! (fn [_ opts]
+                              (swap! session-ids conj (:session-id opts))
+                              ((:on-delta opts) "ok")
+                              {:content "ok"})
                   logging/log! (fn [& _] nil)]
       (binding [*err* (java.io.StringWriter.)]
         (is (= "ok\n"

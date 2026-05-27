@@ -11,8 +11,8 @@
    [agent.broker.core :as broker]
    [agent.chat :as chat]
    [agent.memory.core :as memory]
-   [agent.persistence.sqlite :as sqlite]
    [agent.runners.options :as runner-options]
+   [agent.sessions.service :as session-service]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [agent.ui :as ui]
@@ -48,13 +48,7 @@
 (defn create-session [system request]
   (let [body (h/read-form-body request)
         title (:title body)
-        session (sqlite/create-session! (:store system) (not-empty title))]
-    (v/emit-system-event! system
-                          {:event-type :session.created
-                           :entity-type :session
-                           :entity-id (:id session)
-                           :payload {:title (not-empty title)
-                                     :source :ui}})
+        session (session-service/create-session! system (not-empty title))]
     (streaming/sse-response
      request
      (fn [channel]
@@ -241,12 +235,10 @@
 
 (defn system-reload [system request]
   (let [body (h/read-form-body request)
-        mode (keyword (or (:mode body) "soft"))]
-    ((requiring-resolve 'agent.system/reload!)
-     system
-     {:mode mode
-      :source "ui"})
-    (responses/html-response 200 (ui/dashboard-fragment ((requiring-resolve 'agent.system/current-system) system)))))
+        mode (keyword (or (:mode body) "soft"))
+        control (:system-control system)]
+    ((:reload! control) system {:mode mode :source "ui"})
+    (responses/html-response 200 (ui/dashboard-fragment ((:current-system control) system)))))
 
 (defn events [system _request]
   (responses/html-response 200 (ui/events-fragment system)))

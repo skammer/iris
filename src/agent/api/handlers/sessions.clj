@@ -8,7 +8,8 @@
    [agent.chat :as chat]
    [agent.persistence.sqlite :as sqlite]
    [agent.prompts :as prompts]
-   [agent.runtime.compaction :as compaction]))
+   [agent.runtime.compaction :as compaction]
+   [agent.sessions.service :as session-service]))
 
 (defn- with-state [system session]
   (assoc session :state (assoc (chat/session-state system (:id session))
@@ -16,19 +17,14 @@
 
 (defn create [system request]
   (let [{:keys [title]} (h/read-json-body request)
-        session (sqlite/create-session! (:store system) title)]
-    (v/emit-system-event! system
-                          {:event-type :session.created
-                           :entity-type :session
-                           :entity-id (:id session)
-                           :payload {:title title}})
+        session (session-service/create-session! system title)]
     (responses/json-response 201 (ser/session->response session))))
 
 (defn list-sessions [system _request]
   (responses/json-response 200
                            {:data (mapv ser/session->response
                                         (map #(with-state system %)
-                                             (sqlite/list-sessions (:store system))))}))
+                                             (session-service/list-sessions system)))}))
 
 (defn get-session [system _request session-id]
   (v/ensure-session-exists! system session-id)
@@ -56,7 +52,7 @@
   (v/ensure-session-exists! system session-id)
   (responses/json-response 200
                            {:data (mapv ser/message->response
-                                        (sqlite/list-messages (:store system) session-id))}))
+                                        (session-service/list-messages system session-id))}))
 
 (defn append-entry [system request session-id]
   (v/ensure-session-exists! system session-id)
