@@ -514,13 +514,32 @@
 (defn- next-draft-id []
   (inc (mod (System/currentTimeMillis) 2147483647)))
 
+(defn- telegram-operation-failed!
+  [system chat-id operation error]
+  (when-let [event-sink (:event-sink system)]
+    (event-sink {:event-type :telegram.operation.failed
+                 :entity-type :telegram_chat
+                 :entity-id (str chat-id)
+                 :payload {:operation operation
+                           :chat-id chat-id
+                           :message (.getMessage error)
+                           :type (some-> error ex-data :type)}})))
+
+(defn- safe-telegram!
+  [system chat-id operation f]
+  (try
+    (f)
+    (catch Exception e
+      (telegram-operation-failed! system chat-id operation e)
+      nil)))
+
 (defn- build-stream-controls
   "Returns `{:on-delta f :finalize! f}` for animating a partial reply via
    sendMessageDraft. `finalize!` promotes the accumulated draft to a real
    sendMessage (drafts are ephemeral and get cleared by any subsequent regular
    message), resets the accumulator, and rotates the draft id so the next step
    streams onto a fresh draft slot. Returns nil for non-private chats."
-  [config opts chat chat-id]
+  [system config opts chat chat-id]
   (when (private-chat? chat)
     (let [token (:bot-token config)
           draft-id (atom (next-draft-id))
@@ -536,18 +555,16 @@
                      (when (and (not (str/blank? text))
                                 (>= (- now @last-flush) stream-flush-ms))
                        (reset! last-flush now)
-                       (try
-                         (send-draft! chat-id @draft-id text)
-                         (catch Exception _ nil)))))
+                       (safe-telegram! system chat-id :draft-update
+                                       #(send-draft! chat-id @draft-id text)))))
           finalize! (fn []
                       (let [text @accumulator]
                         (reset! accumulator "")
                         (reset! last-flush 0)
                         (swap! draft-id #(inc (mod % 2147483647)))
                         (when-not (str/blank? text)
-                          (try
-                            (send-msg! chat-id text)
-                            (catch Exception _ nil)))))]
+                          (safe-telegram! system chat-id :draft-finalize
+                                          #(send-msg! chat-id text)))))]
       {:on-delta (fn [delta]
                    (swap! accumulator str delta)
                    (flush!))
@@ -567,24 +584,23 @@
                                             cid text)))
             finalize! (:finalize! stream-controls)]
         (fn [{:keys [receipt]}]
-          (try
-            (when finalize! (finalize!))
-            (let [text (tool-display/telegram-summary system receipt)]
-              (when-not (str/blank? text)
-                (send! chat-id text)))
-            (catch Exception _ nil)))))))
+          (safe-telegram! system chat-id :tool-call-summary
+                          (fn []
+                            (when finalize! (finalize!))
+                            (let [text (tool-display/telegram-summary system receipt)]
+                              (when-not (str/blank? text)
+                                (send! chat-id text))))))))))
 
 (defn- start-typing-indicator!
-  [config opts chat-id]
+  [system config opts chat-id]
   (let [token (:bot-token config)
         running? (atom true)
         send-action! (or (:send-chat-action-fn opts)
                          (fn [cid action] (send-chat-action! token cid action)))
         worker (future
                  (while @running?
-                   (try
-                     (send-action! chat-id "typing")
-                     (catch Exception _ nil))
+                   (safe-telegram! system chat-id :typing
+                                   #(send-action! chat-id "typing"))
                    (Thread/sleep typing-refresh-ms)))]
     (fn []
       (reset! running? false)
@@ -683,8 +699,8 @@
   (let [token (:bot-token config)
         send! (or (:send-message-fn opts)
                   (fn [cid text] (send-message! token cid text)))
-        stop-typing! (start-typing-indicator! config opts chat-id)
-        stream-controls (build-stream-controls config opts chat chat-id)
+        stop-typing! (start-typing-indicator! system config opts chat-id)
+        stream-controls (build-stream-controls system config opts chat chat-id)
         on-tool-call (build-on-tool-call system opts chat-id stream-controls)
         callback-path? (or (:chat-fn opts)
                            (nil? (or (:event-bus system) (:broker system))))

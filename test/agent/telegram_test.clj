@@ -331,6 +331,61 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest telegram-records-draft-send-failures
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        events (atom [])
+        sent (atom [])
+        system {:store store
+                :event-sink #(swap! events conj %)}
+        config {:bot-token "token"
+                :allowlist {:allow-all? true}}
+        opts {:send-message-fn (fn [chat-id text]
+                                 (swap! sent conj {:chat-id chat-id :text text}))
+              :send-message-draft-fn (fn [_ _ _]
+                                       (throw (ex-info "draft failed" {:type :draft-down})))
+              :chat-fn (fn [_ {:keys [on-delta]}]
+                         (on-delta "hello")
+                         {:content "hello"})}]
+    (try
+      (is (= :processed
+             (telegram/process-update! system config opts (update-for 1 100 7 "hi"))))
+      (is (= [{:chat-id 100 :text "hello"}] @sent))
+      (let [failure (first (filter #(= :telegram.operation.failed (:event-type %)) @events))]
+        (is (= :draft-update (get-in failure [:payload :operation])))
+        (is (= "draft failed" (get-in failure [:payload :message])))
+        (is (= :draft-down (get-in failure [:payload :type]))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-records-typing-failures
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        typing-failure (promise)
+        system {:store store
+                :event-sink (fn [event]
+                              (when (= :telegram.operation.failed (:event-type event))
+                                (deliver typing-failure event)))}
+        config {:bot-token "token"
+                :allowlist {:allow-all? true}}
+        opts {:send-message-fn (fn [_ _] nil)
+              :send-chat-action-fn (fn [_ _]
+                                     (throw (ex-info "typing failed" {:type :typing-down})))
+              :chat-fn (fn [_ _]
+                         (is (some? (deref typing-failure 1000 nil)))
+                         {:content "pong"})}]
+    (try
+      (is (= :processed
+             (telegram/process-update! system config opts (update-for 1 100 7 "hi"))))
+      (let [failure (deref typing-failure 1000 nil)]
+        (is (= :typing (get-in failure [:payload :operation])))
+        (is (= "typing failed" (get-in failure [:payload :message])))
+        (is (= :typing-down (get-in failure [:payload :type]))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest telegram-finalizes-streamed-draft-before-tool-call-summary
   ;; Regression: Telegram drafts are ephemeral — sending any regular message
   ;; clears the in-flight draft. Streamed text emitted before a mid-turn tool
