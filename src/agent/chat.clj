@@ -149,6 +149,19 @@
     (sink event)
     (sqlite/log-event! (:store system) event)))
 
+(defn- emit-operation-failed!
+  ([system session-id request-id operation error]
+   (emit-operation-failed! system session-id request-id operation error nil))
+  ([system session-id request-id operation error extra]
+   (emit! system {:event-type :chat.operation.failed
+                  :entity-type :session
+                  :entity-id session-id
+                  :request-id request-id
+                  :payload (cond-> {:operation operation
+                                     :message (.getMessage ^Throwable error)}
+                             (ex-data error) (assoc :type (some-> error ex-data :type))
+                             extra (merge extra))})))
+
 (defn- state-event-payload [state reason]
   {:working (boolean (:working? state))
    :queued-count (:queued-count state 0)
@@ -464,10 +477,6 @@
 (defn- error-content [error]
   (str "Chat failed: " (.getMessage ^Throwable error)))
 
-(defn- error-payload [error]
-  (cond-> {:message (.getMessage ^Throwable error)}
-    (ex-data error) (merge (ex-data error))))
-
 (defn- stream-delta-text [value]
   (cond
     (string? value) value
@@ -494,10 +503,16 @@
 (defn- loop-event-sink
   [system subscribers]
   (fn [event]
-    (doseq [subscriber subscribers]
+    (doseq [{:keys [operation f]} subscribers]
       (try
-        (subscriber event)
-        (catch Exception _ nil)))
+        (f event)
+        (catch Exception e
+          (emit-operation-failed! system
+                                  (:entity-id event)
+                                  (:request-id event)
+                                  operation
+                                  e
+                                  {:trigger-event-type (:event-type event)}))))
     (emit! system event)))
 
 (defn- text-delta-event? [event]
@@ -620,9 +635,7 @@
     (when (and on-tool-call
                (same-event-type? event :tool-execution-end))
       (let [{:keys [tool-call receipt]} (event-payload event)]
-        (try
-          (on-tool-call {:tool-call tool-call :receipt receipt})
-          (catch Exception _ nil))))))
+        (on-tool-call {:tool-call tool-call :receipt receipt})))))
 
 (defn- consume-llm-stream-with!
   [ch emit-delta]
@@ -705,7 +718,8 @@
         _ (when session-id
             (try
               (compaction/auto-compact! (:store system) session-id (:chat (:config system)))
-              (catch Exception _ nil)))
+              (catch Exception e
+                (emit-operation-failed! system session-id request-id :auto-compact e))))
         history (if session-id
                   (session-messages system session-id)
                   (llm-messages/messages->internal messages))
@@ -719,9 +733,12 @@
         stream-content? (and (or stream? on-delta)
                              (not (false? (get-in system [:config :llm :stream-content?] true))))
         persisted (atom {})
-        subscribers [(persistence-subscriber system session-id prompt request-id persisted)
-                     (streaming-subscriber system session-id on-delta)
-                     (tool-call-subscriber on-tool-call)]
+        subscribers [{:operation :persistence
+                      :f (persistence-subscriber system session-id prompt request-id persisted)}
+                     {:operation :streaming-callback
+                      :f (streaming-subscriber system session-id on-delta)}
+                     {:operation :tool-call-callback
+                      :f (tool-call-subscriber on-tool-call)}]
         event-sink* (loop-event-sink system subscribers)
         flusher (stream-delta-flusher event-sink*)
         event-sink (:emit! flusher)

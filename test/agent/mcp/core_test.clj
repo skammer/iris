@@ -43,6 +43,37 @@
         (is (= "echo" (get-in (last @calls) [:headers "Mcp-Name"])))
         (is (= "session-1" (get-in (last @calls) [:headers "Mcp-Session-Id"])))))))
 
+(deftest streamable-http-retains-initialized-notification-failure-test
+  (let [client (mcp/create-http-client {:endpoint-url "https://mcp.example/mcp"})]
+    (with-redefs [http/post (fn [_ request]
+                              (let [body (json/parse-string (:body request) true)]
+                                (case (:method body)
+                                  "initialize"
+                                  {:status 200
+                                   :headers {"Content-Type" "application/json"
+                                             "Mcp-Session-Id" "session-1"}
+                                   :body (json/generate-string
+                                          {:jsonrpc "2.0"
+                                           :id (:id body)
+                                           :result {:protocolVersion mcp/default-protocol-version
+                                                    :capabilities {:tools {}}
+                                                    :serverInfo {:name "remote"}}})}
+
+                                  "notifications/initialized"
+                                  {:status 200
+                                   :headers {"Content-Type" "application/json"}
+                                   :body (json/generate-string
+                                          {:jsonrpc "2.0"
+                                           :id (:id body)
+                                           :error {:code -32000
+                                                   :message "init notification failed"}})})))]
+      (let [client* (mcp/initialize! client)]
+        (is (= "session-1" (:session-id client*)))
+        (is (= "init notification failed"
+               (get-in client* [:initialized-notification-error :message])))
+        (is (= :mcp-json-rpc-error
+               (get-in client* [:initialized-notification-error :type])))))))
+
 (deftest mcp-tool-adapter-round-trips-local-descriptor-test
   (let [description (tools/create-tool-description
                      :echo
