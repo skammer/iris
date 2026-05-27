@@ -71,3 +71,18 @@
                                                 :http
                                                 {:url "https://example.com"}
                                                 {:permissions #{:http-request}}))))))
+
+(deftest http-tool-rejects-invalid-json-response
+  (with-redefs [http/request (fn [_]
+                               {:status 200
+                                :headers {"Content-Type" "application/json"}
+                                :body "not-json"})]
+    (let [registry (-> (tools/create-registry)
+                       (tools/register-tool
+                        (http-tool/create-http-tool {:resolve-host-fn public-resolver})))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"declared JSON"
+                            (tools/execute-tool registry
+                                                :http
+                                                {:url "https://example.com"}
+                                                {:permissions #{:http-request}}))))))

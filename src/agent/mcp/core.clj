@@ -156,8 +156,11 @@
                        :session-id (header-value response "Mcp-Session-Id"))]
     (try
       (rpc! client* (json-rpc-notification "notifications/initialized" nil))
-      (catch Exception _ nil))
-    client*))
+      client*
+      (catch Exception e
+        (assoc client* :initialized-notification-error
+               (cond-> {:message (.getMessage e)}
+                 (ex-data e) (merge (ex-data e))))))))
 
 (defn list-tools!
   [client]

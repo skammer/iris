@@ -182,15 +182,19 @@ Status: partially fixed.
 Evidence:
 
 - Large namespaces remain: `src/agent/ui.clj`, `src/agent/system.clj`, `src/agent/chat.clj`, `src/agent/orchestrator.clj`, `src/agent/config.clj`, `src/agent/telegram.clj`, `src/agent/runtime/loop.clj`.
-- Current large namespace line counts: `src/agent/ui.clj` 1371, `src/agent/chat.clj` 968, `src/agent/orchestrator.clj` 937, `src/agent/telegram.clj` 920, `src/agent/config.clj` 817, `src/agent/runtime/loop.clj` 754.
+- Current large namespace line counts: `src/agent/ui.clj` 1153 plus `src/agent/ui/render.clj` 224 extracted, `src/agent/chat.clj` 985, `src/agent/orchestrator.clj` 937, `src/agent/telegram.clj` 919, `src/agent/config.clj` 817, `src/agent/runtime/loop.clj` 754.
 - `src` still contains many `defonce`, raw `future`, broad `catch`, `Thread/sleep`, `legacy`, and `println` hits.
+- UI message/tool/run rendering helpers moved from `src/agent/ui.clj` to `src/agent/ui/render.clj`, reducing the biggest namespace by 218 lines while keeping route/panel ownership in `agent.ui`.
+- Chat stream callbacks, tool-call callbacks, persistence subscribers, and auto-compaction failures now emit `:chat.operation.failed` instead of disappearing inside catch blocks.
 - Telegram draft, tool-summary, and typing delivery failures now emit `:telegram.operation.failed` events instead of disappearing silently.
-- `test/agent/telegram_test.clj` covers draft-send and typing failure event recording.
-- Remaining swallow sites include `src/agent/ui.clj`, `src/agent/tools/common/http.clj`, `src/agent/mcp/core.clj`, and other Telegram paths that intentionally continue best-effort operation.
+- MCP initialized-notification failure is preserved on the returned client as `:initialized-notification-error`.
+- HTTP responses declaring JSON now raise typed `:invalid-json-response` when parsing fails; non-JSON bodies remain raw.
+- Tests now cover chat callback/compaction failure events, Telegram draft/typing failure events, MCP initialized notification failure retention, and invalid JSON HTTP responses.
+- Remaining broad-catch/best-effort sites include UI display fallback parsing, expected orchestrator local-vs-federated lookup fallback, runtime terminal fallback handling, config console reporter output, and Telegram polling/media error paths.
 
 Reasoning:
 
-The codebase remains hard to support because ownership is not visually obvious. Large namespaces hide local invariants; broad catches hide causality. This pass made Telegram delivery failure causes observable, but did not split the remaining large namespaces.
+The codebase remains hard to support because ownership is not visually obvious. Large namespaces hide local invariants; broad catches hide causality. This pass split one clear UI ownership seam and made the highest-risk callback, compaction, Telegram delivery, MCP initialization, and HTTP JSON parse failures observable. It did not split `chat`, `orchestrator`, `config`, or `runtime/loop`.
 
 Fix direction:
 
@@ -198,7 +202,7 @@ Fix direction:
 - Replace broad catches with typed errors + health/events.
 - Keep comments on non-obvious contracts, not on obvious mechanics.
 
-Confidence: 0.86.
+Confidence: 0.88.
 
 ## Recommended Order
 

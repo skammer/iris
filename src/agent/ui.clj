@@ -14,227 +14,9 @@
    [agent.runtime.core :as runtime]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
-   [agent.tools.display :as tool-display]
+   [agent.ui.render :as ui-render]
    [cheshire.core :as json]
-   [clojure.string :as str]
-   [hiccup2.core :as h])
-  (:import
-   (java.net URLEncoder)
-   (java.time Instant)))
-
-(defn- render [node]
-  (str (h/html node)))
-
-(defn- render-many [& nodes]
-  (apply str (map render nodes)))
-
-(defn- trusted-fragment [html]
-  ;; Invariant: only pass fragments produced by this namespace's render helpers.
-  (h/raw html))
-
-(defn- render-message-content [content]
-  ;; Markdown intentionally disabled; Hiccup escapes LLM/user text here.
-  [:div.code (str content)])
-
-(def ^:private slash-chip-re #"(^|[\t ])\/([A-Za-z0-9][A-Za-z0-9_-]*)")
-
-(defn- render-user-message-content [content]
-  (let [text (str content)
-        matches (re-seq slash-chip-re text)]
-    (if (empty? matches)
-      (render-message-content text)
-      (loop [idx 0
-             remaining matches
-             nodes []]
-        (if-let [[match lead name] (first remaining)]
-          (let [start (.indexOf text match idx)
-                slash-start (+ start (count lead))
-                end (+ start (count match))]
-            (recur end
-                   (rest remaining)
-                   (cond-> nodes
-                     (< idx slash-start) (conj (subs text idx slash-start))
-                     true (conj [:span.skill-chip (str "/" name)]))))
-          (into [:div.code.message-content--user]
-                (cond-> nodes
-                  (< idx (count text)) (conj (subs text idx)))))))))
-
-(defn- keyword-label [value]
-  (if-let [ns (namespace value)]
-    (str ns "/" (name value))
-    (name value)))
-
-(defn- json-ready [value]
-  (cond
-    (keyword? value) (keyword-label value)
-    (map? value) (into {}
-                       (map (fn [[k v]]
-                              [(if (keyword? k) (keyword-label k) k)
-                               (json-ready v)]))
-                       value)
-    (set? value) (mapv json-ready value)
-    (sequential? value) (mapv json-ready value)
-    :else value))
-
-(defn- pretty-json [value]
-  (try
-    (json/generate-string (json-ready (if (string? value)
-                                        (json/parse-string value true)
-                                        value))
-                          {:pretty true})
-    (catch Exception _
-      (if (string? value)
-        value
-        (binding [*print-namespace-maps* false]
-          (pr-str value))))))
-
-(defn- url-encode [value]
-  (URLEncoder/encode (str value) "UTF-8"))
-
-(defn- safe-dom-id [prefix value]
-  (str prefix "-"
-       (str/replace (str value)
-                    #"[^A-Za-z0-9_-]"
-                    "-")))
-
-(defn- parse-json-or-value [value]
-  (try
-    (if (string? value)
-      (json/parse-string value true)
-      value)
-    (catch Exception _ value)))
-
-(defn- tool-status-node [status]
-  (when status
-    [:span {:class (str "tool-status status--" status)} status]))
-
-(defn- tool-detail-template [id title status & body]
-  [:template {:id id}
-   [:div.tool-detail-content
-    [:div.tool-detail-content__meta
-     [:span.meta title]
-     (tool-status-node status)]
-    body]])
-
-(defn- render-tool-call [{:keys [id function]}]
-  (let [{:keys [name arguments]} function
-        params (parse-json-or-value arguments)
-        args (tool-display/params-preview params 800)
-        detail-id (safe-dom-id "tool-call-detail" (or id (str name "-" (hash arguments))))]
-    [:div.tool-call
-     [:button.tool-row
-      {:type "button"
-       "data-tool-detail" true
-       "data-tool-detail-template" detail-id
-       "data-tool-detail-title" (str "function: " name)
-       "data-tool-detail-status" "requested"}
-      [:span.tool-row__main
-       [:span.tool-row__name (str "→ " name)]
-       (tool-status-node "requested")
-       (when id [:span.tool-row__id.meta id])]
-      (when-not (str/blank? args)
-        [:span.tool-row__args.code args])]
-     (tool-detail-template
-      detail-id
-      (str "function: " name)
-      "requested"
-      [:h3 "Arguments"]
-      [:pre.tool-detail__pre.code (pretty-json params)])]))
-
-(defn- parse-tool-content [content]
-  (try
-    (when (string? content)
-      (json/parse-string content true))
-    (catch Exception _ nil)))
-
-(defn- tool-result-summary
-  "Builds one-line tool result summary: name · status · args preview."
-  [system parsed tool-call-id]
-  (let [tool-name (or (:tool-name parsed) "tool")
-        status (some-> (:status parsed) name)
-        cfg (tool-display/channel-config system :web tool-name)
-        args (tool-display/params-preview (:input parsed)
-                                          (or (:args-preview-chars cfg)
-                                              (:preview-chars cfg)
-                                              800))]
-    [:span.tool-result__summary
-     [:span.tool-result__summary-head
-      [:span.tool-result__name tool-name]
-      (tool-status-node status)]
-     (when-not (str/blank? args)
-       [:span.tool-result__args.code args])
-     (when tool-call-id [:span.tool-result__id.meta tool-call-id])]))
-
-(defn- render-tool-message [system {:keys [id content created-at tool-call-id]}]
-  (let [parsed (parse-tool-content content)
-        status (some-> (:status parsed) name)
-        tool-name (or (:tool-name parsed) "tool")
-        detail-id (safe-dom-id "tool-result-detail" (or id tool-call-id (hash content)))
-        body (if parsed
-               (pretty-json (dissoc parsed :tool-name :status))
-               (pretty-json content))]
-    [:article.message.message--tool
-     [:div.tool-result
-      [:button.tool-row.tool-result__head
-       {:type "button"
-        "data-tool-detail" true
-        "data-tool-detail-template" detail-id
-        "data-tool-detail-title" (str "tool: " tool-name)
-        "data-tool-detail-status" (or status "")}
-       (tool-result-summary system parsed tool-call-id)]
-      (tool-detail-template
-       detail-id
-       (str "tool: " tool-name)
-       status
-       [:h3 "Result"]
-       [:pre.tool-detail__pre.code body])]
-     [:div.meta created-at]]))
-
-(defn- render-message
-  ([msg] (render-message nil msg))
-  ([system {:keys [role content created-at tool-calls metadata excluded-from-context?] :as msg}]
-   (let [meta-text (str created-at
-                        (when (:queued metadata) " | queued")
-                        (when excluded-from-context? " | out-of-context"))]
-   (cond
-     (= role "tool")
-     (render-tool-message system msg)
-
-     (seq tool-calls)
-     [:article.message.message--tool-calls
-      [:div.message-role {:class role} role]
-      (when (seq (str content)) (render-message-content content))
-      [:div.tool-calls (for [tc tool-calls] (render-tool-call tc))]
-      [:div.meta meta-text]]
-
-     :else
-     [:article.message
-      [:div.message-role {:class role} role]
-      (if (= "user" role)
-        (render-user-message-content content)
-        (render-message-content content))
-      [:div.meta meta-text]]))))
-
-(defn- now-ms []
-  (.toEpochMilli (Instant/now)))
-
-(defn- instant-ms [value]
-  (when (seq (str value))
-    (try
-      (.toEpochMilli (Instant/parse (str value)))
-      (catch Exception _ nil))))
-
-(defn- run-last-seen-ms [run]
-  (or (some-> run :heartbeat :observed-at instant-ms)
-      (some-> run :started-at instant-ms)
-      (some-> run :created-at instant-ms)))
-
-(def stale-run-threshold-ms 30000)
-
-(defn- stale-run? [run]
-  (and (contains? #{"requested" "running"} (:status run))
-       (when-let [seen-ms (run-last-seen-ms run)]
-         (> (- (now-ms) seen-ms) stale-run-threshold-ms))))
+   [clojure.string :as str]))
 
 (declare dashboard-fragment
          operator-board-fragment
@@ -293,12 +75,12 @@
 (defn- shell-url [{:keys [tab session-id run-id]}]
   (str "/ui/shell?tab=" (name (normalize-tab tab))
        (when session-id
-         (str "&session_id=" (url-encode session-id)))
+         (str "&session_id=" (ui-render/url-encode session-id)))
        (when run-id
-         (str "&run_id=" (url-encode run-id)))))
+         (str "&run_id=" (ui-render/url-encode run-id)))))
 
 (defn router-state-fragment [path]
-  (render [:div#router-state {:hidden true
+  (ui-render/render [:div#router-state {:hidden true
                               "data-route-path" path}]))
 
 (defn- tab-link [tab active-tab]
@@ -313,7 +95,7 @@
   ([] (index-page "/"))
   ([path]
    (let [route-state (route-state-from-path path)]
-  (render
+  (ui-render/render
    [:html {:lang "en"}
     [:head
      [:meta {:charset "utf-8"}]
@@ -345,9 +127,9 @@
         session-count (get-in storage [:details :session-count] 0)
         event-count (get-in storage [:details :event-count] 0)
         port (get-in system [:config :api :port])]
-    (render
+    (ui-render/render
      [:div#shell-fragment.workspace-stack
-      (trusted-fragment (router-state-fragment (route-path {:tab active-tab
+      (ui-render/trusted-fragment (router-state-fragment (route-path {:tab active-tab
                                                             :session-id session-id
                                                             :run-id run-id})))
       [:header.shell-header
@@ -376,32 +158,32 @@
       [:nav.shell-nav
        (for [tab tabs]
          (tab-link tab active-tab))]
-      (trusted-fragment (case active-tab
-             :chat (render-many
+      (ui-render/trusted-fragment (case active-tab
+             :chat (ui-render/render-many
                     [:section.workspace-grid.chat-workspace
-                     (trusted-fragment (sessions-fragment system session-id))
-                     (trusted-fragment (session-detail-fragment system session-id))])
-             :runs (render-many
+                     (ui-render/trusted-fragment (sessions-fragment system session-id))
+                     (ui-render/trusted-fragment (session-detail-fragment system session-id))])
+             :runs (ui-render/render-many
                     [:section.workspace-grid.two-up
-                     (trusted-fragment (runs-fragment system))
-                     (trusted-fragment (run-detail-fragment system run-id))])
-             :tools (render-many
+                     (ui-render/trusted-fragment (runs-fragment system))
+                     (ui-render/trusted-fragment (run-detail-fragment system run-id))])
+             :tools (ui-render/render-many
                      [:section.workspace-grid.tools
                       [:section.panel.stack
-                       (trusted-fragment (tools-fragment system))]
+                       (ui-render/trusted-fragment (tools-fragment system))]
                       [:section.panel.stack
-                       (trusted-fragment
+                       (ui-render/trusted-fragment
                         (tool-approvals-fragment
                          (tool-approvals/list-requests (:store system) {:limit 50})))
                        [:div#tool-results-panel.empty "Request approval, approve, then run."]]])
              :memory (memory-workspace-fragment system)
-             :logs (render-many
+             :logs (ui-render/render-many
                     [:section.workspace-grid.single
-                     (trusted-fragment (logs-fragment system))])
-             (render-many
+                     (ui-render/trusted-fragment (logs-fragment system))])
+             (ui-render/render-many
               [:section.workspace-grid.two-up
-               (trusted-fragment (dashboard-fragment system))
-               (trusted-fragment (operator-board-fragment system))])))])))
+               (ui-render/trusted-fragment (dashboard-fragment system))
+               (ui-render/trusted-fragment (operator-board-fragment system))])))])))
 
 (defn dashboard-fragment [system]
   (let [storage (sqlite/health-check (:store system))
@@ -417,14 +199,14 @@
                                 (update acc (:status run) (fnil inc 0)))
                               {}
                               runs)
-        stale-runs (filter stale-run? runs)
+        stale-runs (filter ui-render/stale-run? runs)
         attention-runs (->> recent-runs
                             (filter #(or (contains? #{"failed" "cancelled"} (:status %))
-                                         (stale-run? %)))
+                                         (ui-render/stale-run? %)))
                             (take 4))
         reload-status (or (some-> system :reload-state deref)
                           {:status :idle})]
-    (render
+    (ui-render/render
      [:section#dashboard-summary.panel
       {"data-on-interval__duration.10s.leading" "@get('/ui/dashboard')"}
       [:h2 "Runtime Snapshot"]
@@ -479,7 +261,7 @@
            (for [{:keys [id status last-error] :as run} attention-runs]
              [:div.meta
               (str id " | " status
-                   (when (stale-run? run)
+                   (when (ui-render/stale-run? run)
                      " | stale")
                    (when (seq last-error)
                      (str " | " last-error)))])]
@@ -493,7 +275,7 @@
   (let [runs (runtime/list-runs (:runtime-service system) {:limit 50})
         agents (orchestrator/list-agents (:orchestrator system))
         active-runs (filter #(contains? #{"requested" "running"} (:status %)) runs)
-        stale-runs (filter stale-run? runs)
+        stale-runs (filter ui-render/stale-run? runs)
         failed-runs (filter #(contains? #{"failed" "cancelled"} (:status %)) runs)
         approvals (tool-approvals/list-requests (:store system) {:status "pending" :limit 8})
         recent-events-pool (sqlite/list-events (:store system) {:limit 40})
@@ -509,7 +291,7 @@
                               (filter #(or (seq (:trusted-peers %))
                                            (seq (:trust-policies %))))
                               (take 6))]
-    (render
+    (ui-render/render
      [:section#operator-board.panel
       {"data-on-interval__duration.10s.leading" "@get('/ui/operator-board')"}
       [:h2 "Operator Board"]
@@ -615,12 +397,12 @@
    (let [sessions (sqlite/list-sessions (:store system))
          active-id (or (not-empty active-session-id)
                        (some-> sessions first :id))]
-     (render
+     (ui-render/render
       [:aside#sessions-panel.panel.sessions-sidebar
        {"data-on-interval__duration.15s.leading"
         (str "@get('/ui/sessions"
              (when active-id
-               (str "?session_id=" (url-encode active-id)))
+               (str "?session_id=" (ui-render/url-encode active-id)))
              "')")}
        [:form#create-session-form.create-session-form
         {"data-on:submit" "@post('/ui/sessions', {contentType: 'form', selector: '#create-session-form'})"
@@ -662,7 +444,7 @@
 
 (defn session-detail-fragment [system session-id]
   (let [session (session-target system session-id)]
-    (render
+    (ui-render/render
      (if-not session
        [:section#session-detail-panel.panel
         [:h2 "Transcript"]
@@ -691,7 +473,7 @@
                             (when (:working? state) " | working")
                             (when (pos? (:queued-count state))
                               (str " | queued " (:queued-count state))))]]
-          (trusted-fragment (session-messages-fragment system (:id session)))
+          (ui-render/trusted-fragment (session-messages-fragment system (:id session)))
           [:aside#tool-detail-sidebar.tool-detail-sidebar
            {:hidden true
             :aria-label "Tool detail"}
@@ -737,7 +519,7 @@
 (defn- streaming-message [content]
   [:article.message.message--streaming
    [:div.message-role {:class "assistant"} "assistant"]
-   (render-message-content content)
+   (ui-render/message-content content)
    [:div.meta "streaming…"]])
 
 (defn session-messages-fragment
@@ -751,21 +533,21 @@
                      (chat/streaming-content system session-id))
          streaming* (when-not (str/blank? (str streaming))
                       (str streaming))]
-     (render
+     (ui-render/render
       [:chat-stream#session-messages-panel
        (if (or (seq messages) streaming* (:working? state))
          (list*
           [:div.chat-stream__filler]
           (concat
            (for [message messages]
-             (render-message system message))
+             (ui-render/message system message))
            (cond
              streaming* [(streaming-message streaming*)]
              :else nil)))
          [:div.empty "No messages yet."])]))))
 
 (defn events-fragment [system]
-  (render
+  (ui-render/render
    [:section#events-panel.panel
     {"data-on-interval__duration.5s.leading" "@get('/ui/events')"}
     [:h2 "Live Events"]
@@ -784,7 +566,7 @@
         trace (:trace system)
         trace-health (runtime-trace/health-check trace)
         trace-events (runtime-trace/load-events trace {:limit 40})]
-    (render
+    (ui-render/render
      [:section#logs-panel.panel
       {"data-on-interval__duration.5s.leading" "@get('/ui/logs')"}
       [:h2 "Logs"]
@@ -827,7 +609,7 @@
 
 (defn memory-prompt-fragment [system]
   (let [{:keys [documents combined]} (memory/read-prompt-memory (:memory-service system))]
-    (render
+    (ui-render/render
      [:div#memory-prompt-panel
       [:h3 "Prompt Memory"]
       [:p.meta (str "documents: " (count documents))]
@@ -863,7 +645,7 @@
    [:p.meta "error"]
    [:div.result.diagnostic-result
     [:strong error]
-    [:pre.code (pretty-json (cond-> {}
+    [:pre.code (ui-render/pretty-json (cond-> {}
                                input (assoc :input input)
                                query (assoc :query query)
                                opts (assoc :opts opts)
@@ -871,7 +653,7 @@
                                details (assoc :details details)))]]])
 
 (defn memory-tool-result-fragment [{:keys [ok? input result source-json] :as payload}]
-  (render
+  (ui-render/render
    [:div#memory-tool-output
     (if ok?
       [:div
@@ -880,36 +662,36 @@
        [:div.memory-result-grid
         [:div.result
          [:strong "input"]
-         [:pre.code (pretty-json input)]]
+         [:pre.code (ui-render/pretty-json input)]]
         [:div.result
          [:strong "output"]
          [:pre.code (str result)]]
         (when source-json
           [:div.result
            [:strong "source json"]
-           [:pre.code (pretty-json source-json)]])]]
+           [:pre.code (ui-render/pretty-json source-json)]])]]
       (error-result "Memory Tool Result" payload))]))
 
 (defn memory-graph-result-fragment [{:keys [ok? query opts result] :as payload}]
-  (render
+  (ui-render/render
    [:div#memory-graph-results-panel
     (if ok?
       [:div
        [:h3 "Graph Query Result"]
        [:p.meta (str "query: " (or query "")
                      " | count: " (count result)
-                     " | opts: " (pretty-json opts))]
+                     " | opts: " (ui-render/pretty-json opts))]
        (if (seq result)
          [:div.memory-result-list
           (for [item result]
             [:article.result
              [:strong (or (:type item) "fact")]
-             [:pre.code (pretty-json item)]])]
+             [:pre.code (ui-render/pretty-json item)]])]
          [:div.empty "No graph rows."])]
       (error-result "Graph Query Result" payload))]))
 
 (defn memory-datalog-result-fragment [{:keys [ok? result] :as payload}]
-  (render
+  (ui-render/render
    [:div#memory-datalog-results-panel
     (if ok?
       [:div
@@ -917,12 +699,12 @@
        [:p.meta (str "rows: " (:row-count result) " | shown: " (count (:rows result)))]
        [:div.result
         [:strong "query"]
-        [:pre.code (pretty-json (select-keys result [:query :args :limit]))]]
+        [:pre.code (ui-render/pretty-json (select-keys result [:query :args :limit]))]]
        (if (seq (:rows result))
          [:div.memory-result-list
           (for [row (:rows result)]
             [:article.result
-             [:pre.code (pretty-json row)]])]
+             [:pre.code (ui-render/pretty-json row)]])]
          [:div.empty "No datalog rows."])]
       (error-result "Datalog Result" payload))]))
 
@@ -932,12 +714,12 @@
     [:div#memory-reset-output.result
      [:strong (str surface " reset")]
      (if ok?
-       [:pre.code (pretty-json result)]
-       [:pre.code (pretty-json {:error error
+       [:pre.code (ui-render/pretty-json result)]
+       [:pre.code (ui-render/pretty-json {:error error
                                 :details details})])]))
 
 (defn memory-search-results-fragment [results]
-  (render
+  (ui-render/render
    [:div#memory-search-results-panel
     [:h3 "Search Results"]
     [:p.meta (str "query: " (:query results)
@@ -957,7 +739,7 @@
           [:article.result
            [:strong (str "ranked " (name surface))]
            [:div.meta (format "score %.3f" (double score))]
-           [:pre.code (pretty-json item)]])
+           [:pre.code (ui-render/pretty-json item)]])
         (for [{:keys [subject predicate object scope updated-at]} (:facts results)]
           [:article.result
            [:strong "fact"]
@@ -967,12 +749,12 @@
         (for [item (:graph results)]
           [:article.result
            [:strong "graph"]
-           [:pre.code (pretty-json item)]])
+           [:pre.code (ui-render/pretty-json item)]])
         (for [{:keys [session-id role content created-at]} (:messages results)]
           [:article.result
            [:strong "message"]
            [:div.meta.code (str session-id " / " role)]
-           (render-message-content content)
+           (ui-render/message-content content)
            [:div.meta created-at]])
         (for [{:keys [event-type entity-type entity-id payload created-at]} (:events results)]
           [:article.result
@@ -990,7 +772,7 @@
          surfaces (memory/list-surfaces memory-service)
          graph-enabled? (some #(and (= :graph (:name %)) (:enabled %)) surfaces)
          prompt (memory/read-prompt-memory memory-service)]
-     (render
+     (ui-render/render
       [:section#memory-workspace.workspace-grid.memory-workspace
        [:section.panel.memory-overview
         [:h2 "Memory"]
@@ -1109,7 +891,7 @@
 
 (defn tools-fragment [system]
   (let [tool-list (tools/list-tools (:tool-registry system))]
-    (render
+    (ui-render/render
      [:div#tools-panel
       [:h3 "Local Tools"]
       [:p.meta "Sensitive actions create approval requests first. Approval list lives below."]
@@ -1143,7 +925,7 @@
          "Request shell action"]]]])))
 
 (defn tool-results-fragment [tool-name status payload]
-  (render
+  (ui-render/render
    [:div#tool-results-panel
     [:h3 "Tool Result"]
     [:p.meta (str (name tool-name) " / status " status)]
@@ -1171,7 +953,7 @@
         "Run"]]])))
 
 (defn tool-approvals-fragment [approvals]
-  (render
+  (ui-render/render
    [:div#tool-approvals-panel
     [:h3 "Tool Approvals"]
     (if (seq approvals)
@@ -1189,7 +971,7 @@
 (defn runs-fragment [system]
   (let [runs (runtime/list-runs (:runtime-service system) {:limit 50})
         default-substrate (name (runner-options/default-substrate system))]
-    (render
+    (ui-render/render
      [:section#runs-panel.panel
       {"data-on-interval__duration.10s.leading" "@get('/ui/runs')"}
       [:h2 "Runs"]
@@ -1270,7 +1052,7 @@
                                    (or (#{"agent.run.failed" "agent.run.cancelled"} event-type)
                                        (= "failed" (:status payload))))
                                  recent-events))]
-    (render
+    (ui-render/render
      (if-not run
        [:div
         [:h2 "Run Detail"]
@@ -1358,7 +1140,7 @@
 
 (defn run-detail-fragment [system run-id]
   (let [run (run-detail-target system run-id)]
-    (render
+    (ui-render/render
      (if-not run
        [:section#run-detail-panel.panel
         [:h2 "Run Detail"]
@@ -1368,4 +1150,4 @@
          :data-live-state "live"
          "data-init" (str "@get('/ui/run-detail/live?run_id=" (:id run) "', {openWhenHidden: true})")}
         [:div#run-detail-body
-         (trusted-fragment (run-detail-body system (:id run)))]]))))
+         (ui-render/trusted-fragment (run-detail-body system (:id run)))]]))))

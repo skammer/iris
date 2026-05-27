@@ -8,6 +8,7 @@
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.loop :as runtime-loop]
+   [agent.runtime.compaction :as compaction]
    [agent.sessions.service :as sessions]
    [agent.system :as system]
    [agent.system.components :as components]
@@ -165,6 +166,58 @@
         (is (some #{"turn-end"} (map :event-type events)))
         (is (some #{"message-end"} (map :event-type events)))
         (is (= :invoke (:mode (first @requests)))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-records-streaming-callback-failures-test
+  (let [path (temp-db-path)
+        responses (atom [{:content "done"
+                          :stream-chunks ["partial"]}])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider identity)
+        session (sessions/create-session! system "stream-callback-failure")]
+    (try
+      (let [result (chat/run! system {:session-id (:id session)
+                                      :messages [{:role "user" :content "hello"}]
+                                      :on-delta (fn [_]
+                                                  (throw (ex-info "delta callback failed"
+                                                                  {:type :callback-down})))})
+            failures (filter #(= "chat.operation.failed" (:event-type %))
+                             (sqlite/list-events (:store system)
+                                                 {:entity-type :session
+                                                  :entity-id (:id session)
+                                                  :limit 20}))]
+        (is (= "done" (:content result)))
+        (is (= ["streaming-callback"]
+               (mapv #(get-in % [:payload :operation]) failures)))
+        (is (= "delta callback failed" (get-in (first failures) [:payload :message])))
+        (is (= "callback-down" (get-in (first failures) [:payload :type]))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-records-auto-compaction-failures-test
+  (let [path (temp-db-path)
+        responses (atom ["done"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider identity)
+        session (sessions/create-session! system "compaction-failure")]
+    (try
+      (with-redefs [compaction/auto-compact! (fn [& _]
+                                               (throw (ex-info "compact failed"
+                                                               {:type :compact-down})))]
+        (let [result (chat/run! system {:session-id (:id session)
+                                        :messages [{:role "user" :content "hello"}]})
+              failure (first (filter #(= "chat.operation.failed" (:event-type %))
+                                     (sqlite/list-events (:store system)
+                                                         {:entity-type :session
+                                                          :entity-id (:id session)
+                                                          :limit 20})))]
+          (is (= "done" (:content result)))
+          (is (= "auto-compact" (get-in failure [:payload :operation])))
+          (is (= "compact failed" (get-in failure [:payload :message])))
+          (is (= "compact-down" (get-in failure [:payload :type])))))
       (finally
         (io/delete-file path true)))))
 

@@ -17,10 +17,28 @@
     (string? method) (keyword (str/lower-case method))
     :else nil))
 
-(defn- parse-response-body [body]
-  (try
-    (json/parse-string body true)
-    (catch Exception _
+(defn- header-value [headers header-name]
+  (let [target (str/lower-case header-name)]
+    (some (fn [[k v]]
+            (when (= target (str/lower-case (name k))) v))
+          headers)))
+
+(defn- json-response? [response]
+  (some-> response
+          :headers
+          (header-value "content-type")
+          str/lower-case
+          (str/includes? "json")))
+
+(defn- parse-response-body [response]
+  (let [body (:body response)]
+    (if (and (string? body) (json-response? response))
+      (try
+        (json/parse-string body true)
+        (catch Exception e
+          (throw (tools/tool-error :invalid-json-response
+                                   "HTTP response declared JSON but body did not parse"
+                                   {:message (.getMessage e)}))))
       body)))
 
 (defn- parse-uri! [url]
@@ -174,7 +192,7 @@
                                            {:url (:url input)
                                             :size body-size
                                             :max-response-bytes (:max-response-bytes config)})))
-              parsed-body (some-> (:body response) parse-response-body)]
+              parsed-body (parse-response-body response)]
           (if (<= 200 status 299)
             {:status status
              :headers (:headers response)
