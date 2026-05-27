@@ -16,6 +16,7 @@
   (remove-all-facts! [this])
   (merge-entities! [this canonical aliases])
   (query-facts [this query opts])
+  (graph-facts [this opts])
   (backend-health-check [this]))
 
 (defprotocol IDatalogExplorer
@@ -34,6 +35,7 @@
   (merge-entities! [_ _ _]
     (throw (ex-info "Graph memory backend is disabled" {:type :graph-memory-disabled})))
   (query-facts [_ _ _] [])
+  (graph-facts [_ _] [])
   (backend-health-check [_]
     {:healthy true
      :details {:enabled false}})
@@ -564,6 +566,154 @@
    (datalog-query* (:graph-backend memory-service)
                    (parse-datalog-query query)
                    (update opts :args parse-datalog-args))))
+
+(defn- now-str []
+  (str (java.time.Instant/now)))
+
+(defn- fact-summary
+  [fact]
+  (select-keys fact [:id :scope :subject :predicate :object :confidence :status]))
+
+(defn- graph-summary
+  [fact]
+  (select-keys fact [:id :source-fact-id :subject :predicate :object :confidence :valid-from :valid-to]))
+
+(defn- sqlite-fact->graph-fact
+  [fact]
+  (cond-> {:id (:id fact)
+           :subject (:subject fact)
+           :predicate (:predicate fact)
+           :object (:object fact)}
+    (:confidence fact) (assoc :confidence (:confidence fact))
+    (:source-session-id fact) (assoc :session-id (:source-session-id fact))
+    (:source-request-id fact) (assoc :source-request-id (:source-request-id fact))
+    (:created-at fact) (assoc :created-at (:created-at fact)
+                              :observed-at (:updated-at fact))))
+
+(defn- fact-diffs
+  [sqlite-fact graph-fact]
+  (->> [:subject :predicate :object :confidence]
+       (keep (fn [k]
+               (let [left (get sqlite-fact k)
+                     right (get graph-fact k)]
+                 (when (not= left right)
+                   [k {:sqlite left :graph right}]))))
+       (into {})))
+
+(defn- sample-issues
+  [issues sample-limit]
+  (mapv identity (take sample-limit issues)))
+
+(defn- repair-issue!
+  [memory-service {:keys [kind sqlite graph]}]
+  (try
+    (case kind
+      :missing
+      {:kind kind
+       :id (:id sqlite)
+       :result (graph-summary (save-graph-fact! memory-service (sqlite-fact->graph-fact sqlite)))}
+
+      :diverged
+      (do
+        (when (and (:id graph) (not= (:id graph) (:id sqlite)))
+          (remove-graph-fact! memory-service {:id (:id graph)}))
+        {:kind kind
+         :id (:id sqlite)
+         :result (graph-summary (save-graph-fact! memory-service (sqlite-fact->graph-fact sqlite)))})
+
+      :stale
+      {:kind kind
+       :id (:source-fact-id graph)
+       :result (remove-graph-fact! memory-service {:id (:id graph)})})
+    (catch Exception e
+      {:kind kind
+       :id (or (:id sqlite) (:source-fact-id graph) (:id graph))
+       :error (.getMessage e)
+       :type (:type (ex-data e))})))
+
+(defn reconcile-graph-memory
+  ([memory-service] (reconcile-graph-memory memory-service {}))
+  ([memory-service opts]
+   (let [repair? (true? (:repair? opts))
+         sample-limit (positive-limit (:sample-limit opts) 20)
+         active-sqlite (sqlite/list-memory-facts (:store memory-service) {:status "active"})
+         graph-enabled? (true? (get-in memory-service [:config :graph :enabled]))]
+     (if-not graph-enabled?
+       {:checked-at (now-str)
+        :enabled false
+        :repair? repair?
+        :counts {:sqlite-active (count active-sqlite)
+                 :graph-active 0
+                 :missing 0
+                 :diverged 0
+                 :stale 0
+                 :graph-only 0
+                 :repair-errors 0}
+        :missing []
+        :diverged []
+        :stale []
+        :graph-only []
+        :message "Graph memory backend is disabled"}
+       (let [all-sqlite (sqlite/list-memory-facts (:store memory-service))
+             sqlite-by-id (into {} (map (juxt :id identity) all-sqlite))
+             active-graph (graph-facts (:graph-backend memory-service) {:include-historical? false})
+             graph-by-source-id (->> active-graph
+                                     (filter :source-fact-id)
+                                     (group-by :source-fact-id))
+             missing (->> active-sqlite
+                          (remove #(contains? graph-by-source-id (:id %)))
+                          (mapv (fn [fact]
+                                  {:kind :missing
+                                   :id (:id fact)
+                                   :sqlite (fact-summary fact)})))
+             diverged (->> active-sqlite
+                           (keep (fn [fact]
+                                   (when-let [graph (first (get graph-by-source-id (:id fact)))]
+                                     (let [diffs (fact-diffs fact graph)]
+                                       (when (seq diffs)
+                                         {:kind :diverged
+                                          :id (:id fact)
+                                          :diffs diffs
+                                          :sqlite (fact-summary fact)
+                                          :graph (graph-summary graph)})))))
+                           vec)
+             stale (->> active-graph
+                        (filter (fn [fact]
+                                  (when-let [source-id (:source-fact-id fact)]
+                                    (= "removed" (:status (get sqlite-by-id source-id))))))
+                        (mapv (fn [fact]
+                                {:kind :stale
+                                 :id (:source-fact-id fact)
+                                 :graph-id (:id fact)
+                                 :graph (graph-summary fact)})))
+             graph-only (->> active-graph
+                             (filter (fn [fact]
+                                       (let [source-id (:source-fact-id fact)]
+                                         (or (str/blank? (or source-id ""))
+                                             (not (contains? sqlite-by-id source-id))))))
+                             (mapv (fn [fact]
+                                     {:kind :graph-only
+                                      :id (:source-fact-id fact)
+                                      :graph-id (:id fact)
+                                      :graph (graph-summary fact)})))
+             repair-targets (concat missing diverged stale)
+             repaired (when repair?
+                        (mapv #(repair-issue! memory-service %) repair-targets))]
+         {:checked-at (now-str)
+          :enabled true
+          :repair? repair?
+          :counts {:sqlite-active (count active-sqlite)
+                   :graph-active (count active-graph)
+                   :missing (count missing)
+                   :diverged (count diverged)
+                   :stale (count stale)
+                   :graph-only (count graph-only)
+                   :repair-errors (count (filter :error repaired))}
+          :missing (sample-issues missing sample-limit)
+          :diverged (sample-issues diverged sample-limit)
+          :stale (sample-issues stale sample-limit)
+          :graph-only (sample-issues graph-only sample-limit)
+          :repaired (or repaired [])})))))
 
 (defn- expected-match? [expected ranked]
   (let [item (:item ranked)]

@@ -9,6 +9,9 @@ Verification:
 - Latest focused SSE/API tests pass:
   `IRIS_CONFIG_DIR=/private/tmp/iris-sse-refactor-config IRIS_DATA_DIR=/private/tmp/iris-sse-refactor-data clojure -M:test -e "(require 'agent.api-test :reload 'agent.ui-test :reload 'agent.system-test :reload 'agent.chat-test :reload 'agent.runtime.child-test :reload) (clojure.test/run-tests 'agent.api-test 'agent.ui-test 'agent.system-test 'agent.chat-test 'agent.runtime.child-test)"`
 - Result: 67 tests, 505 assertions, 0 failures, 0 errors.
+- Latest memory reconciliation tests pass:
+  `clojure -M:test -e "(require 'agent.memory.core-test :reload 'agent.cli-test :reload 'agent.tools.common.memory-test :reload) (clojure.test/run-tests 'agent.memory.core-test 'agent.cli-test 'agent.tools.common.memory-test)"`
+- Result: 28 tests, 122 assertions, 0 failures, 0 errors.
 - `git diff --check` passes.
 - Full suite result: 383 tests, 1540 assertions, 1 failure in `agent.runners.docker-podman-e2e-test/docker-child-runtime-e2e-test` waiting for Docker child run status `running`.
 
@@ -24,7 +27,7 @@ Remaining support cost is architectural:
 
 - `agent.chat`, `agent.ui`, `agent.config`, and `agent.orchestrator` are still too large
 - config loading still mutates disk and normalizes legacy shapes in live path
-- memory graph failures are now visible, but graph reconciliation/noisy Datahike behavior remains unfinished
+- memory graph remains experimental/off by default, but SQLite-vs-graph reconciliation and Datahike log noise are fixed
 
 Weighted confidence: 0.88.
 
@@ -153,25 +156,24 @@ Config loading now has a narrower contract. Disk initialization is an explicit C
 
 Confidence: 0.9.
 
-### 7. Memory graph remains experimental without reconciliation
+### 7. Memory graph remains experimental but now has reconciliation
+
+Status: fixed.
 
 Evidence:
 
-- `src/agent/memory/datahike.clj` still calls the Datahike backend a prototype.
-- Graph failures are now recorded in health and `memory.graph.failed` events, but there is no reconciliation command for SQLite facts vs graph facts.
-- Focused/full tests still print noisy Datahike debug logs.
+- `src/agent/memory/core.clj` now treats SQLite facts as source of truth and exposes `reconcile-graph-memory`.
+- `src/agent/cli.clj` adds `memory reconcile [--repair]`.
+- Reconciliation reports missing, diverged, stale, and graph-only active graph edges, with dry-run default and repair mode.
+- `src/agent/memory/datahike.clj` lists active graph facts for audit and suppresses noisy Datahike DEBUG/INFO logs.
+- `test/agent/memory/core_test.clj` covers dry-run detection and repair.
+- `test/agent/cli_test.clj` covers CLI dispatch.
 
 Reasoning:
 
-Failure visibility is fixed, but graph completeness is still not auditable. SQLite facts and graph facts can drift without an operator command to compare and repair them.
+Graph memory remains a derived experimental surface, but drift is now observable and repairable. Graph-only facts are preserved by default to avoid deleting manually authored graph data.
 
-Fix direction:
-
-- Keep graph backend experimental/off by default.
-- Add reconciliation command: SQLite facts vs graph facts.
-- Quiet Datahike test/runtime logging.
-
-Confidence: 0.84.
+Confidence: 0.88.
 
 ### 8. Namespace size and hidden failure patterns remain high
 
@@ -196,15 +198,13 @@ Confidence: 0.87.
 ## Recommended Order
 
 1. Make config load pure.
-2. Add memory graph reconciliation and quiet Datahike logs.
-3. Split largest namespaces.
+2. Split largest namespaces.
 
 ## Test Gaps
 
 - Active chat cancellation/reload with system-owned chat service.
 - Dedicated public stream contract matrix.
 - Pure config load without filesystem writes.
-- Memory graph reconciliation behavior.
 - Typed-error coverage for broad-catch paths.
 
 ## Final Confidence

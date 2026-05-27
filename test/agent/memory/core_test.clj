@@ -38,6 +38,8 @@
     (throw (ex-info "graph merge failed" {:type :graph-merge-failed})))
   (query-facts [_ _ _]
     (throw (ex-info "graph query failed" {:type :graph-query-failed})))
+  (graph-facts [_ _]
+    (throw (ex-info "graph list failed" {:type :graph-list-failed})))
   (backend-health-check [_]
     {:healthy true
      :details {:enabled true}}))
@@ -469,6 +471,78 @@
     (finally
       (io/delete-file db-path true)
       (io/delete-file graph-root true)))))
+
+(deftest graph-reconciliation-detects-and-repairs-drift-test
+  (let [db-path (temp-db-path)
+        graph-root (temp-dir)
+        graph-path (.getAbsolutePath (io/file graph-root "graph-store"))
+        store (sqlite/create-store {:path db-path})
+        service (memory/create-memory-service
+                 {:prompt {:paths []}
+                  :search {:default-limit 10}
+                  :graph {:enabled true
+                          :backend :datahike
+                          :datahike {:path graph-path
+                                     :keep-history? true}}}
+                 store)]
+    (try
+      (sqlite/save-memory-fact! store {:id "fact-missing"
+                                       :subject "Alice"
+                                       :predicate "likes"
+                                       :object "Clojure"})
+      (sqlite/save-memory-fact! store {:id "fact-diverged"
+                                       :subject "Bob"
+                                       :predicate "likes"
+                                       :object "Rust"})
+      (sqlite/save-memory-fact! store {:id "fact-stale"
+                                       :subject "Carol"
+                                       :predicate "used"
+                                       :object "Datahike"})
+      (memory/save-graph-fact! service {:id "fact-diverged"
+                                        :subject "Bob"
+                                        :predicate "likes"
+                                        :object "Python"})
+      (memory/save-graph-fact! service {:id "fact-stale"
+                                        :subject "Carol"
+                                        :predicate "used"
+                                        :object "Datahike"})
+      (memory/save-graph-fact! service {:id "graph-only"
+                                        :subject "Graph"
+                                        :predicate "stores"
+                                        :object "extra"})
+      (sqlite/remove-memory-fact! store {:id "fact-stale"})
+      (let [dry-run (memory/reconcile-graph-memory service)
+            before-repair (memory/query-graph-memory service "Bob" {:mode :facts})
+            repaired (memory/reconcile-graph-memory service {:repair? true})
+            after (memory/reconcile-graph-memory service)
+            bob (memory/query-graph-memory service "Bob" {:mode :facts})
+            alice (memory/query-graph-memory service "Alice" {:mode :facts})
+            stale (memory/query-graph-memory service "Carol" {:mode :facts})]
+        (is (= {:sqlite-active 2
+                :graph-active 3
+                :missing 1
+                :diverged 1
+                :stale 1
+                :graph-only 1
+                :repair-errors 0}
+               (:counts dry-run)))
+        (is (= ["Python"] (mapv :object before-repair)))
+        (is (false? (:repair? dry-run)))
+        (is (= 3 (count (:repaired repaired))))
+        (is (= {:sqlite-active 2
+                :graph-active 3
+                :missing 0
+                :diverged 0
+                :stale 0
+                :graph-only 1
+                :repair-errors 0}
+               (:counts after)))
+        (is (= ["Rust"] (mapv :object bob)))
+        (is (= ["Clojure"] (mapv :object alice)))
+        (is (empty? stale)))
+      (finally
+        (io/delete-file db-path true)
+        (io/delete-file graph-root true)))))
 
 (deftest graph-entity-alias-resolution-and-merge-test
   (let [db-path (temp-db-path)

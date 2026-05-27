@@ -5,7 +5,8 @@
    [clojure.java.io :as io]
    [clojure.set :as set]
    [clojure.string :as str]
-   [datahike.api :as d])
+   [datahike.api :as d]
+   [taoensso.timbre :as timbre])
   (:import
    (java.time Instant)
    (java.util UUID)))
@@ -137,6 +138,22 @@
         parent (.getParentFile file)]
     (when parent
       (.mkdirs parent))))
+
+(def ^:private datahike-log-filter-installed? (atom false))
+
+(defn- suppress-datahike-debug
+  [{:keys [level ?ns-str] :as data}]
+  (if (and (contains? #{:trace :debug :info} level)
+           (string? ?ns-str)
+           (str/starts-with? ?ns-str "datahike."))
+    nil
+    data))
+
+(defn- quiet-datahike-logs! []
+  (when (compare-and-set! datahike-log-filter-installed? false true)
+    (timbre/merge-config!
+     {:middleware (conj (vec (:middleware timbre/*config*))
+                        suppress-datahike-debug)})))
 
 (defn- backend-path [cfg]
   (get-in cfg [:store :path]))
@@ -421,6 +438,7 @@
          (filter (fn [edge]
                    (and (= subject-id (get-in edge [:edge/source :entity/id]))
                         (= (:predicate fact) (:edge/predicate edge))
+                        (not= new-edge-id (:edge/id edge))
                         (not= object-id (get-in edge [:edge/target :entity/id]))
                         (str/blank? (or (:edge/valid-to edge) "")))))
          (mapv (fn [edge]
@@ -581,6 +599,12 @@
              (take limit)
              vec)
         (throw (ex-info "Unsupported graph query mode" {:mode mode})))))
+  (graph-facts [_ opts]
+    (->> (query-edges @conn)
+         (distinct-by* :edge/id)
+         (filter #(active-at? (:as-of opts) (:include-historical? opts) %))
+         (map edge->result)
+         vec))
   (backend-health-check [_]
     (try
       {:healthy true
@@ -604,6 +628,7 @@
 
 (defn create-backend
   [cfg]
+  (quiet-datahike-logs!)
   (create-db-if-needed! cfg)
   (let [conn (d/connect cfg)]
     (ensure-schema! conn)

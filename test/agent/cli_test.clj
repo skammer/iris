@@ -3,6 +3,7 @@
    [agent.chat :as chat]
    [agent.cli :as cli]
    [agent.logging :as logging]
+   [agent.memory.core :as memory]
    [agent.sessions.service :as sessions]
    [agent.system :as system]
    [clojure.string :as str]
@@ -38,6 +39,22 @@
                                        "--max" "3"
                                        "--run" "clojure -M:test"])
                       [:command :loop-prompt :loop-plan :loop-max :loop-run :prompt]))))
+
+(deftest parse-memory-command-test
+  (is (= {:command "memory"
+          :prompt "reconcile --repair"}
+         (select-keys (cli/parse-args ["memory" "reconcile" "--repair"])
+                      [:command :prompt]))))
+
+(deftest memory-cli-runs-reconcile-test
+  (with-redefs [system/create-system (fn [_] {:memory-service ::memory})
+                memory/reconcile-graph-memory (fn [service opts]
+                                                 {:service service
+                                                  :repair? (:repair? opts)
+                                                  :counts {:missing 0}})]
+    (is (= "{:service :agent.cli-test/memory, :repair? true, :counts {:missing 0}}\n"
+           (with-out-str
+             (cli/main ["memory" "reconcile" "--repair"]))))))
 
 (deftest loop-cli-runs-one-iteration-test
   (let [calls (atom [])]

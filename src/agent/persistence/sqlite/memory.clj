@@ -180,3 +180,14 @@
     store
     (fn [conn]
       (some-> (common/select-one conn (count-facts-sqlvec) identity) :n int))))
+
+(defn list-facts
+  ([store] (list-facts store {}))
+  ([store opts]
+   (common/with-connection
+     store
+     (fn [conn]
+       (mapv row->fact
+             (common/select-many conn
+                                 (list-facts-sqlvec {:status (:status opts)})
+                                 identity))))))
