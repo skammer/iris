@@ -6,11 +6,11 @@ Scope: current `/Users/example/Code/tmp/clj-agent` after latest remediation pass
 
 Verification:
 
-- Latest focused event-contract tests pass:
-  `IRIS_CONFIG_DIR=/private/tmp/iris-runtime-clean-config IRIS_DATA_DIR=/private/tmp/iris-runtime-clean-data clojure -M:test -e "(require 'agent.runtime.schema-test :reload 'agent.api.event-compat-test :reload 'agent.tools.core-test :reload 'agent.chat-test :reload 'agent.api-test :reload 'agent.telegram-test :reload) (clojure.test/run-tests 'agent.runtime.schema-test 'agent.api.event-compat-test 'agent.tools.core-test 'agent.chat-test 'agent.api-test 'agent.telegram-test)"`
-- Result: 77 tests, 501 assertions, 0 failures, 0 errors.
+- Latest focused SSE/API tests pass:
+  `IRIS_CONFIG_DIR=/private/tmp/iris-sse-refactor-config IRIS_DATA_DIR=/private/tmp/iris-sse-refactor-data clojure -M:test -e "(require 'agent.api-test :reload 'agent.ui-test :reload 'agent.system-test :reload 'agent.chat-test :reload 'agent.runtime.child-test :reload) (clojure.test/run-tests 'agent.api-test 'agent.ui-test 'agent.system-test 'agent.chat-test 'agent.runtime.child-test)"`
+- Result: 67 tests, 505 assertions, 0 failures, 0 errors.
 - `git diff --check` passes.
-- Full suite was not rerun after the event-contract cleanup.
+- Full suite result: 383 tests, 1540 assertions, 1 failure in `agent.runners.docker-podman-e2e-test/docker-child-runtime-e2e-test` waiting for Docker child run status `running`.
 
 ## Executive Verdict
 
@@ -18,11 +18,11 @@ Security/control-plane bugs are fixed. Public process-local orchestrator APIs ar
 
 - chat state moved into a system-owned `chat-service`
 - runtime/chat/API event contract is now canonical; historical event conversion moved to one API boundary
+- SSE lifecycle/error/cleanup mechanics moved into one managed streaming service
 
 Remaining support cost is architectural:
 
 - `agent.chat`, `agent.ui`, `agent.config`, and `agent.orchestrator` are still too large
-- streaming/SSE still relies on repeated raw future/catch/close mechanics
 - config loading still mutates disk and normalizes legacy shapes in live path
 - memory graph failures are now visible, but graph reconciliation/noisy Datahike behavior remains unfinished
 
@@ -115,25 +115,25 @@ Confidence: 0.9.
 
 ### 5. Streaming/SSE handlers are still ad hoc
 
-Evidence:
+Status: Fixed 2026-05-27.
 
-- `src/agent/api/handlers/ui.clj` starts futures, subscribes to events, catches `Throwable`, prints errors, and closes channels manually.
-- `src/agent/api/handlers/chat.clj` starts futures for streaming chat.
-- `src/agent/api/handlers/runs.clj` starts a future for run event streaming.
-- `src/agent/api/responses.clj` still ignores stream writer exceptions.
+Evidence after fix:
+
+- `src/agent/api/streaming.clj` now owns managed SSE lifecycle, worker tasks, cleanup, broker subscriptions, terminal/error helpers, and metrics.
+- UI/chat/run/event stream handlers use `streaming/managed-response` or `streaming/once-response`.
+- Handler-level raw futures, manual broker unsubscribe, manual http-kit close, and stream `println` failures were removed.
+- `/health` exposes SSE metrics for opened/closed/completed/error/send-error/dropped/unsubscribe counts.
+- `src/agent/api/responses.clj` logs stream writer failures instead of swallowing them.
 
 Reasoning:
 
-Streaming is repeated per handler with raw futures and broad catches. Terminal/error semantics and cleanup are not centralized.
+Streaming lifecycle is now centralized. Handlers still decide payload shape, but open/close/error/cleanup/subscription mechanics live in one service.
 
-Fix direction:
+Remaining caveat:
 
-- Build one SSE service abstraction.
-- Require structured terminal/error events.
-- Track unsubscribe/close/dropped-event counts centrally.
-- Remove handler-level `println` failures.
+- Dedicated public stream contract matrix is still useful.
 
-Confidence: 0.86.
+Confidence: 0.9.
 
 ### 6. Config load still bootstraps files and carries legacy normalization
 
@@ -198,16 +198,14 @@ Confidence: 0.87.
 
 ## Recommended Order
 
-1. Build shared SSE service.
-2. Make config load pure.
-3. Add memory graph reconciliation and quiet Datahike logs.
-4. Split largest namespaces.
+1. Make config load pure.
+2. Add memory graph reconciliation and quiet Datahike logs.
+3. Split largest namespaces.
 
 ## Test Gaps
 
 - Active chat cancellation/reload with system-owned chat service.
 - Dedicated public stream contract matrix.
-- Shared SSE terminal/error/cleanup behavior.
 - Pure config load without filesystem writes.
 - Memory graph reconciliation behavior.
 - Typed-error coverage for broad-catch paths.

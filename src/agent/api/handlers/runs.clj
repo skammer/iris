@@ -8,8 +8,7 @@
    [agent.broker.core :as broker]
    [agent.persistence.sqlite :as sqlite]
    [agent.runners.options :as runner-options]
-   [agent.runs.service :as runs]
-   [clojure.core.async :as async]))
+   [agent.runs.service :as runs]))
 
 (defn- not-found!
   [code message]
@@ -218,41 +217,36 @@
         replay-messages (broker/replay! broker-instance
                                         (broker/run-events-subject run-id)
                                         {:after-id after_id
-                                         :limit replay-limit})
-        subscription (broker/subscribe! broker-instance
-                                        (broker/all-runs-subject)
-                                        {:buffer-size 256
-                                         :buffer-strategy :sliding
-                                         :slow-client :drop-new})
-        ch (:channel subscription)
-        open? (atom true)]
-    (streaming/sse-response
+                                         :limit replay-limit})]
+    (streaming/managed-response
      request
-     (fn [channel]
-       (future
-         (try
-           (when-let [run (get-run* system run-id)]
-             (streaming/send-sse-chunk! channel
-                                        {:type "snapshot"
-                                         :run (ser/run->response run)}))
-           (doseq [message replay-messages]
-             (when (relevant-run-event? (:payload message) run-id)
-               (streaming/send-sse-chunk! channel
+     {:name :run-events-stream
+      :on-error (fn [ctx error]
+                  (streaming/send-sse-error! ctx "stream_error" (.getMessage error)))}
+     (fn [ctx]
+       (let [subscription (streaming/subscribe! ctx
+                                                broker-instance
+                                                (broker/all-runs-subject)
+                                                {:buffer-size 256
+                                                 :buffer-strategy :sliding
+                                                 :slow-client :drop-new})
+             ch (:channel subscription)]
+         (when-let [run (get-run* system run-id)]
+           (streaming/send-sse-chunk! ctx
+                                      {:type "snapshot"
+                                       :run (ser/run->response run)}))
+         (doseq [message replay-messages]
+           (when (relevant-run-event? (:payload message) run-id)
+             (streaming/send-sse-chunk! ctx
+                                        {:type "event"
+                                         :data (ser/event->response (:payload message))})))
+         (loop []
+           (when-let [event (streaming/take! ctx ch)]
+             (when (relevant-run-event? (:payload event) run-id)
+               (streaming/send-sse-chunk! ctx
                                           {:type "event"
-                                           :data (ser/event->response (:payload message))})))
-           (loop []
-             (when @open?
-               (when-let [event (async/<!! ch)]
-                 (when (relevant-run-event? (:payload event) run-id)
-                   (streaming/send-sse-chunk! channel
-                                              {:type "event"
-                                               :data (ser/event->response (:payload event))}))
-                 (recur))))
-           (finally
-             (broker/unsubscribe! broker-instance subscription)))))
-     (fn [_ _]
-       (reset! open? false)
-       (broker/unsubscribe! broker-instance subscription)))))
+                                           :data (ser/event->response (:payload event))}))
+            (recur))))))))
 
 (defn wait [system request run-id]
   (let [{:keys [timeout_ms interval_ms]} (-> request :parameters :query)
