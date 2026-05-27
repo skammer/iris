@@ -2,6 +2,7 @@
   "Command-line parsing and dispatch."
   (:require
    [agent.chat :as chat]
+   [agent.config :as cfg]
    [agent.loop :as loop]
    [agent.logging :as logging]
    [agent.sessions.service :as sessions]
@@ -22,6 +23,8 @@
     "  clojure -M -m agent.core -r \"pick session\""
     "  clojure -M -m agent.core --session session-id \"continue session\""
     "  clojure -M -m agent.core --no-session \"ephemeral prompt\""
+    "  clojure -M -m agent.core config init"
+    "  clojure -M -m agent.core config migrate path/to/config.edn"
     "  clojure -M -m agent.core skills [prefix]"
     "  clojure -M -m agent.core loop --prompt \"task\" --plan LOOP_PLAN.md --max 10"
     "  clojure -M -m agent.core serve"
@@ -90,7 +93,7 @@
           "--no-session"
           (recur (next remaining) (assoc parsed :no-session? true))
 
-          (if (and (contains? #{"serve" "loop" "skills"} arg)
+          (if (and (contains? #{"serve" "loop" "skills" "config"} arg)
                    (empty? (:prompt-parts parsed))
                    (nil? (:command parsed)))
             (recur (next remaining) (assoc parsed :command arg))
@@ -185,6 +188,41 @@
         (println (str "/" name " - " description)))
       (println "No skills found."))))
 
+(defn- config-args [prompt]
+  (if (str/blank? prompt)
+    []
+    (str/split (str/trim prompt) #"\s+")))
+
+(defn- print-edn! [value]
+  (binding [*print-namespace-maps* false]
+    (prn value)))
+
+(defn- run-config-command! [prompt]
+  (let [[subcommand path & extra] (config-args prompt)]
+    (case subcommand
+      "init"
+      (do
+        (when (or path (seq extra))
+          (throw (ex-info "config init takes no arguments"
+                          {:type :invalid-cli-args})))
+        (println (.getPath (cfg/init-config!))))
+
+      "migrate"
+      (do
+        (when (or (str/blank? path) (seq extra))
+          (throw (ex-info "config migrate requires exactly one path"
+                          {:type :invalid-cli-args})))
+        (print-edn! (cfg/migrate-config-file path)))
+
+      (throw (ex-info "config command must be init or migrate"
+                      {:type :invalid-cli-args
+                       :subcommand subcommand})))))
+
+(defn- create-system!
+  [config-path]
+  (cfg/init-config!)
+  (system/create-system config-path))
+
 (defn- loop-prompt [parsed]
   (or (some-> (:loop-prompt parsed) str/trim not-empty)
       (some-> (:prompt parsed) str/trim not-empty)))
@@ -227,7 +265,7 @@
   (let [{:keys [config-path command prompt no-session?] :as parsed} (parse-args args)]
     (cond
       (= "serve" command)
-      (let [system (system/start-api! (system/create-system config-path))
+      (let [system (system/start-api! (create-system! config-path))
             nrepl-server (nrepl/start! system (:nrepl (:config system)))
             {:keys [host port]} (:api (:config system))]
         (logging/log! :agent.cli/serve {:host host :port port})
@@ -237,12 +275,15 @@
                         " (" (:port-file nrepl-server) ")")))
         @(promise))
 
+      (= "config" command)
+      (run-config-command! prompt)
+
       (= "skills" command)
-      (let [system (system/create-system config-path)]
+      (let [system (create-system! config-path)]
         (print-skills! system prompt))
 
       (= "loop" command)
-      (let [system (system/create-system config-path)]
+      (let [system (create-system! config-path)]
         (run-loop! system parsed))
 
       (str/blank? prompt)
@@ -252,7 +293,7 @@
         (System/exit 1))
 
       :else
-      (let [system (system/create-system config-path)
+      (let [system (create-system! config-path)
             session-id (session-id-for-prompt system parsed prompt)]
         (logging/log! :agent.cli/prompt {:prompt-length (count prompt)
                                          :session-id session-id

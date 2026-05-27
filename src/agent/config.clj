@@ -299,6 +299,9 @@
            (map keyword)
            vec))
 
+(defn- parse-keyword* [value]
+  (some-> value str/lower-case not-empty keyword))
+
 (def ^:dynamic *env* #(System/getenv %))
 (def ^:dynamic *user-home* #(System/getProperty "user.home"))
 (def ^:dynamic *cwd* #(System/getProperty "user.dir"))
@@ -420,7 +423,7 @@
   (binding [*out* *err*]
     (println (str "ERROR " message " " (pr-str attrs)))))
 
-(defn bootstrap-global-config!
+(defn init-config!
   []
   (let [dir (global-config-dir)]
     (.mkdirs dir)
@@ -459,7 +462,8 @@
                                 (provider-default-types provider-key)
                                 provider-key)))
 
-(defn- normalize-llm-config
+(defn migrate-legacy-llm-config
+  "Move pre-provider LLM keys into the canonical provider map."
   [llm-cfg]
   (let [active-provider (or (:provider llm-cfg)
                             (:active-provider llm-cfg)
@@ -486,10 +490,11 @@
            :active-provider active-provider
            :providers provider-configs**)))
 
-(defn- normalize-config
+(defn migrate-legacy-config
+  "Return cfg with legacy LLM shape converted to canonical config shape."
   [cfg]
   (cond-> cfg
-    (contains? cfg :llm) (update :llm normalize-llm-config)))
+    (contains? cfg :llm) (update :llm migrate-legacy-llm-config)))
 
 (def ^:private provider-required-keys
   {:ollama [:base-url :model]
@@ -529,8 +534,21 @@
       {:path path
        :message (str (str/join "/" (map name path)) " must be positive")})))
 
+(def ^:private legacy-llm-config-keys
+  (set (concat [:provider :default-provider]
+               legacy-llm-provider-option-keys
+               provider-keys)))
+
+(defn- legacy-llm-config-errors [llm-cfg]
+  (vec
+   (for [k legacy-llm-config-keys
+         :when (contains? llm-cfg k)]
+     {:path [:llm k]
+      :message (str "legacy LLM config key " k
+                    " is no longer loaded; run config migrate and use :llm/:providers")})))
+
 (defn- config-validation-errors [cfg]
-  (let [llm-cfg (normalize-llm-config (:llm cfg))
+  (let [llm-cfg (:llm cfg)
         provider (:active-provider llm-cfg)
         provider-cfg (get-in llm-cfg [:providers provider])]
     (cond-> []
@@ -544,6 +562,9 @@
 
       provider
       (into (missing-provider-keys provider provider-cfg))
+
+      llm-cfg
+      (into (legacy-llm-config-errors llm-cfg))
 
       true
       (into (keep #(positive-number-error cfg %)
@@ -586,16 +607,21 @@
           cfg
           app-config-keys))
 
+(defn migrate-config-file
+  [path]
+  (-> (or (load-edn-file path)
+          (throw (ex-info (str "Config file not found: " path)
+                          {:type :config-file-not-found
+                           :path path})))
+      normalize-iris-namespaced-config
+      migrate-legacy-config))
+
 (defn- read-context-file
   [file name required?]
   (if (.exists file)
     (slurp file)
-    (do
-      (when required?
-        (warn! "iris context file missing; using default"
-               {:path (.getPath file)}))
-      (when required?
-        (default-file-content name)))))
+    (when required?
+      (default-file-content name))))
 
 (defn- load-context-files
   [global-dir local-dir]
@@ -629,243 +655,131 @@
   [cfg global-dir]
   (update-in cfg [:skills :dirs] resolve-config-first-paths global-dir))
 
-(defn- keyword-env [name]
-  (some-> (getenv name) str/lower-case not-empty keyword))
+(defn- configured-env-value [names]
+  (some (fn [name]
+          (let [value (getenv name)]
+            (when (some? value) value)))
+        (if (sequential? names) names [names])))
 
-(defn env-config
-  []
-  (let [provider (keyword-env "AGENT_LLM_PROVIDER")
-        model (or (getenv "AGENT_LLM_MODEL")
-                  (getenv "OPENROUTER_MODEL")
-                  (getenv "OLLAMA_MODEL"))
-        timeout-ms (parse-long* (getenv "AGENT_LLM_TIMEOUT_MS"))
-        temperature (some-> (getenv "AGENT_LLM_TEMPERATURE")
-                            Double/parseDouble)
-        max-tokens (parse-long* (getenv "AGENT_LLM_MAX_TOKENS"))
-        stream? (parse-bool (getenv "AGENT_LLM_STREAM"))
-        prompt-cache? (parse-bool (getenv "AGENT_LLM_PROMPT_CACHE"))
-        stream-structured-output? (parse-bool (getenv "AGENT_LLM_STREAM_STRUCTURED_OUTPUT"))
-        stream-content? (parse-bool (getenv "AGENT_LLM_STREAM_CONTENT"))
-        site-url (getenv "OPENROUTER_SITE_URL")
-        app-name (or (getenv "OPENROUTER_APP_NAME")
-                     (getenv "AGENT_APP_NAME"))
-        openrouter-base-url (getenv "OPENROUTER_BASE_URL")
-        ollama-base-url (getenv "OLLAMA_BASE_URL")
-        keep-alive (getenv "OLLAMA_KEEP_ALIVE")
-        embedding-model (getenv "OLLAMA_EMBEDDING_MODEL")
-        openai-base-url (getenv "OPENAI_BASE_URL")
-        sqlite-path (getenv "AGENT_SQLITE_PATH")
-        sqlite-reset-on-drift? (parse-bool (getenv "AGENT_SQLITE_DESTRUCTIVE_RESET_ON_DRIFT"))
-        chat-max-steps (parse-long* (getenv "AGENT_CHAT_MAX_STEPS"))
-        loop-max-iterations (parse-long* (getenv "AGENT_LOOP_MAX_ITERATIONS"))
-        loop-plan-file (getenv "AGENT_LOOP_PLAN_FILE")
-        loop-summary-max-chars (parse-long* (getenv "AGENT_LOOP_SUMMARY_MAX_CHARS"))
-        loop-validation-max-chars (parse-long* (getenv "AGENT_LOOP_VALIDATION_MAX_CHARS"))
-        memory-prompt-paths (parse-csv (getenv "AGENT_MEMORY_PROMPT_PATHS"))
-        memory-search-limit (parse-long* (getenv "AGENT_MEMORY_SEARCH_DEFAULT_LIMIT"))
-        memory-search-max-limit (parse-long* (getenv "AGENT_MEMORY_SEARCH_MAX_LIMIT"))
-        memory-search-min-score (parse-double* (getenv "AGENT_MEMORY_SEARCH_MIN_SCORE"))
-        memory-vault-paths (parse-csv (getenv "AGENT_MEMORY_VAULT_PATHS"))
-        memory-vault-writable? (parse-bool (getenv "AGENT_MEMORY_VAULT_WRITABLE"))
-        fact-extractor-enabled (parse-bool (getenv "AGENT_FACT_EXTRACTOR_ENABLED"))
-        fact-extractor-provider (keyword-env "AGENT_FACT_EXTRACTOR_PROVIDER")
-        fact-extractor-model (getenv "AGENT_FACT_EXTRACTOR_MODEL")
-        fact-dedup-similarity-threshold (some-> (getenv "AGENT_FACT_DEDUP_SIMILARITY_THRESHOLD")
-                                                Double/parseDouble)
-        memory-graph-enabled (parse-bool (getenv "AGENT_MEMORY_GRAPH_ENABLED"))
-        memory-graph-path (getenv "AGENT_MEMORY_GRAPH_PATH")
-        telegram-enabled (parse-bool (getenv "AGENT_TELEGRAM_ENABLED"))
-        telegram-bot-token (getenv "AGENT_TELEGRAM_BOT_TOKEN")
-        telegram-allow-all? (parse-bool (getenv "AGENT_TELEGRAM_ALLOW_ALL"))
-        telegram-user-ids (parse-csv (getenv "AGENT_TELEGRAM_ALLOWED_USER_IDS"))
-        telegram-chat-ids (parse-csv (getenv "AGENT_TELEGRAM_ALLOWED_CHAT_IDS"))
-        log-file (getenv "AGENT_LOG_FILE")
-        log-enabled (parse-bool (getenv "AGENT_LOG_ENABLED"))
-        telemetry-enabled (parse-bool (getenv "AGENT_TELEMETRY_ENABLED"))
-        telemetry-max-latency-samples (parse-long* (getenv "AGENT_TELEMETRY_MAX_LATENCY_SAMPLES"))
-        observer-enabled (parse-bool (getenv "AGENT_OBSERVER_ENABLED"))
-        observer-best-effort? (parse-bool (getenv "AGENT_OBSERVER_BEST_EFFORT"))
-        observer-sinks (parse-keyword-csv (getenv "AGENT_OBSERVER_SINKS"))
-        trace-mode (keyword-env "AGENT_TRACE_MODE")
-        trace-path (getenv "AGENT_TRACE_PATH")
-        trace-rolling-max-entries (parse-long* (getenv "AGENT_TRACE_ROLLING_MAX_ENTRIES"))
-        otel-enabled (parse-bool (or (getenv "AGENT_OTEL_ENABLED")
-                                     (getenv "OTEL_ENABLED")))
-        otel-url (or (getenv "AGENT_OTEL_URL")
-                     (getenv "OTEL_EXPORTER_OTLP_ENDPOINT"))
-        otel-send (some-> (getenv "AGENT_OTEL_SEND")
-                          (str/split #",")
-                          (->> (map str/trim)
-                               (remove str/blank?)
-                               (map keyword)
-                               vec))
-        otel-publish-delay (parse-long* (getenv "AGENT_OTEL_PUBLISH_DELAY_MS"))
-        otel-max-items (parse-long* (getenv "AGENT_OTEL_MAX_ITEMS"))
-        tools-yolo? (parse-bool (getenv "AGENT_TOOLS_YOLO"))
-        tool-allowlist (parse-keyword-csv (getenv "AGENT_TOOL_ALLOWLIST"))
-        tool-blocklist (parse-keyword-csv (getenv "AGENT_TOOL_BLOCKLIST"))
-        approval-ttl-seconds (parse-long* (getenv "AGENT_TOOL_APPROVAL_TTL_SECONDS"))
-        api-tool-permissions (parse-keyword-csv (getenv "AGENT_API_TOOL_PERMISSIONS"))
-        ui-tool-permissions (parse-keyword-csv (getenv "AGENT_UI_TOOL_PERMISSIONS"))
-        agent-tool-permissions (parse-keyword-csv (getenv "AGENT_AGENT_TOOL_PERMISSIONS"))
-        chat-tool-permissions (parse-keyword-csv (getenv "AGENT_CHAT_TOOL_PERMISSIONS"))
-        api-host (getenv "AGENT_API_HOST")
-        api-key (getenv "AGENT_API_KEY")
-        api-port (parse-long* (getenv "AGENT_API_PORT"))
-        orchestrator-enabled (parse-bool (getenv "AGENT_ORCHESTRATOR_ENABLED"))
-        runner-default-substrate (keyword-env "AGENT_RUNNER_DEFAULT_SUBSTRATE")
-        nrepl-enabled (parse-bool (getenv "AGENT_NREPL_ENABLED"))
-        nrepl-bind (getenv "AGENT_NREPL_BIND")
-        nrepl-port (parse-long* (getenv "AGENT_NREPL_PORT"))
-        nrepl-port-file (getenv "AGENT_NREPL_PORT_FILE")
-        memory-config (cond-> {}
-                        memory-prompt-paths (assoc :prompt {:paths memory-prompt-paths})
-                        (or (some? memory-search-limit) (some? memory-search-max-limit)
-                            (some? memory-search-min-score))
-                        (assoc :search (cond-> {}
-                                         (some? memory-search-limit) (assoc :default-limit memory-search-limit)
-                                         (some? memory-search-max-limit) (assoc :max-limit memory-search-max-limit)
-                                         (some? memory-search-min-score) (assoc :min-score memory-search-min-score)))
-                        (or memory-vault-paths (some? memory-vault-writable?))
-                        (assoc :vault (cond-> {}
-                                        memory-vault-paths (assoc :paths memory-vault-paths)
-                                        (some? memory-vault-writable?) (assoc :writable? memory-vault-writable?)))
-                        (or (some? fact-extractor-enabled) fact-extractor-provider fact-extractor-model
-                            (some? fact-dedup-similarity-threshold))
-                        (assoc :facts (cond-> {}
-                                        (or (some? fact-extractor-enabled) fact-extractor-provider fact-extractor-model)
-                                        (assoc :extractor
-                                               (cond-> {}
-                                                 (some? fact-extractor-enabled) (assoc :enabled fact-extractor-enabled)
-                                                 fact-extractor-provider (assoc :provider fact-extractor-provider)
-                                                 fact-extractor-model (assoc :model fact-extractor-model)))
-                                        (some? fact-dedup-similarity-threshold)
-                                        (assoc :dedup {:similarity-threshold fact-dedup-similarity-threshold})))
-                        (or (some? memory-graph-enabled) memory-graph-path)
-                        (assoc :graph (cond-> {}
-                                        (some? memory-graph-enabled) (assoc :enabled memory-graph-enabled)
-                                        memory-graph-path (assoc :datahike {:path memory-graph-path}))))
-        telegram-allowlist (cond-> {}
-                             (some? telegram-allow-all?) (assoc :allow-all? telegram-allow-all?)
-                             telegram-user-ids (assoc :user-ids telegram-user-ids)
-                             telegram-chat-ids (assoc :chat-ids telegram-chat-ids))
-        telegram-config (cond-> {}
-                          (some? telegram-enabled) (assoc :enabled telegram-enabled)
-                          telegram-bot-token (assoc :bot-token telegram-bot-token)
-                          (or telegram-user-ids telegram-chat-ids) (assoc :allowlist telegram-allowlist))
-        channel-adapters-config (cond-> {}
-                                  (or (some? telegram-enabled) telegram-bot-token (some? telegram-allow-all?)
-                                      telegram-user-ids telegram-chat-ids)
-                                  (assoc :telegram telegram-config))]
-    {:llm (cond-> {}
-            provider (assoc :provider provider)
-            model (assoc :model model)
-            (some? timeout-ms) (assoc :timeout-ms timeout-ms)
-            (some? temperature) (assoc :temperature temperature)
-            (some? max-tokens) (assoc :max-tokens max-tokens)
-            (some? stream?) (assoc :stream? stream?)
-            (some? prompt-cache?) (assoc :prompt-cache? prompt-cache?)
-            (some? stream-structured-output?) (assoc :stream-structured-output? stream-structured-output?)
-            (some? stream-content?) (assoc :stream-content? stream-content?)
-            site-url (assoc :site-url site-url)
-            app-name (assoc :app-name app-name)
-            (or openrouter-base-url (getenv "OPENROUTER_API_KEY"))
-            (assoc :openrouter (cond-> {}
-                                 openrouter-base-url (assoc :base-url openrouter-base-url)
-                                 (getenv "OPENROUTER_API_KEY")
-                                 (assoc :api-key (getenv "OPENROUTER_API_KEY"))))
-            (or ollama-base-url keep-alive embedding-model)
-            (assoc :ollama (cond-> {}
-                             ollama-base-url (assoc :base-url ollama-base-url)
-                             keep-alive (assoc :keep-alive keep-alive)
-                             embedding-model (assoc :embedding-model embedding-model)))
-            (or openai-base-url (getenv "OPENAI_API_KEY"))
-            (assoc :openai-compatible
-                   (cond-> {}
-                     openai-base-url (assoc :base-url openai-base-url)
-                     (getenv "OPENAI_API_KEY")
-                     (assoc :api-key (getenv "OPENAI_API_KEY")))))
-     :storage (cond-> {}
-                (or sqlite-path (some? sqlite-reset-on-drift?))
-                (assoc :sqlite (cond-> {}
-                                 sqlite-path (assoc :path sqlite-path)
-                                 (some? sqlite-reset-on-drift?)
-                                 (assoc :destructive-reset-on-drift? sqlite-reset-on-drift?))))
-     :runners (cond-> {}
-                runner-default-substrate (assoc :default-substrate runner-default-substrate))
-     :chat (cond-> {}
-             (some? chat-max-steps) (assoc :max-steps chat-max-steps))
-     :loop (cond-> {}
-             (some? loop-max-iterations) (assoc :max-iterations loop-max-iterations)
-             loop-plan-file (assoc :plan-file loop-plan-file)
-             (some? loop-summary-max-chars) (assoc :summary-max-chars loop-summary-max-chars)
-             (some? loop-validation-max-chars) (assoc :validation-max-chars loop-validation-max-chars))
-     :nrepl (cond-> {}
-              (some? nrepl-enabled) (assoc :enabled nrepl-enabled)
-              nrepl-bind (assoc :bind nrepl-bind)
-              (some? nrepl-port) (assoc :port nrepl-port)
-              nrepl-port-file (assoc :port-file nrepl-port-file))
-     :memory memory-config
-     :channel-adapters channel-adapters-config
-     :tools (cond-> {}
-              (some? tools-yolo?) (assoc :yolo? tools-yolo?)
-              (or tool-allowlist tool-blocklist)
-              (assoc :policy
-                     (cond-> {}
-                       tool-allowlist (assoc :allowlist tool-allowlist)
-                       tool-blocklist (assoc :blocklist tool-blocklist)))
-              approval-ttl-seconds (assoc :approvals {:ttl-seconds approval-ttl-seconds})
-              (or api-tool-permissions ui-tool-permissions agent-tool-permissions chat-tool-permissions)
-              (assoc :permissions
-                     (cond-> {}
-                       api-tool-permissions (assoc :api api-tool-permissions)
-                       ui-tool-permissions (assoc :ui ui-tool-permissions)
-                       agent-tool-permissions (assoc :agent agent-tool-permissions)
-                       chat-tool-permissions (assoc :chat chat-tool-permissions))))
-     :telemetry (cond-> {}
-                  (some? telemetry-enabled) (assoc :enabled telemetry-enabled)
-                  (some? telemetry-max-latency-samples) (assoc :max-latency-samples telemetry-max-latency-samples))
-     :observer (cond-> {}
-                 (some? observer-enabled) (assoc :enabled observer-enabled)
-                 (some? observer-best-effort?) (assoc :best-effort? observer-best-effort?)
-                 observer-sinks (assoc :sinks observer-sinks))
-     :trace (cond-> {}
-              trace-mode (assoc :mode trace-mode)
-              trace-path (assoc :path trace-path)
-              (some? trace-rolling-max-entries) (assoc :rolling-max-entries trace-rolling-max-entries))
-     :logging (cond-> {}
-                (some? log-enabled) (assoc :enabled log-enabled)
-                log-file (assoc :file {:path log-file})
-                (or (some? otel-enabled) otel-url otel-send otel-publish-delay otel-max-items)
-                (assoc :otel (cond-> {}
-                               (some? otel-enabled) (assoc :enabled otel-enabled)
-                               otel-url (assoc :url otel-url)
-                               otel-send (assoc :send otel-send)
-                               (some? otel-publish-delay) (assoc :publish-delay otel-publish-delay)
-                               (some? otel-max-items) (assoc :max-items otel-max-items))))
-     :api (cond-> {}
-            api-host (assoc :host api-host)
-            api-key (assoc :key api-key)
-            (some? api-port) (assoc :port api-port))
-     :orchestrator (cond-> {}
-                     (some? orchestrator-enabled) (assoc :enabled orchestrator-enabled))}))
+(defn- assoc-path [path]
+  (fn [cfg value]
+    (assoc-in cfg path value)))
+
+(defn- active-provider [cfg]
+  (or (get-in cfg [:llm :active-provider]) :ollama))
+
+(defn- assoc-active-provider-option [option-key]
+  (fn [cfg value]
+    (assoc-in cfg [:llm :providers (active-provider cfg) option-key] value)))
+
+(def ^:private env-overrides
+  [{:names "AGENT_LLM_PROVIDER" :parse parse-keyword* :apply (assoc-path [:llm :active-provider])}
+   {:names "OPENROUTER_MODEL" :apply (assoc-path [:llm :providers :openrouter :model])}
+   {:names "OLLAMA_MODEL" :apply (assoc-path [:llm :providers :ollama :model])}
+   {:names "AGENT_LLM_MODEL" :apply (assoc-active-provider-option :model)}
+   {:names "AGENT_LLM_TIMEOUT_MS" :parse parse-long* :apply (assoc-active-provider-option :timeout-ms)}
+   {:names "AGENT_LLM_TEMPERATURE" :parse parse-double* :apply (assoc-active-provider-option :temperature)}
+   {:names "AGENT_LLM_MAX_TOKENS" :parse parse-long* :apply (assoc-active-provider-option :max-tokens)}
+   {:names "AGENT_LLM_STREAM" :parse parse-bool :apply (assoc-active-provider-option :stream?)}
+   {:names "AGENT_LLM_PROMPT_CACHE" :parse parse-bool :apply (assoc-active-provider-option :prompt-cache?)}
+   {:names "AGENT_LLM_STREAM_STRUCTURED_OUTPUT" :parse parse-bool :apply (assoc-active-provider-option :stream-structured-output?)}
+   {:names "AGENT_LLM_STREAM_CONTENT" :parse parse-bool :apply (assoc-path [:llm :stream-content?])}
+   {:names "AGENT_APP_NAME" :apply (assoc-active-provider-option :app-name)}
+   {:names "OPENROUTER_SITE_URL" :apply (assoc-path [:llm :providers :openrouter :site-url])}
+   {:names "OPENROUTER_APP_NAME" :apply (assoc-path [:llm :providers :openrouter :app-name])}
+   {:names "OPENROUTER_BASE_URL" :apply (assoc-path [:llm :providers :openrouter :base-url])}
+   {:names "OPENROUTER_API_KEY" :apply (assoc-path [:llm :providers :openrouter :api-key])}
+   {:names "OLLAMA_BASE_URL" :apply (assoc-path [:llm :providers :ollama :base-url])}
+   {:names "OLLAMA_KEEP_ALIVE" :apply (assoc-path [:llm :providers :ollama :keep-alive])}
+   {:names "OLLAMA_EMBEDDING_MODEL" :apply (assoc-path [:llm :providers :ollama :embedding-model])}
+   {:names "OPENAI_BASE_URL" :apply (assoc-path [:llm :providers :openai-compatible :base-url])}
+   {:names "OPENAI_API_KEY" :apply (assoc-path [:llm :providers :openai-compatible :api-key])}
+   {:names "AGENT_SQLITE_PATH" :apply (assoc-path [:storage :sqlite :path])}
+   {:names "AGENT_SQLITE_DESTRUCTIVE_RESET_ON_DRIFT" :parse parse-bool :apply (assoc-path [:storage :sqlite :destructive-reset-on-drift?])}
+   {:names "AGENT_CHAT_MAX_STEPS" :parse parse-long* :apply (assoc-path [:chat :max-steps])}
+   {:names "AGENT_LOOP_MAX_ITERATIONS" :parse parse-long* :apply (assoc-path [:loop :max-iterations])}
+   {:names "AGENT_LOOP_PLAN_FILE" :apply (assoc-path [:loop :plan-file])}
+   {:names "AGENT_LOOP_SUMMARY_MAX_CHARS" :parse parse-long* :apply (assoc-path [:loop :summary-max-chars])}
+   {:names "AGENT_LOOP_VALIDATION_MAX_CHARS" :parse parse-long* :apply (assoc-path [:loop :validation-max-chars])}
+   {:names "AGENT_MEMORY_PROMPT_PATHS" :parse parse-csv :apply (assoc-path [:memory :prompt :paths])}
+   {:names "AGENT_MEMORY_SEARCH_DEFAULT_LIMIT" :parse parse-long* :apply (assoc-path [:memory :search :default-limit])}
+   {:names "AGENT_MEMORY_SEARCH_MAX_LIMIT" :parse parse-long* :apply (assoc-path [:memory :search :max-limit])}
+   {:names "AGENT_MEMORY_SEARCH_MIN_SCORE" :parse parse-double* :apply (assoc-path [:memory :search :min-score])}
+   {:names "AGENT_MEMORY_VAULT_PATHS" :parse parse-csv :apply (assoc-path [:memory :vault :paths])}
+   {:names "AGENT_MEMORY_VAULT_WRITABLE" :parse parse-bool :apply (assoc-path [:memory :vault :writable?])}
+   {:names "AGENT_FACT_EXTRACTOR_ENABLED" :parse parse-bool :apply (assoc-path [:memory :facts :extractor :enabled])}
+   {:names "AGENT_FACT_EXTRACTOR_PROVIDER" :parse parse-keyword* :apply (assoc-path [:memory :facts :extractor :provider])}
+   {:names "AGENT_FACT_EXTRACTOR_MODEL" :apply (assoc-path [:memory :facts :extractor :model])}
+   {:names "AGENT_FACT_DEDUP_SIMILARITY_THRESHOLD" :parse parse-double* :apply (assoc-path [:memory :facts :dedup :similarity-threshold])}
+   {:names "AGENT_MEMORY_GRAPH_ENABLED" :parse parse-bool :apply (assoc-path [:memory :graph :enabled])}
+   {:names "AGENT_MEMORY_GRAPH_PATH" :apply (assoc-path [:memory :graph :datahike :path])}
+   {:names "AGENT_TELEGRAM_ENABLED" :parse parse-bool :apply (assoc-path [:channel-adapters :telegram :enabled])}
+   {:names "AGENT_TELEGRAM_BOT_TOKEN" :apply (assoc-path [:channel-adapters :telegram :bot-token])}
+   {:names "AGENT_TELEGRAM_ALLOW_ALL" :parse parse-bool :apply (assoc-path [:channel-adapters :telegram :allowlist :allow-all?])}
+   {:names "AGENT_TELEGRAM_ALLOWED_USER_IDS" :parse parse-csv :apply (assoc-path [:channel-adapters :telegram :allowlist :user-ids])}
+   {:names "AGENT_TELEGRAM_ALLOWED_CHAT_IDS" :parse parse-csv :apply (assoc-path [:channel-adapters :telegram :allowlist :chat-ids])}
+   {:names "AGENT_LOG_FILE" :apply (assoc-path [:logging :file :path])}
+   {:names "AGENT_LOG_ENABLED" :parse parse-bool :apply (assoc-path [:logging :enabled])}
+   {:names "AGENT_TELEMETRY_ENABLED" :parse parse-bool :apply (assoc-path [:telemetry :enabled])}
+   {:names "AGENT_TELEMETRY_MAX_LATENCY_SAMPLES" :parse parse-long* :apply (assoc-path [:telemetry :max-latency-samples])}
+   {:names "AGENT_OBSERVER_ENABLED" :parse parse-bool :apply (assoc-path [:observer :enabled])}
+   {:names "AGENT_OBSERVER_BEST_EFFORT" :parse parse-bool :apply (assoc-path [:observer :best-effort?])}
+   {:names "AGENT_OBSERVER_SINKS" :parse parse-keyword-csv :apply (assoc-path [:observer :sinks])}
+   {:names "AGENT_TRACE_MODE" :parse parse-keyword* :apply (assoc-path [:trace :mode])}
+   {:names "AGENT_TRACE_PATH" :apply (assoc-path [:trace :path])}
+   {:names "AGENT_TRACE_ROLLING_MAX_ENTRIES" :parse parse-long* :apply (assoc-path [:trace :rolling-max-entries])}
+   {:names ["AGENT_OTEL_ENABLED" "OTEL_ENABLED"] :parse parse-bool :apply (assoc-path [:logging :otel :enabled])}
+   {:names ["AGENT_OTEL_URL" "OTEL_EXPORTER_OTLP_ENDPOINT"] :apply (assoc-path [:logging :otel :url])}
+   {:names "AGENT_OTEL_SEND" :parse parse-keyword-csv :apply (assoc-path [:logging :otel :send])}
+   {:names "AGENT_OTEL_PUBLISH_DELAY_MS" :parse parse-long* :apply (assoc-path [:logging :otel :publish-delay])}
+   {:names "AGENT_OTEL_MAX_ITEMS" :parse parse-long* :apply (assoc-path [:logging :otel :max-items])}
+   {:names "AGENT_TOOLS_YOLO" :parse parse-bool :apply (assoc-path [:tools :yolo?])}
+   {:names "AGENT_TOOL_ALLOWLIST" :parse parse-keyword-csv :apply (assoc-path [:tools :policy :allowlist])}
+   {:names "AGENT_TOOL_BLOCKLIST" :parse parse-keyword-csv :apply (assoc-path [:tools :policy :blocklist])}
+   {:names "AGENT_TOOL_APPROVAL_TTL_SECONDS" :parse parse-long* :apply (assoc-path [:tools :approvals :ttl-seconds])}
+   {:names "AGENT_API_TOOL_PERMISSIONS" :parse parse-keyword-csv :apply (assoc-path [:tools :permissions :api])}
+   {:names "AGENT_UI_TOOL_PERMISSIONS" :parse parse-keyword-csv :apply (assoc-path [:tools :permissions :ui])}
+   {:names "AGENT_AGENT_TOOL_PERMISSIONS" :parse parse-keyword-csv :apply (assoc-path [:tools :permissions :agent])}
+   {:names "AGENT_CHAT_TOOL_PERMISSIONS" :parse parse-keyword-csv :apply (assoc-path [:tools :permissions :chat])}
+   {:names "AGENT_API_HOST" :apply (assoc-path [:api :host])}
+   {:names "AGENT_API_KEY" :apply (assoc-path [:api :key])}
+   {:names "AGENT_API_PORT" :parse parse-long* :apply (assoc-path [:api :port])}
+   {:names "AGENT_ORCHESTRATOR_ENABLED" :parse parse-bool :apply (assoc-path [:orchestrator :enabled])}
+   {:names "AGENT_RUNNER_DEFAULT_SUBSTRATE" :parse parse-keyword* :apply (assoc-path [:runners :default-substrate])}
+   {:names "AGENT_NREPL_ENABLED" :parse parse-bool :apply (assoc-path [:nrepl :enabled])}
+   {:names "AGENT_NREPL_BIND" :apply (assoc-path [:nrepl :bind])}
+   {:names "AGENT_NREPL_PORT" :parse parse-long* :apply (assoc-path [:nrepl :port])}
+   {:names "AGENT_NREPL_PORT_FILE" :apply (assoc-path [:nrepl :port-file])}])
+
+(defn- apply-env-config
+  [cfg]
+  (reduce
+   (fn [acc {:keys [names parse] apply-fn :apply}]
+     (if-let [raw (configured-env-value names)]
+       (let [value ((or parse identity) raw)]
+         (if (some? value)
+           (apply-fn acc value)
+           acc))
+       acc))
+   cfg
+   env-overrides))
 
 (defn load-config
   ([] (load-config nil))
   ([path]
-   (let [global-dir (bootstrap-global-config!)
+   (let [global-dir (global-config-dir)
          local-dir (local-config-dir)
          contexts (load-context-files global-dir local-dir)
          global-config (load-optional-edn (io/file global-dir config-file-name))
          local-config (load-optional-edn (io/file local-dir config-file-name))
          explicit-config (when path (load-edn-file path))]
      (let [file-config (deep-merge default-config
-                                   (some-> global-config normalize-iris-namespaced-config normalize-config)
-                                   (some-> local-config normalize-iris-namespaced-config normalize-config)
+                                   (some-> global-config normalize-iris-namespaced-config)
+                                   (some-> local-config normalize-iris-namespaced-config)
                                    (iris-runtime-config global-dir local-dir contexts)
-                                   (some-> explicit-config normalize-iris-namespaced-config normalize-config))]
-       (-> (deep-merge file-config (env-config))
-           normalize-config
+                                   (some-> explicit-config normalize-iris-namespaced-config))]
+       (-> file-config
+           apply-env-config
            (finalize-data-paths global-dir)
            (finalize-skill-dirs global-dir)
            validate-config!)))))
@@ -876,13 +790,12 @@
 
 (defn active-provider-key
   [llm-cfg]
-  (:active-provider (normalize-llm-config llm-cfg)))
+  (:active-provider llm-cfg))
 
 (defn active-provider-config
   [llm-cfg]
-  (let [llm-cfg* (normalize-llm-config llm-cfg)
-        provider (active-provider-key llm-cfg*)]
-    (assoc (get-in llm-cfg* [:providers provider]) :provider provider)))
+  (let [provider (active-provider-key llm-cfg)]
+    (assoc (get-in llm-cfg [:providers provider]) :provider provider)))
 
 (defn active-model
   [llm-cfg]

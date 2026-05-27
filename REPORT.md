@@ -135,26 +135,23 @@ Remaining caveat:
 
 Confidence: 0.9.
 
-### 6. Config load still bootstraps files and carries legacy normalization
+### 6. Config load no longer bootstraps files or normalizes legacy LLM config
+
+Status: fixed.
 
 Evidence:
 
-- `src/agent/config.clj` starts `bootstrap-global-config!`, which creates config/context files.
-- `src/agent/config.clj` calls bootstrap during `load-config`.
-- `src/agent/config.clj` still normalizes legacy LLM provider shapes in live load path.
-- `src/agent/config.clj` manually maps many env vars.
+- `src/agent/config.clj` now exposes explicit `init-config!` for writing missing global files.
+- `src/agent/config.clj` `load-config` only reads, merges, applies env overrides, finalizes paths, and validates.
+- Legacy LLM provider-shape conversion moved to `migrate-legacy-config` / `migrate-config-file`; live load rejects legacy keys.
+- Env overrides are declared in one `env-overrides` table.
+- `src/agent/cli.clj` adds `config init` and `config migrate path/to/config.edn`.
 
 Reasoning:
 
-Config loading should parse and validate. Here it also mutates disk and migrates legacy shapes, so tests/runtime need special isolation and config state is harder to reason about.
+Config loading now has a narrower contract. Disk initialization is an explicit CLI/runtime step, legacy migration is opt-in, and env behavior is auditable from one table.
 
-Fix direction:
-
-- Split `init-config!` from pure `load-config`.
-- Move legacy normalization to one migration command or remove it.
-- Replace manual env parsing with declarative table/schema.
-
-Confidence: 0.88.
+Confidence: 0.9.
 
 ### 7. Memory graph remains experimental without reconciliation
 

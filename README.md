@@ -51,12 +51,13 @@ clojure -J--enable-native-access=ALL-UNNAMED -M -m agent.core --config config/de
 
 Configuration:
 
-- `~/.config/iris/config.edn` uses the same shape as `resources/config/default.edn`, which is copied only when the global config is missing.
+- `~/.config/iris/config.edn` uses the same shape as `resources/config/default.edn`. Create missing global files with `clojure -M -m agent.core config init`.
 - LLM model settings live under provider entries: `{:llm {:active-provider :ollama :providers {:ollama {:type :ollama :base-url "http://localhost:11434" :model "llama3.2:3b"} :deepseek {:type :openai-compatible :base-url "https://api.deepseek.com/v1" :api-key "..." :model "deepseek-chat"}}}}`.
+- Legacy LLM config can be converted with `clojure -M -m agent.core config migrate path/to/config.edn`.
 - If a generated file starts with `#:iris`, nested keys like `:api` read as `:iris/api`; current loader normalizes this, but prefer normal map syntax: `{:iris/config-version 1 :api {:port 9090}}`.
 - Config dir resolution: `IRIS_CONFIG_DIR`, then `$XDG_CONFIG_HOME/iris`, then `~/.config/iris`.
 - Project-local overlay dir: `./.iris/`.
-- Global files are created from `resources/` templates when missing: `config.edn`, `SOUL.md`, `AGENTS.md`, `USER.md`, `TOOLS.md`, `BOOT.md`, `HEARTBEAT.md`, `MEMORY.md`.
+- Global files are created from `resources/` templates by `config init`: `config.edn`, `SOUL.md`, `AGENTS.md`, `USER.md`, `TOOLS.md`, `BOOT.md`, `HEARTBEAT.md`, `MEMORY.md`.
 - EDN merge order: global `config.edn` → local `./.iris/config.edn` → explicit `--config` file → env vars.
 - Markdown context files merge by concatenating global then local in this order: `SOUL.md`, `AGENTS.md`, `USER.md`, `TOOLS.md`, `BOOT.md`, `HEARTBEAT.md`.
 - `:memory {:prompt {:paths ["MEMORY.md"]}}` uses paths relative to process cwd unless absolute paths are configured.
