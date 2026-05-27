@@ -7,7 +7,11 @@
    [agent.llm.messages :as llm-messages]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
+   [agent.runs.service :as runs]
    [agent.runtime.core :as runtime]
+   [agent.system.components :as components]
+   [agent.system.events :as events]
+   [agent.tools.service :as tool-service]
    [cheshire.core :as json]
    [clojure.core.async :as async]
    [clojure.java.io :as io]
@@ -165,9 +169,9 @@
 (defn started-test-system [path port config-fn]
   (let [base-system (system/create-system)
         store (sqlite/create-store {:path path})
-        event-bus (system/create-event-bus)
-        event-sink (system/create-event-sink store event-bus)
-        runtime-service (system/create-runtime-service store event-sink)
+        event-bus (events/create-event-bus)
+        event-sink (events/create-event-sink store event-bus)
+        runtime-service (runs/create-runtime-service store event-sink)
         config (-> (:config base-system)
                    (assoc :llm (:llm cfg/default-config)
                           :chat (:chat cfg/default-config))
@@ -181,12 +185,12 @@
                       :store store
                       :event-bus event-bus
                       :event-sink event-sink
-                      :tool-registry (system/create-tool-registry (:tools config) event-sink store)
-                      :skills-registry (system/create-skills-registry (:skills config))
+                      :tool-registry (tool-service/create-tool-registry (:tools config) event-sink store)
+                      :skills-registry (components/create-skills-registry (:skills config))
                       :memory-service (memory/create-memory-service (:memory config) store)
                       :runtime-service runtime-service
-                      :runner-registry (system/create-runner-registry runtime-service)
-                      :orchestrator (system/create-orchestrator (:orchestrator config) event-sink)
+                      :runner-registry (runs/create-runner-registry runtime-service)
+                      :orchestrator (components/create-orchestrator (:orchestrator config) event-sink)
                       :config config)]
     {:system system
      :server (api/start-server! system {:host "127.0.0.1" :port port})}))
@@ -369,9 +373,9 @@
         base-system (system/create-system)
         messages* (atom nil)
         store (sqlite/create-store {:path path})
-        event-bus (system/create-event-bus)
-        event-sink (system/create-event-sink store event-bus)
-        runtime-service (system/create-runtime-service store event-sink)
+        event-bus (events/create-event-bus)
+        event-sink (events/create-event-sink store event-bus)
+        runtime-service (runs/create-runtime-service store event-sink)
         config (-> (:config base-system)
                    (assoc :llm (:llm cfg/default-config)
                           :chat (:chat cfg/default-config))
@@ -383,15 +387,15 @@
                       :store store
                       :event-bus event-bus
                       :event-sink event-sink
-                      :tool-registry (system/create-tool-registry (assoc-in (:tools config)
+                      :tool-registry (tool-service/create-tool-registry (assoc-in (:tools config)
                                                                            [:http :allow-private?]
                                                                            true)
                                                                   event-sink
                                                                   store)
                       :memory-service (memory/create-memory-service (:memory config) store)
                       :runtime-service runtime-service
-                      :runner-registry (system/create-runner-registry runtime-service)
-                      :orchestrator (system/create-orchestrator (:orchestrator config) event-sink)
+                      :runner-registry (runs/create-runner-registry runtime-service)
+                      :orchestrator (components/create-orchestrator (:orchestrator config) event-sink)
                       :config (assoc config
                                      :api {:host "127.0.0.1" :port port}
                                      :storage {:sqlite {:path path}}))
@@ -418,23 +422,23 @@
                                     :auto_launch true})
             created-run-body (json/parse-string (:body created-run) true)
             run-id (get-in created-run-body [:data :id])
-            _ (system/register-run! system run-id
+            _ (runs/register-run! system run-id
                                   {:capabilities [:chat]
                                    :network-identity {:logical-id "agent://runner"}
                                    :runner-metadata {:pid 100}})
-            _ (system/heartbeat-run! system run-id
+            _ (runs/heartbeat-run! system run-id
                                    {:sequence-no 1
                                     :status :running
                                     :metrics {:cpu 0.1}
-                                    :lease-id (get-in (system/get-run system run-id) [:lease :id])})
-            _ (system/checkpoint-run! system run-id
+                                    :lease-id (get-in (runs/get-run system run-id) [:lease :id])})
+            _ (runs/checkpoint-run! system run-id
                                     {:sequence-no 1
                                      :checkpoint-type :state
                                      :state {:step "exec"}})
-            command-entry (system/enqueue-run-command! system run-id
+            command-entry (runs/enqueue-run-command! system run-id
                                                      {:command-type :pause
                                                       :payload {:reason "test"}})
-            _ (system/log-event! system
+            _ (events/log-event! system
                                {:event-type :agent.run.output
                                 :entity-type :agent_run
                                 :entity-id run-id
@@ -877,22 +881,22 @@
         base-url (str "http://127.0.0.1:" port)
         base-system (system/create-system)
         store (sqlite/create-store {:path path})
-        event-bus (system/create-event-bus)
-        event-sink (system/create-event-sink store event-bus)
-        runtime-service (system/create-runtime-service store event-sink)
+        event-bus (events/create-event-bus)
+        event-sink (events/create-event-sink store event-bus)
+        runtime-service (runs/create-runtime-service store event-sink)
         system (assoc base-system
                       :llm-provider (->TestProvider (atom nil))
                       :store store
                       :event-bus event-bus
                       :event-sink event-sink
                       :runtime-service runtime-service
-                      :runner-registry (system/create-runner-registry runtime-service)
+                      :runner-registry (runs/create-runner-registry runtime-service)
                       :config (assoc (:config base-system)
                                      :api {:host "127.0.0.1" :port port}
                                      :storage {:sqlite {:path path}}))
         server (api/start-server! system {:host "127.0.0.1" :port port})]
     (try
-      (let [run (system/request-run! system {:agent-id "stream-agent"
+      (let [run (runs/request-run! system {:agent-id "stream-agent"
                                            :name "stream-run"
                                            :substrate :local-unsandboxed
                                            :requested-by "tester"})
@@ -901,15 +905,15 @@
                           (str base-url "/v1/runs/" run-id "/stream")
                           6
                           #(do
-                             (system/register-run! system run-id
+                             (runs/register-run! system run-id
                                                  {:capabilities [:chat]
                                                   :network-identity {:logical-id "agent://stream"}})
-                             (system/heartbeat-run! system run-id
+                             (runs/heartbeat-run! system run-id
                                                   {:sequence-no 1
                                                    :status :running
                                                    :metrics {:phase "boot"}
-                                                   :lease-id (get-in (system/get-run system run-id) [:lease :id])})
-                             (system/log-event! system
+                                                   :lease-id (get-in (runs/get-run system run-id) [:lease :id])})
+                             (events/log-event! system
                                               {:event-type :agent.run.output
                                                :entity-type :agent_run
                                                :entity-id run-id

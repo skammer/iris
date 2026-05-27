@@ -47,10 +47,10 @@
   (keyword (or (:mode body) "soft")))
 
 (defn- reload-response [system request]
-  (let [result ((requiring-resolve 'agent.system/reload!)
-                system
-                {:mode (reload-mode (h/read-json-body request))
-                 :source "api"})]
+  (let [reload! (get-in system [:system-control :reload!])
+        result (reload! system
+                        {:mode (reload-mode (h/read-json-body request))
+                         :source "api"})]
     (responses/json-response (if (= :scheduled (:status result)) 202 200)
                              {:data result})))
 

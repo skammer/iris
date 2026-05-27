@@ -4,7 +4,11 @@
    [agent.memory.core :as memory]
    [agent.nrepl :as nrepl]
    [agent.persistence.sqlite :as sqlite]
+   [agent.sessions.service :as sessions]
    [agent.system :as system]
+   [agent.system.events :as system-events]
+   [agent.system.health :as system-health]
+   [agent.tools.service :as tool-service]
    [clojure.pprint :refer [pprint]]))
 
 (defn sys
@@ -28,7 +32,7 @@
 
 (defn health
   []
-  (system/health-check (sys)))
+  (system-health/health-check (sys)))
 
 (defn api-base-url
   []
@@ -37,11 +41,11 @@
 
 (defn sessions
   []
-  (system/list-sessions (sys)))
+  (sessions/list-sessions (sys)))
 
 (defn messages
   [session-id]
-  (system/list-messages (sys) session-id))
+  (sessions/list-messages (sys) session-id))
 
 (defn current-context
   [session-id]
@@ -49,19 +53,19 @@
 
 (defn events
   ([] (events {:limit 20}))
-  ([opts] (system/list-events (sys) opts)))
+  ([opts] (system-events/list-events (sys) opts)))
 
 (defn memory-surfaces
   []
-  (system/memory-surfaces (sys)))
+  (memory/list-surfaces (memory-service)))
 
 (defn prompt-memory
   []
-  (system/read-prompt-memory (sys)))
+  (memory/read-prompt-memory (memory-service)))
 
 (defn hybrid-search
   ([query] (hybrid-search query {:limit 10}))
-  ([query opts] (system/search-memory (sys) query opts)))
+  ([query opts] (memory/search-memory (memory-service) query opts)))
 
 (defn search-messages
   ([query] (search-messages query {:limit 10}))
@@ -73,11 +77,11 @@
 
 (defn search-facts
   ([query] (search-facts query {:limit 10}))
-  ([query opts] (system/search-memory-facts (sys) query opts)))
+  ([query opts] (memory/search-facts (memory-service) query opts)))
 
 (defn save-fact!
   ([fact] (save-fact! fact {}))
-  ([fact opts] (system/save-memory-fact! (sys) fact opts)))
+  ([fact opts] (memory/save-memory-fact! (memory-service) fact opts)))
 
 (defn save-session-fact!
   [session-id fact]
@@ -93,7 +97,7 @@
 
 (defn graph-search
   ([query] (graph-search query {:limit 10}))
-  ([query opts] (system/query-graph-memory (sys) query opts)))
+  ([query opts] (memory/query-graph-memory (memory-service) query opts)))
 
 (defn save-graph-fact!
   [fact]
@@ -116,21 +120,21 @@
 
 (defn memory-tool
   ([input] (memory-tool input {}))
-  ([input context] (system/execute-tool (sys) :memory input (tool-context context))))
+  ([input context] (tool-service/execute-tool (sys) :memory input (tool-context context))))
 
 (defn message-tool
   ([query] (message-tool query {}))
   ([query opts]
-   (system/execute-tool (sys)
-                        :message_search
-                        (merge {:query query} opts)
-                        (tool-context opts))))
+   (tool-service/execute-tool (sys)
+                              :message_search
+                              (merge {:query query} opts)
+                              (tool-context opts))))
 
 (defn create-demo!
   []
   (let [s (sys)
         st (:store s)
-        session (system/create-session! s "dev memory demo")
+        session (sessions/create-session! s "dev memory demo")
         session-id (:id session)
         user-message (sqlite/append-message! st
                                              session-id
@@ -140,14 +144,14 @@
                                                   session-id
                                                   "assistant"
                                                   "Noted: Alice likes Clojure.")
-        event (system/log-event! s
-                                 {:event-type :dev.memory-demo
-                                  :entity-type :session
-                                  :entity-id session-id
-                                  :request-id "dev/user.clj"
-                                  :payload {:session-id session-id
-                                            :message-ids [(:id user-message)
-                                                          (:id assistant-message)]}})
+        event (system-events/log-event! s
+                                        {:event-type :dev.memory-demo
+                                         :entity-type :session
+                                         :entity-id session-id
+                                         :request-id "dev/user.clj"
+                                         :payload {:session-id session-id
+                                                   :message-ids [(:id user-message)
+                                                                 (:id assistant-message)]}})
         session-fact (save-fact! {:subject "Alice"
                                   :predicate "likes"
                                   :object "Clojure"}
@@ -213,7 +217,7 @@
 
   ;; Store demo data.
   ;; messages -> SQLite messages table; append-message! also writes session_entries.
-  ;; events -> SQLite agent_events via system/log-event!.
+  ;; events -> SQLite agent_events via system-events/log-event!.
   ;; facts -> SQLite memory_facts via save-fact!, logs memory.fact.saved event.
   ;; graph -> optional Datahike write from save-fact! when graph enabled.
   (def demo (create-demo!))

@@ -1,14 +1,20 @@
 (ns agent.system-test
   (:require
-   [agent.system :as system]
+   [agent.channels.core :as channel-adapters]
    [agent.config :as config]
    [agent.health :as health]
    [agent.kernel]
+   [agent.kernel.service :as kernel-service]
    [agent.llm.core :as llm-core]
-   [agent.llm.providers.ollama :as ollama]
-   [agent.llm.providers.openai-compatible :as openai-compatible]
+   [agent.llm.service :as llm-service]
+   [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
+   [agent.runs.service :as runs]
    [agent.runtime.core :as runtime]
+   [agent.skills :as skills]
+   [agent.system :as system]
+   [agent.system.health :as system-health]
+   [agent.tools.service :as tool-service]
    [clojure.java.io :as io]
    [clojure.test :refer :all]))
 
@@ -16,11 +22,11 @@
   (.getAbsolutePath (java.io.File/createTempFile "iris-system-" ".db")))
 
 (deftest create-llm-provider-selects-ollama
-  (let [provider (system/create-llm-provider (:llm config/default-config))]
+  (let [provider (llm-service/create-llm-provider (:llm config/default-config))]
     (is (instance? agent.llm.providers.ollama.OllamaProvider provider))))
 
 (deftest create-llm-provider-selects-openrouter
-  (let [provider (system/create-llm-provider
+  (let [provider (llm-service/create-llm-provider
                   {:active-provider :openrouter
                    :providers {:openrouter {:type :openrouter
                                             :model "openai/gpt-4o-mini"
@@ -33,7 +39,7 @@
     (is (= 2048 (get-in (llm-core/get-config provider) [:config :max-tokens])))))
 
 (deftest create-llm-provider-keeps-openai-compatible-request-defaults
-  (let [provider (system/create-llm-provider
+  (let [provider (llm-service/create-llm-provider
                   {:active-provider :neuraldeep
                    :providers {:neuraldeep {:type :openai-compatible
                                             :model "qwen3.6-35b-a3b"
@@ -50,11 +56,11 @@
 
 (deftest create-system-registers-default-tools
   (let [system (system/create-system)
-        tools (system/list-tools system)
+        tools (tool-service/list-tools system)
         tool-names (set (map :name tools))
-        adapters (system/list-channel-adapters system)
+        adapters (channel-adapters/list-adapters (:channel-adapter-registry system))
         runner-keys (-> system :runner-registry keys set)
-        system-health (system/health-check system)]
+        system-health (system-health/health-check system)]
     (is (every? tool-names [:fs :http :memory :message_search :shell :system_reload :todo]))
     (is (= ["Discord" "Slack" "Telegram"] (mapv :display-name adapters)))
     (is (contains? runner-keys :local-unsandboxed))
@@ -62,8 +68,8 @@
     (is (contains? runner-keys :docker))
     (is (contains? runner-keys :podman))
     (is (contains? runner-keys :seatbelt))
-    (is (empty? (system/list-skills system)))
-    (is (= 5 (count (system/memory-surfaces system))))
+    (is (empty? (skills/list-skills system)))
+    (is (= 5 (count (memory/list-surfaces system))))
     (is (false? (get-in system-health [:logging :enabled])))
     (is (= :local (get-in system-health [:broker :backend])))
     (is (<= 7 (get-in system-health [:tools :count])))
@@ -77,15 +83,15 @@
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})
         registry (health/create-registry)
-        service (system/create-runtime-service store (fn [_] nil))
+        service (runs/create-runtime-service store (fn [_] nil))
         system {:runtime-service service
                 :health-registry registry}
-        run (system/request-run! system
+        run (runs/request-run! system
 	                                 (runtime/create-run-request
 	                                  {:name "restart-count-test"
 	                                   :substrate :local-unsandboxed}))]
     (try
-      (system/retry-run! system (:id run))
+      (runs/retry-run! system (:id run))
       (is (= 1 (get-in (health/snapshot registry)
                        [:components "runtime" :restart-count])))
       (is (= "ok" (get-in (health/snapshot registry)
@@ -98,15 +104,15 @@
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})
         events (atom [])
-        blocked-registry (system/create-tool-registry
+        blocked-registry (tool-service/create-tool-registry
                           (assoc-in (:tools config/default-config) [:policy :blocklist] [:fs])
                           #(swap! events conj %)
                           store)
-        yolo-registry (system/create-tool-registry
+        yolo-registry (tool-service/create-tool-registry
                        (assoc (:tools config/default-config) :yolo? true)
                        #(swap! events conj %)
                        store)
-        yolo-blocked-registry (system/create-tool-registry
+        yolo-blocked-registry (tool-service/create-tool-registry
                                (-> (:tools config/default-config)
                                    (assoc :yolo? true)
                                    (assoc-in [:policy :blocklist] [:shell]))
@@ -115,20 +121,20 @@
     (try
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"startup policy"
-                            (system/execute-tool {:tool-registry blocked-registry
+                            (tool-service/execute-tool {:tool-registry blocked-registry
                                                   :config {:tools (:tools config/default-config)}}
                                                  :fs
                                                  {:action "list" :path "."}
                                                  {:permissions #{:filesystem-read}})))
       (is (= "hi"
-             (:stdout (system/execute-tool {:tool-registry yolo-registry
+             (:stdout (tool-service/execute-tool {:tool-registry yolo-registry
                                             :config {:tools (assoc (:tools config/default-config) :yolo? true)}}
                                            :shell
                                            {:argv ["printf" "hi"]}
                                            {:permissions #{:shell-exec}}))))
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"startup policy"
-                            (system/execute-tool {:tool-registry yolo-blocked-registry
+                            (tool-service/execute-tool {:tool-registry yolo-blocked-registry
                                                   :config {:tools (-> (:tools config/default-config)
                                                                      (assoc :yolo? true)
                                                                      (assoc-in [:policy :blocklist] [:shell]))}}
@@ -146,20 +152,20 @@
         scoped-tools (assoc-in (:tools config/default-config)
                                [:policy :tool-scopes]
                                {:fs [:workspace]})
-        scoped-registry (system/create-tool-registry scoped-tools (constantly nil) store)
-        write-registry (system/create-tool-registry (:tools config/default-config)
+        scoped-registry (tool-service/create-tool-registry scoped-tools (constantly nil) store)
+        write-registry (tool-service/create-tool-registry (:tools config/default-config)
                                                    (constantly nil)
                                                    store)]
     (try
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"Tool scope missing"
-                            (system/execute-tool {:tool-registry scoped-registry
+                            (tool-service/execute-tool {:tool-registry scoped-registry
                                                   :config {:tools scoped-tools}}
                                                  :fs
                                                  {:action "list" :path "."}
                                                  {:permissions #{:filesystem-read}})))
       (is (vector?
-           (:entries (system/execute-tool {:tool-registry scoped-registry
+           (:entries (tool-service/execute-tool {:tool-registry scoped-registry
                                            :config {:tools scoped-tools}}
                                           :fs
                                           {:action "list" :path "."}
@@ -170,12 +176,12 @@
                      {:action "replace" :path target :old-string "old" :new-string "new"}]]
         (is (thrown-with-msg? clojure.lang.ExceptionInfo
                               #"approved request"
-                              (system/execute-tool {:tool-registry write-registry
+                              (tool-service/execute-tool {:tool-registry write-registry
                                                     :config {:tools (:tools config/default-config)}}
                                                    :fs
                                                    input
                                                    {:permissions #{:filesystem-write}}))))
-      (is (:written (system/execute-tool {:tool-registry write-registry
+      (is (:written (tool-service/execute-tool {:tool-registry write-registry
                                           :config {:tools (assoc (:tools config/default-config) :yolo? true)}}
                                          :fs
                                          {:action "write"
@@ -197,7 +203,7 @@
                                             :container-home-dir "/root"
                                             :host-working-dir "."
                                             :share-network? true}}}}
-        prepared (#'agent.system/prepare-runner-options
+        prepared (runs/prepare-runner-options
                   system
                   {:substrate "docker"
                    :runner-options {}})]
@@ -216,7 +222,7 @@
 
 (deftest spawn-task-worker-produces-scoped-worker
   (let [system (system/create-system)
-        worker (system/spawn-task-worker! system
+        worker (kernel-service/spawn-task-worker! system
                                         {:task {:id "task-1" :prompt "collect facts"}
                                          :name "Fact Worker"
                                          :capability-bundle {:capabilities ["research"]
@@ -231,13 +237,13 @@
 
 (deftest execute-step-produces-receipts
   (let [system (system/create-system)
-        orchestrator (system/spawn-agent! system {:name "Planner" :kind "orchestrator" :role "orchestrator"})
+        orchestrator (kernel-service/spawn-agent! system {:name "Planner" :kind "orchestrator" :role "orchestrator"})
         step (agent.kernel/orchestrator-spawn-worker-step
               {:task {:id "task-2"}
                :worker-name "Exec Worker"
                :capability-bundle {:capabilities ["execute"]
                                    :tool-access ["http"]}})
-        executed (system/execute-step! system (:id orchestrator) step)]
+        executed (kernel-service/execute-step! system (:id orchestrator) step)]
     (is (= 2 (count (:receipts executed))))
     (is (= :ok (get-in executed [:receipts 0 :status])))
     (is (= :deferred (get-in executed [:receipts 1 :status])))))

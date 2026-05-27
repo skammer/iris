@@ -8,8 +8,11 @@
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.loop :as runtime-loop]
-   [agent.skills :as skills]
+   [agent.sessions.service :as sessions]
    [agent.system :as system]
+   [agent.system.components :as components]
+   [agent.system.events :as events]
+   [agent.tools.service :as tool-service]
    [agent.tools.core :as tools]
    [cheshire.core :as json]
    [clojure.core.async :as async]
@@ -103,8 +106,8 @@
 (defn- test-system [path provider config-fn]
   (let [base (system/create-system)
         store (sqlite/create-store {:path path})
-        event-bus (system/create-event-bus)
-        event-sink (system/create-event-sink store event-bus)
+        event-bus (events/create-event-bus)
+        event-sink (events/create-event-sink store event-bus)
         config (config-fn (:config base))]
     (assoc base
            :llm-provider provider
@@ -112,7 +115,7 @@
            :store store
            :event-bus event-bus
            :event-sink event-sink
-           :tool-registry (system/create-tool-registry (:tools config) event-sink store)
+           :tool-registry (tool-service/create-tool-registry (:tools config) event-sink store)
            :memory-service (memory/create-memory-service (:memory config) store)
            :config config)))
 
@@ -147,7 +150,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider identity)
-        session (system/create-session! system "chat")]
+        session (sessions/create-session! system "chat")]
     (try
       (let [result (chat/run! system {:session-id (:id session)
                                       :messages [{:role "user" :content "hello"}]})
@@ -171,7 +174,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider identity)
-        session (system/create-session! system "media")
+        session (sessions/create-session! system "media")
         blocks [{:type :text :text "look"}
                 {:type :image
                  :source {:type :base64
@@ -196,7 +199,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider identity)
-        session (system/create-session! system "dedupe")]
+        session (sessions/create-session! system "dedupe")]
     (try
       (sqlite/append-message! (:store system) (:id session) "user" "first")
       (sqlite/append-message! (:store system) (:id session) "assistant" "first answer")
@@ -222,7 +225,7 @@
         provider (->PlannerProvider responses requests)
         system (test-system path provider
                             #(assoc-in % [:iris :context] "SOUL\nAGENTS"))
-        session (system/create-session! system "context")]
+        session (sessions/create-session! system "context")]
     (try
       (chat/run! system {:session-id (:id session)
                          :messages [{:role "user" :content "hello"}]})
@@ -242,7 +245,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider #(assoc-in % [:iris :context] nil))
-        session (system/create-session! system "mode")]
+        session (sessions/create-session! system "mode")]
     (try
       (sqlite/set-session-active-mode! (:store system) (:id session) "code")
       (chat/run! system {:session-id (:id session)
@@ -271,8 +274,8 @@
         system0 (test-system path provider #(-> %
                                                 (assoc-in [:iris :context] nil)
                                                 (assoc-in [:skills :dirs] [(.getAbsolutePath root)])))
-        system (assoc system0 :skills-registry (system/create-skills-registry (:skills (:config system0))))
-        session (system/create-session! system "skill")]
+        system (assoc system0 :skills-registry (components/create-skills-registry (:skills (:config system0))))
+        session (sessions/create-session! system "skill")]
     (try
       (chat/run! system {:session-id (:id session)
                          :messages [{:role "user" :content "please /review this"}]})
@@ -295,7 +298,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider identity)
-        session (system/create-session! system "tools")]
+        session (sessions/create-session! system "tools")]
     (try
       (let [result (chat/run! system {:session-id (:id session)
                                       :messages [{:role "user" :content "list files"}]})
@@ -317,7 +320,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider identity)
-        session (system/create-session! system "default-profile")]
+        session (sessions/create-session! system "default-profile")]
     (try
       (let [result (chat/run! system {:session-id (:id session)
                                       :messages [{:role "user" :content "hello"}]})]
@@ -334,7 +337,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider identity)
-        session (system/create-session! system "loop-block")]
+        session (sessions/create-session! system "loop-block")]
     (try
       (loop/start! (:id session) (:config system) "work plan")
       (let [result (chat/run! system {:session-id (:id session)
@@ -361,7 +364,7 @@
                                                :summary-max-chars 400
                                                :validation-max-chars 400})
                                  (assoc-in [:memory :facts :extractor :enabled] false)))
-        session (system/create-session! system "loop-start")]
+        session (sessions/create-session! system "loop-start")]
     (try
       (spit plan "- [ ] one")
       (let [result (chat/run! system {:session-id (:id session)
@@ -395,7 +398,7 @@
                                             :tool-routing? true
                                             :max-nudges 2
                                             :nudge-budgets {:bare-text 2}})))
-        session (system/create-session! system "small-profile")]
+        session (sessions/create-session! system "small-profile")]
     (try
       (let [result (chat/run! system {:session-id (:id session)
                                       :messages [{:role "user" :content "hello"}]})
@@ -432,7 +435,7 @@
                                             :tool-routing? false
                                             :max-nudges 2
                                             :nudge-budgets {}})))
-        session (system/create-session! system "mixed-respond")
+        session (sessions/create-session! system "mixed-respond")
         tool-events (atom [])]
     (try
       (let [result (chat/run! system {:session-id (:id session)
@@ -452,7 +455,7 @@
         system (test-system path provider #(-> %
                                                (assoc-in [:chat :max-steps] 1)
                                                (assoc-in [:memory :facts :extractor :enabled] false)))
-        session (system/create-session! system "max-steps")]
+        session (sessions/create-session! system "max-steps")]
     (try
       (let [result (chat/run! system {:session-id (:id session)
                                       :messages [{:role "user" :content "list files"}]})]
@@ -467,7 +470,7 @@
         response (promise)
         provider (->BlockingProvider started response)
         system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
-        session (system/create-session! system "cancel")]
+        session (sessions/create-session! system "cancel")]
     (try
       (let [result-f (future
                        (chat/run! system {:session-id (:id session)
@@ -491,7 +494,7 @@
         provider-b (->PlannerProvider (atom ["unused"]) (atom []))
         system-a (test-system path-a provider-a #(assoc-in % [:memory :facts :extractor :enabled] false))
         system-b (test-system path-b provider-b #(assoc-in % [:memory :facts :extractor :enabled] false))
-        session-a (system/create-session! system-a "a")]
+        session-a (sessions/create-session! system-a "a")]
     (try
       (with-redefs [runtime-loop/run!
                     (fn [{:keys [event-sink session-id request-id]}]
@@ -537,7 +540,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
-        session (system/create-session! system "queue")]
+        session (sessions/create-session! system "queue")]
     (try
       (let [first-f (future
                       (chat/run! system {:session-id (:id session)
@@ -573,7 +576,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
-        session (system/create-session! system "tool-queue")]
+        session (sessions/create-session! system "tool-queue")]
     (try
       (with-redefs [kernel-runtime/execute-step!
                     (fn [_ _ step _]
@@ -620,7 +623,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
-        session (system/create-session! system "cancel-queue")]
+        session (sessions/create-session! system "cancel-queue")]
     (try
       (let [first-f (future
                       (chat/run! system {:session-id (:id session)
@@ -648,7 +651,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
-        session (system/create-session! system "truncation")]
+        session (sessions/create-session! system "truncation")]
     (try
       (let [first-result (chat/run! system {:session-id (:id session)
                                             :messages [{:role "user" :content "too big"}]})
@@ -673,7 +676,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
-        session (system/create-session! system "missing-tool-result")]
+        session (sessions/create-session! system "missing-tool-result")]
     (try
       (sqlite/append-message! (:store system) (:id session) "user" "list")
       (sqlite/append-message! (:store system) (:id session) "assistant" ""
@@ -702,7 +705,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
-        session (system/create-session! system "orphan-tool-result")]
+        session (sessions/create-session! system "orphan-tool-result")]
     (try
       (sqlite/append-message! (:store system) (:id session) "tool" "late"
                               {:tool-call-id "orphan"})
@@ -726,7 +729,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider identity)
-        session (system/create-session! system "tool-history")]
+        session (sessions/create-session! system "tool-history")]
     (try
       (chat/run! system {:session-id (:id session)
                          :messages [{:role "user" :content "list files"}]})
@@ -748,7 +751,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider identity)
-        session (system/create-session! system "tool-reload")]
+        session (sessions/create-session! system "tool-reload")]
     (try
       (sqlite/append-message! (:store system) (:id session) "user" "list files")
       (sqlite/append-message! (:store system) (:id session) "assistant" ""
@@ -784,7 +787,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider identity)
-        session (system/create-session! system "large-tool-history")
+        session (sessions/create-session! system "large-tool-history")
         large-content (apply str (repeat 9000 "x"))]
     (try
       (sqlite/append-message! (:store system) (:id session) "assistant" ""
@@ -817,7 +820,7 @@
                                                (assoc-in [:chat :compaction :reserve-output-tokens] 0)
                                                (assoc-in [:chat :compaction :destructive-threshold] 0.1)
                                                (assoc-in [:chat :compaction :warning-threshold] 0.05)))
-        session (system/create-session! system "prompt-compact")
+        session (sessions/create-session! system "prompt-compact")
         old (apply str (repeat 2200 "old "))]
     (try
       (sqlite/append-message! (:store system) (:id session) "user" old)
@@ -867,7 +870,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider identity)
-        session (system/create-session! system "native-tools")]
+        session (sessions/create-session! system "native-tools")]
     (try
       (let [result (chat/run! system {:session-id (:id session)
                                       :messages [{:role "user" :content "list files"}]})
@@ -917,7 +920,7 @@
                        (custom-tool :fast_read
                                     (fn [input _] input)
                                     {:operation :read :parallel-safe? true})))
-        session (system/create-session! system "multi-tool-order")]
+        session (sessions/create-session! system "multi-tool-order")]
     (try
       (let [result (chat/run! system {:session-id (:id session)
                                       :messages [{:role "user" :content "read both"}]})
@@ -958,7 +961,7 @@
                        (custom-tool :read_c
                                     (fn [input _] (swap! order conj :read-c) input)
                                     {:operation :read :parallel-safe? true})))
-        session (system/create-session! system "mixed-tool-boundaries")]
+        session (sessions/create-session! system "mixed-tool-boundaries")]
     (try
       (chat/run! system {:session-id (:id session)
                          :messages [{:role "user" :content "mixed"}]})
@@ -975,7 +978,7 @@
         system (test-system path
                             provider
                             #(assoc-in % [:tools :policy :blocklist] [:fs]))
-        session (system/create-session! system "blocked-tool")]
+        session (sessions/create-session! system "blocked-tool")]
     (try
       (let [result (chat/run! system {:session-id (:id session)
                                       :messages [{:role "user" :content "list files"}]})
@@ -999,7 +1002,7 @@
         system (test-system path
                             provider
                             #(assoc-in % [:tools :permissions :chat] [:shell-exec]))
-        session (system/create-session! system "approval")]
+        session (sessions/create-session! system "approval")]
     (try
       (let [result (chat/run! system {:session-id (:id session)
                                       :messages [{:role "user" :content "run shell"}]})
@@ -1028,7 +1031,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider identity)
-        session (system/create-session! system "facts")]
+        session (sessions/create-session! system "facts")]
     (try
       (chat/run! system {:session-id (:id session)
                          :messages [{:role "user" :content "I prefer concise answers"}]})
@@ -1051,7 +1054,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider identity)
-        session (system/create-session! system "stream-content")
+        session (sessions/create-session! system "stream-content")
         deltas (atom [])]
     (try
       (let [result (chat/run! system {:session-id (:id session)
@@ -1073,7 +1076,7 @@
         system (test-system path
                             provider
                             #(assoc-in % [:llm :stream-content?] false))
-        session (system/create-session! system "stream-disabled")
+        session (sessions/create-session! system "stream-disabled")
         deltas (atom [])]
     (try
       (let [result (chat/run! system {:session-id (:id session)
@@ -1090,7 +1093,7 @@
   (let [path (temp-db-path)
         provider (->FailingProvider)
         system (test-system path provider identity)
-        session (system/create-session! system "failing")]
+        session (sessions/create-session! system "failing")]
     (try
       (let [result (chat/run! system {:session-id (:id session)
                                       :messages [{:role "user" :content "hello"}]})

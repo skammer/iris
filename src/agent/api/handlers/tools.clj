@@ -5,7 +5,7 @@
    [agent.api.responses :as responses]
    [agent.api.serializers :as ser]
    [agent.tools.approvals :as tool-approvals]
-   [agent.tools.core :as tools]
+   [agent.tools.service :as tool-service]
    [clojure.string :as str]))
 
 (defn split-command-plain [command]
@@ -30,7 +30,7 @@
     (throw (errors/api-error 400 "bad_request" "Unsupported tool"))))
 
 (defn configured-tool-permissions [system profile]
-  (set (get-in system [:config :tools :permissions profile] #{})))
+  (tool-service/tool-permissions system profile))
 
 (defn execution-context [system profile tool-name input
                          {:keys [approval-id user request-id activity]}]
@@ -47,7 +47,7 @@
 (defn list-tools [system _request]
   (responses/json-response 200
                            {:data (mapv ser/tool->response
-                                        (tools/list-tools (:tool-registry system)))}))
+                                        (tool-service/list-tools system))}))
 
 (defn execute-tool [system request tool-name]
   (let [body (h/read-json-body request)
@@ -56,12 +56,13 @@
         tool-key (keyword tool-name)]
     (try
       (responses/json-response 200
-                               {:data (tools/execute-tool (:tool-registry system)
-                                                          tool-key
-                                                          input
-                                                          (execution-context system :api tool-key input
-                                                                             {:approval-id approval-id
-                                                                              :user "api"
-                                                                              :activity (:activity body)}))})
+                               {:data (tool-service/execute-tool
+                                       system
+                                       tool-key
+                                       input
+                                       (execution-context system :api tool-key input
+                                                          {:approval-id approval-id
+                                                           :user "api"
+                                                           :activity (:activity body)}))})
       (catch Exception e
         (throw (errors/tool-error->api-error e))))))

@@ -7,11 +7,8 @@
    [agent.api.serializers :as ser]
    [agent.api.validation :as v]
    [agent.kernel :as kernel]
-   [agent.kernel.ops :as kernel-ops]
-   [agent.kernel.runtime :as kernel-runtime]
+   [agent.kernel.service :as kernel-service]
    [agent.orchestrator :as orchestrator]
-   [agent.runtime.tools :as runtime-tools]
-   [agent.tools.core :as tools]
    [clojure.string :as str]))
 
 (defn create [system request]
@@ -89,19 +86,16 @@
     (try
       (responses/json-response
        200
-       {:data (let [agent (orchestrator/get-agent (:orchestrator system) agent-id)]
-                (when-not agent
-                  (throw (ex-info "Agent not found"
-                                  {:type :agent-not-found :agent-id agent-id})))
-                (tools/execute-tool (:tool-registry system)
-                                    tool-key
-                                    input
-                                    (merge (tools-h/execution-context system :agent tool-key input
-                                                                      {:approval-id approval-id
-                                                                       :user (str "agent:" agent-id)
-                                                                       :request-id (:request_id body)
-                                                                       :activity (:activity body)})
-                                           {:allowed-tools (set (:tool-access agent))})))})
+       {:data (kernel-service/execute-agent-tool!
+               system
+               agent-id
+               tool-key
+               input
+               (tools-h/execution-context system :agent tool-key input
+                                          {:approval-id approval-id
+                                           :user (str "agent:" agent-id)
+                                           :request-id (:request_id body)
+                                           :activity (:activity body)}))})
       (catch Exception e
         (let [data (ex-data e)]
           (case (:type data)
@@ -120,46 +114,21 @@
         budgets (or (:budgets body) {})
         system-prompt (:system_prompt body)]
     (try
-      (let [agent (orchestrator/get-agent (:orchestrator system) agent-id)]
-        (when-not agent
-          (throw (ex-info "Agent not found" {:type :agent-not-found :agent-id agent-id})))
-        (when-not (= "orchestrator" (:kind agent))
-          (throw (ex-info "Agent is not an orchestrator"
-                          {:type :validation-failed :agent-id agent-id})))
-        (let [step (kernel/orchestrator-spawn-worker-step
-                    {:task task
-                     :worker-name (or name "Task Worker")
-                     :worker-role (or role "worker")
-                     :capability-bundle {:capabilities capabilities
-                                         :tool-access tool-access}
-                     :memory-scopes memory-scopes
-                     :budgets budgets
-                     :system-prompt system-prompt})
-              spawn (-> step :directives first :payload)
-              worker (orchestrator/spawn-agent! (:orchestrator system)
-                                                {:name (:name spawn)
-                                                 :kind "worker"
-                                                 :role (:role spawn)
-                                                 :parent-id agent-id
-                                                 :system-prompt (:system-prompt spawn)
-                                                 :capabilities capabilities
-                                                 :tool-access tool-access
-                                                 :memory-scopes memory-scopes
-                                                 :budgets budgets
-                                                 :task task})
-              receipt {:directive :spawn-worker
-                       :status :ok
-                       :worker-id (:id worker)}]
-          ((:event-sink system)
-           {:event-type :agent.kernel.step.executed
-            :entity-type :agent
-            :entity-id agent-id
-            :payload {:directive-count 2
-                      :receipt-count 1
-                      :receipts [receipt]}})
+      (let [{:keys [worker receipts]}
+            (kernel-service/orchestrator-spawn-worker-direct!
+             system
+             agent-id
+             {:task task
+              :name name
+              :role role
+              :capabilities capabilities
+              :tool-access tool-access
+              :memory-scopes memory-scopes
+              :budgets budgets
+              :system-prompt system-prompt})]
           (responses/json-response 201
                                    {:data {:worker (ser/agent->response worker)
-                                           :receipts [receipt]}})))
+                                           :receipts receipts}}))
       (catch Exception e
         (case (:type (ex-data e))
           :agent-not-found (throw (errors/api-error 404 "agent_not_found" "Agent not found"))
@@ -175,67 +144,6 @@
                      (or (:directives body) []))
    :receipts (vec (or (:receipts body) []))})
 
-(defrecord ApiKernelOps [system]
-  kernel-ops/KernelOps
-  (spawn-task-worker! [_ {:keys [task name role capability-bundle memory-scopes budgets system-prompt parent-id]}]
-    (orchestrator/spawn-agent! (:orchestrator system)
-                               {:name name
-                                :kind "worker"
-                                :role role
-                                :parent-id parent-id
-                                :system-prompt system-prompt
-                                :capabilities (vec (or (:capabilities capability-bundle) []))
-                                :tool-access (vec (or (:tool-access capability-bundle) []))
-                                :memory-scopes (vec memory-scopes)
-                                :budgets budgets
-                                :task task}))
-  (execute-agent-tool! [_ target-agent-id tool-name input context]
-    (let [target-agent (orchestrator/get-agent (:orchestrator system) target-agent-id)]
-      (when-not target-agent
-        (throw (ex-info "Agent not found" {:type :agent-not-found :agent-id target-agent-id})))
-      (tools/execute-tool (:tool-registry system)
-                          tool-name
-                          input
-                          (merge context
-                                 {:allowed-tools (set (:tool-access target-agent))
-                                  :permissions (tools-h/configured-tool-permissions system :agent)
-                                  :yolo? (true? (get-in system [:config :tools :yolo?]))
-                                  :user (or (:user context) (str "agent:" target-agent-id))}))))
-  (send-agent-message! [_ agent-id message]
-    (orchestrator/send-agent-message! (:orchestrator system)
-                                      (:llm-provider system)
-                                      agent-id
-                                      message))
-  (patch-agent-state! [_ agent-id patch]
-    (orchestrator/patch-agent-state! (:orchestrator system) agent-id patch))
-  (set-agent-status! [_ agent-id status]
-    (orchestrator/set-agent-status! (:orchestrator system) agent-id status))
-  (emit-kernel-event! [_ event]
-    ((:event-sink system) event))
-
-  kernel-ops/KernelToolBatchOps
-  (execute-agent-tool-batch! [_ target-agent-id calls context opts]
-    (let [target-agent (orchestrator/get-agent (:orchestrator system) target-agent-id)]
-      (when-not target-agent
-        (throw (ex-info "Agent not found" {:type :agent-not-found :agent-id target-agent-id})))
-      (let [calls* (mapv (fn [call]
-                           (update call :context #(merge context
-                                                         (or % {})
-                                                         {:allowed-tools (set (:tool-access target-agent))
-                                                          :permissions (tools-h/configured-tool-permissions system :agent)
-                                                          :yolo? (true? (get-in system [:config :tools :yolo?]))
-                                                          :user (or (:user (or % {}))
-                                                                    (:user context)
-                                                                    (str "agent:" target-agent-id))})))
-                         calls)]
-        (runtime-tools/execute-batch! (:tool-registry system)
-                                      calls*
-                                      {}
-                                      (select-keys opts [:mode
-                                                         :tool-execution-modes
-                                                         :cancellation-token
-                                                         :cancelled?]))))))
-
 (defn step-execute [system request agent-id]
   (let [agent (orchestrator/get-agent (:orchestrator system) agent-id)
         body (h/read-json-body request)
@@ -248,9 +156,8 @@
                        (true? (get-in system [:config :tools :yolo?])))}]
     (when-not agent
       (throw (errors/api-error 404 "agent_not_found" "Agent not found")))
-    (let [ops (->ApiKernelOps system)]
-      (responses/json-response 200
-                               {:data (kernel-runtime/execute-step! ops agent-id step opts)}))))
+    (responses/json-response 200
+                             {:data (kernel-service/execute-step! system agent-id step opts)})))
 
 (defn consume-inbox [system _request agent-id]
   (try

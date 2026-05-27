@@ -1,8 +1,10 @@
 (ns agent.cli
   "Command-line parsing and dispatch."
   (:require
+   [agent.chat :as chat]
    [agent.loop :as loop]
    [agent.logging :as logging]
+   [agent.sessions.service :as sessions]
    [agent.skills :as skills]
    [agent.nrepl :as nrepl]
    [agent.system :as system]
@@ -141,17 +143,17 @@
                                :session-id choice}))))))))
 
 (defn- specific-session-id [system session-id]
-  (if (system/session-exists? system session-id)
+  (if (sessions/session-exists? system session-id)
     session-id
     (throw (ex-info (str "Session not found: " session-id)
                     {:type :invalid-cli-session
                      :session-id session-id}))))
 
 (defn- new-session-id [system prompt]
-  (:id (system/create-session! system (prompt-title prompt))))
+  (:id (sessions/create-session! system (prompt-title prompt))))
 
 (defn- session-id-for-prompt [system {:keys [continue? no-session? resume? session-id]} prompt]
-  (let [sessions (delay (system/list-sessions system))]
+  (let [sessions (delay (sessions/list-sessions system))]
     (cond
       no-session? nil
       session-id (specific-session-id system session-id)
@@ -163,13 +165,13 @@
 
 (defn- stream-prompt! [system prompt session-id]
   (let [streamed? (atom false)
-        result (system/complete! system
-                                 [{:role "user" :content prompt}]
-                                 {:session-id session-id
-                                  :on-delta (fn [delta]
-                                              (reset! streamed? true)
-                                              (print delta)
-                                              (flush))})]
+        result (chat/run! system
+                          {:messages [{:role "user" :content prompt}]
+                           :session-id session-id
+                           :on-delta (fn [delta]
+                                       (reset! streamed? true)
+                                       (print delta)
+                                       (flush))})]
     (when-not @streamed?
       (print (or (:content result) "")))
     (println)

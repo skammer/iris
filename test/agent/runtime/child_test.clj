@@ -1,8 +1,8 @@
 (ns agent.runtime.child-test
   (:require
-   [agent.system :as system]
    [agent.persistence.sqlite :as sqlite]
-   [agent.runtime.core :as runtime]
+   [agent.runs.service :as runs]
+   [agent.system.events :as events]
    [clojure.java.io :as io]
    [clojure.test :refer :all]))
 
@@ -24,49 +24,49 @@
 (deftest child-runtime-local-unsandboxed-flow-test
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})
-        event-bus (system/create-event-bus)
-        event-sink (system/create-event-sink store event-bus)
-        runtime-service (system/create-runtime-service store event-sink)
+        event-bus (events/create-event-bus)
+        event-sink (events/create-event-sink store event-bus)
+        runtime-service (runs/create-runtime-service store event-sink)
         system {:config {:storage {:sqlite {:path path}}}
                 :store store
                 :event-bus event-bus
                 :event-sink event-sink
                 :runtime-service runtime-service
-                :runner-registry (system/create-runner-registry runtime-service)}
-        run (system/request-run! system {:agent-id "child-agent"
+                :runner-registry (runs/create-runner-registry runtime-service)}
+        run (runs/request-run! system {:agent-id "child-agent"
                                        :name "child-runtime"
                                        :substrate :local-unsandboxed
                                        :requested-by "tester"})
         run-id (:id run)]
     (try
-      (system/launch-run! system run-id)
-      (is (wait-until #(when (= "running" (:status (system/get-run system run-id)))
-                         (system/get-run system run-id))
+      (runs/launch-run! system run-id)
+      (is (wait-until #(when (= "running" (:status (runs/get-run system run-id)))
+                         (runs/get-run system run-id))
                       15000))
-        (let [registered-run (system/get-run system run-id)
-            _ (system/enqueue-run-command! system run-id {:command-type :ping
+        (let [registered-run (runs/get-run system run-id)
+            _ (runs/enqueue-run-command! system run-id {:command-type :ping
                                                         :payload {}})
-            _ (system/enqueue-run-command! system run-id {:command-type :run-task
+            _ (runs/enqueue-run-command! system run-id {:command-type :run-task
                                                         :payload {:task "demo"
                                                                   :sleep-ms 25}})
             _ (is (wait-until #(when (and (some (fn [command]
                                                   (= "completed" (:status command)))
-                                                (system/list-run-commands system run-id))
+                                                (runs/list-run-commands system run-id))
                                         (some (fn [checkpoint]
                                                 (= "task" (:checkpoint-type checkpoint)))
-                                              (system/list-run-checkpoints system run-id {:limit 20})))
+                                              (runs/list-run-checkpoints system run-id {:limit 20})))
                                  true)
                               15000))
-            commands (system/list-run-commands system run-id)
-            checkpoints (system/list-run-checkpoints system run-id {:limit 20})
-            heartbeats (system/list-run-heartbeats system run-id {:limit 20})
+            commands (runs/list-run-commands system run-id)
+            checkpoints (runs/list-run-checkpoints system run-id {:limit 20})
+            heartbeats (runs/list-run-heartbeats system run-id {:limit 20})
             output-events (sqlite/list-events store {:entity-type :agent_run
                                                      :entity-id run-id
                                                      :limit 50})
-            _ (system/enqueue-run-command! system run-id {:command-type :cancel
+            _ (runs/enqueue-run-command! system run-id {:command-type :cancel
                                                         :payload {:reason "test"}})
-            cancelled-run (wait-until #(when (= "cancelled" (:status (system/get-run system run-id)))
-                                         (system/get-run system run-id))
+            cancelled-run (wait-until #(when (= "cancelled" (:status (runs/get-run system run-id)))
+                                         (runs/get-run system run-id))
                                       15000)]
         (is (= "running" (:status registered-run)))
         (is (= "child-runtime" (get-in registered-run [:runner-metadata :mode])))
@@ -78,6 +78,6 @@
         (is cancelled-run)
         (is (empty? (:pending-commands cancelled-run))))
       (finally
-        (when (get-in (system/runner-status system run-id) [:alive])
-          (system/signal-run! system run-id {:command-type :kill}))
+        (when (get-in (runs/runner-status system run-id) [:alive])
+          (runs/signal-run! system run-id {:command-type :kill}))
         (io/delete-file path true)))))

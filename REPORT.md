@@ -1,28 +1,27 @@
 # IRIS Codebase Review: Remaining Issues
 
-Date: 2026-05-26
+Date: 2026-05-27
 
 Scope: current `/Users/example/Code/tmp/clj-agent` after latest remediation pass.
 
 Verification:
 
-- Focused changed tests pass:
-  `clojure -M:test -e "(require '[clojure.test :as t] 'agent.config-test 'agent.system-test 'agent.api-test 'agent.memory.core-test) (t/run-tests 'agent.config-test 'agent.system-test 'agent.api-test 'agent.memory.core-test)"`
-- Result: 52 tests, 462 assertions, 0 failures, 0 errors.
-- Full suite passes:
-  `clojure -M:test -e "(require 'agent.test-runner) (agent.test-runner/run-all-tests)"`
-- Result: 376 tests, 1518 assertions, 0 failures, 0 errors.
+- Latest focused event-contract tests pass:
+  `IRIS_CONFIG_DIR=/private/tmp/iris-runtime-clean-config IRIS_DATA_DIR=/private/tmp/iris-runtime-clean-data clojure -M:test -e "(require 'agent.runtime.schema-test :reload 'agent.api.event-compat-test :reload 'agent.tools.core-test :reload 'agent.chat-test :reload 'agent.api-test :reload 'agent.telegram-test :reload) (clojure.test/run-tests 'agent.runtime.schema-test 'agent.api.event-compat-test 'agent.tools.core-test 'agent.chat-test 'agent.api-test 'agent.telegram-test)"`
+- Result: 77 tests, 501 assertions, 0 failures, 0 errors.
+- `git diff --check` passes.
+- Full suite was not rerun after the event-contract cleanup.
 
 ## Executive Verdict
 
 Security/control-plane bugs are fixed. Public process-local orchestrator APIs are now disabled by default. Latest remediation:
 
 - chat state moved into a system-owned `chat-service`
+- runtime/chat/API event contract is now canonical; historical event conversion moved to one API boundary
 
 Remaining support cost is architectural:
 
-- runtime migration still has compatibility adapters and legacy event shapes
-- `agent.system`, `agent.chat`, `agent.ui`, `agent.config`, and `agent.orchestrator` are still too large
+- `agent.chat`, `agent.ui`, `agent.config`, and `agent.orchestrator` are still too large
 - streaming/SSE still relies on repeated raw future/catch/close mechanics
 - config loading still mutates disk and normalizes legacy shapes in live path
 - memory graph failures are now visible, but graph reconciliation/noisy Datahike behavior remains unfinished
@@ -47,72 +46,72 @@ Remaining caveat:
 
 Confidence: 0.9.
 
-### 2. Runtime migration still has compatibility adapters and legacy event shapes
+### 2. Runtime migration compatibility adapters and legacy event shapes
 
-Evidence:
+Status: Fixed 2026-05-27 for event contract cleanup.
 
-- `README.md` still says compatibility adapters live in `src`.
-- `src/agent/chat.clj` still requires `agent.loop`.
-- `src/agent/system.clj`, `src/agent/ui.clj`, and API handlers still require `agent.orchestrator`.
-- `src/agent/api/streaming.clj` still says legacy stream writers will be deleted later.
-- `src/agent/runtime/schema.clj` still keeps legacy event mapping.
-- `src/agent/api/serializers.clj` still maps legacy events through `legacy-event->canonical`.
+Evidence after fix:
+
+- `README.md` no longer says compatibility adapters live in `src`.
+- `src/agent/runtime/schema.clj` now contains canonical runtime schemas only.
+- Historical event-name conversion lives in `src/agent/api/event_compat.clj`.
+- `src/agent/chat.clj` no longer emits `chat.*`, `message.appended`, or `completion.completed` events.
+- API/UI/Telegram stream filters now consume canonical event names.
+- `src/agent/api/streaming.clj` no longer carries unused legacy JDK stream writers.
 
 Reasoning:
 
-There is no single runtime contract yet. New behavior still crosses old chat/loop/orchestrator/event adapters, so every runtime change risks fixing the wrong layer.
+There is now one runtime event contract for chat/runtime flow. Legacy persisted event rows are normalized only at the API serialization boundary.
 
-Fix direction:
+Remaining caveat:
 
-- Declare `agent.runtime.*` event/directive schema as only internal contract.
-- Move compatibility adapters into one boundary namespace.
-- Delete legacy event emission once API/UI consume canonical events only.
-- Keep explicitly experimental modules behind config until persistence/contracts exist.
+- `agent.loop` and `agent.orchestrator` still exist, but they are broader lifecycle/ownership cleanup, not part of the legacy event-shape issue.
 
-Confidence: 0.9.
+Confidence: 0.91.
 
 ### 3. `agent.system` is still a God object
 
-Evidence:
+Status: Fixed 2026-05-27.
 
-- `src/agent/system.clj` is still over 1300 lines.
-- It builds config, SQLite, telemetry, trace, broker, runtime, memory, LLM, tools, skills, runners, orchestrator, Telegram, channel adapters, and API lifecycle.
-- It exposes a broad facade for runtime, runners, orchestrator, chat, API lifecycle, config reload, and health.
-- Run launch/control behavior still exists in both `src/agent/system.clj` and `src/agent/api/handlers/runs.clj`.
+Evidence after fix:
 
-Reasoning:
-
-System construction and domain behavior are fused. Reload, test setup, and runtime changes still require edits in a central high-blast-radius namespace.
-
-Fix direction:
-
-- Split into `agent.system.config`, `store`, `bus`, `tools`, `chat`, `runs`, `channels`, `api`.
-- Make API handlers call run service functions, not duplicate launch/control mechanics.
-- Keep `agent.system` as thin assembly only.
-
-Confidence: 0.88.
-
-### 4. Event contracts remain mixed
-
-Evidence:
-
-- `src/agent/runtime/loop.clj` emits validated runtime events.
-- `src/agent/chat.clj` translates canonical runtime events into legacy chat events.
-- `src/agent/api/handlers/chat.clj` accepts both old names and new names in stream filters.
-- `src/agent/api/serializers.clj` still maps legacy events.
-- `src/agent/runtime/schema.clj` still has legacy event maps.
+- `src/agent/system.clj` is now 285 lines.
+- `agent.system` is lifecycle-only: create/current/reload/start API/stop API/close.
+- System construction moved into focused service namespaces under `agent.system.*`, `agent.llm.service`, `agent.tools.service`, `agent.runs.service`, `agent.kernel.service`, and `agent.sessions.service`.
+- Run launch/control/reclaim behavior now lives in `agent.runs.service`; API handlers delegate to it.
+- No `requiring-resolve 'agent.system` or `agent.system/` callers remain in `src` or `test`.
 
 Reasoning:
 
-Consumers still need to understand multiple eras of event names and payloads. Debugging starts with "which event version did this path emit?"
+System construction and domain behavior are now separated. The system namespace remains the assembly/lifecycle boundary, while runtime, tools, sessions, health, events, LLM, and kernel behavior have narrower owners.
 
-Fix direction:
+Remaining caveat:
 
-- Define one event envelope and finite event type set.
-- Move legacy conversion to one external compatibility serializer.
-- Add schema tests for every public stream event.
+- Downstream non-repo callers of removed `agent.system/*` facade functions must migrate to service namespaces.
 
-Confidence: 0.88.
+Confidence: 0.92.
+
+### 4. Event contracts now canonical
+
+Status: Fixed 2026-05-27.
+
+Evidence after fix:
+
+- `src/agent/runtime/loop.clj` emits validated canonical runtime events.
+- `src/agent/chat.clj` persists runtime events without translating them into legacy chat events.
+- `src/agent/api/handlers/chat.clj` and `src/agent/api/handlers/ui.clj` filter canonical event names only.
+- `src/agent/api/serializers.clj` calls `agent.api.event-compat/canonicalize-event` only for historical stored rows.
+- `test/agent/api/event_compat_test.clj` covers legacy persisted-row normalization.
+
+Reasoning:
+
+Runtime consumers no longer need to understand multiple event eras. Historical rows remain readable through one explicit compatibility boundary.
+
+Remaining caveat:
+
+- Public stream event tests cover current behavior, but a dedicated contract test matrix per public stream route would still be cleaner.
+
+Confidence: 0.9.
 
 ### 5. Streaming/SSE handlers are still ad hoc
 
@@ -199,18 +198,15 @@ Confidence: 0.87.
 
 ## Recommended Order
 
-1. Make chat a real system component.
-2. Pick one event contract; delete legacy event adapters.
-3. Split `agent.system` into lifecycle components.
-4. Build shared SSE service.
-5. Make config load pure.
-6. Add memory graph reconciliation and quiet Datahike logs.
-7. Split largest namespaces.
+1. Build shared SSE service.
+2. Make config load pure.
+3. Add memory graph reconciliation and quiet Datahike logs.
+4. Split largest namespaces.
 
 ## Test Gaps
 
 - Active chat cancellation/reload with system-owned chat service.
-- Canonical-only event stream contract.
+- Dedicated public stream contract matrix.
 - Shared SSE terminal/error/cleanup behavior.
 - Pure config load without filesystem writes.
 - Memory graph reconciliation behavior.

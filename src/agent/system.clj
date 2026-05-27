@@ -1,583 +1,43 @@
 (ns agent.system
-  "System construction and runtime facade."
+  "System lifecycle only."
   (:require
-   [agent.broker.core :as broker]
-   [agent.broker.local :as local-broker]
+   [agent.api :as api]
    [agent.channels.core :as channel-adapters]
    [agent.chat :as chat]
-   [agent.api :as api]
    [agent.config :as config]
-   [agent.federation.http :as federation-http]
    [agent.health :as health]
-   [agent.kernel :as kernel]
-   [agent.kernel.ops :as kernel-ops]
-   [agent.kernel.runtime :as kernel-runtime]
-   [agent.llm.core :as llm-core]
-   [agent.llm.providers.ollama :as ollama]
-   [agent.llm.providers.openai-compatible :as openai-compatible]
-   [agent.llm.registry :as llm-registry]
+   [agent.llm.service :as llm-service]
    [agent.logging :as logging]
-   [agent.memory.core :as memory]
-   [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
-   [agent.runners.bubblewrap :as bubblewrap]
-   [agent.runners.docker-podman :as docker-podman]
-   [agent.runners.core :as runners]
-   [agent.runners.local-unsandboxed :as local-unsandboxed]
-   [agent.runners.options :as runner-options]
-   [agent.runners.seatbelt :as seatbelt]
-   [agent.runtime.core :as runtime]
-   [agent.runtime.tools :as runtime-tools]
-   [agent.runtime.trace :as runtime-trace]
-   [agent.skills :as skills]
+   [agent.system.components :as components]
+   [agent.system.health :as system-health]
    [agent.telegram :as telegram]
-   [agent.telemetry :as telemetry]
-   [agent.tools.common.fs :as fs-tool]
-   [agent.tools.common.http :as http-tool]
-   [agent.tools.common.memory :as memory-tool]
-   [agent.tools.common.shell :as shell-tool]
-   [agent.tools.common.telegram :as telegram-tool]
-   [agent.tools.common.todo :as todo-tool]
-   [agent.tools.approvals :as tool-approvals]
-   [agent.tools.core :as tools]
-   [clojure.set :as set]))
+   [agent.tools.service :as tool-service]))
 
-(declare spawn-task-worker! send-agent-message! execute-agent-tool! reload! start-api!)
+(declare reload! start-api! current-system reload-status)
 
-(defn create-llm-provider
-  [cfg]
-  (let [{:keys [provider type model base-url stream-structured-output?
-                embedding-model keep-alive]
-         :as provider-cfg}
-        (config/active-provider-config cfg)]
-    (case type
-      :ollama
-      (ollama/create-ollama-provider
-       {:base-url base-url
-        :default-model model
-        :embedding-model embedding-model
-        :keep-alive keep-alive
-        :stream-structured-output? stream-structured-output?})
-
-      :openrouter
-      (openai-compatible/create-openrouter-provider
-       provider-cfg)
-
-      :openai-compatible
-      (openai-compatible/create-openai-compatible-provider
-       (assoc provider-cfg :default-model model))
-
-      (throw (ex-info (str "Unsupported provider type: " type)
-                      {:provider provider
-                       :type type})))))
-
-(defn create-fact-llm-provider
-  [cfg]
-  (let [extractor (get-in cfg [:memory :facts :extractor])
-        provider (:provider extractor)
-        model (:model extractor)]
-    (when (or provider model)
-      (create-llm-provider (cond-> (:llm cfg)
-                             provider (assoc :active-provider provider)
-                             model (assoc-in [:providers (or provider (config/active-provider-key (:llm cfg))) :model] model))))))
-
-(defn create-store
-  [cfg]
-  (sqlite/create-store (get cfg :sqlite)))
-
-(defn- replay-broker-messages
-  [store pattern {:keys [limit after-id since-sequence request-id]
-                  :or {limit 100}}]
-  (let [pattern* (str pattern)]
-    (cond
-      (nil? store) []
-
-      (= pattern* (broker/all-events-subject))
-      (mapv (fn [event] {:subject "events.all" :payload event})
-            (reverse (sqlite/list-events store {:limit limit
-                                               :after-id after-id})))
-
-      (= pattern* (broker/all-runs-subject))
-      (mapcat broker/event->messages
-              (reverse (sqlite/list-events store {:entity-type :agent_run
-                                                  :limit limit
-                                                  :after-id after-id})))
-
-      (re-matches #"runs\.([^\.]+)\.events" pattern*)
-      (let [[_ run-id] (re-matches #"runs\.([^\.]+)\.events" pattern*)]
-        (mapv (fn [event] {:subject (broker/run-events-subject run-id)
-                           :payload event})
-              (reverse (sqlite/list-events store {:entity-type :agent_run
-                                                  :entity-id run-id
-                                                  :limit limit
-                                                  :after-id after-id}))))
-
-      (re-matches #"runs\.([^\.]+)\.commands" pattern*)
-      (let [[_ run-id] (re-matches #"runs\.([^\.]+)\.commands" pattern*)]
-        (mapv broker/command->message
-              (sqlite/list-agent-run-commands store run-id {:limit limit
-                                                            :request-id request-id})))
-
-      (re-matches #"runs\.([^\.]+)\.heartbeats" pattern*)
-      (let [[_ run-id] (re-matches #"runs\.([^\.]+)\.heartbeats" pattern*)]
-        (mapv broker/heartbeat->message
-              (sqlite/list-agent-run-heartbeats store run-id {:limit limit
-                                                              :since-sequence since-sequence})))
-
-      (re-matches #"runs\.([^\.]+)\.checkpoints" pattern*)
-      (let [[_ run-id] (re-matches #"runs\.([^\.]+)\.checkpoints" pattern*)]
-        (mapv broker/checkpoint->message
-              (sqlite/list-agent-run-checkpoints store run-id {:limit limit
-                                                               :since-sequence since-sequence})))
-
-      (re-matches #"runs\.([^\.]+)\.output" pattern*)
-      (let [[_ run-id] (re-matches #"runs\.([^\.]+)\.output" pattern*)]
-        (mapv (fn [event] {:subject (broker/run-output-subject run-id)
-                           :payload event})
-              (reverse (sqlite/list-events store {:entity-type :agent_run
-                                                  :entity-id run-id
-                                                  :event-type "agent.run.output"
-                                                  :limit limit
-                                                  :after-id after-id}))))
-
-      :else [])))
-
-(defn create-broker
-  [store]
-  (local-broker/create-broker {:replay-fn #(replay-broker-messages store %1 %2)}))
-
-(defn create-event-bus
-  []
-  (create-broker nil))
-
-(defn create-telemetry
-  [cfg]
-  (telemetry/create-collector cfg))
-
-(defn create-observer
-  [telemetry-collector cfg]
-  (telemetry/create-observer telemetry-collector cfg))
-
-(defn create-trace
-  [cfg]
-  (runtime-trace/create-trace (:trace cfg) (get-in cfg [:iris :data-dir])))
-
-(defn- with-component-health
-  [registry component f]
-  (try
-    (let [result (f)]
-      (health/mark-ok! registry component)
-      result)
-    (catch Exception e
-      (health/mark-error! registry component e)
-      (throw e))))
-
-(defn- unhealthy-message
-  [component result]
-  (or (:error result)
-      (:message result)
-      (get-in result [:details :error])
-      (get-in result [:details :message])
-      (str component " unhealthy")))
-
-(defn- checked-component-health
-  [registry component f]
-  (try
-    (let [result (f)]
-      (if (false? (:healthy result))
-        (health/mark-error! registry component (unhealthy-message component result))
-        (health/mark-ok! registry component))
-      result)
-    (catch Exception e
-      (health/mark-error! registry component e)
-      {:healthy false
-       :details {:error (.getMessage e)}})))
-
-(defn- observe-system-event!
-  [telemetry-collector observer recorded]
-  (if observer
-    (telemetry/record-event! observer {:event-type :system/event
-                                       :payload recorded})
-    (do
-      (logging/log-system-event! recorded)
-      (telemetry/record-system-event! telemetry-collector recorded))))
-
-(defn- trace-system-event!
-  [trace recorded]
-  (let [entity-type (if (keyword? (:entity-type recorded))
-                      (name (:entity-type recorded))
-                      (str (:entity-type recorded)))]
-  (runtime-trace/record-event!
-   trace
-   {:event-type (:event-type recorded)
-    :turn-id (:request-id recorded)
-    :channel (when (= "channel" entity-type)
-               (:entity-id recorded))
-    :success (not (or (= "telegram.error" (:event-type recorded))
-                      (and (= "agent-end" (:event-type recorded))
-                           (contains? #{"error" "planner-error" "max-tokens"}
-                                      (some-> (get-in recorded [:payload :stop-reason]) name)))
-                      (= "failed" (get-in recorded [:payload :status]))))
-    :error-message (or (get-in recorded [:payload :message])
-                       (get-in recorded [:payload :error]))
-    :payload (select-keys recorded [:event-type :entity-type :entity-id :request-id :payload])})))
-
-(defn create-event-sink
-  ([store broker-instance]
-   (create-event-sink store broker-instance nil))
-  ([store broker-instance telemetry-collector]
-   (create-event-sink store broker-instance telemetry-collector nil nil))
-  ([store broker-instance telemetry-collector observer trace]
-   (fn [event]
-     (let [recorded (sqlite/log-event! store event)]
-       (observe-system-event! telemetry-collector observer recorded)
-       (trace-system-event! trace recorded)
-       (doseq [message (broker/event->messages recorded)]
-         (broker/publish! broker-instance message))
-       recorded))))
-
-(defn create-recorded-event-sink
-  ([broker-instance]
-   (create-recorded-event-sink broker-instance nil))
-  ([broker-instance telemetry-collector]
-   (create-recorded-event-sink broker-instance telemetry-collector nil nil))
-  ([broker-instance telemetry-collector observer trace]
-   (fn [recorded]
-     (observe-system-event! telemetry-collector observer recorded)
-     (trace-system-event! trace recorded)
-     (doseq [message (broker/event->messages recorded)]
-       (broker/publish! broker-instance message))
-     recorded)))
-
-(defn- normalize-tool-name [tool]
-  (cond
-    (keyword? tool) tool
-    (string? tool) (keyword tool)
-    :else tool))
-
-(defn- tool-name-set [tools]
-  (set (map normalize-tool-name tools)))
-
-(defn create-tool-policy-hook
-  [cfg]
-  (let [policy (:policy cfg)
-        allowlist (tool-name-set (:allowlist policy))
-        blocklist (tool-name-set (:blocklist policy))
-        tool-scopes (into {}
-                          (map (fn [[tool scopes]]
-                                 [(normalize-tool-name tool) (set (map keyword scopes))]))
-                          (:tool-scopes policy))]
-    (fn [{:keys [tool context]}]
-      (let [tool-name (:name tool)
-            context-scopes (set (map keyword (or (:tool-scopes context) (:scopes context) [])))
-            required-scopes (get tool-scopes tool-name)]
-        (cond
-          (or (contains? blocklist :*) (contains? blocklist tool-name))
-          {:block true
-           :reason "Tool blocked by startup policy"}
-
-          (and (seq allowlist)
-               (not (or (contains? allowlist :*) (contains? allowlist tool-name))))
-          {:block true
-           :reason "Tool not in startup allowlist"}
-
-          (and (seq required-scopes)
-               (empty? (set/intersection required-scopes context-scopes)))
-          {:block true
-           :reason "Tool scope missing"}
-
-          :else nil)))))
-
-(defn subscribe-events
-  ([system] (subscribe-events system (broker/all-events-subject)))
-  ([system pattern]
-   (broker/subscribe! (:broker system) pattern)))
-
-(defn unsubscribe-events
-  [system subscription]
-  (broker/unsubscribe! (:broker system) subscription))
-
-(defn- reload-tool
+(defn- system-control
   [system-ref]
-  (tools/create-tool
-   {:description
-    (tools/create-tool-description
-     :system_reload
-     "Reload Iris runtime configuration from disk. Soft reload applies hot-safe runtime config; full reload schedules a process-local rebuild."
-     :category :system
-     :required-permissions #{:system-reload}
-     :input-schema [:map
-                    [:mode {:optional true} [:enum "soft" "full"]]]
-     :operation :act)
-    :execute-fn
-    (fn [input context]
-      (reload! @system-ref {:mode (keyword (or (:mode input) "soft"))
-                            :source (or (:user context) "tool")}))
-    :health-fn
-    (fn [] {:healthy true})}))
-
-(defn create-tool-registry
-  ([cfg event-sink store]
-   (create-tool-registry cfg event-sink store nil nil nil nil nil nil))
-  ([cfg event-sink store telemetry-collector]
-   (create-tool-registry cfg event-sink store telemetry-collector nil nil nil nil nil))
-  ([cfg event-sink store telemetry-collector memory-service]
-   (create-tool-registry cfg event-sink store telemetry-collector memory-service nil nil nil nil))
-  ([cfg event-sink store telemetry-collector memory-service channel-adapters-cfg]
-   (create-tool-registry cfg event-sink store telemetry-collector memory-service channel-adapters-cfg nil nil nil))
-  ([cfg event-sink store telemetry-collector memory-service channel-adapters-cfg system-ref]
-   (create-tool-registry cfg event-sink store telemetry-collector memory-service channel-adapters-cfg system-ref nil nil))
-  ([cfg event-sink store telemetry-collector memory-service channel-adapters-cfg system-ref observer trace]
-   (let [http-cfg (get cfg :http)
-         fs-cfg (get cfg :fs)
-         shell-cfg (get cfg :shell)
-         todo-cfg (get cfg :todo)
-         telegram-cfg (get channel-adapters-cfg :telegram)
-         policy-hook (create-tool-policy-hook cfg)
-         registry (tools/create-registry
-                   {:event-sink event-sink
-                    :approval-check (tool-approvals/create-policy-hook store)
-                    :before-execute policy-hook
-                    :activity-executor (when store
-                                         (fn [activity f]
-                                           (:result (runtime/execute-activity!
-                                                     (runtime/create-runtime-service {:store store})
-                                                     activity
-                                                     f))))
-                    :after-execute (fn [{:keys [tool context duration-ms is-error error input result] :as hook}]
-                                     (let [observation {:tool-name (:name tool)
-                                                        :duration-ms duration-ms
-                                                        :success? (not is-error)
-                                                        :error error
-                                                        :user (:user context)}]
-                                       (if observer
-                                         (do
-                                           (telemetry/record-event! observer {:event-type :tool/call
-                                                                              :payload observation})
-                                           (telemetry/record-metric! observer {:metric-type :request-latency-ms
-                                                                               :component :tool
-                                                                               :tool-name (:name tool)
-                                                                               :value duration-ms}))
-                                         (telemetry/record-tool! telemetry-collector observation))
-                                       (runtime-trace/record-event!
-                                        trace
-                                        {:event-type :tool.call
-                                         :turn-id (:request-id context)
-                                         :success (not is-error)
-                                         :error-message (some-> error .getMessage)
-                                         :payload {:tool-name (some-> (:name tool) name)
-                                                   :duration-ms duration-ms
-                                                   :input input
-                                                   :result result}}))
-                                     hook)})]
-     (cond-> registry
-       (not= false (:enabled http-cfg))
-       (tools/register-tool (http-tool/create-http-tool http-cfg))
-
-       (not= false (:enabled fs-cfg))
-       (tools/register-tool (fs-tool/create-fs-tool fs-cfg))
-
-       memory-service
-       (-> (tools/register-tool (memory-tool/create-memory-tool memory-service))
-           (tools/register-tool (memory-tool/create-message-search-tool memory-service)))
-
-       (and store (not= false (:enabled todo-cfg)))
-       (tools/register-tool (todo-tool/create-todo-tool store))
-
-       (not= false (:enabled shell-cfg))
-       (tools/register-tool (shell-tool/create-shell-tool shell-cfg))
-
-       (telegram-tool/enabled? telegram-cfg)
-       (-> (tools/register-tool (telegram-tool/create-send-photo-tool telegram-cfg))
-           (tools/register-tool (telegram-tool/create-send-document-tool telegram-cfg)))
-
-       system-ref
-       (tools/register-tool (reload-tool system-ref))))))
-
-(defn create-orchestrator
-  ([_cfg event-sink]
-   (create-orchestrator _cfg event-sink nil nil nil nil))
-  ([_cfg event-sink telemetry-collector]
-   (create-orchestrator _cfg event-sink telemetry-collector nil nil nil))
-  ([cfg event-sink telemetry-collector store]
-   (create-orchestrator cfg event-sink telemetry-collector store nil nil))
-  ([cfg event-sink telemetry-collector store observer trace]
-   (orchestrator/create-orchestrator {:event-sink event-sink
-                                      :enabled? (true? (:enabled cfg))
-                                      :telemetry telemetry-collector
-                                      :observer observer
-                                      :trace trace
-                                      :federation-deliver (federation-http/create-forwarder
-                                                           (assoc (:federation cfg)
-                                                                  :store store
-                                                                  :telemetry telemetry-collector))})))
-
-(defn create-skills-registry
-  [cfg]
-  (skills/create-registry cfg))
-
-(defn create-memory-service
-  ([cfg store]
-   (memory/create-memory-service cfg store))
-  ([cfg tools-cfg store]
-   (memory/create-memory-service (assoc cfg :fs-roots (get-in tools-cfg [:fs :roots]))
-                                 store)))
-
-(defn create-runtime-service
-  ([store event-sink]
-   (create-runtime-service store event-sink nil))
-  ([store event-sink broker-instance]
-   (runtime/create-runtime-service {:store store
-                                     :broker broker-instance
-                                     :event-sink event-sink}))
-  ([store event-sink broker-instance recorded-event-sink]
-   (runtime/create-runtime-service {:store store
-                                    :broker broker-instance
-                                    :event-sink event-sink
-                                    :recorded-event-sink recorded-event-sink})))
-
-(defn- runner-exit-status [run exit-code]
-  (cond
-    (contains? #{"cancelled" "completed" "failed"} (:status run)) nil
-    (zero? exit-code) :completed
-    :else :failed))
-
-(defn- create-exit-aware-local-unsandboxed-runner
-  [runtime-service]
-  (local-unsandboxed/create-local-unsandboxed-runner
-   {:on-exit (fn [run-id {:keys [exit-code]}]
-               (when-let [run (runtime/get-run runtime-service run-id)]
-                 (when-let [status (runner-exit-status run exit-code)]
-                   (runtime/transition-run! runtime-service
-                                            run-id
-                                            status
-                                            {:last-error (when-not (zero? exit-code)
-                                                            (str "Process exited with code " exit-code))
-                                             :runner-metadata (assoc (:runner-metadata run)
-                                                                     :exit-code exit-code)}))))
-    :on-output (fn [run-id {:keys [stream line captured-at]}]
-                 (runtime/log-run-output! runtime-service
-                                          run-id
-                                          {:stream stream
-                                           :line line
-                                           :captured-at captured-at}))}))
-
-(defn create-runner-registry
-  [runtime-service]
-  {:local-unsandboxed (create-exit-aware-local-unsandboxed-runner runtime-service)
-   :bubblewrap (bubblewrap/create-bubblewrap-runner
-                {:delegate (create-exit-aware-local-unsandboxed-runner runtime-service)})
-   :docker (docker-podman/create-docker-podman-runner
-            {:delegate (create-exit-aware-local-unsandboxed-runner runtime-service)
-             :engine-binary "docker"})
-   :podman (docker-podman/create-docker-podman-runner
-            {:delegate (create-exit-aware-local-unsandboxed-runner runtime-service)
-             :engine-binary "podman"})
-   :seatbelt (seatbelt/create-seatbelt-runner
-              {:delegate (create-exit-aware-local-unsandboxed-runner runtime-service)})})
-
-(defn create-channel-adapter-registry
-  ([cfg] (create-channel-adapter-registry cfg nil))
-  ([cfg telegram-service]
-  (let [registry (channel-adapters/create-registry)
-        registry* (if telegram-service
-                    (channel-adapters/register-adapter registry telegram-service)
-                    registry)
-        specs [{:key :discord
-                :display-name "Discord"
-                :inbound-mode :gateway
-                :capabilities #{}}
-               {:key :slack
-                :display-name "Slack"
-                :inbound-mode :socket-mode
-                :capabilities #{}}]]
-    (reduce
-     (fn [acc {:keys [key display-name inbound-mode capabilities]}]
-       (channel-adapters/register-adapter
-        acc
-        (channel-adapters/create-adapter
-         {:description
-          (channel-adapters/create-adapter-description
-           key
-           display-name
-           inbound-mode
-           capabilities
-           :public-url-required? false
-           :config-schema {:enabled :boolean})
-          :health-fn (fn []
-                       {:healthy true
-                        :enabled (true? (get-in cfg [key :enabled]))})})))
-     registry*
-     specs))))
+  {:system-ref system-ref
+   :current-system current-system
+   :reload-status reload-status
+   :reload! reload!
+   :health-check system-health/health-check})
 
 (defn create-system
   ([] (create-system nil))
   ([config-path]
-   (let [cfg (config/load-config config-path)
-         system-ref (atom nil)
+   (let [system-ref (atom nil)
          reload-state (atom {:status :idle})
          health-registry (health/create-registry)
-         _ (logging/start! (:logging cfg))
-         llm-cfg (config/llm-config cfg)
-         store (with-component-health health-registry :sqlite
-                 #(create-store (:storage cfg)))
-         telemetry-collector (with-component-health health-registry :telemetry
-                               #(create-telemetry (:telemetry cfg)))
-         observer (create-observer telemetry-collector (:observer cfg))
-         trace (create-trace cfg)
-         broker-instance (with-component-health health-registry :broker
-                           #(create-broker store))
-         event-sink (create-event-sink store broker-instance telemetry-collector observer trace)
-         recorded-event-sink (create-recorded-event-sink broker-instance telemetry-collector observer trace)
-         runtime-service (with-component-health health-registry :runtime
-                           #(create-runtime-service store event-sink broker-instance recorded-event-sink))
-         memory-service (with-component-health health-registry :memory
-                          #(create-memory-service (:memory cfg) (:tools cfg) store))
-         llm-registry (llm-registry/create-registry llm-cfg)
-         llm-provider (with-component-health health-registry :llm-provider
-                        #(create-llm-provider llm-cfg))
-         fact-llm-provider (with-component-health health-registry :llm-provider
-                             #(create-fact-llm-provider cfg))
-         tool-registry (with-component-health health-registry :tools
-                         #(create-tool-registry (:tools cfg) event-sink store telemetry-collector memory-service (:channel-adapters cfg) system-ref observer trace))
-         chat-service (with-component-health health-registry :chat
-                        #(chat/create-service))]
-     (logging/log! :agent.system/created
-                   {:config-path config-path
-                    :provider (name (config/active-provider-key (:llm cfg)))
-                    :sqlite-path (get-in cfg [:storage :sqlite :path])
-                    :log-path (get-in cfg [:logging :file :path])})
-     (let [base-system {:config cfg
-                   :config-path config-path
-                   :system-ref system-ref
-                   :reload-state reload-state
-                   :health-registry health-registry
-                   :llm-registry llm-registry
-                   :llm-provider llm-provider
-                   :fact-llm-provider fact-llm-provider
-                   :store store
-                   :telemetry telemetry-collector
-                   :observer observer
-                   :trace trace
-                   :broker broker-instance
-                   :event-sink event-sink
-                   :recorded-event-sink recorded-event-sink
-                   :tool-registry tool-registry
-                   :chat-service chat-service
-                   :skills-registry (create-skills-registry (:skills cfg))
-                   :memory-service memory-service
-                   :runtime-service runtime-service
-                   :runner-registry (create-runner-registry runtime-service)
-                   :orchestrator (create-orchestrator (:orchestrator cfg) event-sink telemetry-collector store observer trace)}]
-       (let [telegram-service (telegram/create-service base-system)
-             system* (assoc base-system
-                            :telegram-service telegram-service
-                            :channel-adapter-registry
-                            (with-component-health health-registry :channel-adapters
-                              #(create-channel-adapter-registry (:channel-adapters cfg)
-                                                                telegram-service)))]
-         (reset! system-ref system*)
-         system*)))))
+         control (system-control system-ref)
+         system* (components/create-system-components config-path
+                                                       system-ref
+                                                       reload-state
+                                                       health-registry
+                                                       control)]
+     (reset! system-ref system*)
+     system*)))
 
 (defn current-system
   [system]
@@ -605,26 +65,25 @@
   (true? (get-in (channel-adapters/adapter-health-check service) [:running])))
 
 (defn- rebuild-hot-system [old-system new-cfg]
-  (let [system-ref (:system-ref old-system)
-        health-registry (:health-registry old-system)
-        memory-service (with-component-health health-registry :memory
-                         #(create-memory-service (:memory new-cfg)
-                                                 (:tools new-cfg)
-                                                 (:store old-system)))
-        observer (create-observer (:telemetry old-system) (:observer new-cfg))
-        trace (create-trace new-cfg)
+  (let [health-registry (:health-registry old-system)
+        memory-service (system-health/with-component-health health-registry :memory
+                         #(components/create-memory-service (:memory new-cfg)
+                                                           (:tools new-cfg)
+                                                           (:store old-system)))
+        observer (components/create-observer (:telemetry old-system) (:observer new-cfg))
+        trace (components/create-trace new-cfg)
         base (assoc old-system
                     :config new-cfg
-                    :chat-service (with-component-health health-registry :chat
+                    :chat-service (system-health/with-component-health health-registry :chat
                                     #(chat/create-service))
-                    :llm-provider (with-component-health health-registry :llm-provider
-                                    #(create-llm-provider (:llm new-cfg)))
-                    :fact-llm-provider (with-component-health health-registry :llm-provider
-                                         #(create-fact-llm-provider new-cfg))
+                    :llm-provider (system-health/with-component-health health-registry :llm-provider
+                                    #(llm-service/create-llm-provider (:llm new-cfg)))
+                    :fact-llm-provider (system-health/with-component-health health-registry :llm-provider
+                                         #(llm-service/create-fact-llm-provider new-cfg))
                     :observer observer
                     :trace trace
                     :memory-service memory-service
-                    :skills-registry (create-skills-registry (:skills new-cfg)))
+                    :skills-registry (components/create-skills-registry (:skills new-cfg)))
         telegram-running? (some-> (:telegram-service old-system) running-adapter?)
         _ (when telegram-running?
             (health/bump-restart! health-registry :channel-adapters))
@@ -635,24 +94,24 @@
               (throw e)))
         telegram-service (telegram/create-service base)
         telegram-service* (if telegram-running?
-                            (with-component-health health-registry :channel-adapters
+                            (system-health/with-component-health health-registry :channel-adapters
                               #(channel-adapters/start-adapter! telegram-service))
                             telegram-service)]
     (assoc base
            :telegram-service telegram-service*
-           :tool-registry (with-component-health health-registry :tools
-                            #(create-tool-registry (:tools new-cfg)
-                                                   (:event-sink old-system)
-                                                   (:store old-system)
-                                                   (:telemetry old-system)
-                                                   memory-service
-                                                   (:channel-adapters new-cfg)
-                                                   system-ref
-                                                   observer
-                                                   trace))
-           :channel-adapter-registry (with-component-health health-registry :channel-adapters
-                                       #(create-channel-adapter-registry (:channel-adapters new-cfg)
-                                                                         telegram-service*)))))
+           :tool-registry (system-health/with-component-health health-registry :tools
+                            #(tool-service/create-tool-registry (:tools new-cfg)
+                                                               (:event-sink old-system)
+                                                               (:store old-system)
+                                                               (:telemetry old-system)
+                                                               memory-service
+                                                               (:channel-adapters new-cfg)
+                                                               (:system-control old-system)
+                                                               observer
+                                                               trace))
+           :channel-adapter-registry (system-health/with-component-health health-registry :channel-adapters
+                                       #(components/create-channel-adapter-registry (:channel-adapters new-cfg)
+                                                                                   telegram-service*)))))
 
 (defn- soft-reload! [system opts]
   (let [system* (current-system system)
@@ -675,23 +134,24 @@
       :payload result})
     result))
 
-(defn- close-system! [system]
+(defn close-system!
+  [system]
   (try
     (chat/stop! (:chat-service system))
     (catch Exception e
-      (logging/log-error! :agent.system/chat-stop-failed e {})))
+      (logging/log-error! :agent.system.lifecycle/chat-stop-failed e {})))
   (try
     (some-> (:telegram-service system) channel-adapters/stop-adapter!)
     (catch Exception e
-      (logging/log-error! :agent.system/telegram-stop-failed e {})))
+      (logging/log-error! :agent.system.lifecycle/telegram-stop-failed e {})))
   (try
     (some-> (:api-server system) api/stop-server!)
     (catch Exception e
-      (logging/log-error! :agent.system/api-stop-failed e {})))
+      (logging/log-error! :agent.system.lifecycle/api-stop-failed e {})))
   (try
     (some-> (:store system) sqlite/close-store!)
     (catch Exception e
-      (logging/log-error! :agent.system/store-close-failed e {}))))
+      (logging/log-error! :agent.system.lifecycle/store-close-failed e {}))))
 
 (defn- full-reload-now! [system opts]
   (let [old-system (current-system system)
@@ -709,10 +169,23 @@
         new-system** (assoc new-system*
                             :system-ref system-ref
                             :reload-state reload-state
-                            :health-registry health-registry)
+                            :health-registry health-registry
+                            :system-control (:system-control old-system))
+        new-system*** (assoc new-system**
+                             :tool-registry
+                             (system-health/with-component-health health-registry :tools
+                               #(tool-service/create-tool-registry (get-in new-system** [:config :tools])
+                                                                  (:event-sink new-system**)
+                                                                  (:store new-system**)
+                                                                  (:telemetry new-system**)
+                                                                  (:memory-service new-system**)
+                                                                  (get-in new-system** [:config :channel-adapters])
+                                                                  (:system-control new-system**)
+                                                                  (:observer new-system**)
+                                                                  (:trace new-system**))))
         new-system (if api-running?
-                     (start-api! new-system**)
-                     new-system**)
+                     (start-api! new-system***)
+                     new-system***)
         result (reload-result :full old-cfg (:config new-system) :reloaded)]
     (chat/stop! (:chat-service old-system))
     (doseq [component [:llm-provider :sqlite :broker :telemetry :runtime :chat
@@ -750,7 +223,7 @@
                    :source (:source opts)
                    :message (.getMessage e)
                    :failed-at (str (java.time.Instant/now))})
-          (logging/log-error! :agent.system/full-reload-failed e {}))))
+          (logging/log-error! :agent.system.lifecycle/full-reload-failed e {}))))
     @reload-state))
 
 (defn reload!
@@ -772,524 +245,8 @@
                   :source (:source opts)
                   :message (.getMessage e)
                   :failed-at (str (java.time.Instant/now))}))
-       (logging/log-error! :agent.system/reload-failed e {:mode mode})
+       (logging/log-error! :agent.system.lifecycle/reload-failed e {:mode mode})
        (throw e)))))
-
-(defn complete
-  ([system prompt]
-   (complete system [{:role "user" :content prompt}] {}))
-  ([system messages opts]
-   (telemetry/complete-with-telemetry! (:telemetry system)
-                                       (:llm-provider system)
-                                       messages
-                                       opts
-                                       {:agent-id "system"
-                                        :observer (:observer system)
-                                        :trace (:trace system)
-                                        :model (or (:model opts)
-                                                   (config/active-model (get-in system [:config :llm])))})))
-
-(defn stream
-  ([system prompt]
-   (stream system [{:role "user" :content prompt}] {}))
-  ([system messages opts]
-   (llm-core/stream (:llm-provider system) messages opts)))
-
-(defn embed
-  [system text opts]
-  (llm-core/embed (:llm-provider system) text opts))
-
-(defn health-check
-  [system]
-  (let [registry (:health-registry system)]
-    {:llm (checked-component-health registry :llm-provider
-            #(llm-core/health-check (:llm-provider system)))
-     :llm-registry {:active-provider (:active-provider (:llm-registry system))
-                    :provider-count (count (:providers (:llm-registry system)))
-                    :providers (count (:providers (:llm-registry system)))}
-     :storage (checked-component-health registry :sqlite
-                #(sqlite/health-check (:store system)))
-     :logging (logging/health-check)
-     :broker (checked-component-health registry :broker
-               #(broker/health-check (:broker system)))
-     :tools (checked-component-health registry :tools
-              #(tools/registry-health (:tool-registry system)))
-     :skills (skills/registry-health (:skills-registry system))
-     :memory (checked-component-health registry :memory
-               #(memory/health-check (:memory-service system)))
-     :telemetry (checked-component-health registry :telemetry
-                  #(telemetry/health-check (:telemetry system)))
-     :trace (runtime-trace/health-check (:trace system))
-     :runtime (checked-component-health registry :runtime
-                #(runtime/runtime-health (:runtime-service system)))
-     :chat (checked-component-health registry :chat
-             #(chat/health-check (:chat-service system)))
-     :channel-adapters (checked-component-health registry :channel-adapters
-                         #(channel-adapters/registry-health (:channel-adapter-registry system)))
-     :orchestrator (orchestrator/health-check (:orchestrator system))
-     :provider (config/active-provider-key (get-in system [:config :llm]))
-     :health-snapshot (health/snapshot registry)}))
-
-(defn orchestrator-enabled?
-  [system]
-  (true? (get-in system [:config :orchestrator :enabled])))
-
-(defn log-event!
-  [system event]
-  ((:event-sink system) event))
-
-(defn- prepare-runner-options
-  [system run]
-  (runner-options/prepare-runner-options system run))
-
-(defn create-session!
-  ([system] (create-session! system nil))
-  ([system title]
-   (let [session (sqlite/create-session! (:store system) title)]
-     (log-event! system
-                 {:event-type :session.created
-                  :entity-type :session
-                  :entity-id (:id session)
-                  :payload {:title title}})
-     session)))
-
-(defn list-sessions
-  [system]
-  (sqlite/list-sessions (:store system)))
-
-(defn session-exists?
-  [system session-id]
-  (sqlite/session-exists? (:store system) session-id))
-
-(defn list-messages
-  [system session-id]
-  (sqlite/list-messages (:store system) session-id))
-
-(defn list-tools
-  [system]
-  (tools/list-tools (:tool-registry system)))
-
-(defn list-skills
-  [system]
-  (skills/list-skills (:skills-registry system)))
-
-(defn list-channel-adapters
-  [system]
-  (channel-adapters/list-adapters (:channel-adapter-registry system)))
-
-(defn list-events
-  ([system] (list-events system {}))
-  ([system opts]
-   (sqlite/list-events (:store system) opts)))
-
-(defn telemetry-snapshot
-  [system]
-  (telemetry/snapshot (:telemetry system)))
-
-(defn trace-events
-  ([system] (trace-events system {}))
-  ([system opts]
-   (runtime-trace/load-events (:trace system) opts)))
-
-(defn memory-surfaces
-  [system]
-  (memory/list-surfaces (:memory-service system)))
-
-(defn read-prompt-memory
-  [system]
-  (memory/read-prompt-memory (:memory-service system)))
-
-(defn search-memory
-  ([system query] (search-memory system query {}))
-  ([system query opts]
-   (memory/search-memory (:memory-service system) query opts)))
-
-(defn save-memory-fact!
-  [system fact opts]
-  (memory/save-memory-fact! (:memory-service system) fact opts))
-
-(defn search-memory-facts
-  ([system query] (search-memory-facts system query {}))
-  ([system query opts]
-   (memory/search-facts (:memory-service system) query opts)))
-
-(defn save-graph-fact!
-  [system fact]
-  (memory/save-graph-fact! (:memory-service system) fact))
-
-(defn query-graph-memory
-  ([system query] (query-graph-memory system query {}))
-  ([system query opts]
-   (memory/query-graph-memory (:memory-service system) query opts)))
-
-(defn tool-permissions
-  [system profile]
-  (set (get-in system [:config :tools :permissions profile] #{})))
-
-(defn- agent-tool-context [system agent agent-id context]
-  (merge context
-         {:user (or (:user context) agent-id)
-          :permissions (tool-permissions system :agent)
-          :yolo? (true? (get-in system [:config :tools :yolo?]))
-          :allowed-tools (set (:tool-access agent))}))
-
-(defn execute-tool
-  ([system tool-name input]
-   (execute-tool system tool-name input {}))
-  ([system tool-name input context]
-   (tools/execute-tool (:tool-registry system)
-                       tool-name
-                       input
-                       (assoc context :yolo? (true? (get-in system [:config :tools :yolo?]))))))
-
-(defn get-agent
-  [system agent-id]
-  (orchestrator/get-agent (:orchestrator system) agent-id))
-
-(defn execute-agent-tool!
-  ([system agent-id tool-name input]
-   (execute-agent-tool! system agent-id tool-name input {}))
-  ([system agent-id tool-name input context]
-   (let [agent (or (get-agent system agent-id)
-                   (throw (ex-info "Agent not found"
-                                   {:type :agent-not-found
-                                    :agent-id agent-id})))]
-     (execute-tool system tool-name input
-                   (agent-tool-context system agent agent-id context)))))
-
-(defrecord SystemKernelOps [system]
-  kernel-ops/KernelOps
-  (spawn-task-worker! [_ spec]
-    (spawn-task-worker! system spec))
-  (execute-agent-tool! [_ agent-id tool-name input context]
-    (execute-agent-tool! system agent-id tool-name input context))
-  (send-agent-message! [_ agent-id message]
-    (send-agent-message! system agent-id message))
-  (patch-agent-state! [_ agent-id patch]
-    (orchestrator/patch-agent-state! (:orchestrator system) agent-id patch))
-  (set-agent-status! [_ agent-id status]
-    (orchestrator/set-agent-status! (:orchestrator system) agent-id status))
-  (emit-kernel-event! [_ event]
-    ((:event-sink system) event))
-
-  kernel-ops/KernelToolBatchOps
-  (execute-agent-tool-batch! [_ agent-id calls context opts]
-    (let [agent (or (get-agent system agent-id)
-                    (throw (ex-info "Agent not found"
-                                    {:type :agent-not-found
-                                     :agent-id agent-id})))
-          calls* (mapv (fn [call]
-                         (update call :context #(agent-tool-context system
-                                                                    agent
-                                                                    agent-id
-                                                                    (merge context (or % {})))))
-                       calls)]
-      (runtime-tools/execute-batch! (:tool-registry system)
-                                    calls*
-                                    {}
-                                    (select-keys opts [:mode
-                                                       :tool-execution-modes
-                                                       :cancellation-token
-                                                       :cancelled?])))))
-
-(defn- kernel-ops [system]
-  (->SystemKernelOps system))
-
-(defn execute-directive!
-  ([system parent-agent-id directive]
-   (execute-directive! system parent-agent-id directive {}))
-  ([system parent-agent-id directive opts]
-   (kernel-runtime/execute-directive!
-    (kernel-ops system)
-    parent-agent-id
-    directive
-    (merge {:yolo? (true? (get-in system [:config :tools :yolo?]))} opts))))
-
-(defn execute-step!
-  ([system parent-agent-id step]
-   (execute-step! system parent-agent-id step {}))
-  ([system parent-agent-id step opts]
-   (kernel-runtime/execute-step!
-    (kernel-ops system)
-    parent-agent-id
-    step
-    (merge {:yolo? (true? (get-in system [:config :tools :yolo?]))} opts))))
-
-(defn request-run!
-  [system request]
-  (runtime/request-run! (:runtime-service system) request))
-
-(defn list-runs
-  ([system] (list-runs system {}))
-  ([system opts]
-   (runtime/list-runs (:runtime-service system) opts)))
-
-(defn get-run
-  [system run-id]
-  (runtime/get-run (:runtime-service system) run-id))
-
-(defn register-run!
-  [system run-id registration]
-  (runtime/register-run! (:runtime-service system) run-id registration))
-
-(defn heartbeat-run!
-  [system run-id heartbeat]
-  (runtime/heartbeat! (:runtime-service system) run-id heartbeat))
-
-(defn checkpoint-run!
-  [system run-id checkpoint]
-  (runtime/checkpoint! (:runtime-service system) run-id checkpoint))
-
-(defn enqueue-run-command!
-  [system run-id command]
-  (runtime/enqueue-command! (:runtime-service system) run-id command))
-
-(defn pending-run-commands
-  [system run-id]
-  (runtime/pending-commands (:runtime-service system) run-id))
-
-(defn list-run-commands
-  ([system run-id] (list-run-commands system run-id {}))
-  ([system run-id opts]
-   (runtime/list-commands (:runtime-service system) run-id opts)))
-
-(defn list-run-heartbeats
-  ([system run-id] (list-run-heartbeats system run-id {}))
-  ([system run-id opts]
-   (runtime/list-heartbeats (:runtime-service system) run-id opts)))
-
-(defn list-run-checkpoints
-  ([system run-id] (list-run-checkpoints system run-id {}))
-  ([system run-id opts]
-   (runtime/list-checkpoints (:runtime-service system) run-id opts)))
-
-(defn recovery-plan
-  [system run-id]
-  (runtime/recovery-plan (:runtime-service system) run-id))
-
-(defn wait-for-run!
-  ([system run-id] (wait-for-run! system run-id {}))
-  ([system run-id opts]
-   (runtime/wait-for-run! (:runtime-service system) run-id opts)))
-
-(defn reclaim-stale-runs!
-  [system]
-  (let [results (runtime/reclaim-stale-runs! (:runtime-service system))]
-    (doseq [_ (filter :replacement results)]
-      (health/bump-restart! (:health-registry system) :runtime))
-    (health/mark-ok! (:health-registry system) :runtime)
-    results))
-
-(defn retry-run!
-  [system run-id]
-  (try
-    (let [run (runtime/retry-run! (:runtime-service system) run-id)]
-      (health/bump-restart! (:health-registry system) :runtime)
-      (health/mark-ok! (:health-registry system) :runtime)
-      run)
-    (catch Exception e
-      (health/mark-error! (:health-registry system) :runtime e)
-      (throw e))))
-
-(defn acknowledge-run-command!
-  [system run-id command-id]
-  (runtime/acknowledge-command! (:runtime-service system) run-id command-id))
-
-(defn complete-run-command!
-  [system run-id command-id status error]
-  (runtime/complete-command! (:runtime-service system) run-id command-id status error))
-
-(defn transition-run!
-  [system run-id status & [opts]]
-  (runtime/transition-run! (:runtime-service system) run-id status opts))
-
-(defn runner-status
-  [system run-id]
-  (when-let [run (get-run system run-id)]
-    (when-let [runner (get (:runner-registry system) (keyword (:substrate run)))]
-      (runners/status runner run-id))))
-
-(defn container-image-contract
-  [system run-id]
-  (when-let [run (get-run system run-id)]
-    (when (#{"docker" "podman"} (:substrate run))
-      (docker-podman/image-contract (prepare-runner-options system run)))))
-
-(defn launch-run!
-  [system run-id]
-  (try
-    (let [run (or (get-run system run-id)
-                  (throw (ex-info "Run not found" {:type :run-not-found
-                                                   :run-id run-id})))
-          runner (or (get (:runner-registry system) (keyword (:substrate run)))
-                     (throw (ex-info "No runner for substrate"
-                                     {:type :runner-not-found
-                                      :substrate (:substrate run)})))
-          checkpoint-seq (or (get-in run [:checkpoint :sequence-no]) 0)
-          launch-result (runners/launch runner
-                                        (runners/create-run-spec
-                                         {:run-id (:id run)
-                                          :agent-id (:agent-id run)
-                                          :parent-run-id (:parent-run-id run)
-                                          :lease-id (:lease-id run)
-                                          :name (:name run)
-                                          :substrate (keyword (:substrate run))
-                                          :capabilities (:capabilities run)
-                                          :network-identity (:network-identity run)
-                                          :bootstrap-token (:bootstrap-token run)
-                                          :bootstrap-spec (assoc (:bootstrap-spec run)
-                                                                :checkpoint-seq checkpoint-seq)
-                                          :requested-by (:requested-by run)
-                                          :runner-options (prepare-runner-options system run)}))]
-      (transition-run! system run-id :launched {:runner-metadata launch-result})
-      (health/mark-ok! (:health-registry system) :runtime)
-      (get-run system run-id))
-    (catch Exception e
-      (health/mark-error! (:health-registry system) :runtime e)
-      (throw e))))
-
-(defn signal-run!
-  [system run-id command]
-  (let [run (or (get-run system run-id)
-                (throw (ex-info "Run not found" {:type :run-not-found
-                                                 :run-id run-id})))
-        runner (or (get (:runner-registry system) (keyword (:substrate run)))
-                   (throw (ex-info "No runner for substrate"
-                                   {:type :runner-not-found
-                                    :substrate (:substrate run)})))
-        signal-result (runners/signal runner run-id command)
-        command-type (cond
-                       (keyword? command) command
-                       (map? command) (keyword (:command-type command))
-                       (string? command) (keyword command)
-                       :else nil)]
-    (when (contains? #{:cancel :terminate :kill} command-type)
-      (transition-run! system run-id :cancelled {:runner-metadata (merge (:runner-metadata run)
-                                                                         signal-result)}))
-    signal-result))
-
-(defn spawn-agent!
-  [system spec]
-  (orchestrator/spawn-agent! (:orchestrator system) spec))
-
-(defn spawn-task-worker!
-  [system {:keys [task name role capability-bundle memory-scopes budgets system-prompt parent-id]
-           :or {name "Task Worker"
-                role "worker"
-                capability-bundle {}
-                memory-scopes []
-                budgets {}}}]
-  (let [step (kernel/orchestrator-spawn-worker-step {:task task
-                                                     :worker-name name
-                                                     :worker-role role
-                                                     :capability-bundle capability-bundle
-                                                     :memory-scopes memory-scopes
-                                                     :budgets budgets
-                                                     :system-prompt system-prompt})
-        spawn (-> step :directives first :payload)]
-    (spawn-agent! system {:name (:name spawn)
-                          :kind "worker"
-                          :role (:role spawn)
-                          :parent-id parent-id
-                          :system-prompt (:system-prompt spawn)
-                          :capabilities (vec (or (:capabilities capability-bundle) []))
-                          :tool-access (vec (or (:tool-access capability-bundle) []))
-                          :memory-scopes (vec memory-scopes)
-                          :budgets budgets
-                          :task task})))
-
-(defn orchestrator-spawn-worker!
-  [system orchestrator-agent-id worker-spec]
-  (let [agent (or (get-agent system orchestrator-agent-id)
-                  (throw (ex-info "Agent not found"
-                                  {:type :agent-not-found
-                                   :agent-id orchestrator-agent-id})))]
-    (when-not (= "orchestrator" (:kind agent))
-      (throw (ex-info "Agent is not an orchestrator"
-                      {:type :validation-failed
-                       :agent-id orchestrator-agent-id})))
-    (let [step (kernel/orchestrator-spawn-worker-step
-                {:task (:task worker-spec)
-                 :worker-name (or (:name worker-spec) "Task Worker")
-                 :worker-role (or (:role worker-spec) "worker")
-                 :capability-bundle {:capabilities (or (:capabilities worker-spec) [])
-                                     :tool-access (or (:tool-access worker-spec) [])}
-                 :memory-scopes (or (:memory-scopes worker-spec) [])
-                 :budgets (or (:budgets worker-spec) {})
-                 :system-prompt (:system-prompt worker-spec)})]
-      (execute-step! system orchestrator-agent-id step))))
-
-(defn list-agents
-  [system]
-  (orchestrator/list-agents (:orchestrator system)))
-
-(defn list-agent-messages
-  [system agent-id]
-  (orchestrator/list-agent-messages (:orchestrator system) agent-id))
-
-(defn send-agent-message!
-  [system agent-id message]
-  (orchestrator/send-agent-message! (:orchestrator system) (:llm-provider system) agent-id message))
-
-(defn describe-agent-interop
-  [system agent-ref]
-  (orchestrator/describe-agent-interop (:orchestrator system) agent-ref))
-
-(defn register-agent-capabilities!
-  [system agent-ref spec]
-  (orchestrator/register-agent-capabilities! (:orchestrator system) agent-ref spec))
-
-(defn register-federated-peer!
-  [system spec]
-  (orchestrator/register-federated-peer! (:orchestrator system) spec))
-
-(defn list-federated-peers
-  [system]
-  (orchestrator/list-federated-peers (:orchestrator system)))
-
-(defn send-interop-message!
-  [system from-agent-ref to-agent-ref message]
-  (orchestrator/send-interop-message! (:orchestrator system) from-agent-ref to-agent-ref message))
-
-(defn list-interop-messages
-  ([system agent-ref]
-   (orchestrator/list-interop-messages (:orchestrator system) agent-ref))
-  ([system agent-ref opts]
-   (orchestrator/list-interop-messages (:orchestrator system) agent-ref opts)))
-
-(defn acknowledge-interop-message!
-  [system agent-ref message-id opts]
-  (orchestrator/acknowledge-interop-message! (:orchestrator system) agent-ref message-id opts))
-
-(defn retry-interop-message!
-  [system agent-ref message-id]
-  (orchestrator/retry-interop-message! (:orchestrator system) agent-ref message-id))
-
-(defn create-channel!
-  [system spec]
-  (orchestrator/create-channel! (:orchestrator system) spec))
-
-(defn list-channels
-  [system]
-  (orchestrator/list-channels (:orchestrator system)))
-
-(defn list-channel-messages
-  [system channel-id]
-  (orchestrator/list-channel-messages (:orchestrator system) channel-id))
-
-(defn post-channel-message!
-  [system channel-id message]
-  (orchestrator/post-channel-message! (:orchestrator system) channel-id message))
-
-(defn consume-agent-inbox!
-  [system agent-id]
-  (orchestrator/consume-agent-inbox! (:orchestrator system) (:llm-provider system) agent-id))
-
-(defn complete!
-  [system messages {:keys [session-id] :as opts}]
-  (chat/run! system (merge opts
-                           {:messages messages
-                            :session-id session-id})))
 
 (defn start-api!
   [system]
