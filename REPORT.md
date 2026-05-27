@@ -177,15 +177,20 @@ Confidence: 0.88.
 
 ### 8. Namespace size and hidden failure patterns remain high
 
+Status: partially fixed.
+
 Evidence:
 
 - Large namespaces remain: `src/agent/ui.clj`, `src/agent/system.clj`, `src/agent/chat.clj`, `src/agent/orchestrator.clj`, `src/agent/config.clj`, `src/agent/telegram.clj`, `src/agent/runtime/loop.clj`.
+- Current large namespace line counts: `src/agent/ui.clj` 1371, `src/agent/chat.clj` 968, `src/agent/orchestrator.clj` 937, `src/agent/telegram.clj` 920, `src/agent/config.clj` 817, `src/agent/runtime/loop.clj` 754.
 - `src` still contains many `defonce`, raw `future`, broad `catch`, `Thread/sleep`, `legacy`, and `println` hits.
-- `src/agent/ui.clj`, `src/agent/tools/common/http.clj`, `src/agent/mcp/core.clj`, and `src/agent/telegram.clj` still swallow exceptions in multiple paths.
+- Telegram draft, tool-summary, and typing delivery failures now emit `:telegram.operation.failed` events instead of disappearing silently.
+- `test/agent/telegram_test.clj` covers draft-send and typing failure event recording.
+- Remaining swallow sites include `src/agent/ui.clj`, `src/agent/tools/common/http.clj`, `src/agent/mcp/core.clj`, and other Telegram paths that intentionally continue best-effort operation.
 
 Reasoning:
 
-The codebase remains hard to support because ownership is not visually obvious. Large namespaces hide local invariants; broad catches hide causality.
+The codebase remains hard to support because ownership is not visually obvious. Large namespaces hide local invariants; broad catches hide causality. This pass made Telegram delivery failure causes observable, but did not split the remaining large namespaces.
 
 Fix direction:
 
@@ -193,7 +198,7 @@ Fix direction:
 - Replace broad catches with typed errors + health/events.
 - Keep comments on non-obvious contracts, not on obvious mechanics.
 
-Confidence: 0.87.
+Confidence: 0.86.
 
 ## Recommended Order
 
