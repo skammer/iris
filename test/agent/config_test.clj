@@ -209,10 +209,18 @@
       (is (= (str (io/file root "home" ".config" "iris"))
              (get-in cfg [:iris :config-dir]))))))
 
-(deftest bootstrap-global-config-files-test
+(deftest load-config-does-not-bootstrap-global-files-test
   (with-isolated-config [root {}]
     (let [cfg (config/load-config)
           dir (io/file (get-in cfg [:iris :config-dir]))]
+      (doseq [name config/template-file-names]
+        (is (not (.exists (io/file dir name)))))
+      (is (re-find #"Agent-specific instructions"
+                   (get-in cfg [:iris :contexts "AGENTS.md"]))))))
+
+(deftest init-config-files-test
+  (with-isolated-config [root {}]
+    (let [dir (config/init-config!)]
       (doseq [name config/template-file-names]
         (is (.exists (io/file dir name))))
       (is (.exists (io/file dir "HEARTBEAT.md")))
@@ -231,9 +239,9 @@
       (.mkdirs global-dir)
       (.mkdirs local-dir)
       (spit (io/file global-dir "config.edn")
-            "{:llm {:model \"global-model\"}\n :memory {:search {:default-limit 5}}}")
+            "{:llm {:providers {:ollama {:model \"global-model\"}}}\n :memory {:search {:default-limit 5}}}")
       (spit (io/file local-dir "config.edn")
-            "{:llm {:temperature 0.7}\n :memory {:search {:default-limit 9}}}")
+            "{:llm {:providers {:ollama {:temperature 0.7}}}\n :memory {:search {:default-limit 9}}}")
       (let [cfg (config/load-config)]
         (is (= "global-model" (config/active-model (:llm cfg))))
         (is (= 0.7 (get-in cfg [:llm :providers :ollama :temperature])))
@@ -246,9 +254,9 @@
       (.mkdirs global-dir)
       (.mkdirs project-dir)
       (spit (io/file global-dir "config.edn")
-            "{:llm {:provider :openai-compatible\n       :providers {:openai-compatible {:type :openai-compatible\n                                         :base-url \"https://api.example.test/v1\"\n                                         :model \"global-model\"\n                                         :api-key \"test-key\"}}}\n :api {:port 1001}}")
+            "{:llm {:active-provider :openai-compatible\n       :providers {:openai-compatible {:type :openai-compatible\n                                         :base-url \"https://api.example.test/v1\"\n                                         :model \"global-model\"\n                                         :api-key \"test-key\"}}}\n :api {:port 1001}}")
       (spit (io/file project-dir "default.edn")
-            "{:llm {:provider :ollama :model \"project-model\"}\n :api {:port 2002}}")
+            "{:llm {:active-provider :ollama :providers {:ollama {:model \"project-model\"}}}\n :api {:port 2002}}")
       (let [cfg (config/load-config)]
         (is (= :openai-compatible (config/active-provider-key (:llm cfg))))
         (is (= "global-model" (config/active-model (:llm cfg))))
@@ -299,9 +307,17 @@
           explicit-file (io/file root "explicit.edn")]
       (.mkdirs global-dir)
       (spit (io/file global-dir "config.edn")
-            "{:llm {:provider :openai-compatible :model \"global-model\"}}")
+            "{:llm {:active-provider :openai-compatible
+                    :providers {:openai-compatible {:type :openai-compatible
+                                                    :base-url \"https://api.example.test/v1\"
+                                                    :api-key \"test-key\"
+                                                    :model \"global-model\"}}}}")
       (spit explicit-file
-            "{:llm {:provider :openrouter :model \"explicit-model\"}}")
+            "{:llm {:active-provider :openrouter
+                    :providers {:openrouter {:type :openrouter
+                                             :base-url \"https://openrouter.ai/api/v1\"
+                                             :api-key \"test-key\"
+                                             :model \"explicit-model\"}}}}")
       (let [cfg (config/load-config (.getPath explicit-file))]
         (is (= :ollama (config/active-provider-key (:llm cfg))))
         (is (= "env-model" (config/active-model (:llm cfg))))
@@ -332,10 +348,40 @@
     (let [global-dir (io/file root "home" ".config" "iris")]
       (.mkdirs global-dir)
       (spit (io/file global-dir "config.edn")
-            "#:iris{:config-version 1\n        :api {:port 9090}\n        :llm {:model \"namespaced-model\"}}")
+            "#:iris{:config-version 1\n        :api {:port 9090}\n        :llm {:providers {:ollama {:model \"namespaced-model\"}}}}")
       (let [cfg (config/load-config)]
         (is (= 9090 (get-in cfg [:api :port])))
         (is (= "namespaced-model" (config/active-model (:llm cfg))))))))
+
+(deftest legacy-llm-config-is-rejected-test
+  (with-isolated-config [root {}]
+    (let [global-dir (io/file root "home" ".config" "iris")]
+      (.mkdirs global-dir)
+      (spit (io/file global-dir "config.edn")
+            "{:llm {:provider :ollama :model \"legacy-model\"}}")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"Invalid iris config"
+                            (config/load-config))))))
+
+(deftest migrate-legacy-config-file-test
+  (with-isolated-config [root {}]
+    (let [file (io/file root "legacy.edn")]
+      (spit file
+            "{:llm {:provider :openrouter
+                    :model \"openai/gpt-4o-mini\"
+                    :temperature 0.4
+                    :openrouter {:base-url \"https://openrouter.ai/api/v1\"
+                                 :api-key \"test-key\"}}}")
+      (let [cfg (config/migrate-config-file (.getPath file))]
+        (is (= :openrouter (get-in cfg [:llm :active-provider])))
+        (is (= {:type :openrouter
+                :base-url "https://openrouter.ai/api/v1"
+                :api-key "test-key"
+                :model "openai/gpt-4o-mini"
+                :temperature 0.4}
+               (get-in cfg [:llm :providers :openrouter])))
+        (is (nil? (get-in cfg [:llm :provider])))
+        (is (nil? (get-in cfg [:llm :model])))))))
 
 (deftest markdown-context-concat-test
   (with-isolated-config [root {}]
@@ -351,11 +397,11 @@
         (is (re-find #"global agents\nlocal agents"
                      (get-in cfg [:iris :context])))))))
 
-(deftest missing-files-warning-test
+(deftest init-config-warning-test
   (with-isolated-config [root {}]
     (let [err (java.io.StringWriter.)]
       (binding [*err* err]
-        (config/load-config))
+        (config/init-config!))
       (is (re-find #"WARNING iris config file missing; writing default"
                    (str err)))
       (is (re-find #"HEARTBEAT.md" (str err))))))
