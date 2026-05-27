@@ -740,6 +740,8 @@
         (is (= "ok" (get-in health-body [:health-snapshot :components :api :status])))
         (is (= "ok" (get-in health-body [:health-snapshot :components :sqlite :status])))
         (is (integer? (get-in health-body [:health-snapshot :components :runtime :restart-count])))
+        (is (map? (get-in health-body [:sse :metrics])))
+        (is (integer? (get-in health-body [:sse :metrics :opened])))
         (is (= 200 (:status tools)))
         (is (= ["fs" "http" "shell" "todo"] (mapv :name (:data tools-body))))
         (is (= "builtin" (get-in tools-body [:data 0 :source])))

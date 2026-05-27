@@ -17,8 +17,7 @@
    [agent.tools.core :as tools]
    [agent.ui :as ui]
    [clojure.core.async :as async]
-   [clojure.string :as str]
-   [org.httpkit.server :as http-kit]))
+   [clojure.string :as str]))
 
 (defn- form-bool [value]
   (contains? #{"1" "true" "yes" "on"} (str/lower-case (str value))))
@@ -49,17 +48,15 @@
   (let [body (h/read-form-body request)
         title (:title body)
         session (session-service/create-session! system (not-empty title))]
-    (streaming/sse-response
+    (streaming/once-response
      request
-     (fn [channel]
+     (fn [ctx]
        (streaming/send-datastar-patch!
-        channel
+        ctx
         (str (ui/sessions-fragment system (:id session))
              (ui/session-detail-fragment system (:id session))
              (ui/dashboard-fragment system)
-             (ui/router-state-fragment (ui/session-route-path system (:id session)))))
-       (http-kit/close channel))
-     (fn [_ _] nil))))
+             (ui/router-state-fragment (ui/session-route-path system (:id session)))))))))
 
 (defn session-detail [system request]
   (let [session-id (-> request :parameters :query :session_id)]
@@ -117,113 +114,100 @@
 (defn session-live-response
   [system request]
   (let [session-id (-> request :parameters :query :session_id)
-        broker-instance (or (:event-bus system) (:broker system))
-        subscription (broker/subscribe! broker-instance
-                                        (broker/all-events-subject)
-                                        {:buffer-size 256
-                                         :buffer-strategy :sliding
-                                         :slow-client :drop-new})
-        ch (:channel subscription)
-        open? (atom true)]
+        broker-instance (or (:event-bus system) (:broker system))]
     (v/ensure-session-exists! system session-id)
-    (streaming/sse-response
+    (streaming/managed-response
      request
-     (fn [channel]
-       (future
-         (try
-           (streaming/send-datastar-patch! channel (ui/session-messages-fragment system session-id))
-           (loop []
-             (when @open?
-               (when-let [event (some-> (async/<!! ch) :payload)]
-                 (when (relevant-session-event? event session-id)
-                   (streaming/send-datastar-patch! channel
-                                                   (ui/session-messages-fragment system session-id)))
-                 (recur))))
-           (finally
-             (broker/unsubscribe! broker-instance subscription)))))
-     (fn [_ _]
-       (reset! open? false)
-       (broker/unsubscribe! broker-instance subscription)))))
+     {:name :ui-session-live
+      :on-error (fn [_ _] nil)}
+     (fn [ctx]
+       (let [subscription (streaming/subscribe! ctx
+                                                broker-instance
+                                                (broker/all-events-subject)
+                                                {:buffer-size 256
+                                                 :buffer-strategy :sliding
+                                                 :slow-client :drop-new})
+             ch (:channel subscription)]
+         (streaming/send-datastar-patch! ctx (ui/session-messages-fragment system session-id))
+         (loop []
+           (when-let [event (some-> (streaming/take! ctx ch) :payload)]
+             (when (relevant-session-event? event session-id)
+               (streaming/send-datastar-patch! ctx
+                                               (ui/session-messages-fragment system session-id)))
+            (recur))))))))
 
 (defn chat-action [system request]
   (let [{:keys [session_id prompt]} (h/read-form-body request)]
     (v/ensure-session-exists! system session_id)
-    (streaming/sse-response
+    (streaming/managed-response
      request
-     (fn [channel]
-       (future
-         (let [broker-instance (or (:event-bus system) (:broker system))
-               subscription (broker/subscribe! broker-instance
-                                               (broker/all-events-subject)
-                                               {:buffer-size 256
-                                                :buffer-strategy :sliding
-                                                :slow-client :drop-new})
-               ch (:channel subscription)
-               result-ch (async/chan 1)
-               streaming-text (atom nil)
-               push! (fn
-                       ([]
-                        (streaming/send-datastar-patch!
-                         channel
-                         (ui/session-messages-fragment system session_id)))
-                       ([streaming]
-                        (streaming/send-datastar-patch!
-                         channel
-                         (ui/session-messages-fragment system
-                                                       session_id
-                                                       {:streaming streaming}))))
-               push-delta! (fn [delta]
-                             (when-not (str/blank? (str delta))
-                               (push! (swap! streaming-text
-                                             (fnil str "")
-                                             delta))))]
-           (try
-             (push!)
-             (future
-               (try
-                 (async/>!! result-ch
-                            {:result (chat/run! system
-                                                {:messages [{:role "user" :content prompt}]
-                                                 :session-id session_id
-                                                 :stream? true
-                                                 :on-delta push-delta!})})
-                 (catch Throwable t
-                   (async/>!! result-ch {:error t}))))
-             (loop [done? false
-                    terminal? false]
-               (when-not (and done? terminal?)
-                 (let [[value port] (async/alts!! [result-ch ch])]
+     {:name :ui-chat
+      :on-error (fn [ctx _]
+                  (streaming/send-datastar-patch!
+                   ctx
+                   (ui/session-messages-fragment system session_id)))}
+     (fn [ctx]
+       (let [broker-instance (or (:event-bus system) (:broker system))
+             subscription (streaming/subscribe! ctx
+                                                broker-instance
+                                                (broker/all-events-subject)
+                                                {:buffer-size 256
+                                                 :buffer-strategy :sliding
+                                                 :slow-client :drop-new})
+             ch (:channel subscription)
+             streaming-text (atom nil)
+             push! (fn
+                     ([]
+                      (streaming/send-datastar-patch!
+                       ctx
+                       (ui/session-messages-fragment system session_id)))
+                     ([streaming]
+                      (streaming/send-datastar-patch!
+                       ctx
+                       (ui/session-messages-fragment system
+                                                     session_id
+                                                     {:streaming streaming}))))
+             push-delta! (fn [delta]
+                           (when-not (str/blank? (str delta))
+                             (push! (swap! streaming-text
+                                           (fnil str "")
+                                           delta))))
+             result-ch (streaming/run-task!
+                        ctx
+                        #(chat/run! system
+                                    {:messages [{:role "user" :content prompt}]
+                                     :session-id session_id
+                                     :stream? true
+                                     :on-delta push-delta!}))]
+         (push!)
+         (loop [done? false
+                terminal? false]
+           (when-not (and done? terminal?)
+             (let [[value port] (async/alts!! [result-ch ch])]
+               (cond
+                 (= port result-ch)
+                 (if-let [error (:error value)]
+                   (throw error)
+                   (do
+                     (push!)
+                     (recur true terminal?)))
+
+                 (= port ch)
+                 (when-let [event (:payload value)]
                    (cond
-                     (= port result-ch)
-                     (if-let [error (:error value)]
-                       (throw error)
-                       (do
-                         (push!)
-                         (recur true terminal?)))
+                     (message-delta-event? event session_id)
+                     nil
 
-                     (= port ch)
+                     (stream-ending-message-event? event session_id)
                      (do
-                       (when-let [event (:payload value)]
-                         (cond
-                           (message-delta-event? event session_id)
-                           nil
+                       (reset! streaming-text nil)
+                       (push! nil))
 
-                           (stream-ending-message-event? event session_id)
-                           (do
-                             (reset! streaming-text nil)
-                             (push! nil))
-
-                           (relevant-session-event? event session_id)
-                           (push!))
-                         (recur done? (or terminal?
-                                          (terminal-session-event? event session_id)))))))))
-             (push!)
-             (catch Throwable t
-               (println "chat/run! failed:" (.getMessage t)))
-             (finally
-               (broker/unsubscribe! broker-instance subscription)
-               (http-kit/close channel))))))
-     (fn [_ _] nil))))
+                     (relevant-session-event? event session_id)
+                     (push!))
+                   (recur done? (or terminal?
+                                      (terminal-session-event? event session_id))))))))
+        (push!))))))
 
 (defn chat-stop [system request]
   (let [{:keys [session_id]} (h/read-form-body request)]
@@ -253,64 +237,51 @@
 (defn run-detail-live-response
   [system request]
   (let [run-id (-> request :parameters :query :run_id)
-        broker-instance (or (:event-bus system) (:broker system))
-        subscription (broker/subscribe! broker-instance
-                                        (broker/all-events-subject)
-                                        {:buffer-size 256
-                                         :buffer-strategy :sliding
-                                         :slow-client :drop-new})
-        ch (:channel subscription)
-        open? (atom true)]
-    (streaming/sse-response
+        broker-instance (or (:event-bus system) (:broker system))]
+    (streaming/managed-response
      request
-     (fn [channel]
-       (future
-         (try
-           (streaming/send-datastar-patch! channel
-                                           (str "<div id=\"run-detail-body\">"
-                                                (ui/run-detail-body system run-id)
-                                                "</div>"))
-           (loop []
-             (when @open?
-               (when-let [event (some-> (async/<!! ch) :payload)]
-                 (when (relevant-run-detail-event? event run-id)
-                   (streaming/send-datastar-patch! channel
-                                                   (str "<div id=\"run-detail-body\">"
-                                                        (ui/run-detail-body system run-id)
-                                                        "</div>")))
-                 (recur))))
-           (finally
-             (broker/unsubscribe! broker-instance subscription)))))
-     (fn [_ _]
-       (reset! open? false)
-       (broker/unsubscribe! broker-instance subscription)))))
+     {:name :ui-run-detail-live
+      :on-error (fn [_ _] nil)}
+     (fn [ctx]
+       (let [subscription (streaming/subscribe! ctx
+                                                broker-instance
+                                                (broker/all-events-subject)
+                                                {:buffer-size 256
+                                                 :buffer-strategy :sliding
+                                                 :slow-client :drop-new})
+             ch (:channel subscription)
+             patch! #(streaming/send-datastar-patch!
+                      ctx
+                      (str "<div id=\"run-detail-body\">"
+                           (ui/run-detail-body system run-id)
+                           "</div>"))]
+         (patch!)
+         (loop []
+           (when-let [event (some-> (streaming/take! ctx ch) :payload)]
+             (when (relevant-run-detail-event? event run-id)
+               (patch!))
+            (recur))))))))
 
 (defn events-live-response
   [system request]
-  (let [broker-instance (or (:event-bus system) (:broker system))
-        subscription (broker/subscribe! broker-instance
-                                        (broker/all-events-subject)
-                                        {:buffer-size 256
-                                         :buffer-strategy :sliding
-                                         :slow-client :drop-new})
-        ch (:channel subscription)
-        open? (atom true)]
-    (streaming/sse-response
+  (let [broker-instance (or (:event-bus system) (:broker system))]
+    (streaming/managed-response
      request
-     (fn [channel]
-       (future
-         (try
-           (streaming/send-datastar-patch! channel (ui/events-fragment system))
-           (loop []
-             (when @open?
-               (when (async/<!! ch)
-                 (streaming/send-datastar-patch! channel (ui/events-fragment system))
-                 (recur))))
-           (finally
-             (broker/unsubscribe! broker-instance subscription)))))
-     (fn [_ _]
-       (reset! open? false)
-       (broker/unsubscribe! broker-instance subscription)))))
+     {:name :ui-events-live
+      :on-error (fn [_ _] nil)}
+     (fn [ctx]
+       (let [subscription (streaming/subscribe! ctx
+                                                broker-instance
+                                                (broker/all-events-subject)
+                                                {:buffer-size 256
+                                                 :buffer-strategy :sliding
+                                                 :slow-client :drop-new})
+             ch (:channel subscription)]
+         (streaming/send-datastar-patch! ctx (ui/events-fragment system))
+         (loop []
+           (when (streaming/take! ctx ch)
+             (streaming/send-datastar-patch! ctx (ui/events-fragment system))
+            (recur))))))))
 
 (defn memory-prompt [system _request]
   (responses/html-response 200 (ui/memory-prompt-fragment system)))

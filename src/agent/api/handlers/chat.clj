@@ -8,8 +8,7 @@
    [agent.broker.core :as broker]
    [agent.chat :as chat]
    [agent.config :as config]
-   [clojure.core.async :as async]
-   [org.httpkit.server :as http-kit]))
+   [clojure.core.async :as async]))
 
 (defn- complete! [system messages {:keys [session-id]}]
   (chat/run! system {:messages messages :session-id session-id}))
@@ -59,14 +58,6 @@
         provider (name (:provider llm))
         model (:model llm)
         broker-instance (or (:event-bus system) (:broker system))
-        subscription (broker/subscribe! broker-instance
-                                        (broker/all-events-subject)
-                                        {:buffer-size 256
-                                         :buffer-strategy :sliding
-                                         :slow-client :drop-new})
-        events-ch (:channel subscription)
-        result-ch (async/chan 1)
-        open? (atom true)
         send-delta! (fn [channel delta]
                       (streaming/send-sse-chunk! channel
                                                  {:id stream-id
@@ -87,91 +78,71 @@
                                                    {:id stream-id
                                                     :object "chat.progress"
                                                     :session_id session-id
-                                                    :event (ser/event->response event)})))]
-    (streaming/sse-response
+                                                    :event (ser/event->response event)})))
+        finish! (fn [ctx result-value]
+                  (when (:error? (:result result-value))
+                    (send-delta! ctx (get-in result-value [:result :content])))
+                  (streaming/send-sse-chunk! ctx
+                                             {:id stream-id
+                                              :object "chat.completion.chunk"
+                                              :session_id session-id
+                                              :provider provider
+                                              :model model
+                                              :choices [{:index 0
+                                                         :delta {}
+                                                         :finish_reason "stop"}]})
+                  (streaming/send-sse-done! ctx))]
+    (streaming/managed-response
      request
-     (fn [channel]
-       (future
-         (try
-           (streaming/send-sse-chunk! channel
-                                      {:id stream-id
-                                       :object "chat.completion.chunk"
-                                       :session_id session-id
-                                       :provider provider
-                                       :model model
-                                       :choices [{:index 0
-                                                  :delta {:role "assistant"}
-                                                  :finish_reason nil}]})
-           (future
-             (try
-               (async/>!! result-ch
-                          {:result (chat/run! system
-                                              {:messages messages
-                                               :session-id session-id
-                                               :stream? true})})
-               (catch Exception e
-                 (async/>!! result-ch {:error e}))))
-           (loop [result-value nil
-                  terminal? false]
-             (when @open?
-               (let [[value port] (async/alts!! [result-ch events-ch])]
-                 (cond
-                   (= port result-ch)
-                   (if-let [error (:error value)]
-                     (do
-                       (streaming/send-sse-chunk! channel
-                                                  {:error "stream_error"
-                                                   :message (.getMessage error)})
-                       (streaming/send-sse-done! channel)
-                       (http-kit/close channel))
-                     (if terminal?
-                       (do
-                         (when (:error? (:result value))
-                           (send-delta! channel (get-in value [:result :content])))
-                         (streaming/send-sse-chunk! channel
-                                                    {:id stream-id
-                                                     :object "chat.completion.chunk"
-                                                     :session_id session-id
-                                                     :provider provider
-                                                     :model model
-                                                     :choices [{:index 0
-                                                                :delta {}
-                                                                :finish_reason "stop"}]})
-                         (streaming/send-sse-done! channel)
-                         (http-kit/close channel))
-                       (recur value terminal?)))
-
-                   (= port events-ch)
+     {:name :chat-completions-stream
+      :on-error (fn [ctx error]
+                  (streaming/send-sse-error! ctx "stream_error" (.getMessage error))
+                  (streaming/send-sse-done! ctx))}
+     (fn [ctx]
+       (let [subscription (streaming/subscribe! ctx
+                                                broker-instance
+                                                (broker/all-events-subject)
+                                                {:buffer-size 256
+                                                 :buffer-strategy :sliding
+                                                 :slow-client :drop-new})
+             events-ch (:channel subscription)
+             result-ch (streaming/run-task!
+                        ctx
+                        #(chat/run! system
+                                    {:messages messages
+                                     :session-id session-id
+                                     :stream? true}))]
+         (streaming/send-sse-chunk! ctx
+                                    {:id stream-id
+                                     :object "chat.completion.chunk"
+                                     :session_id session-id
+                                     :provider provider
+                                     :model model
+                                     :choices [{:index 0
+                                                :delta {:role "assistant"}
+                                                :finish_reason nil}]})
+         (loop [result-value nil
+                terminal? false]
+           (when (streaming/open? ctx)
+             (let [[value port] (async/alts!! [result-ch events-ch])]
+               (cond
+                 (= port result-ch)
+                 (if-let [error (:error value)]
                    (do
-                     (when-let [event (:payload value)]
-                       (send-event! channel event)
-                       (let [terminal?* (or terminal?
-                                            (chat-stream-terminal-event? event session-id))]
-                         (if (and result-value terminal?*)
-                           (do
-                             (when (:error? (:result result-value))
-                               (send-delta! channel (get-in result-value [:result :content])))
-                             (streaming/send-sse-chunk! channel
-                                                        {:id stream-id
-                                                         :object "chat.completion.chunk"
-                                                         :session_id session-id
-                                                         :provider provider
-                                                         :model model
-                                                         :choices [{:index 0
-                                                                    :delta {}
-                                                                    :finish_reason "stop"}]})
-                             (streaming/send-sse-done! channel)
-                             (http-kit/close channel))
-                           (recur result-value terminal?*)))))))))
-           (catch Exception e
-             (streaming/send-sse-chunk! channel
-                                        {:error "stream_error"
-                                         :message (.getMessage e)}))
-           (finally
-             (broker/unsubscribe! broker-instance subscription)))))
-     (fn [_ _]
-       (reset! open? false)
-       (broker/unsubscribe! broker-instance subscription)))))
+                     (streaming/send-sse-error! ctx "stream_error" (.getMessage error))
+                     (streaming/send-sse-done! ctx))
+                   (if terminal?
+                     (finish! ctx value)
+                     (recur value terminal?)))
+
+                 (= port events-ch)
+                 (when-let [event (:payload value)]
+                   (send-event! ctx event)
+                   (let [terminal?* (or terminal?
+                                        (chat-stream-terminal-event? event session-id))]
+                     (if (and result-value terminal?*)
+                       (finish! ctx result-value)
+                       (recur result-value terminal?*)))))))))))))
 
 (defn completions-response
   "Ring-style handler for POST /v1/chat/completions."

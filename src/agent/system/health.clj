@@ -2,6 +2,7 @@
   "Component health wrappers and aggregate system health."
   (:require
    [agent.broker.core :as broker]
+   [agent.api.streaming :as streaming]
    [agent.channels.core :as channel-adapters]
    [agent.chat :as chat]
    [agent.config :as config]
@@ -71,6 +72,8 @@
      :trace (runtime-trace/health-check (:trace system))
      :runtime (checked-component-health registry :runtime
                 #(runtime/runtime-health (:runtime-service system)))
+     :sse {:healthy true
+           :metrics (streaming/metrics)}
      :chat (checked-component-health registry :chat
              #(chat/health-check (:chat-service system)))
      :channel-adapters (checked-component-health registry :channel-adapters

@@ -1,5 +1,7 @@
 (ns agent.api.responses
-  (:require [cheshire.core :as json])
+  (:require
+   [agent.logging :as logging]
+   [cheshire.core :as json])
   (:import
    (java.io ByteArrayOutputStream OutputStream)
    (java.nio.charset StandardCharsets)
@@ -95,8 +97,8 @@
     (future
       (try
         (writer-fn stream)
-        (catch Exception _
-          nil)
+        (catch Throwable t
+          (logging/log-error! :agent.api.responses/stream-writer-failed t))
         (finally
           (.close ^OutputStream stream))))
     {:status 200

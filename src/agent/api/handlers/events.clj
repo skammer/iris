@@ -4,8 +4,7 @@
    [agent.api.serializers :as ser]
    [agent.api.streaming :as streaming]
    [agent.broker.core :as broker]
-   [agent.persistence.sqlite :as sqlite]
-   [clojure.core.async :as async]))
+   [agent.persistence.sqlite :as sqlite]))
 
 (defn list-events [system _request]
   (responses/json-response 200
@@ -15,29 +14,24 @@
 (defn stream-response
   [system request]
   (let [stream-id (str "events-" (System/currentTimeMillis))
-        broker-instance (or (:event-bus system) (:broker system))
-        subscription (broker/subscribe! broker-instance
-                                        (broker/all-events-subject)
-                                        {:buffer-size 256
-                                         :buffer-strategy :sliding
-                                         :slow-client :drop-new})
-        ch (:channel subscription)
-        open? (atom true)]
-    (streaming/sse-response
+        broker-instance (or (:event-bus system) (:broker system))]
+    (streaming/managed-response
      request
-     (fn [channel]
-       (future
-         (try
-           (loop []
-             (when @open?
-               (when-let [event (some-> (async/<!! ch) :payload)]
-                 (streaming/send-sse-chunk! channel
-                                            {:id stream-id
-                                             :object "event.chunk"
-                                             :event (ser/event->response event)})
-                 (recur))))
-           (finally
-             (broker/unsubscribe! broker-instance subscription)))))
-     (fn [_ _]
-       (reset! open? false)
-       (broker/unsubscribe! broker-instance subscription)))))
+     {:name :events-stream
+      :on-error (fn [ctx error]
+                  (streaming/send-sse-error! ctx "stream_error" (.getMessage error)))}
+     (fn [ctx]
+       (let [subscription (streaming/subscribe! ctx
+                                                broker-instance
+                                                (broker/all-events-subject)
+                                                {:buffer-size 256
+                                                 :buffer-strategy :sliding
+                                                 :slow-client :drop-new})
+             ch (:channel subscription)]
+         (loop []
+           (when-let [event (some-> (streaming/take! ctx ch) :payload)]
+             (streaming/send-sse-chunk! ctx
+                                        {:id stream-id
+                                         :object "event.chunk"
+                                         :event (ser/event->response event)})
+            (recur))))))))
