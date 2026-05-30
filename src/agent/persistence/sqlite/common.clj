@@ -97,7 +97,7 @@
                  (.setInitializationFailTimeout -1))]
     (HikariDataSource. config)))
 
-(declare close-connection!)
+(declare close-connection! with-connection)
 
 (defn configure-connection! [store ^Connection conn]
   (execute-ddl! conn (str "PRAGMA busy_timeout=" (or (:busy-timeout-ms store)
@@ -142,14 +142,12 @@
         (throw ex)))))
 
 (defn apply-journal-mode! [store]
-  (let [datasource ^HikariDataSource (:datasource store)
-        conn (.getConnection datasource)]
-    (try
+  (with-connection
+    store
+    (fn [conn]
       (execute-ddl! conn (str "PRAGMA journal_mode="
                               (or (:journal-mode store) "WAL")
-                              ";"))
-      (finally
-        (close-connection! store datasource conn)))))
+                              ";")))))
 
 (defn- close-connection! [store ^HikariDataSource datasource ^Connection conn]
   (try
@@ -232,8 +230,12 @@
           (recur (conj acc (row-fn (read-row rs))))
           acc)))))
 
-(defn select-value [^Connection conn sqlvec]
-  (select-one conn sqlvec (fn [^ResultSet rs] (.getObject rs 1))))
+(defn select-value [^Connection conn [sql & params]]
+  (with-open [stmt (.prepareStatement conn sql)]
+    (bind-params! stmt params)
+    (with-open [rs (.executeQuery stmt)]
+      (when (.next rs)
+        (.getObject rs 1)))))
 
 (defn close-store! [store]
   (when-let [datasource (:datasource store)]

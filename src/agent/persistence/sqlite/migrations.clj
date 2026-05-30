@@ -3,17 +3,41 @@
    [agent.persistence.sqlite.common :as common]
    [ragtime.core :as ragtime]
    [ragtime.protocols :as ragtime-protocols]
-   [ragtime.strategy :as ragtime-strategy]))
+   [ragtime.strategy :as ragtime-strategy])
+  (:import
+   (java.nio.charset StandardCharsets)
+   (java.security MessageDigest)))
 
 (def latest-schema-version 20)
 
 (def ^:private metadata-table "schema_migration_meta")
 
+(def ^:private legacy-descriptor-checksums
+  {1 "d846e9929ae182da"
+   2 "9d6f286ca4525909"
+   3 "bad410b46446a4ff"
+   4 "f6076f1a97ddf2e0"
+   5 "28efe801a91772fd"
+   6 "4f9294070efb6b52"
+   7 "d715b4ea611c879e"
+   8 "11c3e7e33dfb0c2"
+   9 "7bf4270de8c46bd8"
+   10 "366f6a2322665cc9"
+   11 "f5a70d2e197b3f1"
+   12 "8c3e2b2d4a5f1201"
+   13 "b35b0839c3f4b987"
+   14 "d8b29a4f61c83e21"
+   15 "a7c4f9b2e1d83056"
+   16 "4d0bd0466cdb7f19"
+   17 "6d1b71d94f8c2a03"
+   18 "f4d67d91a6c0e2b8"
+   19 "39ef97d9e734fca1"
+   20 "c4b48d06d3b5a820"})
+
 (def ^:private migration-descriptors
   [{:version 1
     :id "1"
     :name "initial-schema"
-    :checksum "d846e9929ae182da"
     :irreversible? true
     :up ["CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
@@ -42,14 +66,12 @@
    {:version 2
     :id "2"
     :name "completion-created-index"
-    :checksum "9d6f286ca4525909"
     :irreversible? true
     :up ["CREATE INDEX IF NOT EXISTS idx_completions_created
           ON completions(created_at);"]}
    {:version 3
     :id "3"
     :name "event-log"
-    :checksum "bad410b46446a4ff"
     :irreversible? true
     :up ["CREATE TABLE IF NOT EXISTS agent_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,7 +91,6 @@
    {:version 4
     :id "4"
     :name "tool-approvals"
-    :checksum "f6076f1a97ddf2e0"
     :irreversible? true
     :up ["CREATE TABLE IF NOT EXISTS tool_approvals (
             id TEXT PRIMARY KEY,
@@ -90,7 +111,6 @@
    {:version 5
     :id "5"
     :name "distributed-run-registry"
-    :checksum "28efe801a91772fd"
     :irreversible? true
     :up ["CREATE TABLE IF NOT EXISTS agent_runs (
             id TEXT PRIMARY KEY,
@@ -166,20 +186,17 @@
    {:version 6
     :id "6"
     :name "agent-runner-options"
-    :checksum "4f9294070efb6b52"
     :irreversible? true
     :up ["ALTER TABLE agent_runs ADD COLUMN runner_options_json TEXT;"]}
    {:version 7
     :id "7"
     :name "agent-run-command-request-response"
-    :checksum "d715b4ea611c879e"
     :irreversible? true
     :up ["ALTER TABLE agent_run_commands ADD COLUMN request_id TEXT;"
          "ALTER TABLE agent_run_commands ADD COLUMN response_json TEXT;"]}
    {:version 8
     :id "8"
     :name "federation-auth-outbox"
-    :checksum "11c3e7e33dfb0c2"
     :irreversible? true
     :up ["CREATE TABLE IF NOT EXISTS federation_peer_keys (
             peer_id TEXT NOT NULL,
@@ -223,7 +240,6 @@
    {:version 9
     :id "9"
     :name "workflow-idempotency"
-    :checksum "7bf4270de8c46bd8"
     :irreversible? true
     :up ["ALTER TABLE agent_runs ADD COLUMN idempotency_key TEXT;"
          "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runs_idempotency_key
@@ -241,7 +257,6 @@
    {:version 10
     :id "10"
     :name "workflow-events-activities"
-    :checksum "366f6a2322665cc9"
     :irreversible? true
     :up ["CREATE TRIGGER IF NOT EXISTS trg_agent_runs_requested_event
           AFTER INSERT ON agent_runs
@@ -340,7 +355,6 @@
    {:version 11
     :id "11"
     :name "harden-tool-approvals"
-    :checksum "f5a70d2e197b3f1"
     :irreversible? true
     :up ["ALTER TABLE tool_approvals ADD COLUMN input_hash TEXT;"
          "ALTER TABLE tool_approvals ADD COLUMN requested_permissions_json TEXT;"
@@ -350,7 +364,6 @@
    {:version 12
     :id "12"
     :name "mandatory-memory-facts"
-    :checksum "8c3e2b2d4a5f1201"
     :irreversible? true
     :up ["CREATE TABLE IF NOT EXISTS memory_facts (
             id TEXT PRIMARY KEY,
@@ -382,7 +395,6 @@
    {:version 13
     :id "13"
     :name "channel-session-mappings"
-    :checksum "b35b0839c3f4b987"
     :irreversible? true
     :up ["CREATE TABLE IF NOT EXISTS channel_session_mappings (
             source TEXT NOT NULL,
@@ -399,7 +411,6 @@
    {:version 14
     :id "14"
     :name "channel-inbox-offsets"
-    :checksum "d8b29a4f61c83e21"
     :irreversible? true
     :up ["CREATE TABLE IF NOT EXISTS channel_offsets (
             source TEXT PRIMARY KEY,
@@ -422,14 +433,12 @@
    {:version 15
     :id "15"
     :name "messages-tool-calls"
-    :checksum "a7c4f9b2e1d83056"
     :irreversible? true
     :up ["ALTER TABLE messages ADD COLUMN tool_calls TEXT;"
          "ALTER TABLE messages ADD COLUMN tool_call_id TEXT;"]}
    {:version 16
     :id "16"
     :name "sqlite-fts-retrieval"
-    :checksum "4d0bd0466cdb7f19"
     :irreversible? true
     :up ["CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
           USING fts5(content, content='messages', content_rowid='id');"
@@ -483,7 +492,6 @@
    {:version 17
     :id "17"
     :name "session-entry-tree"
-    :checksum "6d1b71d94f8c2a03"
     :irreversible? true
     :up ["CREATE TABLE IF NOT EXISTS session_entries (
             id TEXT PRIMARY KEY,
@@ -530,20 +538,17 @@
    {:version 18
     :id "18"
     :name "message-runtime-flags"
-    :checksum "f4d67d91a6c0e2b8"
     :irreversible? true
     :up ["ALTER TABLE messages ADD COLUMN metadata_json TEXT;"
          "ALTER TABLE messages ADD COLUMN excluded_from_context INTEGER NOT NULL DEFAULT 0;"]}
    {:version 19
     :id "19"
     :name "session-active-mode"
-    :checksum "39ef97d9e734fca1"
     :irreversible? true
     :up ["ALTER TABLE sessions ADD COLUMN active_mode TEXT;"]}
    {:version 20
     :id "20"
     :name "todo-lists"
-    :checksum "c4b48d06d3b5a820"
     :irreversible? true
     :up ["CREATE TABLE IF NOT EXISTS todo_lists (
             id TEXT PRIMARY KEY,
@@ -580,23 +585,34 @@
 (defn descriptor-by-version [version]
   (some #(when (= version (:version %)) %) migration-descriptors))
 
+(defn- sha256-hex [value]
+  (let [digest (.digest (MessageDigest/getInstance "SHA-256")
+                        (.getBytes (str value) StandardCharsets/UTF_8))]
+    (apply str (map #(format "%02x" (bit-and (int %) 0xff)) digest))))
+
+(defn- migration-checksum [{:keys [version up down]}]
+  (subs (sha256-hex (str version up down)) 0 16))
+
+(defn- migration-history* [conn]
+  (common/select-many
+    conn
+    ["SELECT version, name, checksum, irreversible, applied_at
+      FROM schema_migration_meta
+      ORDER BY version ASC"]
+    (fn [{:keys [version name checksum irreversible applied_at]}]
+      {:version (int version)
+       :name name
+       :checksum checksum
+       :irreversible? (pos? (int irreversible))
+       :applied-at applied_at})))
+
 (defn migration-history [store]
   (common/with-connection
     store
     (fn [conn]
       (if-not (common/table-exists? conn metadata-table)
         []
-        (common/select-many
-          conn
-          ["SELECT version, name, checksum, irreversible, applied_at
-            FROM schema_migration_meta
-            ORDER BY version ASC"]
-          (fn [{:keys [version name checksum irreversible applied_at]}]
-            {:version (int version)
-             :name name
-             :checksum checksum
-             :irreversible? (pos? (int irreversible))
-             :applied-at applied_at}))))))
+        (migration-history* conn)))))
 
 (defn schema-version [store]
   (or (some->> (migration-history store) last :version)
@@ -611,13 +627,13 @@
                                applied_at TEXT NOT NULL
                              );"))
 
-(defn- record-migration-meta! [conn {:keys [version name checksum irreversible?]}]
+(defn- record-migration-meta! [conn {:keys [version name irreversible?] :as descriptor}]
   (with-open [stmt (.prepareStatement conn
                                       "INSERT OR REPLACE INTO schema_migration_meta (version, name, checksum, irreversible, applied_at)
                                        VALUES (?, ?, ?, ?, ?)")]
     (.setInt stmt 1 (int version))
     (.setString stmt 2 name)
-    (.setString stmt 3 checksum)
+    (.setString stmt 3 (migration-checksum descriptor))
     (.setInt stmt 4 (if irreversible? 1 0))
     (.setString stmt 5 (common/now-str))
     (.executeUpdate stmt))
@@ -730,19 +746,47 @@
                   (remove-migration-meta! conn (:version descriptor))))
         nil))))
 
+(defn- update-migration-checksum! [conn version checksum]
+  (with-open [stmt (.prepareStatement conn
+                                      "UPDATE schema_migration_meta
+                                       SET checksum = ?
+                                       WHERE version = ?")]
+    (.setString stmt 1 checksum)
+    (.setInt stmt 2 (int version))
+    (.executeUpdate stmt)))
+
+(defn- migration-drift! [version expected actual]
+  (throw (ex-info "Migration checksum drift detected"
+                  {:type :migration-drift
+                   :version version
+                   :expected expected
+                   :actual actual})))
+
+(defn- unknown-applied-migration! [version]
+  (throw (ex-info "Unknown applied migration"
+                  {:type :migration-drift
+                   :version version})))
+
+(defn- backfill-legacy-migration-checksums! [store]
+  (common/with-transaction
+    store
+    (fn [conn]
+      (doseq [{:keys [version checksum]} (migration-history* conn)]
+        (let [descriptor (descriptor-by-version version)]
+          (when-not descriptor
+            (unknown-applied-migration! version))
+          (let [expected (migration-checksum descriptor)]
+            (when (= checksum (get legacy-descriptor-checksums version))
+              (update-migration-checksum! conn version expected))))))))
+
 (defn- verify-migration-checksums! [store]
   (doseq [{:keys [version checksum]} (migration-history store)]
     (let [expected (descriptor-by-version version)]
       (when-not expected
-        (throw (ex-info "Unknown applied migration"
-                        {:type :migration-drift
-                         :version version})))
-      (when (not= checksum (:checksum expected))
-        (throw (ex-info "Migration checksum drift detected"
-                        {:type :migration-drift
-                         :version version
-                         :expected (:checksum expected)
-                         :actual checksum}))))))
+        (unknown-applied-migration! version))
+      (let [expected-checksum (migration-checksum expected)]
+        (when (not= checksum expected-checksum)
+          (migration-drift! version expected-checksum checksum))))))
 
 (defn migrate! [store]
   (common/with-transaction
@@ -757,5 +801,6 @@
       migrations
       {:strategy ragtime-strategy/apply-new
        :reporter (reporter store)}))
+  (backfill-legacy-migration-checksums! store)
   (verify-migration-checksums! store)
   store)

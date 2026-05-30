@@ -1,8 +1,10 @@
 (ns agent.persistence.sqlite-test
   (:require
+   [agent.persistence.sqlite.common :as sqlite-common]
+   [agent.persistence.sqlite.migrations :as migrations]
    [agent.persistence.sqlite :as sqlite]
    [clojure.java.io :as io]
-   [clojure.test :refer :all])
+   [clojure.test :refer [deftest is]])
   (:import
    (java.sql DriverManager)))
 
@@ -60,9 +62,13 @@
     (try
       (is (= "approved"
              (:status (sqlite/decide-tool-approval! store (:id approval) :approved "tester" "ok"))))
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                            #"not pending"
-                            (sqlite/decide-tool-approval! store (:id approval) :denied "tester" "late")))
+      (let [err (try
+                  (sqlite/decide-tool-approval! store (:id approval) :denied "tester" "late")
+                  nil
+                  (catch clojure.lang.ExceptionInfo e
+                    e))]
+        (is (some? err))
+        (is (re-find #"not pending" (.getMessage err))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
@@ -178,6 +184,64 @@
       (is (true? (:healthy (sqlite/health-check store))))
       (sqlite/close-store! store))
     (io/delete-file path true)))
+
+(deftest sqlite-migration-checksum-detects-edited-applied-sql-test
+  (let [path (temp-db-path)
+        descriptors-var #'migrations/migration-descriptors
+        original-descriptors @descriptors-var]
+    (try
+      (let [store (sqlite/create-store {:path path})]
+        (sqlite/close-store! store))
+      (alter-var-root descriptors-var
+                      (fn [descriptors]
+                        (update-in descriptors
+                                   [0 :up]
+                                   conj
+                                   "CREATE TABLE edited_applied_migration_probe (id TEXT);")))
+      (let [err (try
+                  (sqlite/create-store {:path path})
+                  nil
+                  (catch clojure.lang.ExceptionInfo e
+                    e))]
+        (is (some? err))
+        (is (= :migration-drift (:type (ex-data err))))
+        (is (= 1 (:version (ex-data err)))))
+      (finally
+        (alter-var-root descriptors-var (constantly original-descriptors))
+        (io/delete-file path true)))))
+
+(deftest sqlite-migration-legacy-checksum-backfills-test
+  (let [path (temp-db-path)]
+    (try
+      (let [store (sqlite/create-store {:path path})]
+        (sqlite/close-store! store))
+      (with-open [conn (DriverManager/getConnection (sqlite/jdbc-url path))
+                  stmt (.prepareStatement conn
+                                         "UPDATE schema_migration_meta
+                                          SET checksum = ?
+                                          WHERE version = ?")]
+        (.setString stmt 1 "d846e9929ae182da")
+        (.setInt stmt 2 1)
+        (.executeUpdate stmt))
+      (let [store (sqlite/create-store {:path path})
+            version-one (first (sqlite/migration-history store))]
+        (is (re-matches #"[0-9a-f]{16}" (:checksum version-one)))
+        (is (not= "d846e9929ae182da" (:checksum version-one)))
+        (sqlite/close-store! store))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest sqlite-select-value-returns-first-column-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (is (= 42
+             (sqlite-common/with-connection
+               store
+               #(sqlite-common/select-value % ["SELECT 42 AS n"]))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
 
 (deftest sqlite-memory-search-uses-fts-test
   (let [path (temp-db-path)
