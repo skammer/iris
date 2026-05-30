@@ -365,6 +365,15 @@
                 llm-response (:llm-response step*)
                 usage* (usage+ usage (:usage llm-response))
                 max-token? (max-token-stop-reason? (:stop-reason llm-response))
+                ;; A length-truncated turn is only terminal when it produced no
+                ;; executable tool calls. finish_reason="length" frequently rides
+                ;; along with a complete tool_calls array (the model emitted the
+                ;; call, then hit the output cap) — discarding those makes the
+                ;; agent dead-end on turns that actually produced work. When the
+                ;; tool calls are present we fall through and execute them; only
+                ;; a tool-call-free truncation surfaces as a max-tokens stop.
+                max-token-terminal? (and max-token?
+                                         (empty? (:tool-calls llm-response)))
                 pre-verdict (nudge/check-before-exec chat-profile*
                                                      nudge-state
                                                      {:step executable-step
@@ -386,7 +395,7 @@
                 (retry-events! event-sink base pre-verdict step-no)
                 (fatal-guardrail! event-sink base pre-verdict step-no final-messages trace usage* stream?* request-id))
 
-              max-token?
+              max-token-terminal?
               (do
                 (discard-pending-deltas!)
                 (emit-max-token-truncation! event-sink base request-id llm-response)
@@ -395,7 +404,7 @@
                                                     :stream stream?*})
                 {:content max-tokens-content
                  :request-id request-id
-                 :final-messages [{:role "assistant" :content max-tokens-content}]
+                 :final-messages (conj final-messages {:role "assistant" :content max-tokens-content})
                  :trace trace
                  :usage usage*
                  :stop-reason :max-tokens
