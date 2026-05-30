@@ -177,12 +177,35 @@
        [:pre.tool-detail__pre.code body])]
      [:div.meta created-at]]))
 
+(defn format-tokens
+  "Compact human-readable token count: 950 -> \"950\", 12345 -> \"12.3k\", 2300000 -> \"2.3M\"."
+  [n]
+  (let [n (long (or n 0))]
+    (cond
+      (>= n 1000000) (format "%.1fM" (/ (double n) 1e6))
+      (>= n 1000) (format "%.1fk" (/ (double n) 1e3))
+      :else (str n))))
+
+(defn- usage-tokens
+  "Total tokens for one message's usage map, if present."
+  [metadata]
+  (some-> (:usage metadata) :tokens long))
+
+(defn- message-meta-suffix
+  "Per-message stats badge text: token count for the turn + tool-call count."
+  [metadata tool-calls]
+  (let [tok (usage-tokens metadata)
+        n-tools (count tool-calls)]
+    (str (when (and tok (pos? tok)) (str " | " (format-tokens tok) " tok"))
+         (when (pos? n-tools) (str " | " n-tools " tool" (when (> n-tools 1) "s"))))))
+
 (defn message
   ([msg] (message nil msg))
   ([system {:keys [role content created-at tool-calls metadata excluded-from-context?] :as msg}]
    (let [meta-text (str created-at
                         (when (:queued metadata) " | queued")
-                        (when excluded-from-context? " | out-of-context"))]
+                        (when excluded-from-context? " | out-of-context")
+                        (message-meta-suffix metadata tool-calls))]
      (cond
        (= role "tool")
        (tool-message system msg)
@@ -201,6 +224,68 @@
           (user-message-content content)
           (message-content content))
         [:div.meta meta-text]]))))
+
+(defn thread-stats
+  "Aggregate per-thread usage/tool stats from the FULL message list.
+   Compaction-safe: `list-messages` returns every message (compaction never
+   deletes rows), so this sums the whole thread.
+   - :total/:prompt/:completion/:cached-tokens — cumulative SUM over every turn
+     (= total tokens billed across the thread's life).
+   - :context-tokens — size of the live context window, taken from the most
+     recent turn's prompt+completion (already reflects any compaction cut).
+   - :tool-calls — total tool calls; :tool-breakdown — [name count] desc."
+  [messages]
+  (let [usages (keep #(get-in % [:metadata :usage]) messages)
+        sum-key (fn [k] (reduce (fn [acc u] (+ acc (long (or (get u k) 0)))) 0 usages))
+        latest (last usages)
+        tool-names (for [m messages
+                         tc (:tool-calls m)
+                         :let [nm (get-in tc [:function :name])]
+                         :when nm]
+                     nm)
+        breakdown (->> tool-names
+                       frequencies
+                       (sort-by (juxt (comp - val) key))
+                       (mapv (fn [[nm n]] [nm n])))]
+    {:total-tokens (sum-key :tokens)
+     :prompt-tokens (sum-key :prompt-tokens)
+     :completion-tokens (sum-key :completion-tokens)
+     :cached-tokens (sum-key :cached-tokens)
+     :context-tokens (when latest
+                       (+ (long (or (:prompt-tokens latest) 0))
+                          (long (or (:completion-tokens latest) 0))))
+     :tool-calls (count tool-names)
+     :tool-breakdown breakdown}))
+
+(defn thread-stats-bar
+  "Compact per-thread stats strip rendered live inside the message panel.
+   Returns nil when there is nothing to show yet."
+  [messages]
+  (let [{:keys [total-tokens prompt-tokens completion-tokens cached-tokens
+                context-tokens tool-calls tool-breakdown]} (thread-stats messages)]
+    (when (or (pos? total-tokens) (pos? tool-calls))
+      [:div.thread-stats {:aria-label "Thread usage"}
+       [:span.thread-stats__group
+        {:title (str "cumulative across thread — prompt " prompt-tokens
+                     " · completion " completion-tokens
+                     " · cached " cached-tokens)}
+        [:span.thread-stats__label "Σ"]
+        [:span.thread-stats__value (format-tokens total-tokens)]
+        [:span.thread-stats__unit "tok"]]
+       (when (and context-tokens (pos? context-tokens))
+         [:span.thread-stats__group
+          {:title "approximate tokens in the current context window (post-compaction)"}
+          [:span.thread-stats__label "ctx"]
+          [:span.thread-stats__value (str "~" (format-tokens context-tokens))]])
+       [:span.thread-stats__group
+        {:title (when (seq tool-breakdown)
+                  (str/join " · " (map (fn [[nm n]] (str nm " ×" n)) tool-breakdown)))}
+        [:span.thread-stats__label "tools"]
+        [:span.thread-stats__value (str tool-calls)]
+        (when (seq tool-breakdown)
+          (into [:span.thread-stats__breakdown]
+                (for [[nm n] tool-breakdown]
+                  [:span.thread-stats__tool nm [:span.thread-stats__tool-n (str "×" n)]])))]])))
 
 (defn- now-ms []
   (.toEpochMilli (Instant/now)))

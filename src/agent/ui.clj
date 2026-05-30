@@ -545,6 +545,7 @@
       [:chat-stream#session-messages-panel
        (if (or (seq messages) streaming* (:working? state))
          (list*
+          (ui-render/thread-stats-bar messages)
           [:div.chat-stream__filler]
           (concat
            (for [message messages]

@@ -169,6 +169,25 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest chat-loop-persists-turn-usage-onto-assistant-message-test
+  (let [path (temp-db-path)
+        responses (atom [{:content "done"
+                          :usage {:tokens 1234 :prompt-tokens 1000
+                                  :completion-tokens 234 :cached-tokens 0}}])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider identity)
+        session (sessions/create-session! system "usage")]
+    (try
+      (chat/run! system {:session-id (:id session)
+                         :messages [{:role "user" :content "hello"}]})
+      (let [assistant (last (sqlite/list-messages (:store system) (:id session)))]
+        (is (= "assistant" (:role assistant)))
+        (is (= 1234 (get-in assistant [:metadata :usage :tokens])))
+        (is (= 1000 (get-in assistant [:metadata :usage :prompt-tokens]))))
+      (finally
+        (io/delete-file path true)))))
+
 (deftest chat-loop-records-streaming-callback-failures-test
   (let [path (temp-db-path)
         responses (atom [{:content "done"

@@ -624,6 +624,56 @@ textarea {
   margin: auto;
 }
 
+.thread-stats {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin: -16px -18px 4px;
+  padding: 7px 18px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-family: "IoskeleyMono", "Space Mono", "JetBrains Mono", "SF Mono", monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.thread-stats__group {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.thread-stats__value {
+  color: var(--text-display);
+  font-size: 12px;
+}
+
+.thread-stats__breakdown {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: 2px;
+}
+
+.thread-stats__tool {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-compact);
+  padding: 0 6px;
+}
+
+.thread-stats__tool-n {
+  color: var(--accent);
+  margin-left: 3px;
+}
+
 .chat-stream__filler {
   flex: 1 1 auto;
   min-height: 0;

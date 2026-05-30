@@ -72,7 +72,7 @@
                                               :model model
                                               :duration-ms duration
                                               :success? true
-                                              :tokens (get-in response [:usage :total-tokens])
+                                              :tokens (get-in response [:usage :tokens])
                                               :prompt-tokens (get-in response [:usage :prompt-tokens])
                                               :completion-tokens (get-in response [:usage :completion-tokens])}}))
         (runtime-trace/record-event! trace
