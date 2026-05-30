@@ -4,7 +4,7 @@
 **Reviewed:** 2026-05-29 · `master` @ `96b6930` · **Remediated:** 2026-05-30 · `master` @ `58d700c` (+ `feat/web-ui-usage-stats` @ `fce5cd7`) · **JDK (local):** 25 · **Clojure:** 1.12.4
 **Method:** 12 parallel subsystem readers → 7 cross-cutting reviewers (architecture, concurrency, security, error/resource, smells, data, agentic-correctness) → adversarial verification of every High/Critical finding, plus an independent ground-truth pass (build, CI, full test suite, hand-read of the loop / auth / shell / fs / migrations / sandbox spine). An interactive map of the agentic workflow is in **`iris-workflow-map.html`** (open in a browser).
 
-> **Status (2026-05-30):** all **12 Critical/High findings are fixed and merged** to `master`, plus the highest-risk §5 Medium/security backlog items fixed through `58d700c`. Build/CI blocker **B2** and a smaller Medium backlog remain open; **B1 is fixed in the working tree**. See **§1A** for the remediation ledger.
+> **Status (2026-05-30):** all **12 Critical/High findings are fixed and merged** to `master`, plus the highest-risk §5 Medium/security backlog items fixed through `58d700c`. Build/CI blocker **B2** and a smaller Medium backlog remain open; **B1 and B3 are fixed in the working tree**. See **§1A** for the remediation ledger.
 
 ---
 
@@ -25,7 +25,7 @@ Grades below are **at-review (2026-05-29)**; the trailing arrow notes the post-r
 | Error handling / resources | **B → B+** | Good per-request boundaries; ✅ child store, runner map, provider error-body leaks, SQLite retry, and CLI shutdown fixed |
 | Data / persistence | **A−** | Parameterized, transactional, idempotent; ✅ `SQLITE_BUSY`, pool sizing, runtime health, and approval CAS fixed |
 | Build / CI / release | **D+** | **Docker build fixed in working tree; CI never runs; 3 jar names** — *B2 open* |
-| Tests | **B** | 404 tests, 396 pass; 8 fail in one env-sensitive e2e test (`child-runtime`); 0 errors |
+| Tests | **A−** | Full suite now passes: 437 tests, 1742 assertions, 0 failures, 0 errors |
 
 ---
 
@@ -78,14 +78,13 @@ Additional §5 Medium remediation landed on `master`:
 
 A live-path telemetry token-key bug is also fixed on `feat/web-ui-usage-stats` (✅ `fce5cd7`, `planner.clj` read `:total-tokens` which providers never set).
 
-**Still open** (out of scope for the Critical/High pass):
-- **B1** (Dockerfile `COPY config`) is fixed in the working tree; local `docker build` verification was blocked because the Docker daemon/socket was unavailable.
+**Still open / caveats** (out of scope for the Critical/High pass):
 - **B2** (CI targets `main`/`develop`, not `master`) remains open.
-- **B3** — still 8 failures, all in the same env-sensitive `child-runtime-local-unsandboxed-flow-test` (subprocess + loopback under a restricted sandbox); 0 errors, no new failures.
+- **B1** is fixed in the working tree; full local `docker build` verification was blocked because the Docker daemon/socket was unavailable.
 - Remaining §5 Medium backlog: migration checksum hashing/re-baseline, memory dual-write divergence, and provider/common util duplication.
 - Structural §4.2 follow-up from 2026-05-30 is now done on `master`: `agent.runtime.*` run registry/control-plane moved to `agent.runs.*`, `KernelOps` has explicit capabilities, SSE metrics moved to `agent.streaming.metrics`, and orchestrator mutators enforce `:enabled?`.
 
-**Current focused suites:** §4.2 structural pass → **69 tests, 537 assertions, 0 failures, 0 errors**. §5 Medium/security focused suites all passed: `agent.api-test`, `agent.runners.local-unsandboxed-test`, `agent.runners.seatbelt-test`, `agent.persistence.sqlite-test`, `agent.config-test`, `agent.runs.registry-test`, `agent.runtime.context-pack-test`, `agent.llm.providers.openai-compatible-test`, `agent.llm.providers.ollama-test`, `agent.runtime.tools-test`, `agent.chat.streaming-test`, `agent.tools.common.shell-test`, `agent.tools.common.http-test`, `agent.tools.common.fs-test`, `agent.logging-test`, `agent.ui-test`, plus targeted `agent.system-test/agent-tool-context-ignores-caller-security-overrides`. Targeted `clj-kondo` clean on touched source/test files except known HugSQL/config macro false positives.
+**Current verification:** full suite now passes: `clojure -M:test -e "(require 'agent.test-runner :reload) (agent.test-runner/run-all-tests)"` → **437 tests, 1742 assertions, 0 failures, 0 errors**. B3 focused suite also passes: `agent.runs.child-test` → **1 test, 11 assertions, 0 failures, 0 errors**. Previous §4.2 and §5 focused suites remain green.
 
 ---
 
@@ -104,9 +103,10 @@ These I verified directly, outside the review agents.
 - The CI `deploy` job still runs `kubectl set image deployment/clj-agent …` although the README states "Kubernetes manifests were removed; Compose is only an optional local wrapper." Remove the stale k8s deploy job.
 - CI pins Clojure CLI `1.11.1.1347` and JDK 21; `deps.edn` targets Clojure 1.12.4 and local dev is JDK 25. Align versions to avoid drift.
 
-### 🟠 B3 — 8 failing tests, all in one environment-sensitive e2e test
-`clojure -M:test … run-all-tests` → **393 tests, 1579 assertions, 8 failures, 0 errors.** All 8 are in the child-runtime local-unsandboxed flow (now `agent.runs.child-test`, `test/agent/runs/child_test.clj`): the spawned child never transitions `launched → running`, so commands stay `pending` and there are 0 heartbeats/checkpoints. This is the child-runtime control-plane handshake (subprocess spawn + loopback HTTP), which does not complete under a restricted sandbox. The other **392 tests pass**.
-**Action:** confirm this test passes in a permissive CI environment (it must, once B2 is fixed and CI actually runs). If it is environment-dependent, tag it (`^:integration`) so it doesn't silently rot. Right now nobody knows it fails because CI never runs (B2).
+### ✅ B3 — full suite now passes
+The previously failing `child-runtime-local-unsandboxed-flow-test` now passes in the full runner and in isolation. Current verification:
+- `clojure -M:test -e "(require 'agent.runs.child-test :reload) (clojure.test/run-tests 'agent.runs.child-test)"` → **1 test, 11 assertions, 0 failures, 0 errors**.
+- `clojure -M:test -e "(require 'agent.test-runner :reload) (agent.test-runner/run-all-tests)"` → **437 tests, 1742 assertions, 0 failures, 0 errors**.
 
 ---
 
