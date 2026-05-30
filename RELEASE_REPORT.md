@@ -267,7 +267,7 @@ For each finding: **problem → why it matters → fix.** Line numbers are from 
 
 ### 5.6 Code smells & duplication
 
-**Verification (2026-05-30):** Focused suite: **137 tests, 460 assertions, 0 failures, 0 errors** (`agent.runtime.loop-test`, `agent.runtime.tools-test`, `agent.tools.core-test`, OpenAI/Ollama provider tests, `agent.config-test`, `agent.chat-test`).
+**Verification (2026-05-30):** All 5.6 items fixed. Final focused suite: **181 tests, 891 assertions, 0 failures, 0 errors** (`agent.runtime.loop-test`, `agent.runtime.tools-test`, `agent.tools.core-test`, OpenAI/Ollama provider tests, `agent.config-test`, `agent.chat-test`, orchestrator/broker/runs/API/Telegram tests). Final touched-file lint: **0 warnings**.
 
 - **`run!` god function / terminal-result duplication** — **Status:** ✅ fixed. `terminal-result` is centralized and `fatal-guardrail!` uses it, so terminal branches no longer duplicate the 7-key return map. The residual size concern is also reduced: runtime event construction moved into `agent.runtime.events`, leaving `runtime.loop/run!` focused on orchestration. Focused loop/chat suite: **58 tests, 211 assertions, 0 failures, 0 errors**; source lint: **0 warnings**.
 - **`double-tool-enforcement`** — **Status:** ✅ fixed. Runtime preflight owns allow-list/permission/validation (`runtime/tools.clj:89-134`), passes `:preflighted? true` (`runtime/tools.clj:146-157`), and `tools.core/execute-tool` skips those checks/events when preflighted while keeping approval/hooks authoritative (`tools/core.clj:302-324`). Regression test confirms one start/end event on batch execution (`runtime/tools_test.clj:198-214`).
