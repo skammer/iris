@@ -39,14 +39,24 @@
                     {:api-key "sk-test"
                      :nested {:authorization "Bearer token-value"
                               :safe "visible"}})
+      (logging/log-error! :agent.logging/secret-error
+                          (ex-info "boom"
+                                   {:openai-key "sk-error"
+                                    :headers {"Authorization" "Bearer error-token"}
+                                    :message "Bearer inline-token"
+                                    :safe "visible-error"}))
       (Thread/sleep 250)
       (logging/stop!)
       (Thread/sleep 150)
       (let [body (slurp file)]
         (is (str/includes? body "***REDACTED***"))
         (is (str/includes? body "visible"))
+        (is (str/includes? body "visible-error"))
         (is (not (str/includes? body "sk-test")))
-        (is (not (str/includes? body "token-value"))))
+        (is (not (str/includes? body "sk-error")))
+        (is (not (str/includes? body "token-value")))
+        (is (not (str/includes? body "error-token")))
+        (is (not (str/includes? body "inline-token"))))
       (finally
         (logging/stop!)
         (io/delete-file file true)

@@ -10,7 +10,9 @@
 (def ^:private default-max-bytes (* 10 1024 1024))
 (def ^:private default-max-files 5)
 (def ^:private sensitive-key-fragments
-  #{"api-key" "api_key" "authorization" "password" "secret" "token" "credential"})
+  #{"api-key" "api_key" "authorization" "bearer" "password" "secret" "token" "credential"})
+(def ^:private sensitive-value-patterns
+  [#"(?i)bearer\s+[A-Za-z0-9._~+/=-]+"])
 (defonce ^:private publisher-state (atom nil))
 
 (defn- normalize-send [send]
@@ -102,7 +104,8 @@
                                (keyword? k) (name k)
                                (string? k) k
                                :else (str k)))]
-    (boolean (some #(str/includes? text %) sensitive-key-fragments))))
+    (boolean (or (some #(str/includes? text %) sensitive-key-fragments)
+                 (re-find #"(^|[-_/.:])key($|[-_/.:])" text)))))
 
 (declare mask-sensitive)
 
@@ -120,6 +123,10 @@
     (vector? value) (mapv mask-sensitive value)
     (set? value) (set (map mask-sensitive value))
     (sequential? value) (doall (map mask-sensitive value))
+    (string? value) (reduce (fn [text pattern]
+                              (str/replace text pattern "Bearer ***REDACTED***"))
+                            value
+                            sensitive-value-patterns)
     :else value))
 
 (defn enabled?
@@ -165,7 +172,7 @@
          (merge attrs
                 {:error/message (.getMessage error)
                  :error/class (.getName (class error))
-                 :error/data (some-> (ex-data error) pr-str)}))))
+                 :error/data (some-> (ex-data error) mask-sensitive pr-str)}))))
 
 (defn log-system-event!
   [event]
