@@ -226,6 +226,23 @@
                                      :reason (name (:reason verdict))
                                      :content (:content verdict)}))
 
+(defn- terminal-result
+  "Canonical terminal return map for run!. Every terminal branch returns the
+   same seven base keys; `extra` carries any branch-specific keys. Centralising
+   the shape here means a contract change touches one site instead of nine
+   (a missed site is how the max-token branch silently drifted)."
+  ([content request-id final-messages trace usage stop-reason stream?]
+   (terminal-result content request-id final-messages trace usage stop-reason stream? nil))
+  ([content request-id final-messages trace usage stop-reason stream? extra]
+   (merge {:content content
+           :request-id request-id
+           :final-messages final-messages
+           :trace trace
+           :usage usage
+           :stop-reason stop-reason
+           :stream? stream?}
+          extra)))
+
 (defn- fatal-guardrail! [sink base verdict step-no final-messages trace usage stream? request-id]
   (let [content (or (:content verdict) guardrail-exhausted-content)]
     (emit-terminal-message! sink base content {:stop-reason :guardrail-exhausted
@@ -233,15 +250,10 @@
     (event! sink :agent-end base {:steps (inc step-no)
                                   :stop-reason :guardrail-exhausted
                                   :stream stream?})
-    {:content content
-     :request-id request-id
-     :final-messages (conj final-messages {:role "assistant"
-                                           :content content})
-     :trace trace
-     :usage usage
-     :stop-reason :guardrail-exhausted
-     :stream? stream?
-     :guardrail? true}))
+    (terminal-result content request-id
+                     (conj final-messages {:role "assistant" :content content})
+                     trace usage :guardrail-exhausted stream?
+                     {:guardrail? true})))
 
 (defn run!
   [{:keys [messages context-injectors system-prompt tools model provider-config
@@ -293,13 +305,9 @@
           (do
             (emit-terminal-message! event-sink base max-steps-content {:stop-reason :max-steps})
             (event! event-sink :agent-end base {:steps step-no :stop-reason :max-steps :stream stream?*})
-            {:content max-steps-content
-             :request-id request-id
-             :final-messages (conj final-messages {:role "assistant" :content max-steps-content})
-             :trace trace
-             :usage usage
-             :stop-reason :max-steps
-             :stream? stream?*})
+            (terminal-result max-steps-content request-id
+                             (conj final-messages {:role "assistant" :content max-steps-content})
+                             trace usage :max-steps stream?*))
           (let [_ (event! event-sink :turn-start base {:step step-no})
                 _ (reset! delta-emitted? false)
                 _ (discard-pending-deltas!)
@@ -402,14 +410,10 @@
                 (event! event-sink :agent-end base {:steps (inc step-no)
                                                     :stop-reason :max-tokens
                                                     :stream stream?*})
-                {:content max-tokens-content
-                 :request-id request-id
-                 :final-messages (conj final-messages {:role "assistant" :content max-tokens-content})
-                 :trace trace
-                 :usage usage*
-                 :stop-reason :max-tokens
-                 :stream? stream?*
-                 :error? true})
+                (terminal-result max-tokens-content request-id
+                                 (conj final-messages {:role "assistant" :content max-tokens-content})
+                                 trace usage* :max-tokens stream?*
+                                 {:error? true}))
 
               :else
               (let [doom-check (doom-loop/check-step doom-loop-state doom-loop-config* executable-step)
@@ -431,15 +435,11 @@
                     (event! event-sink :agent-end base {:steps (inc step-no)
                                                         :stop-reason :doom-loop
                                                         :stream stream?*})
-                    {:content doom-loop-content
-                     :request-id request-id
-                     :final-messages (conj final-messages {:role "assistant" :content doom-loop-content})
-                     :trace trace
-                     :usage usage*
-                     :stop-reason :doom-loop
-                     :stream? stream?*
-                     :guardrail? true
-                     :doom-loop payload})
+                    (terminal-result doom-loop-content request-id
+                                     (conj final-messages {:role "assistant" :content doom-loop-content})
+                                     trace usage* :doom-loop stream?*
+                                     {:guardrail? true
+                                      :doom-loop payload}))
                   (let [executed (execute-step-fn executable-step)
                         _ (throw-if-cancelled! cancellation-token)
                         receipts (:receipts executed)
@@ -493,13 +493,9 @@
                               (event! event-sink :agent-end base {:steps (inc step-no)
                                                                   :stop-reason :completed
                                                                   :stream stream?*})
-                              {:content content
-                               :request-id request-id
-                               :final-messages (conj final-messages* {:role "assistant" :content content})
-                               :trace trace*
-                               :usage usage*
-                               :stop-reason :completed
-                               :stream? stream?*})
+                              (terminal-result content request-id
+                                               (conj final-messages* {:role "assistant" :content content})
+                                               trace* usage* :completed stream?*))
                             (let [approval-needed (vec (approval-receipts receipts))]
                               (if (seq approval-needed)
                                 (let [approvals (if approval-fn (approval-fn approval-needed) approval-needed)
@@ -512,14 +508,10 @@
                                   (event! event-sink :agent-end base {:steps (inc step-no)
                                                                       :stop-reason :approval-required
                                                                       :stream stream?*})
-                                  {:content content
-                                   :request-id request-id
-                                   :final-messages (conj final-messages* {:role "assistant" :content content})
-                                   :trace trace*
-                                   :usage usage*
-                                   :stop-reason :approval-required
-                                   :approvals approvals
-                                   :stream? stream?*})
+                                  (terminal-result content request-id
+                                                   (conj final-messages* {:role "assistant" :content content})
+                                                   trace* usage* :approval-required stream?*
+                                                   {:approvals approvals}))
                                 (recur (inc step-no)
                                        (merge state (:state executed))
                                        (into planner-messages* protocol-messages)
@@ -536,14 +528,10 @@
             (event! event-sink :agent-end base {:stop-reason :cancelled
                                                 :message (.getMessage e)
                                                 :stream stream?*})
-            {:content stopped-content
-             :request-id request-id
-             :final-messages [{:role "assistant" :content stopped-content}]
-             :trace []
-             :usage {}
-             :stop-reason :cancelled
-             :stream? stream?*
-             :cancelled? true})
+            (terminal-result stopped-content request-id
+                             [{:role "assistant" :content stopped-content}]
+                             [] {} :cancelled stream?*
+                             {:cancelled? true}))
           (do
             (event! event-sink :agent-end base {:stop-reason :planner-error
                                                 :message (.getMessage e)
@@ -570,12 +558,10 @@
                   (event! event-sink :agent-end base {:stop-reason (if (:error? fallback) :error :completed)
                                                       :fallback? true
                                                       :stream stream?*})
-                  (merge {:request-id request-id
-                          :final-messages [{:role "assistant" :content content}]
-                          :trace []
-                          :usage (:usage fallback {})
-                          :stop-reason (if (:error? fallback) :error :completed)
-                          :stream? stream?*}
+                  (merge (terminal-result content request-id
+                                          [{:role "assistant" :content content}]
+                                          [] (:usage fallback {})
+                                          (if (:error? fallback) :error :completed) stream?*)
                          fallback))
                 (catch Exception fallback-error
                   (let [content (str "Chat failed: " (.getMessage fallback-error))]
@@ -589,12 +575,8 @@
                                                         :message (.getMessage fallback-error)
                                                         :initial-error (.getMessage e)
                                                         :stream stream?*})
-                    {:content content
-                     :request-id request-id
-                     :final-messages [{:role "assistant" :content content}]
-                     :trace []
-                     :usage {}
-                     :stop-reason :error
-                     :stream? stream?*
-                     :error? true})))
+                    (terminal-result content request-id
+                                     [{:role "assistant" :content content}]
+                                     [] {} :error stream?*
+                                     {:error? true}))))
               (throw e))))))))
