@@ -222,6 +222,7 @@
                                          (kernel-schema/normalize-step executable-step)
                                          {:execute-safe-tools? true
                                           :cancellation-token cancelled?
+                                          :max-parallelism (get-in system [:config :tools :max-parallelism])
                                           :yolo? (true? (get-in system [:config :tools :yolo?]))}))
                      :approval-fn (fn [receipts]
                                     (mapv #(request-approval! system session-id %) receipts))

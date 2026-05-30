@@ -8,6 +8,7 @@
    (java.util.concurrent Callable ExecutorCompletionService Executors TimeUnit)))
 
 (def default-mode :policy)
+(def default-max-parallelism 6)
 
 (defn- now-ns [] (System/nanoTime))
 
@@ -244,7 +245,10 @@
 (defn- execute-parallel! [registry preflights opts]
   (let [errors (filterv :preflight-error preflights)
         ready (remove :preflight-error preflights)
-        pool (Executors/newFixedThreadPool (max 1 (count ready)))
+        max-parallelism (max 1 (long (or (:max-parallelism opts)
+                                         default-max-parallelism)))
+        pool-size (max 1 (min (count ready) max-parallelism))
+        pool (Executors/newFixedThreadPool pool-size)
         ecs (ExecutorCompletionService. pool)
         futures (atom [])]
     (try

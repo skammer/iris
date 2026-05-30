@@ -60,6 +60,28 @@
     (is (= [:slow :fast] (mapv :tool-name (:results result))))
     (is (= ["slow" "fast"] (mapv :name (:messages result))))))
 
+(deftest parallel-execution-respects-max-parallelism-test
+  (let [active (atom 0)
+        max-seen (atom 0)
+        tool-fn (fn [input _]
+                  (let [n (swap! active inc)]
+                    (swap! max-seen max n)
+                    (Thread/sleep 40)
+                    (swap! active dec)
+                    input))
+        tools* (mapv #(safe-read-tool (keyword (str "read-" %)) tool-fn) (range 5))
+        reg (apply registry tools*)]
+    (runtime-tools/execute-batch!
+     reg
+     (mapv (fn [idx]
+             {:tool-name (keyword (str "read-" idx))
+              :input {:value idx}})
+           (range 5))
+     {:permissions (set (map :name (tools/list-tools reg)))}
+     {:mode :parallel
+      :max-parallelism 2})
+    (is (<= @max-seen 2))))
+
 (deftest default-metadata-stays-sequential-test
   (let [calls (atom [])
         reg (registry (test-tool :slow (fn [input _] (Thread/sleep 60) (swap! calls conj :slow) input))

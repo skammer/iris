@@ -60,7 +60,9 @@
     (kernel-ops system)
     parent-agent-id
     directive
-    (merge {:yolo? (true? (get-in system [:config :tools :yolo?]))} opts))))
+    (merge {:yolo? (true? (get-in system [:config :tools :yolo?]))
+            :max-parallelism (get-in system [:config :tools :max-parallelism])}
+           opts))))
 
 (defn execute-step!
   ([system parent-agent-id step]
@@ -70,7 +72,9 @@
     (kernel-ops system)
     parent-agent-id
     step
-    (merge {:yolo? (true? (get-in system [:config :tools :yolo?]))} opts))))
+    (merge {:yolo? (true? (get-in system [:config :tools :yolo?]))
+            :max-parallelism (get-in system [:config :tools :max-parallelism])}
+           opts))))
 
 (defn spawn-task-worker!
   [system {:keys [task name role capability-bundle memory-scopes budgets system-prompt parent-id]

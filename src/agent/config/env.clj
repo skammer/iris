@@ -75,6 +75,7 @@
    {:names "AGENT_SQLITE_CONNECTION_TIMEOUT_MS" :parse parse-long* :apply (assoc-path [:storage :sqlite :connection-timeout-ms])}
    {:names "AGENT_SQLITE_DESTRUCTIVE_RESET_ON_DRIFT" :parse parse-bool :apply (assoc-path [:storage :sqlite :destructive-reset-on-drift?])}
    {:names "AGENT_CHAT_MAX_STEPS" :parse parse-long* :apply (assoc-path [:chat :max-steps])}
+   {:names "AGENT_TOOLS_MAX_PARALLELISM" :parse parse-long* :apply (assoc-path [:tools :max-parallelism])}
    {:names "AGENT_LOOP_MAX_ITERATIONS" :parse parse-long* :apply (assoc-path [:loop :max-iterations])}
    {:names "AGENT_LOOP_PLAN_FILE" :apply (assoc-path [:loop :plan-file])}
    {:names "AGENT_LOOP_SUMMARY_MAX_CHARS" :parse parse-long* :apply (assoc-path [:loop :summary-max-chars])}

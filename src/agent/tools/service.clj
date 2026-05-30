@@ -209,5 +209,6 @@
                                   {}
                                   (select-keys opts [:mode
                                                      :tool-execution-modes
+                                                     :max-parallelism
                                                      :cancellation-token
                                                      :cancelled?]))))

@@ -59,6 +59,7 @@
               :action :stop}
              (get-in cfg [:chat :guardrails :doom-loop])))
       (is (false? (get-in cfg [:tools :yolo?])))
+      (is (= 6 (get-in cfg [:tools :max-parallelism])))
       (is (= [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write]
              (get-in cfg [:tools :permissions :api])))
       (is (= [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec]
@@ -121,6 +122,11 @@
       (is (= 12 (get-in cfg [:storage :sqlite :maximum-pool-size])))
       (is (= 3 (get-in cfg [:storage :sqlite :minimum-idle])))
       (is (= 1500 (get-in cfg [:storage :sqlite :connection-timeout-ms]))))))
+
+(deftest tools-max-parallelism-env-override-test
+  (with-isolated-config [_root {"AGENT_TOOLS_MAX_PARALLELISM" "4"}]
+    (let [cfg (config/load-config)]
+      (is (= 4 (get-in cfg [:tools :max-parallelism]))))))
 
 (deftest default-data-paths-use-global-data-dir-test
   (with-isolated-config [root {}]
