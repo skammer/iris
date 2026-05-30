@@ -502,6 +502,39 @@
                        :reason :missing-required-capabilities
                        :required-capabilities (vec required-capabilities)})))))
 
+(defn- enforce-federated-interop-trust! [from-agent federated-target route message-type]
+  ;; Federated delivery leaves this host, so apply the sender's outbound trust of
+  ;; the target peer here (the remote side independently re-verifies signatures).
+  ;; Previously federated sends skipped all trust/route/message-type/capability
+  ;; checks entirely — a registered peer became an open relay for any local agent.
+  (let [peer-id (:peer-id federated-target)
+        trusted (:trusted-peers from-agent)
+        policy (get (:trusted-peer-policies from-agent) peer-id)]
+    (when-not (or (contains? trusted peer-id) policy)
+      (throw (ex-info "Federated interop denied"
+                      {:type :permission-denied
+                       :reason :peer-not-trusted
+                       :peer-id peer-id})))
+    (let [{:keys [message-types routes required-capabilities]} policy]
+      (when (and (seq message-types)
+                 (not (contains? message-types message-type)))
+        (throw (ex-info "Federated interop denied"
+                        {:type :permission-denied
+                         :reason :message-type-not-allowed
+                         :message-type message-type})))
+      (when (and (seq routes)
+                 (not (contains? routes route)))
+        (throw (ex-info "Federated interop denied"
+                        {:type :permission-denied
+                         :reason :route-not-allowed
+                         :route route})))
+      (when (and (seq required-capabilities)
+                 (not-every? (:capabilities from-agent) required-capabilities))
+        (throw (ex-info "Federated interop denied"
+                        {:type :permission-denied
+                         :reason :missing-required-capabilities
+                         :required-capabilities (vec required-capabilities)}))))))
+
 (defn- prune-window [timestamps now-ms]
   (filterv #(<= (- now-ms %) 60000) timestamps))
 
@@ -684,8 +717,9 @@
                  (choose-interop-route from-agent to-agent
                                        (normalize-route route))
                  :federated)
-        _ (when to-agent
-            (enforce-interop-trust! from-agent to-agent route* message-type))
+        _ (cond
+            to-agent (enforce-interop-trust! from-agent to-agent route* message-type)
+            federated-target (enforce-federated-interop-trust! from-agent federated-target route* message-type))
         dedupe-key (dedupe-key-for from-agent to-agent federated-target request-id)]
     (if (and dedupe-key
              (= "at-most-once" delivery-mode)
