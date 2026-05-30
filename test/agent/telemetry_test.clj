@@ -82,6 +82,41 @@
   (flush! [_] (throw (ex-info "observer boom" {})))
   (observer-name [_] "failing"))
 
+(defrecord ToolCallProvider []
+  llm-core/ILLMProvider
+  (complete [_ _ _] "ignored")
+  (stream [_ _ _] nil)
+  (embed [_ _ _] [])
+  (list-models [_] [])
+  (get-capabilities [_ _] {})
+  (estimate-cost [_ _ model] {:model model :tokens 0 :prompt-tokens 0 :cost-usd 0.0})
+  llm-core/ILLMProviderInvoke
+  (invoke [_ _]
+    {:role "assistant"
+     :content "calling a tool"
+     :tool-calls [{:id "call-1" :function {:name "list_dir"}}]
+     :usage {:prompt-tokens 11 :completion-tokens 4 :tokens 15}
+     :stop-reason :tool_use})
+  (generate [this messages opts] (llm-core/invoke this (assoc opts :messages messages))))
+
+(deftest complete-with-telemetry-captures-tool-calls-and-real-usage
+  (let [events (atom [])
+        observer (->CountingObserver events (atom []))
+        content (telemetry/complete-with-telemetry! (telemetry/create-collector {:enabled true})
+                                                    (->ToolCallProvider)
+                                                    [{:role "user" :content "hi"}]
+                                                    {:model "m"}
+                                                    {:agent-id "agent-1"
+                                                     :observer observer})
+        llm-event (first (filter #(= :llm/call (:event-type %)) @events))
+        payload (:payload llm-event)]
+    (is (= "calling a tool" content) "returns string content for callers")
+    (is (= [{:id "call-1" :function {:name "list_dir"}}] (:tool-calls payload))
+        "tool calls reach the observer instead of being dropped")
+    (is (= 15 (:tokens payload)) "real provider token count, not estimate")
+    (is (= 11 (:prompt-tokens payload)))
+    (is (= 4 (:completion-tokens payload)))))
+
 (deftest multi-observer-fans-out-and-is-best-effort
   (let [events (atom [])
         metrics (atom [])

@@ -290,6 +290,26 @@
                       cost-usd (assoc :cost/usd cost-usd)
                       error (assoc :error/message (.getMessage ^Throwable error)))))))
 
+(defn- turn-usage->observation
+  "Map the provider-reported usage on a normalized turn to the keys
+   record-llm-call! consumes. Returns only the keys that are actually present,
+   so callers can merge it over an estimate and keep the estimate for any gaps.
+   Tolerates kebab- and snake-case provider variants."
+  [usage]
+  (when (map? usage)
+    (let [prompt (or (:prompt-tokens usage) (:prompt_tokens usage))
+          completion (or (:completion-tokens usage) (:completion_tokens usage))
+          total (or (:tokens usage) (:total-tokens usage) (:total_tokens usage))
+          cached (or (:cached-tokens usage)
+                     (:cached_tokens usage)
+                     (get-in usage [:prompt-tokens-details :cached-tokens])
+                     (get-in usage [:prompt_tokens_details :cached_tokens]))]
+      (cond-> {}
+        prompt (assoc :prompt-tokens prompt)
+        completion (assoc :completion-tokens completion)
+        total (assoc :tokens total)
+        cached (assoc :cached-tokens cached)))))
+
 (defn complete-with-telemetry!
   [collector provider messages opts attrs]
   (let [start-ns (System/nanoTime)
@@ -321,16 +341,25 @@
                      :payload (select-keys observation
                                            [:agent-id :duration-ms :tokens
                                             :prompt-tokens :completion-tokens
-                                            :cached-tokens :cost-usd])}))]
+                                            :cached-tokens :cost-usd
+                                            :tool-calls :stop-reason])}))]
     (try
-      (let [completion (llm-core/complete provider messages opts)
-            usage (usage-estimate provider messages completion opts*)
+      ;; Route through invoke (not complete) so tool calls and provider-reported
+      ;; usage survive. complete returns string-only content, dropping both.
+      (let [turn (llm-core/invoke provider (assoc opts* :messages messages))
+            content (or (:content turn) "")
+            tool-calls (or (:tool-calls turn) [])
+            usage (merge (usage-estimate provider messages content opts*)
+                         (turn-usage->observation (:usage turn)))
             observation (merge attrs*
                                usage
                                {:duration-ms (duration-ms start-ns)
-                                :success? true})]
+                                :success? true
+                                :tool-calls tool-calls
+                                :stop-reason (:stop-reason turn)})]
         (observe! observation)
-        completion)
+        ;; Preserve the string-content contract every caller relies on.
+        content)
       (catch Exception e
         (let [observation (merge attrs*
                                  (usage-estimate provider messages "" opts*)
