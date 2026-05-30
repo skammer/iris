@@ -4,14 +4,11 @@
    [agent.llm.core :as llm-core]
    [agent.llm.dsml :as dsml]
    [agent.llm.messages :as llm-messages]
+   [agent.llm.providers.common :as provider-common]
    [cheshire.core :as json]
    [clj-http.client :as http]
-   [clojure.core.async :as async]
    [clojure.java.io :as io]
    [clojure.string :as str]))
-
-(defn- trim-trailing-slash [value]
-  (str/replace (or value "") #"/+$" ""))
 
 (defn- bearer-headers [{:keys [api-key site-url app-name extra-headers]}]
   (merge {"Content-Type" "application/json"}
@@ -24,16 +21,16 @@
          extra-headers))
 
 (defn- chat-url [base-url]
-  (str (trim-trailing-slash base-url) "/chat/completions"))
+  (provider-common/endpoint base-url "/chat/completions"))
 
 (defn- responses-url [base-url]
-  (str (trim-trailing-slash base-url) "/responses"))
+  (provider-common/endpoint base-url "/responses"))
 
 (defn- embeddings-url [base-url]
-  (str (trim-trailing-slash base-url) "/embeddings"))
+  (provider-common/endpoint base-url "/embeddings"))
 
 (defn- models-url [base-url]
-  (str (trim-trailing-slash base-url) "/models"))
+  (provider-common/endpoint base-url "/models"))
 
 (defn- structured-output-format [{:keys [name schema strict?]}]
   {:type "json_schema"
@@ -120,10 +117,7 @@
         :else {}))))
 
 (defn- stream-structured-output? [config opts]
-  (and (:structured-output opts)
-       (not (false? (if (contains? opts :stream-structured-output?)
-                      (:stream-structured-output? opts)
-                      (:stream-structured-output? config true))))))
+  (provider-common/stream-structured-output? config opts))
 
 (defn- completion-body [base-url default-model config messages opts]
   (let [model (or (:model opts) default-model)
@@ -223,23 +217,8 @@
      :cost-usd nil}))
 
 (defn- retryable-http-error [response]
-  (llm-core/llm-error :http-error
-                      (str "LLM request failed: " (:status response))
-                      {:status (:status response)
-                       :headers (:headers response)
-                       :body (:body response)}))
-
-(defn- close-response-body! [response]
-  (when-let [body (:body response)]
-    (when (instance? java.io.Closeable body)
-      (.close ^java.io.Closeable body))))
-
-(defn- checked-response [response]
-  (if (<= 200 (:status response 0) 299)
-    response
-    (let [error (retryable-http-error response)]
-      (close-response-body! response)
-      (throw error))))
+  (provider-common/http-error (str "LLM request failed: " (:status response))
+                              response))
 
 (defn- blank-content? [content]
   (or (nil? content)
@@ -267,8 +246,10 @@
                                         :tool-call-count (count tool-calls)))))))
 
 (defn- post-json [url request]
-  (llm-core/retry-with-backoff
-   #(checked-response (http/post url (assoc request :throw-exceptions false)))))
+  (provider-common/post-json url request retryable-http-error))
+
+(defn- post-stream [url request]
+  (provider-common/post-stream url request retryable-http-error))
 
 (defn- message->turn [body]
   (let [choice (-> body :choices first)
@@ -469,20 +450,14 @@
   ([url request] (post-stream-turn url request nil))
   ([url request on-content-delta]
    (stream->turn
-    (:body (checked-response
-            (http/post url (assoc request
-                                  :throw-exceptions false
-                                  :as :stream))))
+    (:body (post-stream url request))
     on-content-delta)))
 
 (defn- post-responses-stream-turn
   ([url request] (post-responses-stream-turn url request nil))
   ([url request on-content-delta]
    (responses-stream->turn
-    (:body (checked-response
-            (http/post url (assoc request
-                                  :throw-exceptions false
-                                  :as :stream))))
+    (:body (post-stream url request))
     on-content-delta)))
 
 (defn- current-api-key [provider]
@@ -549,70 +524,60 @@
           (:content (message->turn (:body response)))))))
 
   (stream [this messages opts]
-    (let [ch (async/chan)]
-      (async/thread
-        (try
-          (if (responses-api? config opts)
-            (let [response (checked-response
-                            (http/post (responses-url base-url)
-                                       {:headers (provider-headers this)
-                                        :body (json/generate-string
-                                               (responses-stream-body base-url
-                                                                      default-model
-                                                                      config
-                                                                      messages
-                                                                      opts))
-                                        :throw-exceptions false
-                                        :as :stream}))]
-              (responses-stream->turn (:body response) #(async/>!! ch %)))
-            (let [response (checked-response
-                            (http/post (chat-url base-url)
-                                       {:headers (provider-headers this)
-                                        :body (json/generate-string
-                                               (stream-body base-url
-                                                            default-model
-                                                            config
-                                                            messages
-                                                            opts))
-                                        :throw-exceptions false
-                                        :as :stream}))]
-              (with-open [reader (io/reader (:body response))]
-                (let [state (atom {:content? false
-                                   :reasoning? false
-                                   :finish-reason nil
-                                   :content-chars 0
-                                   :reasoning-chars 0
-                                   :event-count 0})]
-                  (doseq [line (line-seq reader)]
-                    (when-let [event (parse-sse-line line)]
-                      (let [choice (-> event :choices first)
-                            delta (:delta choice)]
-                        (swap! state
-                               (fn [s]
-                                 (cond-> (-> s
-                                             (update :event-count inc)
-                                             (update :content-chars + (count (or (:content delta) "")))
-                                             (update :reasoning-chars + (count (or (:reasoning_content delta) ""))))
-                                   (:finish_reason choice) (assoc :finish-reason (:finish_reason choice))
-                                   (some? (:reasoning_content delta)) (assoc :reasoning? true))))
-                        (when-let [content (:content delta)]
-                          (when-not (str/blank? content)
-                            (swap! state assoc :content? true))
-                          (async/>!! ch content)))))
-                  (let [{:keys [content? reasoning? finish-reason reasoning-chars content-chars event-count]} @state]
-                    (when (and (not content?)
-                               (or (= "length" finish-reason) reasoning?))
-                      (throw (empty-content-error
-                              {:finish-reason finish-reason
-                               :reasoning-content? reasoning?
-                               :reasoning-chars reasoning-chars
-                               :content-chars content-chars
-                               :event-count event-count}))))))))
-          (catch Exception e
-            (async/>!! ch (llm-core/stream-error-event e)))
-          (finally
-            (async/close! ch))))
-      ch))
+    (provider-common/stream-channel
+     (fn [emit!]
+       (if (responses-api? config opts)
+         (let [response (post-stream
+                         (responses-url base-url)
+                         {:headers (provider-headers this)
+                          :body (json/generate-string
+                                 (responses-stream-body base-url
+                                                        default-model
+                                                        config
+                                                        messages
+                                                        opts))})]
+           (responses-stream->turn (:body response) emit!))
+         (let [response (post-stream
+                         (chat-url base-url)
+                         {:headers (provider-headers this)
+                          :body (json/generate-string
+                                 (stream-body base-url
+                                              default-model
+                                              config
+                                              messages
+                                              opts))})]
+           (with-open [reader (io/reader (:body response))]
+             (let [state (atom {:content? false
+                                :reasoning? false
+                                :finish-reason nil
+                                :content-chars 0
+                                :reasoning-chars 0
+                                :event-count 0})]
+               (doseq [line (line-seq reader)]
+                 (when-let [event (parse-sse-line line)]
+                   (let [choice (-> event :choices first)
+                         delta (:delta choice)]
+                     (swap! state
+                            (fn [s]
+                              (cond-> (-> s
+                                          (update :event-count inc)
+                                          (update :content-chars + (count (or (:content delta) "")))
+                                          (update :reasoning-chars + (count (or (:reasoning_content delta) ""))))
+                                (:finish_reason choice) (assoc :finish-reason (:finish_reason choice))
+                                (some? (:reasoning_content delta)) (assoc :reasoning? true))))
+                     (when-let [content (:content delta)]
+                       (when-not (str/blank? content)
+                         (swap! state assoc :content? true))
+                       (emit! content)))))
+               (let [{:keys [content? reasoning? finish-reason reasoning-chars content-chars event-count]} @state]
+                 (when (and (not content?)
+                            (or (= "length" finish-reason) reasoning?))
+                   (throw (empty-content-error
+                           {:finish-reason finish-reason
+                            :reasoning-content? reasoning?
+                            :reasoning-chars reasoning-chars
+                            :content-chars content-chars
+                            :event-count event-count})))))))))))
 
   (embed [this text opts]
     (let [input (if (string? text) [text] text)

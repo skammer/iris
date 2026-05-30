@@ -5,7 +5,7 @@
    [cheshire.core :as json]
    [clj-http.client :as http]
    [clojure.core.async :as async]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defn byte-stream [text]
   (java.io.ByteArrayInputStream. (.getBytes text "UTF-8")))

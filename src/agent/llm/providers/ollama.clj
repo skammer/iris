@@ -4,17 +4,14 @@
    [agent.llm.core :as llm-core]
    [agent.llm.dsml :as dsml]
    [agent.llm.messages :as llm-messages]
+   [agent.llm.providers.common :as provider-common]
    [cheshire.core :as json]
    [clj-http.client :as http]
-   [clojure.core.async :as async]
    [clojure.java.io :as io]
    [clojure.string :as str]))
 
-(defn- trim-trailing-slash [value]
-  (str/replace (or value "") #"/+$" ""))
-
 (defn- endpoint [base-url path]
-  (str (trim-trailing-slash base-url) path))
+  (provider-common/endpoint base-url path))
 
 (defn- chat-body [default-model keep-alive messages opts stream?]
   (cond-> {:model (or (:model opts) default-model)
@@ -32,26 +29,17 @@
     (:response-format opts) (assoc :format (:response-format opts))))
 
 (defn- stream-structured-output? [config opts]
-  (and (:structured-output opts)
-       (not (false? (if (contains? opts :stream-structured-output?)
-                      (:stream-structured-output? opts)
-                      (:stream-structured-output? config true))))))
+  (provider-common/stream-structured-output? config opts))
 
-(defn- checked-response [response]
-  (if (<= 200 (:status response 0) 299)
-    response
-    (let [error (llm-core/llm-error :http-error
-                                    (str "Ollama request failed: " (:status response))
-                                    {:status (:status response)
-                                     :headers (:headers response)
-                                     :body (:body response)})]
-      (when (instance? java.io.Closeable (:body response))
-        (.close ^java.io.Closeable (:body response)))
-      (throw error))))
+(defn- ollama-http-error [response]
+  (provider-common/http-error (str "Ollama request failed: " (:status response))
+                              response))
 
 (defn- post-json [url request]
-  (llm-core/retry-with-backoff
-   #(checked-response (http/post url (assoc request :throw-exceptions false)))))
+  (provider-common/post-json url request ollama-http-error))
+
+(defn- post-stream [url request]
+  (provider-common/post-stream url request ollama-http-error))
 
 (defn- stream-response->turn
   ([body-stream] (stream-response->turn body-stream nil))
@@ -97,38 +85,27 @@
                    :content-type :json
                    :accept :json}]
       (if stream?
-        (let [response (checked-response
-                        (http/post (endpoint base-url "/api/chat")
-                                   (assoc request
-                                          :throw-exceptions false
-                                          :as :stream)))]
+        (let [response (post-stream (endpoint base-url "/api/chat")
+                                    request)]
           (:content (stream-response->turn (:body response))))
         (let [response (post-json (endpoint base-url "/api/chat")
                                   (assoc request :as :json))]
           (-> response :body :message :content)))))
 
   (stream [_ messages opts]
-    (let [ch (async/chan)]
-      (async/thread
-        (try
-          (let [response (checked-response
-                          (http/post (endpoint base-url "/api/chat")
-                                     {:body (json/generate-string (structured-chat-body default-model keep-alive messages opts true))
-                                      :content-type :json
-                                      :accept :json
-                                      :throw-exceptions false
-                                      :as :stream}))]
-            (with-open [reader (io/reader (:body response))]
-              (doseq [line (line-seq reader)]
-                (when-not (str/blank? line)
-                  (let [event (json/parse-string line true)]
-                    (when-let [content (-> event :message :content)]
-                      (async/>!! ch content)))))))
-          (catch Exception e
-            (async/>!! ch (llm-core/stream-error-event e)))
-          (finally
-            (async/close! ch))))
-      ch))
+    (provider-common/stream-channel
+     (fn [emit!]
+       (let [response (post-stream
+                       (endpoint base-url "/api/chat")
+                       {:body (json/generate-string (structured-chat-body default-model keep-alive messages opts true))
+                        :content-type :json
+                        :accept :json})]
+         (with-open [reader (io/reader (:body response))]
+           (doseq [line (line-seq reader)]
+             (when-not (str/blank? line)
+               (let [event (json/parse-string line true)]
+                 (when-let [content (-> event :message :content)]
+                   (emit! content))))))))))
 
   (embed [_ text opts]
     (let [input (if (string? text) text (vec text))
@@ -202,11 +179,8 @@
                     :content-type :json
                     :accept :json}]
       (if stream?
-        (let [response (checked-response
-                        (http/post (endpoint (:base-url this) "/api/chat")
-                                   (assoc request*
-                                          :throw-exceptions false
-                                          :as :stream)))]
+        (let [response (post-stream (endpoint (:base-url this) "/api/chat")
+                                    request*)]
           (llm-core/normalize-llm-response
            (stream-response->turn (:body response)
                                   (dsml/guard-content-delta (:on-content-delta opts)

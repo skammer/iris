@@ -5,7 +5,7 @@
    [cheshire.core :as json]
    [clj-http.client :as http]
    [clojure.core.async :as async]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defn byte-stream [text]
   (java.io.ByteArrayInputStream. (.getBytes text "UTF-8")))
@@ -251,14 +251,17 @@
                                     (str "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"}}]}\n\n"
                                          "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n"
                                          "data: [DONE]\n\n"))})]
-    (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})]
-      (is (thrown-with-msg?
-           clojure.lang.ExceptionInfo
-           #"ended before final content"
-           (llm-core/invoke
-            llm
-            {:messages [{:role "user" :content "hi"}]
-             :on-content-delta (fn [_])}))))))
+    (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})
+          err (try
+                (llm-core/invoke
+                 llm
+                 {:messages [{:role "user" :content "hi"}]
+                  :on-content-delta (fn [_])})
+                nil
+                (catch clojure.lang.ExceptionInfo e
+                  e))]
+      (is (some? err))
+      (is (re-find #"ended before final content" (.getMessage err))))))
 
 (deftest complete-errors-on-reasoning-only-length-test
   (with-redefs [http/post (fn [_ _]
@@ -268,11 +271,14 @@
                                                          :reasoning_content "thinking"
                                                          :content nil}
                                                :finish_reason "length"}]}})]
-    (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})]
-      (is (thrown-with-msg?
-           clojure.lang.ExceptionInfo
-           #"ended before final content"
-           (llm-core/complete llm [{:role "user" :content "hi"}] {}))))))
+    (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})
+          err (try
+                (llm-core/complete llm [{:role "user" :content "hi"}] {})
+                nil
+                (catch clojure.lang.ExceptionInfo e
+                  e))]
+      (is (some? err))
+      (is (re-find #"ended before final content" (.getMessage err))))))
 
 (deftest invoke-strips-leaked-tool-call-tags-when-native-tool-call-present-test
   (with-redefs [http/post (fn [_ _]
