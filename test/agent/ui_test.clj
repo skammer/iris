@@ -103,6 +103,14 @@
     (is (not (str/includes? html "<img")))
     (is (not (str/includes? html "onerror=\"alert(1)\"")))))
 
+(deftest trusted-fragment-requires-rendered-html
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"requires output"
+                        (ui-render/trusted-fragment "<script>alert(1)</script>")))
+  (let [safe (ui-render/render [:span "safe"])
+        html (ui-render/render [:div (ui-render/trusted-fragment safe)])]
+    (is (str/includes? html "<span>safe</span>"))))
+
 (deftest memory-workspace-exposes-tool-and-datalog-lab
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})

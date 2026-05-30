@@ -7,16 +7,35 @@
    [hiccup2.core :as h])
   (:import
    (java.net URLEncoder)
-   (java.time Instant)))
+   (java.time Instant)
+   (java.util ArrayDeque IdentityHashMap)))
+
+(def ^:private max-trusted-fragments 4096)
+(defonce ^:private trusted-fragments (IdentityHashMap.))
+(defonce ^:private trusted-fragment-order (ArrayDeque.))
+
+(defn- remember-trusted-fragment! [html]
+  (locking trusted-fragments
+    (.put trusted-fragments html true)
+    (.addLast trusted-fragment-order html)
+    (while (> (.size trusted-fragment-order) max-trusted-fragments)
+      (.remove trusted-fragments (.removeFirst trusted-fragment-order))))
+  html)
+
+(defn- trusted-fragment? [html]
+  (locking trusted-fragments
+    (.containsKey trusted-fragments html)))
 
 (defn render [node]
-  (str (h/html node)))
+  (remember-trusted-fragment! (str (h/html node))))
 
 (defn render-many [& nodes]
-  (apply str (map render nodes)))
+  (remember-trusted-fragment! (apply str (map render nodes))))
 
 (defn trusted-fragment [html]
-  ;; Invariant: only pass fragments produced by this namespace's render helpers.
+  (when-not (and (string? html) (trusted-fragment? html))
+    (throw (ex-info "trusted-fragment requires output from render or render-many"
+                    {:type :untrusted-html-fragment})))
   (h/raw html))
 
 (defn message-content [content]
