@@ -100,8 +100,8 @@ const NODES = {
   tg:{l:'Telegram poller',t:'entry',f:'telegram.clj',s:0,d:'Long-polls getUpdates, persists to channel inbox, allowlist-checks, maps chat→session, downloads media, calls run-chat! → chat/run!.'},
   sse:{l:'SSE streaming handler',t:'transport',f:'api/streaming.clj',s:1,d:'managed-response opens an SSE channel, runs chat/run! on a worker future, converts broker events → OpenAI-style chat.completion.chunk.'},
   broker:{l:'Event broker / bus',t:'transport',f:'system/events.clj · broker/local.clj',s:1,d:'publish! fans events synchronously to all subscriptions. SSE + Telegram subscribe here.'},
-  chatrun:{l:'chat/run! + queue manager',t:'runtime',f:'chat.clj',s:2,d:'Routes loop-control/loop-active, then a per-session manager runs immediately (:active) or persists+enqueues (:queued) under manager-lock.'},
-  runturn:{l:'chat/run-turn!',t:'runtime',f:'chat.clj',s:3,d:'Persists user turn, auto-compacts, loads history, recalls memory, builds context-injectors, wires the layered event-sink, then calls the loop.'},
+  chatrun:{l:'chat/run! + queue manager',t:'runtime',f:'chat.clj · chat/queue.clj',s:2,d:'Facade dispatches to queue/service owners: loop-control, active turn, or persisted queued item under manager-lock.'},
+  runturn:{l:'chat/run-turn!',t:'runtime',f:'chat/turn.clj',s:3,d:'Persists user turn, auto-compacts, loads history, recalls memory, builds context-injectors, wires the layered event-sink, then calls the loop.'},
   compaction:{l:'auto-compact!',t:'memory',f:'runtime/compaction.clj',s:4,d:'Trims persisted session entries above token thresholds, writing a deterministic :compaction entry. (Uses its own estimator, separate from context-pack.)'},
   memrecall:{l:'memory recall',t:'memory',f:'memory/core.clj',s:4,d:'Reads MEMORY.md prompt docs + hybrid search across messages/events/facts/graph before each turn.'},
   prompts:{l:'prompts · skills · modes',t:'memory',f:'prompts.clj · skills.clj',s:4,d:'Builds context-injectors: iris context, prompt-mode system message, invoked-skill section, memory-context message.'},
@@ -152,19 +152,19 @@ const STAGE_NAMES = ['Ingress','Transport','Orchestrate','Per-turn prep','Loop',
 const FIND = {
   cli:[['med','no-jvm-shutdown-hook — serve/CLI leak the pool, poller, nREPL on exit']],
   http:[['high','api-body-coercion-discarded — coerced body validated then ignored; handler re-reads raw JSON','6b3c7e6'],
-        ['med','auth-disabled-when-key-nil — fail-open when no API key configured (footgun if bound 0.0.0.0)']],
+        ['med','auth-disabled-when-key-nil — non-loopback API bind now requires configured key','190db38']],
   tg:[['high','telegram-draft-id-invalid — draft id can rotate to 0/negative, violates API contract','7e72b44'],
       ['high','broker firehose overflow — subscribes with no opts; a slow turn can throw publish! for everyone','1ade0dd'],
       ['med','draft streaming can lose the final reply when no closer arrives']],
   sse:[['med','run-task! future cancelled but the synchronous chat turn is not actually interrupted on disconnect']],
   broker:[['high','broker-park-overflow — default subscriber uses unbounded put!; 1024 pending puts → throw on the sink thread','1ade0dd']],
-  chatrun:[['high','chat-god-namespace — 985 LOC: queue + streaming + persistence + memory + kernel-ops + fallback','9f089db (◐ 985→800; queue retained)'],
-           ['med','stream-flusher-thread-per-flush — a future + Thread/sleep per 50ms flush window']],
+  chatrun:[['high','chat-god-namespace — chat.clj is now a 44-line facade; behavior split under agent.chat.*','9f089db'],
+           ['med','stream-flusher-thread-per-flush — shared daemon ScheduledExecutorService replaces per-flush futures','34c2cfe']],
   runturn:[['med','memory dual-write — SQLite + graph can silently diverge (best-effort)']],
   loop:[['high','max-token-discards-toolcalls — finish_reason="length" aborts the turn even with valid tool calls','19febce'],
         ['high','run-bang-god-function — 346 lines, ~12 deep, 8 duplicated terminal-result maps','aa69766'],
         ['med','max-token-loses-final-messages — that branch drops accumulated prior-turn messages','19febce']],
-  ctxpack:[['med','token-estimate-counts-raw — :raw payload double-counts tokens → premature compaction'],
+  ctxpack:[['med','token-estimate-counts-raw — provider :raw/:annotations stripped before estimating tokens','593b412'],
            ['med','pack-by-prefix-summary choose-cut is O(n²) over message count'],
            ['low','budget-report double-counts tool-result tokens across budgets']],
   prompts:[['med','slash skill names can silently shadow built-in loop-control commands']],
@@ -174,27 +174,27 @@ const FIND = {
   planner:[],
   llm:[['high','telemetry completion path discards tool calls and real usage','4efd399'],
        ['med','retry-with-backoff: blocking Thread/sleep in async threads, no jitter (thundering herd)']],
-  provider:[['med','openai-stream-leak-on-error — non-2xx throws before with-open → leaked connection (same in ollama)'],
-            ['med','streaming-toolcall-index-fallback — providers omitting :index split one call across slots'],
+  provider:[['med','openai-stream-leak-on-error — non-2xx response bodies closed before throw (same in ollama)','1be7a90'],
+            ['med','streaming-toolcall-index-fallback — index-less fragments attach to last open tool call','593b412'],
             ['med','provider-helper-copypaste — byte-identical helpers across the two providers']],
   kernel:[['med','dual-kernelops-divergent — ChatKernelOps silently no-ops state-patch/complete; no capability gate']],
   kerneldown:[],
   batch:[['high','double-tool-enforcement — gate/validate runs twice through divergent paths (allow- vs block-on-ambiguous)','d59975c'],
-         ['med','parallel-tool-pool-unbounded — newFixedThreadPool sized to LLM-chosen call count']],
+         ['med','parallel-tool-pool-unbounded — tool batch pool capped by :tools :max-parallelism','e3a65e7']],
   toolreg:[['med','execute-tool repeats the :tool-execution-end map 4× and nanoTime calc 2×; blocked/failed omit duration']],
-  shell:[['med','shell-denylist-bypassable — literal-argv deny; npm run / cargo build|test are auto-allowed (RCE w/o approval)'],
+  shell:[['med','shell-denylist-bypassable — basename/wrapper-aware authoritative deny; risky auto-allows removed','783d0d0'],
          ['med','http-ssrf-dns-rebinding — resolve-then-connect TOCTOU'],
          ['low','fs default root is process CWD; check-then-use symlink window']],
   runners:[['high','api-arbitrary-substrate — API accepts local-unsandboxed + arbitrary command → host RCE','6b3c7e6'],
-           ['med','container default share-network? = true (weakest network isolation on the strongest substrate)'],
-           ['med','local-runner-process-map-leak — dead Process objects never pruned'],
+           ['med','container default share-network? = true — fixed: docker/podman now default network off','190db38'],
+           ['med','local-runner-process-map-leak — dead Process objects pruned by exit watcher','190db38'],
            ['low','seatbelt paths not canonicalized; root only forbidden for docker/podman']],
   eventsink:[],
   persist:[['high','sqlite-retry wraps connection acquisition only, not statement execution','5788de9'],
            ['med','migration-checksum-cosmetic — never hashes the SQL; drift undetectable'],
-           ['med','pool-config-not-forwarded — permanently 4 connections'],
-           ['med','runtime-health N+1 — one query per run (up to 1000)'],
-           ['med','decide-approval has no status=pending guard / CAS']],
+           ['med','pool-config-not-forwarded — sqlite pool defaults + env overrides now wired','15b4fa2'],
+           ['med','runtime-health N+1 — pending command counts use one grouped query','15b4fa2'],
+           ['med','decide-approval has no status=pending guard / CAS — fixed with pending-only update + 409 conflict','190db38']],
   factmem:[['low','datahike full edge-table scan per query / per BFS level (prototype)']],
   output:[],
 };
@@ -352,13 +352,13 @@ function intro(){
       <div class="desc">One user message flows from an ingress (CLI / HTTP / Telegram) through <b>chat/run!</b> into the pure evented <b>runtime.loop/run!</b>, which plans with the LLM, executes tools through the kernel, streams events back out, and persists everything. Click any node for its file, role, and findings.</div>
     </div>
     <div class="flow"><h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin:0 0 10px">Findings on this map (open)</h3>
-      <div class="finding fixed"><div class="sv">✓ RESOLVED × ${fixed}</div><div class="ti">all 12 Critical/High + 2 mediums — merged 2026-05-30</div></div>
+      <div class="finding fixed"><div class="sv">✓ RESOLVED × ${fixed}</div><div class="ti">all 12 Critical/High + highest-risk §5 Mediums — merged 2026-05-30</div></div>
       <div class="finding high"><div class="sv">HIGH × ${counts.high}</div><div class="ti">remaining (none on this map are High)</div></div>
       <div class="finding med"><div class="sv">MEDIUM × ${counts.med}</div></div>
       <div class="finding low"><div class="sv">LOW × ${counts.low}</div></div>
       <div class="desc" style="margin-top:14px">Termination stop-reasons (all explicit in the loop):<br><span style="color:var(--txt)">completed · approval-required · max-steps · max-tokens · doom-loop · guardrail-exhausted · cancelled · planner-error</span></div>
       <div class="desc" style="margin-top:12px">The dashed edge from <b>runners/*</b> is the separate durable-run control-plane (spawned agent runs), not the synchronous chat turn — the two meet only at the event sink.</div>
-      <div class="desc" style="margin-top:12px"><b style="color:var(--control)">2026-05-30:</b> the two federation High fixes (verify-noop, interop-bypass) aren't on this turn map but are merged. The telemetry path now keeps tool calls + usage, and each turn's usage is persisted to message metadata and surfaced in the web UI (per-message + per-thread, compaction-aware).</div>
+      <div class="desc" style="margin-top:12px"><b style="color:var(--control)">2026-05-30:</b> the two federation High fixes (verify-noop, interop-bypass) aren't on this turn map but are merged. Auth, shell policy, container networking, token estimates, streaming tool calls, bounded tool parallelism, stream flushing, sqlite health, approval CAS, and provider error-body cleanup are also fixed.</div>
       <div class="desc" style="margin-top:12px">Full prose + remediation ledger: <b style="color:var(--accent)">RELEASE_REPORT.md</b> §1A.</div>
     </div>`;
 }
