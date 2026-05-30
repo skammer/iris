@@ -147,11 +147,12 @@
                                                   tool-output-max-chars)
         assistant-msg (first protocol-messages)
         tool-msgs (vec (rest protocol-messages))]
-    (event! sink :message-end base {:role "assistant"
-                                    :content (llm-messages/content-text assistant-msg)
-                                    :content-blocks (:content assistant-msg)
-                                    :tool-calls (llm-messages/message-tool-calls assistant-msg)
-                                    :tool-turn? true})
+    (event! sink :message-end base (cond-> {:role "assistant"
+                                            :content (llm-messages/content-text assistant-msg)
+                                            :content-blocks (:content assistant-msg)
+                                            :tool-calls (llm-messages/message-tool-calls assistant-msg)
+                                            :tool-turn? true}
+                                     (:usage llm-response) (assoc :metadata {:usage (:usage llm-response)})))
     (doseq [tool-msg tool-msgs]
       (let [tool-result (runtime-messages/tool-result-block tool-msg)]
         (event! sink :message-end base {:role "tool"
@@ -486,10 +487,12 @@
                             (let [content (result-text (:result receipt))]
                               (when-not @delta-emitted?
                                 (emit-delta! content))
-                              (event! event-sink :message-end base {:role "assistant"
-                                                                    :content content
-                                                                    :final? true
-                                                                    :stop-reason :completed})
+                              (event! event-sink :message-end base
+                                      (cond-> {:role "assistant"
+                                               :content content
+                                               :final? true
+                                               :stop-reason :completed}
+                                        (:usage llm-response) (assoc :metadata {:usage (:usage llm-response)})))
                               (event! event-sink :agent-end base {:steps (inc step-no)
                                                                   :stop-reason :completed
                                                                   :stream stream?*})

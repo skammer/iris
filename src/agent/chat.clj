@@ -405,7 +405,7 @@
                                :payload (:compaction payload)})
 
         (chat-util/same-event-type? event :message-end)
-        (let [{:keys [role content final? tool-turn? audit? tool-calls tool-call-id]} payload]
+        (let [{:keys [role content final? tool-turn? audit? tool-call-id]} payload]
           (cond
             (and (= "assistant" role) final?)
             (let [message (persist-final-assistant! system
@@ -420,7 +420,7 @@
             (append-message-record! system session-id "assistant" content (message-extra payload))
 
             (and session-id (= "assistant" role) tool-turn?)
-            (append-message-record! system session-id "assistant" content {:tool-calls tool-calls})
+            (append-message-record! system session-id "assistant" content (message-extra payload))
 
             (and session-id (= "tool" role) tool-turn?)
             (append-message-record! system session-id "tool" content {:tool-call-id tool-call-id})))))))

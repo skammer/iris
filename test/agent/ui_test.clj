@@ -5,6 +5,7 @@
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.trace :as trace]
    [agent.ui :as ui]
+   [agent.ui.render :as ui-render]
    [clojure.java.io :as io]
    [clojure.string :as str]
    [clojure.test :refer :all]))
@@ -210,6 +211,65 @@
           (is (not (str/includes? html "<details")))
           (is (str/includes? html "url: http://example.test"))
           (is (str/includes? html "method: GET"))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest format-tokens-compacts-large-counts
+  (is (= "950" (ui-render/format-tokens 950)))
+  (is (= "12.3k" (ui-render/format-tokens 12345)))
+  (is (= "2.3M" (ui-render/format-tokens 2345678)))
+  (is (= "0" (ui-render/format-tokens nil))))
+
+(deftest thread-stats-aggregates-tokens-and-tools-across-full-history
+  (let [messages [{:role "user" :content "hi"}
+                  {:role "assistant" :content ""
+                   :tool-calls [{:function {:name "read"}} {:function {:name "bash"}}]
+                   :metadata {:usage {:tokens 100 :prompt-tokens 80 :completion-tokens 20 :cached-tokens 10}}}
+                  {:role "tool" :content "result" :tool-call-id "c1"}
+                  {:role "assistant" :content ""
+                   :tool-calls [{:function {:name "read"}}]
+                   :metadata {:usage {:tokens 150 :prompt-tokens 120 :completion-tokens 30 :cached-tokens 40}}}
+                  {:role "assistant" :content "done"
+                   :metadata {:usage {:tokens 200 :prompt-tokens 160 :completion-tokens 40 :cached-tokens 50}}}]
+        stats (ui-render/thread-stats messages)]
+    ;; cumulative SUM over every turn = total billed across the thread
+    (is (= 450 (:total-tokens stats)))
+    (is (= 360 (:prompt-tokens stats)))
+    (is (= 90 (:completion-tokens stats)))
+    (is (= 100 (:cached-tokens stats)))
+    ;; current context window = most recent turn's prompt + completion
+    (is (= 200 (:context-tokens stats)))
+    ;; total tool calls + per-tool breakdown (desc)
+    (is (= 3 (:tool-calls stats)))
+    (is (= [["read" 2] ["bash" 1]] (:tool-breakdown stats)))))
+
+(deftest thread-stats-bar-empty-when-no-usage-or-tools
+  (is (nil? (ui-render/thread-stats-bar [{:role "user" :content "hi"}
+                                         {:role "assistant" :content "hello"}]))))
+
+(deftest session-messages-fragment-surfaces-per-message-and-thread-stats
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [session (sqlite/create-session! store "stats")]
+        (sqlite/append-message! store (:id session) "user" "hi" nil)
+        (sqlite/append-message! store (:id session) "assistant" ""
+                                {:tool-calls [{:id "c1" :function {:name "read" :arguments "{}"}}]
+                                 :metadata {:usage {:tokens 1234 :prompt-tokens 1000
+                                                    :completion-tokens 234 :cached-tokens 0}}})
+        (sqlite/append-message! store (:id session) "assistant" "done"
+                                {:metadata {:usage {:tokens 5678 :prompt-tokens 5000
+                                                    :completion-tokens 678 :cached-tokens 0}}})
+        (let [html (ui/session-messages-fragment {:store store} (:id session))]
+          ;; per-message badge: token count + tool count in the .meta footer
+          (is (str/includes? html "1.2k tok"))
+          (is (str/includes? html "1 tool"))
+          (is (str/includes? html "5.7k tok"))
+          ;; per-thread aggregate bar
+          (is (str/includes? html "thread-stats"))
+          (is (str/includes? html "6.9k"))
+          (is (str/includes? html "read"))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
