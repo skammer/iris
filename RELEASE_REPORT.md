@@ -253,7 +253,7 @@ For each finding: **problem → why it matters → fix.** Line numbers are from 
 
 ### 5.5 Data & persistence
 
-**Verification (2026-05-30):** §5.5 items are fixed. Focused SQLite/config suite: **40 tests, 164 assertions, 0 failures, 0 errors** (`agent.persistence.sqlite-test`, `agent.config-test`). Focused memory suite: **15 tests, 84 assertions, 0 failures, 0 errors** (`agent.memory.core-test`).
+**Verification (2026-05-30):** §5.5 items are fixed. Combined focused suite: **59 tests, 277 assertions, 0 failures, 0 errors** (`agent.persistence.sqlite-test`, `agent.config-test`, `agent.runs.registry-test`, `agent.memory.core-test`). `clj-kondo` on touched namespaces/tests: **0 errors, 0 warnings**.
 
 **🟡 migration-checksum-cosmetic — MEDIUM.** Each migration used to carry a hand-written literal `:checksum`; `record-migration-meta!` stored that literal and `verify-migration-checksums!` compared it to the same literal, so SQL edits were invisible. **Status:** ✅ fixed in `8b4248a`; descriptors no longer carry `:checksum`, `record-migration-meta!` and verify derive `sha256(str version up down)[:16]`, and legacy literal checksums are backfilled before verification so existing DBs do not false-positive or destructively reset. Regression coverage verifies edited applied SQL now raises `:migration-drift` and legacy literals backfill safely.
 
@@ -263,7 +263,7 @@ For each finding: **problem → why it matters → fix.** Line numbers are from 
 
 **🟡 decide-approval-no-pending-guard — MEDIUM.** `decide-tool-approval` SQL (`resources/.../tools.sql:17`) used to update by `id` only, with no pending-state CAS, allowing stale decisions to flip an already-denied/expired approval. **Fix:** add `and status='pending'` and treat 0-row update as conflict. **Status:** ✅ fixed in `190db38`; SQL now requires `status = 'pending'`, stale decisions throw `:approval-decision-conflict`, and API returns 409.
 
-**🟢 Lower:** ✅ `journal-mode-bypasses-busy-timeout` fixed in `8b4248a`: `apply-journal-mode!` now goes through `with-connection`, so configured busy-timeout and SQLite retry wrap the journal PRAGMA. ✅ `select-value-broken` fixed in `8b4248a`: `select-value` now reads column 1 directly from its own `ResultSet`, with regression coverage for `SELECT 42 AS n`. ✅ `datahike-full-edge-scan` fixed in this commit for neighborhood/path hot paths: entity-neighborhood and path search now use indexed source/target edge lookups with per-node caching instead of scanning every edge. Full scans remain only for unfiltered graph listing/reconciliation/reset paths where all edges are intentionally needed.
+**🟢 Lower:** ✅ `journal-mode-bypasses-busy-timeout` fixed in `8b4248a`: `apply-journal-mode!` now goes through `with-connection`, so configured busy-timeout and SQLite retry wrap the journal PRAGMA. ✅ `select-value-broken` fixed in `8b4248a`: `select-value` now reads column 1 directly from its own `ResultSet`, with regression coverage for `SELECT 42 AS n`. ✅ `datahike-full-edge-scan` fixed in `eddf80d` for neighborhood/path hot paths: entity-neighborhood and path search now use indexed source/target edge lookups with per-node caching instead of scanning every edge. Full scans remain only for unfiltered graph listing/reconciliation/reset paths where all edges are intentionally needed.
 
 ### 5.6 Code smells & duplication
 
