@@ -1068,7 +1068,7 @@
 
 (deftest chat-loop-creates-approval-for-sensitive-tool-test
   (let [path (temp-db-path)
-        responses (atom [(tool-call-response :shell {:argv ["uname" "-a"]})])
+        responses (atom [(tool-call-response :shell {:argv ["whoami"]})])
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path

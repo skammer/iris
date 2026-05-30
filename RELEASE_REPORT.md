@@ -1,8 +1,10 @@
 # Iris Runtime — Release Review Report
 
 **Scope:** canonical runtime under `src/agent` (~26.5k LOC, ~110 namespaces). `tmp/llx`, `legacy_src`, `restate-data`, `target` excluded.
-**Date:** 2026-05-29 · **Branch:** `master` @ `96b6930` · **JDK (local):** 25 · **Clojure:** 1.12.4
+**Reviewed:** 2026-05-29 · `master` @ `96b6930` · **Remediated:** 2026-05-30 · `master` @ `9f089db` (+ `feat/web-ui-usage-stats` @ `fce5cd7`) · **JDK (local):** 25 · **Clojure:** 1.12.4
 **Method:** 12 parallel subsystem readers → 7 cross-cutting reviewers (architecture, concurrency, security, error/resource, smells, data, agentic-correctness) → adversarial verification of every High/Critical finding, plus an independent ground-truth pass (build, CI, full test suite, hand-read of the loop / auth / shell / fs / migrations / sandbox spine). An interactive map of the agentic workflow is in **`iris-workflow-map.html`** (open in a browser).
+
+> **Status (2026-05-30):** all **12 Critical/High findings are fixed and merged** to `master` (11 commits), plus a web-UI usage/tool-stats feature on `feat/web-ui-usage-stats`. Build/CI blockers **B1, B2** and the medium backlog remain open. See **§1A** for the remediation ledger.
 
 ---
 
@@ -12,16 +14,49 @@
 
 Confidence in this assessment: **0.85**. The architecture and code quality findings are high-confidence (read + verified). The "is it exploitable in practice" nuance on security depends on deployment posture (default loopback bind + optional API key), which I flag per-finding.
 
+Grades below are **at-review (2026-05-29)**; the trailing arrow notes the post-remediation state (§1A).
+
 | Area | Grade | One-line |
 |---|---|---|
-| Architecture / layering | **B+** | Clean DI, protocol seams; spoiled by 2 god namespaces + a mis-named package |
-| Agentic loop correctness | **B** | Bounded & well-structured; one real truncation bug discards valid tool calls |
-| Security | **C+** | Strong SQL/static-file/crypto layers; sandbox & auth have real holes |
-| Concurrency | **B+** | Sound threading model; a couple of unbounded-buffer / leak edges |
-| Error handling / resources | **B** | Good per-request boundaries; weak process-lifecycle (no shutdown hook) |
-| Data / persistence | **A−** | Parameterized, transactional, idempotent; checksum "drift" is cosmetic |
-| Build / CI / release | **D** | **Docker build broken; CI never runs; 3 jar names** |
-| Tests | **B** | 393 tests, 1571 pass; 8 fail in one env-sensitive e2e test |
+| Architecture / layering | **B+** | Clean DI, protocol seams; spoiled by 2 god namespaces + a mis-named package · ✅ `chat.clj` split (985→800), `run!` terminal maps deduped; `runtime.*` rename still pending |
+| Agentic loop correctness | **B → A−** | Bounded & well-structured; ✅ the truncation bug that discarded valid tool calls is fixed |
+| Security | **C+ → B** | Strong SQL/static-file/crypto layers; ✅ run-API RCE, keyless-federation verify, and federated-interop bypass closed; medium backlog (auth fail-open, SSRF, share-network) remains |
+| Concurrency | **B+ → A−** | Sound threading model; ✅ broker park-overflow fixed (sliding default); remaining edges are MEDIUM |
+| Error handling / resources | **B** | Good per-request boundaries; weak process-lifecycle (no shutdown hook) — *unchanged, MEDIUM backlog* |
+| Data / persistence | **A−** | Parameterized, transactional, idempotent; ✅ `SQLITE_BUSY` now retried at statement execution |
+| Build / CI / release | **D** | **Docker build broken; CI never runs; 3 jar names** — *unchanged (B1/B2 open)* |
+| Tests | **B** | 404 tests, 396 pass; 8 fail in one env-sensitive e2e test (`child-runtime`); 0 errors |
+
+---
+
+## 1A. Remediation status (2026-05-30)
+
+All **12 Critical/High findings (§3) are fixed, verified, and merged** to `master` in 11 commits, with regression tests added for each. A separate web-UI enhancement (token-usage + tool-call stats, per-message and per-thread, compaction-aware) landed on `feat/web-ui-usage-stats`.
+
+| Finding (§3) | Status | Commit | Notes |
+|---|---|---|---|
+| api-arbitrary-substrate | ✅ fixed | `6b3c7e6` | API substrate allow-list + strip caller-supplied execution keys (command/binds/network/…) |
+| api-body-coercion-discarded | ✅ fixed | `6b3c7e6` | create/signal handlers use the Malli-coerced `:parameters :body` |
+| federation-verify-noop | ✅ fixed | `f194677` | `verify-request!` fails closed: auth required, nil key → `:signature-missing` |
+| federated-interop-bypass | ✅ fixed | `f194677` | sender trust/route enforced on the federated path (`1478ee4` wires test keys) |
+| broker-park-overflow | ✅ fixed | `1ade0dd` | default subscriptions use a `:sliding` buffer; Telegram + `wait-for-run!` pass safe opts |
+| max-token-discards-toolcalls | ✅ fixed | `19febce` | truncation terminal only when no tool calls; `final-messages` preserved; nudge gated |
+| run-bang-god-function | ✅ fixed | `aa69766` | single `terminal-result` helper for the 9 exit maps (kills the duplication that hid the bug) |
+| double-tool-enforcement | ✅ fixed | `d59975c` | one authoritative gate in `tools.core/execute-tool`; `:preflighted?` skips the duplicate |
+| telemetry-discards-toolcalls | ✅ fixed | `4efd399` | `complete-with-telemetry!` routes through `invoke`; keeps tool calls + real usage |
+| telegram-draft-id-invalid | ✅ fixed | `7e72b44` | draft ids stay in `[1, 2³¹-1]`; external ids validated |
+| sqlite-retry-conn-only | ✅ fixed | `5788de9` | retry wraps the whole unit-of-work (statement exec), not just `getConnection` |
+| chat-god-namespace | ◐ partial | `9f089db` | extracted `chat.util`/`memory`/`streaming`/`kernel-ops` (985→800 LOC); the queue state-machine stays (it is mutually recursive with `run!`), so the ≤300 target is **not** met |
+
+Two §5 MEDIUMs were swept up by the loop/telemetry work: **max-token-loses-final-messages** (✅ `19febce`) and a live-path telemetry token-key bug (✅ `fce5cd7`, `planner.clj` read `:total-tokens` which providers never set).
+
+**Still open** (out of scope for the Critical/High pass):
+- **B1** (Dockerfile `COPY config`) and **B2** (CI targets `main`/`develop`, not `master`) — the release blockers in §2 are untouched.
+- **B3** — still 8 failures, all in the same env-sensitive `child-runtime-local-unsandboxed-flow-test` (subprocess + loopback under a restricted sandbox); 0 errors, no new failures.
+- The §3 **Medium** backlog (auth fail-open, SSRF/DNS-rebind, container `share-network?`, shell denylist, migration-checksum, decide-approval CAS, resource-lifecycle leaks, etc.) is unaddressed.
+- Structural §3.2 items beyond `chat.clj`: the `agent.runtime.*` → `agent.runs.*` rename and the capability-gated `KernelOps` are not done.
+
+**Current suite:** `feat/web-ui-usage-stats` → **404 tests, 1627 assertions, 8 failures (all B3), 0 errors** (`master` alone: 399 tests). `clj-kondo` clean on every touched file.
 
 ---
 
@@ -52,20 +87,22 @@ Severities are the **corrected** severities after adversarial verification. ✓ 
 
 ### Critical / High
 
-| ID | Sev | Verdict | Where | Issue |
-|---|---|---|---|---|
-| api-arbitrary-substrate | **CRIT→HIGH** | ✓ | `api/routes.clj:40`, `handlers/runs.clj:57` | Run API accepts `substrate:"local-unsandboxed"` + arbitrary `command` → host RCE outside any sandbox |
-| federation-verify-noop | **HIGH** | ◐ | `federation/http.clj:115` | Signature verification skipped for a registered peer with no key → unsigned/replayable inbox |
-| broker-park-overflow | **HIGH** | ✓ | `broker/local.clj:27` | Default subscriber uses unbounded `put!`; a slow consumer can throw at 1024 pending puts, aborting event emission for everyone |
-| max-token-discards-toolcalls | **HIGH** | ✓ | `runtime/loop.clj:389` | `finish_reason="length"` aborts the turn even when valid tool calls were emitted |
-| run-bang-god-function | **HIGH** | ✓ | `runtime/loop.clj:246` | 346-line, ~12-deep `run!` with 8 duplicated terminal maps — *and* harbors the max-token bug below |
-| double-tool-enforcement | **HIGH** | ✓ | `runtime/tools.clj:88` vs `tools/core.clj:236` | Approval/permission/validate run twice through **divergent** code paths (allow-on-ambiguous vs block-on-ambiguous) |
-| chat-god-namespace | **HIGH** | ✓ | `chat.clj` (985 LOC) | Queue + streaming + persistence + memory + kernel-ops + fallback in one namespace |
-| api-body-coercion-discarded | **HIGH** | ✓ | `handlers/runs.clj:92` | Malli-coerced body is validated then ignored; handlers re-read raw JSON, so schema doesn't actually gate input |
-| telemetry-discards-toolcalls | **HIGH** | ✓ | `telemetry.clj:326` | `complete-with-telemetry!` path drops tool calls and real usage |
-| federated-interop-bypass | **HIGH** | ✓ | `orchestrator.clj:687` | Federated interop delivery bypasses trust-policy/route enforcement |
-| telegram-draft-id-invalid | **HIGH** | ✓ | `telegram.clj:827` | Draft id can rotate to 0/negative, violating Telegram API contract |
-| sqlite-retry-conn-only | **HIGH** | ✓ | `persistence/sqlite/common.clj:116` | Retry wraps connection *acquisition*, not statement execution → `SQLITE_BUSY` on statements not retried |
+**Status** column = remediation state as of 2026-05-30 (all now resolved; ◐ = mitigated short of the stated target — see §1A).
+
+| ID | Sev | Verdict | Status | Where | Issue |
+|---|---|---|---|---|---|
+| api-arbitrary-substrate | **CRIT→HIGH** | ✓ | ✅ `6b3c7e6` | `api/routes.clj:40`, `handlers/runs.clj:57` | Run API accepts `substrate:"local-unsandboxed"` + arbitrary `command` → host RCE outside any sandbox |
+| federation-verify-noop | **HIGH** | ◐ | ✅ `f194677` | `federation/http.clj:115` | Signature verification skipped for a registered peer with no key → unsigned/replayable inbox |
+| broker-park-overflow | **HIGH** | ✓ | ✅ `1ade0dd` | `broker/local.clj:27` | Default subscriber uses unbounded `put!`; a slow consumer can throw at 1024 pending puts, aborting event emission for everyone |
+| max-token-discards-toolcalls | **HIGH** | ✓ | ✅ `19febce` | `runtime/loop.clj:389` | `finish_reason="length"` aborts the turn even when valid tool calls were emitted |
+| run-bang-god-function | **HIGH** | ✓ | ✅ `aa69766` | `runtime/loop.clj:246` | 346-line, ~12-deep `run!` with 8 duplicated terminal maps — *and* harbors the max-token bug below |
+| double-tool-enforcement | **HIGH** | ✓ | ✅ `d59975c` | `runtime/tools.clj:88` vs `tools/core.clj:236` | Approval/permission/validate run twice through **divergent** code paths (allow-on-ambiguous vs block-on-ambiguous) |
+| chat-god-namespace | **HIGH** | ✓ | ◐ `9f089db` | `chat.clj` (985 LOC) | Queue + streaming + persistence + memory + kernel-ops + fallback in one namespace — *split to 800 LOC; queue state-machine retained* |
+| api-body-coercion-discarded | **HIGH** | ✓ | ✅ `6b3c7e6` | `handlers/runs.clj:92` | Malli-coerced body is validated then ignored; handlers re-read raw JSON, so schema doesn't actually gate input |
+| telemetry-discards-toolcalls | **HIGH** | ✓ | ✅ `4efd399` | `telemetry.clj:326` | `complete-with-telemetry!` path drops tool calls and real usage |
+| federated-interop-bypass | **HIGH** | ✓ | ✅ `f194677` | `orchestrator.clj:687` | Federated interop delivery bypasses trust-policy/route enforcement |
+| telegram-draft-id-invalid | **HIGH** | ✓ | ✅ `7e72b44` | `telegram.clj:827` | Draft id can rotate to 0/negative, violating Telegram API contract |
+| sqlite-retry-conn-only | **HIGH** | ✓ | ✅ `5788de9` | `persistence/sqlite/common.clj:116` | Retry wraps connection *acquisition*, not statement execution → `SQLITE_BUSY` on statements not retried |
 
 ### Medium (selected — full list in §5)
 
@@ -227,37 +264,41 @@ ingress (cli | http | telegram)
 
 Termination stop-reasons (all explicit, auditable): `completed · approval-required · max-steps · max-tokens · doom-loop · guardrail-exhausted · cancelled · planner-error`. The `runners/*` substrates + `runtime.core` durable registry are a **separate** control-plane for *spawned agent runs*, not the synchronous chat turn (they meet at the event sink).
 
+**Post-remediation (2026-05-30):** `max-tokens` no longer terminates a turn that emitted tool calls; the telemetry completion path preserves tool calls + real usage; each assistant turn's provider `:usage` is now stamped onto the persisted message metadata and surfaced in the web UI — per message (token + tool-call badge) and per thread (cumulative-billed + current-context-window tokens and a per-tool breakdown, summed over the full history so it stays correct across compaction).
+
 ---
 
 ## 7. Prioritized remediation roadmap
 
+Markers (2026-05-30): ✅ done · ◐ partial · ⬜ open.
+
 **P0 — Release blockers (do before any release/deploy)**
-1. Fix `Dockerfile` `COPY config` (B1) — Docker build is dead.
-2. Point CI at `master`, unify the jar name, drop the k8s deploy job (B2) — tests/lint/build currently never run.
-3. `api-arbitrary-substrate` — remove `:local-unsandboxed` from the API-selectable registry + reject caller-supplied `:command`/binds/network on the API path.
-4. `auth-disabled-when-key-nil` — fail closed (or force loopback) when bound non-locally without a key.
-5. `federation-verify-noop` — fail closed when no peer key resolves.
-6. `broker-park-overflow` — default subscriptions to a non-blocking (`:sliding`) buffer; fix the Telegram + `wait-for-run!` subscriptions.
+1. ⬜ Fix `Dockerfile` `COPY config` (B1) — Docker build is dead.
+2. ⬜ Point CI at `master`, unify the jar name, drop the k8s deploy job (B2) — tests/lint/build currently never run.
+3. ✅ `api-arbitrary-substrate` — `:local-unsandboxed` removed from the API-selectable registry + caller-supplied `:command`/binds/network rejected on the API path. (`6b3c7e6`)
+4. ⬜ `auth-disabled-when-key-nil` — fail closed (or force loopback) when bound non-locally without a key.
+5. ✅ `federation-verify-noop` — `verify-request!` fails closed when no peer key resolves. (`f194677`)
+6. ✅ `broker-park-overflow` — default subscriptions now use a non-blocking (`:sliding`) buffer; Telegram + `wait-for-run!` subscriptions fixed. (`1ade0dd`)
 
 **P1 — Correctness**
-7. `max-token-discards-toolcalls` + `max-token-loses-final-messages` (loop + nudge).
-8. `double-tool-enforcement` — single authoritative gate; reconcile ambiguous-approval semantics.
-9. `api-body-coercion-discarded` — actually use the coerced body (don't re-read raw JSON) so schema validation gates input.
-10. `telemetry-discards-toolcalls` and `token-estimate-counts-raw`.
-11. `migration-checksum-cosmetic` — real hash **with** the re-baseline step.
-12. `decide-approval-no-pending-guard`.
+7. ✅ `max-token-discards-toolcalls` + `max-token-loses-final-messages` (loop + nudge). (`19febce`)
+8. ✅ `double-tool-enforcement` — single authoritative gate; ambiguous-approval semantics reconciled. (`d59975c`)
+9. ✅ `api-body-coercion-discarded` — handlers use the coerced body; schema now gates input. (`6b3c7e6`)
+10. ◐ `telemetry-discards-toolcalls` ✅ (`4efd399`); `token-estimate-counts-raw` ⬜ open.
+11. ⬜ `migration-checksum-cosmetic` — real hash **with** the re-baseline step.
+12. ⬜ `decide-approval-no-pending-guard`.
 
 **P2 — Robustness / resources**
-13. JVM shutdown hook + one-shot `try/finally`; child store close; runner process-map prune; OpenAI/Ollama stream-on-error close.
-14. `sqlite-retry-conn-only`; pool-config forwarding; `runtime-health` N+1.
-15. `http-ssrf-dns-rebinding` (pin to validated IP); `container-default-share-network-true`; `bootstrap-token-non-constant-time`; `shell-denylist` hardening (or document as approval-only + drop `npm run`/`cargo build|test` from auto-allow).
-16. `parallel-tool-pool-unbounded`; `stream-flusher-thread-per-flush`; `orchestrator-inbox` silent loss.
+13. ⬜ JVM shutdown hook + one-shot `try/finally`; child store close; runner process-map prune; OpenAI/Ollama stream-on-error close.
+14. ◐ `sqlite-retry-conn-only` ✅ (`5788de9`); pool-config forwarding + `runtime-health` N+1 ⬜ open.
+15. ⬜ `http-ssrf-dns-rebinding` (pin to validated IP); `container-default-share-network-true`; `bootstrap-token-non-constant-time`; `shell-denylist` hardening (or document as approval-only + drop `npm run`/`cargo build|test` from auto-allow).
+16. ⬜ `parallel-tool-pool-unbounded`; `stream-flusher-thread-per-flush`; `orchestrator-inbox` silent loss.
 
 **P3 — Structure / maintainability**
-17. Split `agent.runtime.*` (registry → `agent.runs.*`); decompose `chat.clj` (≤300 lines).
-18. Extract `run!`'s `terminal-result` helper; `agent.llm.providers.common`; `agent.util`/`agent.runtime.cancel`.
-19. Capability-gated single `KernelOps` contract; move `system/health`'s streaming-metrics dependency; enforce or remove `orchestrator :enabled?`.
-20. Promote magic numbers to named/config; verify `max-steps` override; `trusted-fragment` HTML-escaping invariant.
+17. ◐ Split `agent.runtime.*` (registry → `agent.runs.*`) ⬜ open; decompose `chat.clj` ◐ — extracted `util`/`memory`/`streaming`/`kernel-ops` (985→800), queue state-machine retained, ≤300 target not met. (`9f089db`)
+18. ◐ `run!`'s `terminal-result` helper ✅ (`aa69766`); `agent.llm.providers.common` + `agent.util`/`agent.runtime.cancel` ⬜ open.
+19. ⬜ Capability-gated single `KernelOps` contract; move `system/health`'s streaming-metrics dependency; enforce or remove `orchestrator :enabled?`.
+20. ⬜ Promote magic numbers to named/config; verify `max-steps` override; `trusted-fragment` HTML-escaping invariant.
 
 ---
 
@@ -268,4 +309,4 @@ Termination stop-reasons (all explicit, auditable): `completed · approval-requi
 - Where a fix proposed by an agent was itself wrong (e.g. the `@system-ref` local name; the `(when-not (>!! …) (reduced))` non-fix; the migration re-baseline omission), the corrected fix is what appears above.
 - Line numbers are a snapshot; re-confirm before editing. Several findings cluster in `loop.clj` and `chat.clj` — fixing the structural debt (§3) makes the correctness fixes safer.
 
-*Bottom line: strong foundations, a short and concrete blocker list. Clear the P0 items and this is a credible 0.1.*
+*Bottom line: strong foundations, a short and concrete blocker list. As of 2026-05-30 the security/correctness P0–P1 code fixes are done (all 12 Critical/High closed); the remaining gates to a credible 0.1 are the **build/CI blockers B1 + B2** and the medium backlog.*

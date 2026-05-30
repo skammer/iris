@@ -54,7 +54,7 @@
       (is (false? (get-in cfg [:tools :yolo?])))
       (is (= [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write]
              (get-in cfg [:tools :permissions :api])))
-      (is (= [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write]
+      (is (= [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec]
              (get-in cfg [:tools :permissions :chat])))
       (is (= {:allowlist []
               :blocklist []
