@@ -40,11 +40,14 @@
 (defn- checked-response [response]
   (if (<= 200 (:status response 0) 299)
     response
-    (throw (llm-core/llm-error :http-error
-                               (str "Ollama request failed: " (:status response))
-                               {:status (:status response)
-                                :headers (:headers response)
-                                :body (:body response)}))))
+    (let [error (llm-core/llm-error :http-error
+                                    (str "Ollama request failed: " (:status response))
+                                    {:status (:status response)
+                                     :headers (:headers response)
+                                     :body (:body response)})]
+      (when (instance? java.io.Closeable (:body response))
+        (.close ^java.io.Closeable (:body response)))
+      (throw error))))
 
 (defn- post-json [url request]
   (llm-core/retry-with-backoff

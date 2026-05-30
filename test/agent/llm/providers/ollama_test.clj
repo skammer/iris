@@ -10,6 +10,12 @@
 (defn byte-stream [text]
   (java.io.ByteArrayInputStream. (.getBytes text "UTF-8")))
 
+(defn closing-byte-stream [text closed?]
+  (proxy [java.io.ByteArrayInputStream] [(.getBytes text "UTF-8")]
+    (close []
+      (reset! closed? true)
+      (proxy-super close))))
+
 (deftest ollama-complete-test
   (with-redefs [http/post (fn [_ _]
                             {:status 200
@@ -43,6 +49,18 @@
           embedding (llm-core/embed llm "hi" {})]
       (is (= ["hello" " world"] chunks))
       (is (= [0.1 0.2 0.3] embedding)))))
+
+(deftest ollama-stream-closes-error-response-body-test
+  (let [closed? (atom false)]
+    (with-redefs [http/post (fn [_ _]
+                              {:status 500
+                               :headers {"Content-Type" "application/x-ndjson"}
+                               :body (closing-byte-stream "oops" closed?)})]
+      (let [llm (provider/create-ollama-provider {})
+            ch (llm-core/stream llm [{:role "user" :content "hi"}] {})
+            value (async/<!! ch)]
+        (is (= :error (:type value)))
+        (is (true? @closed?))))))
 
 (deftest ollama-structured-output-invoke-streams-by-default-test
   (let [body* (atom nil)

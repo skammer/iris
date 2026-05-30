@@ -143,10 +143,17 @@
                        :headers (:headers response)
                        :body (:body response)}))
 
+(defn- close-response-body! [response]
+  (when-let [body (:body response)]
+    (when (instance? java.io.Closeable body)
+      (.close ^java.io.Closeable body))))
+
 (defn- checked-response [response]
   (if (<= 200 (:status response 0) 299)
     response
-    (throw (retryable-http-error response))))
+    (let [error (retryable-http-error response)]
+      (close-response-body! response)
+      (throw error))))
 
 (defn- blank-content? [content]
   (or (nil? content)

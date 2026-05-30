@@ -10,6 +10,12 @@
 (defn byte-stream [text]
   (java.io.ByteArrayInputStream. (.getBytes text "UTF-8")))
 
+(defn closing-byte-stream [text closed?]
+  (proxy [java.io.ByteArrayInputStream] [(.getBytes text "UTF-8")]
+    (close []
+      (reset! closed? true)
+      (proxy-super close))))
+
 (deftest openrouter-complete-test
   (with-redefs [http/post (fn [_ _]
                             {:status 200
@@ -220,6 +226,18 @@
           value (async/<!! ch)]
       (is (= :error (:type value)))
       (is (re-find #"ended before final content" (:error value))))))
+
+(deftest stream-closes-error-response-body-test
+  (let [closed? (atom false)]
+    (with-redefs [http/post (fn [_ _]
+                              {:status 429
+                               :headers {"Content-Type" "text/event-stream"}
+                               :body (closing-byte-stream "rate limited" closed?)})]
+      (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})
+            ch (llm-core/stream llm [{:role "user" :content "hi"}] {})
+            value (async/<!! ch)]
+        (is (= :error (:type value)))
+        (is (true? @closed?))))))
 
 (deftest invoke-merges-streamed-tool-call-arg-fragments-test
   (with-redefs [http/post (fn [_ _]
