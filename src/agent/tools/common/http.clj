@@ -6,7 +6,8 @@
    [clj-http.client :as http]
    [clojure.string :as str])
   (:import
-   [java.net Inet4Address Inet6Address InetAddress URI]))
+   [java.net Inet4Address Inet6Address InetAddress URI UnknownHostException]
+   [org.apache.http.conn DnsResolver]))
 
 (def ^:private allowed-methods
   #{:get :post :put :patch :delete :head})
@@ -51,6 +52,23 @@
 (defn- ipv4-octets [^Inet4Address address]
   (mapv #(bit-and 0xff %) (.getAddress address)))
 
+(defn- private-ipv4-octets? [[a b _c _d]]
+  (or (= a 0)
+      (= a 10)
+      (= a 127)
+      (= [169 254] [a b])
+      (and (= a 172) (<= 16 b 31))
+      (= [192 168] [a b])
+      (and (= a 100) (<= 64 b 127))
+      (<= 224 a 239)))
+
+(defn- ipv4-mapped-octets [^Inet6Address address]
+  (let [bytes (.getAddress address)]
+    (when (and (every? zero? (map #(bit-and 0xff (aget bytes %)) (range 10)))
+               (= 0xff (bit-and 0xff (aget bytes 10)))
+               (= 0xff (bit-and 0xff (aget bytes 11))))
+      (mapv #(bit-and 0xff (aget bytes %)) (range 12 16)))))
+
 (defn- private-ip? [^InetAddress address]
   (or (.isAnyLocalAddress address)
       (.isLoopbackAddress address)
@@ -58,12 +76,11 @@
       (.isSiteLocalAddress address)
       (.isMulticastAddress address)
       (and (instance? Inet4Address address)
-           (let [[a b] (ipv4-octets address)]
-             (or (= [169 254] [a b])
-                 (and (= a 100) (<= 64 b 127)))))
+           (private-ipv4-octets? (ipv4-octets address)))
       (and (instance? Inet6Address address)
-           (let [first-byte (bit-and 0xff (aget (.getAddress address) 0))]
-             (= 0xfc (bit-and 0xfe first-byte))))))
+           (or (some-> address ipv4-mapped-octets private-ipv4-octets?)
+               (let [first-byte (bit-and 0xff (aget (.getAddress address) 0))]
+                 (= 0xfc (bit-and 0xfe first-byte)))))))
 
 (defn- default-resolve-host [host]
   (vec (InetAddress/getAllByName host)))
@@ -82,18 +99,29 @@
                                       :scheme scheme})))
     (when (str/blank? host)
       (throw (tools/validation-error "url host is required" {:url url})))
-    (when-not (:allow-private? config)
-      (let [addresses ((:resolve-host-fn config) host)]
-        (when (empty? addresses)
-          (throw (tools/validation-error "url host did not resolve" {:url url
-                                                                     :host host})))
+    (let [addresses (vec ((:resolve-host-fn config) host))]
+      (when (empty? addresses)
+        (throw (tools/validation-error "url host did not resolve" {:url url
+                                                                   :host host})))
+      (when-not (:allow-private? config)
         (when-let [blocked (some #(when (private-ip? %) %) addresses)]
           (throw (tools/tool-error :url-not-allowed
                                    "URL resolves to non-public address"
                                    {:url url
                                     :host host
-                                    :address (.getHostAddress ^InetAddress blocked)})))))
-    url))
+                                    :address (.getHostAddress ^InetAddress blocked)}))))
+      {:url url
+       :host host
+       :addresses addresses})))
+
+(defn- pinned-dns-resolver [host addresses]
+  (let [host* (str/lower-case host)
+        addresses* (into-array InetAddress addresses)]
+    (reify DnsResolver
+      (^"[Ljava.net.InetAddress;" resolve [_ ^String requested-host]
+       (if (= host* (str/lower-case requested-host))
+         (aclone addresses*)
+         (throw (UnknownHostException. requested-host)))))))
 
 (defn- validate-input [input]
   (let [url (:url input)
@@ -153,13 +181,14 @@
       (fn [input _context]
         (let [timeout-ms (min (long (or (:timeout-ms input) (:timeout-ms config)))
                               (long (:max-timeout-ms config)))
-              request-opts (fn [url]
+              request-opts (fn [{:keys [url host addresses]}]
                              (cond-> {:method (:method input)
                                       :url url
                                       :headers (merge (:default-headers config) (:headers input))
                                       :query-params (:params input)
                                       :socket-timeout timeout-ms
                                       :conn-timeout timeout-ms
+                                      :dns-resolver (pinned-dns-resolver host addresses)
                                       :follow-redirects false
                                       :throw-exceptions false}
                                (contains? input :body)
@@ -168,8 +197,8 @@
                                       :accept :json)))
               response (loop [url (:url input)
                               redirects-left (:max-redirects config)]
-                         (validate-url! config url)
-                         (let [response (http/request (request-opts url))
+                         (let [target (validate-url! config url)
+                               response (http/request (request-opts target))
                                status (:status response)]
                            (if (and (<= 300 status 399)
                                     (response-location response))
@@ -181,7 +210,6 @@
                                                            :max-redirects (:max-redirects config)})))
                                (let [next-url (str (.resolve (URI. url)
                                                               (response-location response)))]
-                                 (validate-url! config next-url)
                                  (recur next-url (dec redirects-left))))
                              response)))
               status (:status response)

@@ -56,6 +56,43 @@
                                               {:url "https://example.com"}
                                               {:permissions #{:http-request}})))))
 
+(deftest http-tool-blocks-ipv4-mapped-private-resolutions
+  (let [mapped-loopback (InetAddress/getByAddress
+                         (byte-array [0 0 0 0 0 0 0 0 0 0 -1 -1 127 0 0 1]))
+        registry (-> (tools/create-registry)
+                     (tools/register-tool
+                      (http-tool/create-http-tool {:resolve-host-fn (fn [_] [mapped-loopback])})))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"non-public"
+                          (tools/execute-tool registry
+                                              :http
+                                              {:url "https://example.com"}
+                                              {:permissions #{:http-request}})))))
+
+(deftest http-tool-pins-validated-dns-addresses
+  (let [request-seen (atom nil)
+        resolutions (atom [(InetAddress/getByName "93.184.216.34")
+                           (InetAddress/getByName "127.0.0.1")])]
+    (with-redefs [http/request (fn [request]
+                                 (reset! request-seen request)
+                                 {:status 200
+                                  :headers {}
+                                  :body "ok"})]
+      (let [registry (-> (tools/create-registry)
+                         (tools/register-tool
+                          (http-tool/create-http-tool
+                           {:resolve-host-fn (fn [_]
+                                               [(let [address (first @resolutions)]
+                                                  (swap! resolutions subvec 1)
+                                                  address)])})))
+            result (tools/execute-tool registry
+                                       :http
+                                       {:url "https://example.com"}
+                                       {:permissions #{:http-request}})
+            pinned (vec (.resolve (:dns-resolver @request-seen) "example.com"))]
+        (is (= "ok" (:body result)))
+        (is (= ["93.184.216.34"] (mapv #(.getHostAddress %) pinned)))))))
+
 (deftest http-tool-enforces-max-response-bytes
   (with-redefs [http/request (fn [_]
                                {:status 200
