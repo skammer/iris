@@ -124,6 +124,70 @@
     (is (= :peer-not-trusted denied)
         "a sender that does not trust the federated peer is rejected")))
 
+(defn- events-of-type [events event-type]
+  (filter #(= event-type (:event-type %)) @events))
+
+(deftest orchestrator-emits-drop-events-when-interop-inbox-full-test
+  (let [events (atom [])
+        runtime (orchestrator/create-orchestrator {:event-sink #(swap! events conj %)})
+        parent (orchestrator/spawn-agent! runtime {:name "Parent"
+                                                   :capabilities ["delegate"]
+                                                   :allow-direct? true
+                                                   :interop-rate-limit-per-minute 1000})
+        child (orchestrator/spawn-agent! runtime {:name "Child"
+                                                  :capabilities ["execute"]
+                                                  :allow-direct? true
+                                                  :interop-rate-limit-per-minute 1000})
+        _ (orchestrator/register-agent-capabilities! runtime (:id child)
+                                                     {:capabilities ["execute"]
+                                                      :allow-direct? true
+                                                      :trusted-peers [(:id parent)]
+                                                      :interop-rate-limit-per-minute 1000})
+        sent (doall
+              (for [idx (range 70)]
+                (orchestrator/send-interop-message! runtime
+                                                    (:id parent)
+                                                    (:id child)
+                                                    {:message-type "request"
+                                                     :request-id (str "req-" idx)
+                                                     :content (str "msg-" idx)})))
+        inbound (orchestrator/list-interop-messages runtime (:id child) {:direction :inbound})
+        consumed (orchestrator/consume-agent-inbox! runtime (->TestProvider) (:id child))
+        delivered-events (events-of-type events :agent.interop.message.delivered)
+        dropped-events (events-of-type events :agent.interop.message.dropped)]
+    (is (= 70 (count sent)))
+    (is (= 70 (count inbound)))
+    (is (= 64 (count delivered-events)))
+    (is (= 6 (count dropped-events)))
+    (is (= 64 (:consumed consumed)))
+    (is (= 6 (count (filter #(= "dropped" (:status %)) inbound))))
+    (is (every? #(= "agent-inbox-full" (get-in % [:payload :last-error]))
+                dropped-events))))
+
+(deftest orchestrator-emits-drop-events-when-channel-buffers-full-test
+  (let [events (atom [])
+        runtime (orchestrator/create-orchestrator {:event-sink #(swap! events conj %)})
+        sender (orchestrator/spawn-agent! runtime {:name "Sender"})
+        recipient (orchestrator/spawn-agent! runtime {:name "Recipient"})
+        channel (orchestrator/create-channel! runtime {:name "coord"
+                                                       :participants [(:id sender) (:id recipient)]})]
+    (dotimes [idx 130]
+      (orchestrator/post-channel-message! runtime
+                                          (:id channel)
+                                          {:sender-id (:id sender)
+                                           :content (str "msg-" idx)}))
+    (let [drops (events-of-type events :channel.message.dropped)
+          bus-drops (filter #(= :channel-bus-full (get-in % [:payload :reason])) drops)
+          inbox-drops (filter #(= :agent-inbox-full (get-in % [:payload :reason])) drops)
+          posted-events (events-of-type events :channel.message.posted)
+          consumed (orchestrator/consume-agent-inbox! runtime (->TestProvider) (:id recipient))]
+      (is (= 130 (count posted-events)))
+      (is (= 130 (count (orchestrator/list-channel-messages runtime (:id channel)))))
+      (is (= 2 (count bus-drops)))
+      (is (= 66 (count inbox-drops)))
+      (is (= 68 (count drops)))
+      (is (= 64 (:consumed consumed))))))
+
 (deftest disabled-orchestrator-allows-reads-and-blocks-mutators-test
   (let [runtime (orchestrator/create-orchestrator {:enabled? false})]
     (is (empty? (orchestrator/list-agents runtime)))

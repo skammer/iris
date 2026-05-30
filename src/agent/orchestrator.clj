@@ -15,6 +15,9 @@
 (defn- random-id [prefix]
   (str prefix "-" (UUID/randomUUID)))
 
+(def ^:private agent-inbox-buffer-size 64)
+(def ^:private channel-bus-buffer-size 128)
+
 (defn- emit-event!
   [orchestrator event]
   (when-let [sink (:event-sink orchestrator)]
@@ -236,7 +239,7 @@
                 :status "idle"
                 :created-at created-at
                 :messages []
-                :inbox (async/chan (async/sliding-buffer 64))}]
+                :inbox (async/chan agent-inbox-buffer-size)}]
       (swap-state! orchestrator assoc-in [:agents (:id agent*)] agent*)
       (emit-event! orchestrator
                    {:event-type :agent.created
@@ -679,13 +682,22 @@
                                :metadata {:route (name route)
                                           :delivery-mode delivery-mode}})}))
 
+(defn- mark-interop-dropped [envelope reason]
+  (assoc envelope
+         :status "dropped"
+         :last-error (name reason)
+         :last-delivered-at nil
+         :dropped-at (now)))
+
 (defn- deliver-local-interop! [to-agent envelope]
-  (async/>!! (:inbox to-agent)
-             {:role "user"
-              :content (str "[interop:" (:message-type envelope) "] "
-                            (:from-address envelope) ": " (:content envelope))
-              :created-at (:created-at envelope)
-              :interop envelope}))
+  (let [message {:role "user"
+                 :content (str "[interop:" (:message-type envelope) "] "
+                               (:from-address envelope) ": " (:content envelope))
+                 :created-at (:created-at envelope)
+                 :interop envelope}]
+    (if (async/offer! (:inbox to-agent) message)
+      envelope
+      (mark-interop-dropped envelope :agent-inbox-full))))
 
 (defn- record-interop-delivery! [orchestrator dedupe-key envelope]
   (store-interop-message! orchestrator envelope)
@@ -693,28 +705,45 @@
     (swap-state! orchestrator assoc-in [:interop :deliveries dedupe-key] envelope))
   envelope)
 
+(defn- emit-interop-delivery-event! [orchestrator to-agent federated-target envelope]
+  (case (:status envelope)
+    "delivered"
+    (when to-agent
+      (emit-event! orchestrator
+                   {:event-type :agent.interop.message.delivered
+                    :entity-type :agent
+                    :entity-id (:id to-agent)
+                    :payload envelope}))
+
+    "dropped"
+    (emit-event! orchestrator
+                 {:event-type :agent.interop.message.dropped
+                  :entity-type :agent
+                  :entity-id (or (some-> to-agent :id)
+                                 (:to-agent-id envelope))
+                  :payload envelope})
+
+    "forward_requested"
+    (emit-event! orchestrator
+                 {:event-type :agent.interop.message.forward.requested
+                  :entity-type :peer
+                  :entity-id (or (some-> federated-target :peer-id)
+                                 (:to-peer-id envelope))
+                  :payload envelope})
+
+    nil))
+
 (defn- emit-interop-send-events! [orchestrator from-agent to-agent federated-target envelope]
   (emit-event! orchestrator
                {:event-type :agent.interop.message.sent
                 :entity-type :agent
                 :entity-id (:id from-agent)
                 :payload envelope})
-  (when (or to-agent
-            (= "forward_requested" (:status envelope)))
-    (emit-event! orchestrator
-                 {:event-type (if to-agent
-                                :agent.interop.message.delivered
-                                :agent.interop.message.forward.requested)
-                  :entity-type (if to-agent :agent :peer)
-                  :entity-id (or (some-> to-agent :id)
-                                 (some-> federated-target :peer-id))
-                  :payload envelope})))
+  (emit-interop-delivery-event! orchestrator to-agent federated-target envelope))
 
 (defn- route-interop-envelope! [orchestrator to-agent federated-target envelope]
   (if to-agent
-    (do
-      (deliver-local-interop! to-agent envelope)
-      envelope)
+    (deliver-local-interop! to-agent envelope)
     (deliver-federated! orchestrator
                         (:peer-id federated-target)
                         (:peer federated-target)
@@ -801,23 +830,22 @@
                       {:type :validation-failed
                        :field :message-id
                        :message-id message-id})))
-      (let [to-agent (when-let [to-agent-id (:to-agent-id envelope)]
-                      (ensure-agent! orchestrator to-agent-id))
-            updated0 (-> envelope
-                      (assoc :status (if to-agent "delivered" "forward_requested"))
-                      (assoc :last-delivered-at (now))
-                      (assoc :forwarded-at nil)
-                      (assoc :last-error nil)
-                      (update :delivery-count (fnil inc 1)))
-            updated (if to-agent
-                      updated0
-                      (deliver-federated! orchestrator
-                                          (:to-peer-id updated0)
-                                          (get (federated-peers-map orchestrator) (:to-peer-id updated0))
-                                          (:remote-agent-id updated0)
-                                          updated0))]
-      (when to-agent
-        (deliver-local-interop! to-agent (assoc updated :created-at (:last-delivered-at updated))))
+    (let [to-agent (when-let [to-agent-id (:to-agent-id envelope)]
+                     (ensure-agent! orchestrator to-agent-id))
+          updated0 (-> envelope
+                       (assoc :status (if to-agent "delivered" "forward_requested"))
+                       (assoc :last-delivered-at (now))
+                       (assoc :forwarded-at nil)
+                       (assoc :last-error nil)
+                       (update :delivery-count (fnil inc 1)))
+          updated (if to-agent
+                    (deliver-local-interop! to-agent
+                                            (assoc updated0 :created-at (:last-delivered-at updated0)))
+                    (deliver-federated! orchestrator
+                                        (:to-peer-id updated0)
+                                        (get (federated-peers-map orchestrator) (:to-peer-id updated0))
+                                        (:remote-agent-id updated0)
+                                        updated0))]
       (store-interop-message! orchestrator updated)
       (emit-event! orchestrator
                    {:event-type :agent.interop.message.retried
@@ -827,16 +855,7 @@
                               :to-agent-id (:to-agent-id updated)
                               :to-peer-id (:to-peer-id updated)
                               :delivery-count (:delivery-count updated)}})
-      (when (or to-agent
-                (= "forward_requested" (:status updated)))
-        (emit-event! orchestrator
-                     {:event-type (if to-agent
-                                    :agent.interop.message.delivered
-                                    :agent.interop.message.forward.requested)
-                      :entity-type (if to-agent :agent :peer)
-                      :entity-id (or (:to-agent-id updated)
-                                     (:to-peer-id updated))
-                      :payload updated}))
+      (emit-interop-delivery-event! orchestrator to-agent nil updated)
       updated)))
 
 (defn receive-federated-message!
@@ -867,18 +886,23 @@
                         :acked-at nil
                         :acknowledged-by nil
                         :ack-type nil
-                        :last-error nil}]
-    (deliver-local-interop! to-agent local-envelope)
-    (store-interop-message! orchestrator local-envelope)
+                        :last-error nil}
+        delivered-envelope (deliver-local-interop! to-agent local-envelope)]
+    (store-interop-message! orchestrator delivered-envelope)
     (emit-event! orchestrator
-                 {:event-type :agent.interop.message.received
-                  :entity-type :agent
-                  :entity-id (:id to-agent)
-                  :payload {:message-id (:id local-envelope)
-                            :origin-message-id (:origin-message-id local-envelope)
-                            :from-peer-id peer-id
-                            :from-address (:from-address local-envelope)}})
-    local-envelope))
+                 (if (= "dropped" (:status delivered-envelope))
+                   {:event-type :agent.interop.message.dropped
+                    :entity-type :agent
+                    :entity-id (:id to-agent)
+                    :payload delivered-envelope}
+                   {:event-type :agent.interop.message.received
+                    :entity-type :agent
+                    :entity-id (:id to-agent)
+                    :payload {:message-id (:id delivered-envelope)
+                              :origin-message-id (:origin-message-id delivered-envelope)
+                              :from-peer-id peer-id
+                              :from-address (:from-address delivered-envelope)}}))
+    delivered-envelope))
 
 (defn create-channel!
   [orchestrator {:keys [name participants]
@@ -893,7 +917,7 @@
                    :participants participant-set
                    :created-at (now)
                    :messages []
-                   :bus (async/chan (async/sliding-buffer 128))}]
+                   :bus (async/chan channel-bus-buffer-size)}]
       (swap-state! orchestrator assoc-in [:channels (:id channel)] channel)
       (emit-event! orchestrator
                    {:event-type :channel.created
@@ -936,7 +960,16 @@
                    :created-at (now)
                    :channel-id channel-id}]
       (swap-state! orchestrator update-in [:channels channel-id :messages] conj message)
-      (async/>!! (:bus (get (channels-map orchestrator) channel-id)) message)
+      (when-not (async/offer! (:bus (get (channels-map orchestrator) channel-id)) message)
+        (emit-event! orchestrator
+                     {:event-type :channel.message.dropped
+                      :entity-type :channel
+                      :entity-id channel-id
+                      :payload {:message-id (:id message)
+                                :channel-id channel-id
+                                :sender-id sender-id
+                                :drop-target :channel-bus
+                                :reason :channel-bus-full}}))
       (doseq [participant-id participants
               :when (not= participant-id sender-id)]
         (let [delivered {:role "user"
@@ -945,7 +978,17 @@
                          :created-at (now)
                          :channel-id channel-id
                          :sender-id sender-id}]
-          (async/>!! (:inbox (ensure-agent! orchestrator participant-id)) delivered)))
+          (when-not (async/offer! (:inbox (ensure-agent! orchestrator participant-id)) delivered)
+            (emit-event! orchestrator
+                         {:event-type :channel.message.dropped
+                          :entity-type :agent
+                          :entity-id participant-id
+                          :payload {:message-id (:id message)
+                                    :channel-id channel-id
+                                    :sender-id sender-id
+                                    :participant-id participant-id
+                                    :drop-target :agent-inbox
+                                    :reason :agent-inbox-full}}))))
       (emit-event! orchestrator
                    {:event-type :channel.message.posted
                     :entity-type :channel
