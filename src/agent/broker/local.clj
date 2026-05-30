@@ -8,7 +8,13 @@
 
 (defn- channel-buffer [{:keys [buffer-size buffer-strategy]
                         :or {buffer-size 64
-                             buffer-strategy :fixed}}]
+                             ;; Default to :sliding so the :park (async/put!) path can never
+                             ;; accumulate pending puts and throw at the 1024 hard cap: a sliding
+                             ;; buffer never reports full, it drops the oldest message instead.
+                             ;; A slow subscriber must not be able to abort event emission for
+                             ;; every other subscriber (publish! runs synchronously on the
+                             ;; event-sink thread).
+                             buffer-strategy :sliding}}]
   (case (keyword buffer-strategy)
     :dropping (async/dropping-buffer buffer-size)
     :sliding (async/sliding-buffer buffer-size)
