@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Iris — Agentic Workflow Map</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --line:#30363d;
+    --txt:#e6edf3; --dim:#8b949e; --accent:#58a6ff;
+    --entry:#d29922; --transport:#a371f7; --runtime:#58a6ff; --control:#3fb950;
+    --llm:#f778ba; --tool:#ff7b72; --sandbox:#db6d28; --persistence:#56d364;
+    --memory:#79c0ff; --output:#8b949e;
+    --crit:#f85149; --high:#ff7b72; --med:#d29922; --low:#8b949e;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;
+    align-items:baseline;gap:16px;flex-wrap:wrap;background:var(--panel)}
+  header h1{font-size:17px;margin:0;font-weight:650}
+  header .sub{color:var(--dim);font-size:12.5px}
+  header .hint{margin-left:auto;color:var(--dim);font-size:12px}
+  #wrap{display:flex;height:calc(100% - 54px)}
+  #stage{flex:1;overflow:auto;position:relative}
+  svg{display:block}
+  .edge{stroke:var(--line);stroke-width:1.4;fill:none;opacity:.45;transition:.15s}
+  .edge.back{stroke:#6e7681;stroke-dasharray:4 3;opacity:.3}
+  .edge.hl{stroke:var(--accent);opacity:1;stroke-width:2.2}
+  .edge.hlback{stroke:#f778ba;opacity:1;stroke-width:2}
+  .elabel{fill:var(--dim);font-size:9.5px;opacity:0;transition:.15s;pointer-events:none}
+  .elabel.show{opacity:.92}
+  .node{cursor:pointer}
+  .node rect{stroke-width:1.5;rx:8;transition:.15s;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))}
+  .node text.lbl{fill:var(--txt);font-size:11.5px;font-weight:600;pointer-events:none}
+  .node text.file{fill:var(--dim);font-size:8.7px;pointer-events:none}
+  .node.dim{opacity:.28}
+  .node.sel rect{stroke:#fff;stroke-width:2.4}
+  .badge circle{stroke:#0d1117;stroke-width:1.5}
+  .badge text{fill:#0d1117;font-size:9px;font-weight:700;pointer-events:none}
+  #panel{width:360px;min-width:360px;border-left:1px solid var(--line);
+    background:var(--panel);overflow:auto;padding:0}
+  #panel .ph{padding:16px 18px;border-bottom:1px solid var(--line)}
+  #panel .tag{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.04em;
+    text-transform:uppercase;padding:2px 8px;border-radius:20px;color:#0d1117}
+  #panel h2{font-size:16px;margin:10px 0 4px}
+  #panel .file{color:var(--accent);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}
+  #panel .desc{color:var(--dim);font-size:13px;margin-top:10px}
+  #panel .sec{padding:14px 18px;border-bottom:1px solid var(--line)}
+  #panel .sec h3{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin:0 0 10px}
+  .finding{padding:9px 11px;border-radius:7px;background:var(--panel2);margin-bottom:8px;border-left:3px solid var(--low)}
+  .finding.crit{border-color:var(--crit)} .finding.high{border-color:var(--high)}
+  .finding.med{border-color:var(--med)} .finding.low{border-color:var(--low)}
+  .finding .sv{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em}
+  .finding.crit .sv{color:var(--crit)} .finding.high .sv{color:var(--high)}
+  .finding.med .sv{color:var(--med)} .finding.low .sv{color:var(--low)}
+  .finding .ti{font-size:12.5px;margin-top:2px;color:var(--txt)}
+  .flow{padding:14px 18px}
+  .flow ol{margin:0;padding-left:18px} .flow li{margin-bottom:7px;color:var(--dim);font-size:12.5px}
+  .flow li b{color:var(--txt)}
+  .empty{color:var(--dim);font-style:italic;font-size:12.5px}
+  #legend{position:absolute;top:10px;right:12px;background:rgba(22,27,34,.92);
+    border:1px solid var(--line);border-radius:8px;padding:9px 11px;font-size:11px}
+  #legend .row{display:flex;align-items:center;gap:6px;margin:2px 0}
+  #legend .sw{width:11px;height:11px;border-radius:3px}
+  .stage-band{fill:#ffffff;opacity:.014}
+  .stage-name{fill:#484f58;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}
+  .stop{fill:var(--dim);font-size:11px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Iris — Agentic Workflow Map</h1>
+  <span class="sub">one user message → response · <code>src/agent</code></span>
+  <span class="hint">click a node → file + role + findings · hover an edge highlights flow</span>
+</header>
+<div id="wrap">
+  <div id="stage">
+    <div id="legend"></div>
+    <svg id="svg"></svg>
+  </div>
+  <aside id="panel"></aside>
+</div>
+
+<script>
+// ---- data ---------------------------------------------------------------
+const TYPES = {
+  entry:'Ingress', transport:'Transport', runtime:'Runtime', control:'Control',
+  llm:'LLM', tool:'Tools', sandbox:'Sandbox', persistence:'Persistence',
+  memory:'Memory', output:'Output'
+};
+// stage = vertical band (pipeline order). lane assigned automatically.
+const NODES = {
+  cli:{l:'CLI main / stream-prompt!',t:'entry',f:'cli.clj',s:0,d:'Parses args, builds the system, resolves a session, calls chat/run! with an :on-delta stdout callback.'},
+  http:{l:'HTTP /v1/chat/completions',t:'entry',f:'api/handlers/chat.clj',s:0,d:'Validates + normalizes the chat request, ensures the session, then complete! (non-stream) or stream-response (SSE).'},
+  tg:{l:'Telegram poller',t:'entry',f:'telegram.clj',s:0,d:'Long-polls getUpdates, persists to channel inbox, allowlist-checks, maps chat→session, downloads media, calls run-chat! → chat/run!.'},
+  sse:{l:'SSE streaming handler',t:'transport',f:'api/streaming.clj',s:1,d:'managed-response opens an SSE channel, runs chat/run! on a worker future, converts broker events → OpenAI-style chat.completion.chunk.'},
+  broker:{l:'Event broker / bus',t:'transport',f:'system/events.clj · broker/local.clj',s:1,d:'publish! fans events synchronously to all subscriptions. SSE + Telegram subscribe here.'},
+  chatrun:{l:'chat/run! + queue manager',t:'runtime',f:'chat.clj',s:2,d:'Routes loop-control/loop-active, then a per-session manager runs immediately (:active) or persists+enqueues (:queued) under manager-lock.'},
+  runturn:{l:'chat/run-turn!',t:'runtime',f:'chat.clj',s:3,d:'Persists user turn, auto-compacts, loads history, recalls memory, builds context-injectors, wires the layered event-sink, then calls the loop.'},
+  compaction:{l:'auto-compact!',t:'memory',f:'runtime/compaction.clj',s:4,d:'Trims persisted session entries above token thresholds, writing a deterministic :compaction entry. (Uses its own estimator, separate from context-pack.)'},
+  memrecall:{l:'memory recall',t:'memory',f:'memory/core.clj',s:4,d:'Reads MEMORY.md prompt docs + hybrid search across messages/events/facts/graph before each turn.'},
+  prompts:{l:'prompts · skills · modes',t:'memory',f:'prompts.clj · skills.clj',s:4,d:'Builds context-injectors: iris context, prompt-mode system message, invoked-skill section, memory-context message.'},
+  loop:{l:'runtime.loop/run!',t:'runtime',f:'runtime/loop.clj',s:5,d:'The pure evented loop. Per step: repair history → pack context → route tools → plan → guardrails → execute → recur or terminate. All side effects injected as fns.'},
+  ctxpack:{l:'context-pack/pack-context',t:'runtime',f:'runtime/context_pack.clj',s:6,d:'Per-call window shrink: drop stale nudges, truncate/compact old tool results, summarize a prefix via an LLM summarizer-fn if still over budget.'},
+  router:{l:'tool-router/route-tools',t:'control',f:'runtime/tool_router.clj',s:6,d:'Pure fn returning the trimmed tool schemas the model sees AND the allowed-tools set used to gate execution.'},
+  planner:{l:'planner/plan-step!',t:'control',f:'planner.clj',s:7,d:'Stateless: prepends the planner-system prompt, attaches native tool defs, one LLM invoke, converts tool_calls→directives (or :complete).'},
+  kernel:{l:'kernel.runtime/execute-step!',t:'control',f:'kernel/runtime.clj',s:7,d:'Pure directive dispatch; batches consecutive tool-call directives, preserves per-directive receipt ordering. Driven via ChatKernelOps.'},
+  llm:{l:'llm.core/invoke',t:'llm',f:'llm/core.clj',s:8,d:'Provider-agnostic invoke → normalized turn {:content :tool-calls :usage :stop-reason}. messages.clj does wire translation; dsml.clj salvages leaked tool calls.'},
+  provider:{l:'OpenAI-compatible provider',t:'llm',f:'llm/providers/openai_compatible.clj',s:8,d:'HTTP to /chat/completions; streams deltas back into the loop via on-content-delta, or post-json. Ollama is a parallel provider.'},
+  batch:{l:'runtime.tools/execute-batch!',t:'tool',f:'runtime/tools.clj',s:9,d:'Preflights, groups parallel-safe vs sequential calls, forces sequential for approval-sensitive/tool-activating calls, preserves source-index ordering.'},
+  toolreg:{l:'tools.core / execute-tool',t:'tool',f:'tools/core.clj',s:9,d:'Per-call: allow-list → permissions → Malli validate → before-hook → approval → durable-activity wrap → execute-fn → after-hook → events.'},
+  shell:{l:'fs · shell · http · memory · todo',t:'tool',f:'tools/common/*.clj',s:10,d:'Built-in tools. shell/fs are bounded to allowed roots; in the chat path tools run in-process (not via the sandbox substrates).'},
+  runners:{l:'runners/* substrates',t:'sandbox',f:'runners/core.clj',s:10,d:'Separate control-plane: seatbelt/bubblewrap/docker/podman/local-unsandboxed for SPAWNED agent runs (runtime.core registry), not the synchronous chat turn.'},
+  kerneldown:{l:'receipts → loop',t:'control',f:'kernel/runtime.clj',s:11,d:'Tool receipts flow back; the loop emits the assistant tool-call message + per-tool results, appends protocol messages, and recurs.'},
+  eventsink:{l:'system event-sink',t:'persistence',f:'system/events.clj',s:12,d:'Each runtime event is persisted (log-event!) AND published to the broker. Central event write path.'},
+  persist:{l:'persistence.sqlite',t:'persistence',f:'persistence/sqlite/*.clj',s:12,d:'Sessions/messages/entries/completions/events/runs. Parameterized SQL, transactional writes under a tx-lock, idempotent inserts, FTS5 mirrors.'},
+  factmem:{l:'memory fact extraction',t:'memory',f:'memory/core.clj',s:12,d:'After the turn, mines subject/predicate/object facts via a structured-output LLM call and saves to SQLite (+ optional datahike graph). Non-fatal on failure.'},
+  output:{l:'Response / SSE / Telegram',t:'output',f:'api/handlers/chat.clj',s:13,d:'Non-stream → OpenAI chat.completion; stream → chat.completion.chunk + [DONE]; Telegram → finalize draft to a real message.'},
+};
+const EDGES = [
+  ['cli','chatrun','chat/run! {:on-delta}'],['http','chatrun','complete!'],['http','sse','stream-response'],
+  ['sse','chatrun','run-task! {:stream? true}'],['sse','broker','subscribe all-events'],
+  ['tg','chatrun','run-chat!'],['tg','broker','subscribe (stream)'],
+  ['chatrun','runturn','run-active-item!'],
+  ['runturn','compaction','auto-compact!'],['runturn','persist','persist-user-turn! / context'],
+  ['runturn','memrecall','recall-memory'],['runturn','prompts','injectors'],
+  ['runturn','loop','runtime-loop/run!'],
+  ['loop','ctxpack','context-pack-fn'],['ctxpack','llm','summarizer-fn (LLM)'],
+  ['loop','router','route-tools'],['loop','planner','planner-fn'],
+  ['planner','prompts','planner-system prompt'],['planner','llm','llm/invoke'],
+  ['llm','provider','HTTP'],['provider','loop','streamed deltas'],['llm','planner','normalized turn'],
+  ['planner','loop','step + directives'],['loop','kernel','execute-step-fn'],
+  ['kernel','batch','execute-agent-tool-batch!'],['batch','toolreg','preflight + execute-tool'],
+  ['toolreg','shell','execute-fn'],['toolreg','persist','activity-executor wrap'],
+  ['shell','batch','tool result'],['batch','kerneldown','receipts'],['kerneldown','loop','executed step'],
+  ['loop','runturn','emit events'],['runturn','eventsink','emit!'],
+  ['eventsink','persist','log-event!'],['eventsink','broker','publish!'],
+  ['broker','sse','events → SSE'],['broker','tg','events → drafts'],
+  ['runturn','persist','persist-final-assistant!'],['runturn','factmem','extract-turn-memory!'],
+  ['factmem','llm','structured-output call'],['factmem','persist','save-memory-fact!'],
+  ['runturn','chatrun','{:content} result'],['chatrun','output','final content'],
+  ['sse','output','chunk / [DONE]'],['tg','output','finalize draft'],
+  ['runners','eventsink','durable-run control-plane (separate)'],
+];
+const STAGE_NAMES = ['Ingress','Transport','Orchestrate','Per-turn prep','Loop','Loop','Plan / control','Plan / control','LLM','Tools','Tools / sandbox','Return','Persist / memory','Output'];
+const FIND = {
+  cli:[['med','no-jvm-shutdown-hook — serve/CLI leak the pool, poller, nREPL on exit']],
+  http:[['high','api-body-coercion-discarded — coerced body validated then ignored; handler re-reads raw JSON'],
+        ['med','auth-disabled-when-key-nil — fail-open when no API key configured (footgun if bound 0.0.0.0)']],
+  tg:[['high','telegram-draft-id-invalid — draft id can rotate to 0/negative, violates API contract'],
+      ['high','broker firehose overflow — subscribes with no opts; a slow turn can throw publish! for everyone'],
+      ['med','draft streaming can lose the final reply when no closer arrives']],
+  sse:[['med','run-task! future cancelled but the synchronous chat turn is not actually interrupted on disconnect']],
+  broker:[['high','broker-park-overflow — default subscriber uses unbounded put!; 1024 pending puts → throw on the sink thread']],
+  chatrun:[['high','chat-god-namespace — 985 LOC: queue + streaming + persistence + memory + kernel-ops + fallback'],
+           ['med','stream-flusher-thread-per-flush — a future + Thread/sleep per 50ms flush window']],
+  runturn:[['med','memory dual-write — SQLite + graph can silently diverge (best-effort)']],
+  loop:[['high','max-token-discards-toolcalls — finish_reason="length" aborts the turn even with valid tool calls'],
+        ['high','run-bang-god-function — 346 lines, ~12 deep, 8 duplicated terminal-result maps'],
+        ['med','max-token-loses-final-messages — that branch drops accumulated prior-turn messages']],
+  ctxpack:[['med','token-estimate-counts-raw — :raw payload double-counts tokens → premature compaction'],
+           ['med','pack-by-prefix-summary choose-cut is O(n²) over message count'],
+           ['low','budget-report double-counts tool-result tokens across budgets']],
+  prompts:[['med','slash skill names can silently shadow built-in loop-control commands']],
+  memrecall:[['med','graph items scored twice in search-memory']],
+  compaction:[['high','two independent token estimators/thresholds (compaction vs context-pack) with no shared truth']],
+  router:[['med','default-to-read routing can hide tools from the model']],
+  planner:[],
+  llm:[['high','telemetry completion path discards tool calls and real usage'],
+       ['med','retry-with-backoff: blocking Thread/sleep in async threads, no jitter (thundering herd)']],
+  provider:[['med','openai-stream-leak-on-error — non-2xx throws before with-open → leaked connection (same in ollama)'],
+            ['med','streaming-toolcall-index-fallback — providers omitting :index split one call across slots'],
+            ['med','provider-helper-copypaste — byte-identical helpers across the two providers']],
+  kernel:[['med','dual-kernelops-divergent — ChatKernelOps silently no-ops state-patch/complete; no capability gate']],
+  kerneldown:[],
+  batch:[['high','double-tool-enforcement — gate/validate runs twice through divergent paths (allow- vs block-on-ambiguous)'],
+         ['med','parallel-tool-pool-unbounded — newFixedThreadPool sized to LLM-chosen call count']],
+  toolreg:[['med','execute-tool repeats the :tool-execution-end map 4× and nanoTime calc 2×; blocked/failed omit duration']],
+  shell:[['med','shell-denylist-bypassable — literal-argv deny; npm run / cargo build|test are auto-allowed (RCE w/o approval)'],
+         ['med','http-ssrf-dns-rebinding — resolve-then-connect TOCTOU'],
+         ['low','fs default root is process CWD; check-then-use symlink window']],
+  runners:[['high','api-arbitrary-substrate — API accepts local-unsandboxed + arbitrary command → host RCE'],
+           ['med','container default share-network? = true (weakest network isolation on the strongest substrate)'],
+           ['med','local-runner-process-map-leak — dead Process objects never pruned'],
+           ['low','seatbelt paths not canonicalized; root only forbidden for docker/podman']],
+  eventsink:[],
+  persist:[['high','sqlite-retry wraps connection acquisition only, not statement execution'],
+           ['med','migration-checksum-cosmetic — never hashes the SQL; drift undetectable'],
+           ['med','pool-config-not-forwarded — permanently 4 connections'],
+           ['med','runtime-health N+1 — one query per run (up to 1000)'],
+           ['med','decide-approval has no status=pending guard / CAS']],
+  factmem:[['low','datahike full edge-table scan per query / per BFS level (prototype)']],
+  output:[],
+};
+const SEVRANK={crit:0,high:1,med:2,low:3};
+const SEVCOL={crit:'var(--crit)',high:'var(--high)',med:'var(--med)',low:'var(--low)'};
+
+// ---- layout -------------------------------------------------------------
+const NW=176, NH=44, VGAP=88, TOP=40, COLW=1320;
+const byStage={};
+Object.entries(NODES).forEach(([id,n])=>{(byStage[n.s]=byStage[n.s]||[]).push(id);});
+const maxStage=Math.max(...Object.keys(byStage).map(Number));
+const pos={};
+for(let s=0;s<=maxStage;s++){
+  const ids=byStage[s]||[];
+  const n=ids.length;
+  ids.forEach((id,i)=>{
+    const x = COLW*(i+1)/(n+1);
+    pos[id]={x, y: TOP + s*VGAP + 30};
+  });
+}
+const H = TOP + maxStage*VGAP + NH + 60;
+
+// ---- render -------------------------------------------------------------
+const SVGNS='http://www.w3.org/2000/svg';
+const svg=document.getElementById('svg');
+svg.setAttribute('viewBox',`0 0 ${COLW} ${H}`);
+svg.setAttribute('width',COLW); svg.setAttribute('height',H);
+
+// defs: arrowheads
+const defs=document.createElementNS(SVGNS,'defs');
+defs.innerHTML=`
+ <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+   <path d="M0,0 L10,5 L0,10 z" fill="#6e7681"/></marker>
+ <marker id="arrhl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+   <path d="M0,0 L10,5 L0,10 z" fill="#58a6ff"/></marker>`;
+svg.appendChild(defs);
+
+// stage bands + names
+for(let s=0;s<=maxStage;s++){
+  const y=TOP+s*VGAP;
+  const b=document.createElementNS(SVGNS,'rect');
+  b.setAttribute('class','stage-band');b.setAttribute('x',0);b.setAttribute('y',y);
+  b.setAttribute('width',COLW);b.setAttribute('height',VGAP);
+  if(s%2===0) svg.appendChild(b);
+  const t=document.createElementNS(SVGNS,'text');
+  t.setAttribute('class','stage-name');t.setAttribute('x',10);t.setAttribute('y',y+VGAP/2);
+  t.textContent=STAGE_NAMES[s]||''; svg.appendChild(t);
+}
+
+// edges
+const edgeEls=[];
+EDGES.forEach((e,i)=>{
+  const[a,b,lbl]=e; const pa=pos[a],pb=pos[b]; if(!pa||!pb)return;
+  const back = NODES[b].s <= NODES[a].s;
+  const x1=pa.x, y1=pa.y+NH/2, x2=pb.x, y2=pb.y-NH/2;
+  const my=(y1+y2)/2;
+  const path=document.createElementNS(SVGNS,'path');
+  // curve: if back-edge, bow out to the side
+  let d;
+  if(back){
+    const off = (x1+x2)/2 + (i%2?160:-160);
+    d=`M${x1},${pa.y} C${off},${y1} ${off},${y2} ${x2},${pb.y}`;
+  }else{
+    d=`M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`;
+  }
+  path.setAttribute('d',d);
+  path.setAttribute('class','edge'+(back?' back':''));
+  path.setAttribute('marker-end','url(#arr)');
+  svg.appendChild(path);
+  const tl=document.createElementNS(SVGNS,'text');
+  tl.setAttribute('class','elabel');
+  tl.setAttribute('x',back? ((x1+x2)/2 + (i%2?150:-150)) : (x1+x2)/2);
+  tl.setAttribute('y',my-2); tl.setAttribute('text-anchor','middle');
+  tl.textContent=lbl; svg.appendChild(tl);
+  edgeEls.push({a,b,path,label:tl,back});
+});
+
+// nodes
+const nodeEls={};
+Object.entries(NODES).forEach(([id,n])=>{
+  const p=pos[id];
+  const g=document.createElementNS(SVGNS,'g');
+  g.setAttribute('class','node'); g.setAttribute('transform',`translate(${p.x-NW/2},${p.y-NH/2})`);
+  const col=`var(--${n.t})`;
+  const fset=FIND[id]||[];
+  const worst = fset.length? fset.reduce((w,f)=>SEVRANK[f[0]]<SEVRANK[w]?f[0]:w,'low') : null;
+  g.innerHTML=`
+    <rect width="${NW}" height="${NH}" rx="8" fill="var(--panel2)" stroke="${col}"/>
+    <rect width="4" height="${NH}" rx="2" fill="${col}"/>
+    <text class="lbl" x="12" y="19">${n.l.length>26?n.l.slice(0,25)+'…':n.l}</text>
+    <text class="file" x="12" y="34">${n.f}</text>`;
+  if(fset.length){
+    const bg=document.createElementNS(SVGNS,'g'); bg.setAttribute('class','badge');
+    bg.innerHTML=`<circle cx="${NW-13}" cy="13" r="9" fill="${SEVCOL[worst]}"/>
+      <text x="${NW-13}" y="16.5" text-anchor="middle">${fset.length}</text>`;
+    g.appendChild(bg);
+  }
+  g.addEventListener('click',()=>select(id));
+  g.addEventListener('mouseenter',()=>highlight(id,true));
+  g.addEventListener('mouseleave',()=>{ if(!selected) highlight(null,false); });
+  svg.appendChild(g); nodeEls[id]=g;
+});
+
+// legend
+const lg=document.getElementById('legend');
+lg.innerHTML=Object.entries(TYPES).map(([k,v])=>
+  `<div class="row"><span class="sw" style="background:var(--${k})"></span>${v}</div>`).join('');
+
+// ---- interaction --------------------------------------------------------
+let selected=null;
+function neighbors(id){const ins=[],outs=[];EDGES.forEach(e=>{if(e[0]===id)outs.push(e);if(e[1]===id)ins.push(e);});return{ins,outs};}
+function highlight(id,showLabels){
+  edgeEls.forEach(ee=>{
+    const on = id && (ee.a===id||ee.b===id);
+    ee.path.setAttribute('class','edge'+(ee.back?' back':'')+(on?(ee.back?' hlback':' hl'):''));
+    ee.path.setAttribute('marker-end', on&&!ee.back?'url(#arrhl)':'url(#arr)');
+    ee.label.classList.toggle('show', !!(on&&showLabels));
+  });
+  Object.entries(nodeEls).forEach(([nid,g])=>{
+    const conn = id && (nid===id || EDGES.some(e=>(e[0]===id&&e[1]===nid)||(e[1]===id&&e[0]===nid)));
+    g.classList.toggle('dim', !!id && !conn);
+    g.classList.toggle('sel', nid===selected);
+  });
+}
+function select(id){
+  selected=id; highlight(id,true);
+  const n=NODES[id]; const f=FIND[id]||[]; const {ins,outs}=neighbors(id);
+  const findHtml = f.length? f.map(([sv,ti])=>{
+    const cls=sv==='crit'?'crit':sv; const lab=sv==='crit'?'CRITICAL':sv.toUpperCase();
+    return `<div class="finding ${cls}"><div class="sv">${lab}</div><div class="ti">${ti}</div></div>`;
+  }).join('') : `<div class="empty">No findings attached — clean in this review.</div>`;
+  const flowList = `
+    <div class="sec"><h3>Inbound</h3>${ins.length?ins.map(e=>`<div style="font-size:12.5px;margin:3px 0"><b style="color:var(--accent)">${NODES[e[0]].l}</b> <span style="color:var(--dim)">— ${e[2]}</span></div>`).join(''):'<div class="empty">entry point</div>'}</div>
+    <div class="sec"><h3>Outbound</h3>${outs.length?outs.map(e=>`<div style="font-size:12.5px;margin:3px 0"><b style="color:var(--accent)">${NODES[e[1]].l}</b> <span style="color:var(--dim)">— ${e[2]}</span></div>`).join(''):'<div class="empty">terminal</div>'}</div>`;
+  document.getElementById('panel').innerHTML=`
+    <div class="ph">
+      <span class="tag" style="background:var(--${n.t})">${TYPES[n.t]}</span>
+      <h2>${n.l}</h2>
+      <div class="file">${n.f}</div>
+      <div class="desc">${n.d}</div>
+    </div>
+    <div class="sec"><h3>Findings (${f.length})</h3>${findHtml}</div>
+    ${flowList}`;
+}
+function intro(){
+  selected=null; highlight(null,false);
+  const counts={crit:0,high:0,med:0,low:0};
+  Object.values(FIND).forEach(arr=>arr.forEach(([s])=>counts[s]++));
+  document.getElementById('panel').innerHTML=`
+    <div class="ph"><h2>The agentic turn</h2>
+      <div class="desc">One user message flows from an ingress (CLI / HTTP / Telegram) through <b>chat/run!</b> into the pure evented <b>runtime.loop/run!</b>, which plans with the LLM, executes tools through the kernel, streams events back out, and persists everything. Click any node for its file, role, and findings.</div>
+    </div>
+    <div class="flow"><h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin:0 0 10px">Findings on this map</h3>
+      <div class="finding high"><div class="sv">HIGH × ${counts.high}</div><div class="ti">correctness + security + structure</div></div>
+      <div class="finding med"><div class="sv">MEDIUM × ${counts.med}</div></div>
+      <div class="finding low"><div class="sv">LOW × ${counts.low}</div></div>
+      <div class="desc" style="margin-top:14px">Termination stop-reasons (all explicit in the loop):<br><span style="color:var(--txt)">completed · approval-required · max-steps · max-tokens · doom-loop · guardrail-exhausted · cancelled · planner-error</span></div>
+      <div class="desc" style="margin-top:12px">The dashed edge from <b>runners/*</b> is the separate durable-run control-plane (spawned agent runs), not the synchronous chat turn — the two meet only at the event sink.</div>
+      <div class="desc" style="margin-top:12px">Full prose + fixes: <b style="color:var(--accent)">RELEASE_REPORT.md</b>.</div>
+    </div>`;
+}
+intro();
+</script>
+</body>
+</html>
