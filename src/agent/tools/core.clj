@@ -41,6 +41,79 @@
 (defn validation-error [message details]
   (tool-error :validation-failed message details))
 
+(defn- schema-children [schema]
+  (let [children (rest schema)]
+    (if (map? (first children))
+      (rest children)
+      children)))
+
+(defn- map-entry-schema [entry]
+  (let [[k maybe-props & rest*] entry]
+    [k (if (map? maybe-props) (first rest*) maybe-props)]))
+
+(defn- parse-long-string [value]
+  (let [value* (str/trim value)]
+    (if (re-matches #"[+-]?\d+" value*)
+      (try
+        (Long/parseLong value*)
+        (catch NumberFormatException _
+          value))
+      value)))
+
+(defn- parse-double-string [value]
+  (let [value* (str/trim value)]
+    (if (re-matches #"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?" value*)
+      (try
+        (Double/parseDouble value*)
+        (catch NumberFormatException _
+          value))
+      value)))
+
+(declare coerce-schema-input)
+
+(defn- coerce-map-input [schema value]
+  (if-not (map? value)
+    value
+    (reduce (fn [acc entry]
+              (let [[k child-schema] (map-entry-schema entry)]
+                (if (contains? acc k)
+                  (update acc k #(coerce-schema-input child-schema %))
+                  acc)))
+            value
+            (schema-children schema))))
+
+(defn- coerce-vector-input [schema value]
+  (if-not (vector? value)
+    value
+    (let [children (schema-children schema)
+          item-schema (if (map? (first children))
+                        (second children)
+                        (first children))]
+      (if item-schema
+        (mapv #(coerce-schema-input item-schema %) value)
+        value))))
+
+(defn- coerce-schema-input [schema value]
+  (let [schema-type (if (vector? schema) (first schema) schema)]
+    (cond
+      (nil? value) nil
+      (= :int schema-type) (if (string? value) (parse-long-string value) value)
+      (= 'number? schema-type) (if (string? value) (parse-double-string value) value)
+      (= number? schema-type) (if (string? value) (parse-double-string value) value)
+      (= :boolean schema-type) (if (string? value)
+                                 (case (str/lower-case (str/trim value))
+                                   "true" true
+                                   "false" false
+                                   value)
+                                 value)
+      (and (vector? schema) (= :maybe schema-type))
+      (coerce-schema-input (first (schema-children schema)) value)
+      (and (vector? schema) (= :map schema-type))
+      (coerce-map-input schema value)
+      (and (vector? schema) (= :vector schema-type))
+      (coerce-vector-input schema value)
+      :else value)))
+
 (defn- json-input-schema [input-schema]
   (try
     (json-schema/transform input-schema)
@@ -179,16 +252,18 @@
       :else (constantly false))))
 
 (defn create-tool
-  [{:keys [description execute-fn validate-fn health-fn]}]
+  [{:keys [description execute-fn validate-fn health-fn coerce-fn]}]
   (when-not (:malli-schema description)
     (throw (validation-error "tool description must include Malli input-schema"
                              {:tool-name (:name description)})))
   (when-not execute-fn
     (throw (validation-error "execute-fn is required" {:tool-name (:name description)})))
-  (let [base-validator (schema-validator description)
+  (let [schema (:malli-schema description)
+        coerce* (or coerce-fn #(coerce-schema-input schema %))
+        base-validator (schema-validator description)
         validator (if validate-fn
-                    (fn [input] (validate-fn (base-validator input)))
-                    base-validator)]
+                    (fn [input] (validate-fn (base-validator (coerce* input))))
+                    (fn [input] (base-validator (coerce* input))))]
     (->BasicTool description
                  execute-fn
                  validator

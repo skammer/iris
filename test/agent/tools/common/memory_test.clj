@@ -139,6 +139,29 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest message-search-tool-accepts-provider-string-limit-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        session (sqlite/create-session! store "message-search-string-limit")
+        service (memory-service store)
+        registry* (registry service)]
+    (try
+      (doseq [idx (range 3)]
+        (sqlite/append-message! store (:id session) "assistant" (str "Kimi chunk " idx)))
+      (let [result (tools/execute-tool registry*
+                                       :message_search
+                                       {:query "Kimi"
+                                        :limit "1"
+                                        :session-id (:id session)}
+                                       {:permissions #{:memory-read}
+                                        :session-id (:id session)})
+            result-lines (->> (str/split-lines result)
+                              (filter #(str/starts-with? % "- "))
+                              vec)]
+        (is (= 1 (count result-lines))))
+      (finally
+        (io/delete-file path true)))))
+
 (deftest memory-tool-removes-sqlite-facts-test
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})

@@ -123,6 +123,27 @@
                                                       {:permissions #{:echo}
                                                        :allowed-tools #{:http}}))))))
 
+(deftest registry-coerces-provider-scalar-strings-before-validation-test
+  (let [tool (tools/create-tool
+              {:description (tools/create-tool-description
+                             :search
+                             "Search"
+                             :input-schema [:map {:closed true}
+                                            [:query :string]
+                                            [:limit {:optional true} [:maybe :int]]
+                                            [:all-sessions? {:optional true} [:maybe :boolean]]])
+               :execute-fn (fn [input _context] input)})
+        registry (-> (tools/create-registry)
+                     (tools/register-tool tool))]
+    (is (= {:query "prompts"
+            :limit 10
+            :all-sessions? false}
+           (tools/execute-tool registry
+                               :search
+                               {:query "prompts"
+                                :limit "10"
+                                :all-sessions? "false"})))))
+
 (deftest registry-requires-approval-policy-for-sensitive-tools-test
   (let [tool (tools/create-tool
               {:description (tools/create-tool-description
