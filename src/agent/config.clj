@@ -2,6 +2,7 @@
   "Configuration loading for the rewritten runtime."
   (:require
    [agent.config.env :as config-env]
+   [agent.defaults :as defaults]
    [clojure.edn :as edn]
    [clojure.java.io :as io]
    [clojure.string :as str]))
@@ -12,8 +13,8 @@
          :providers {:ollama {:type :ollama
                               :base-url "http://localhost:11434"
                               :model "llama3.2:3b"
-                              :temperature 0.2
-                              :max-tokens 1024
+                              :temperature defaults/llm-temperature
+                              :max-tokens defaults/llm-max-tokens
                               :stream? false
                               :prompt-cache? true
                               :stream-structured-output? true
@@ -30,8 +31,8 @@
                                                                  :supports-streaming true
                                                                  :supports-tools true
                                                                  :supports-vision true}}
-                                  :temperature 0.2
-                                  :max-tokens 1024
+                                  :temperature defaults/llm-temperature
+                                  :max-tokens defaults/llm-max-tokens
                                   :stream? false
                                   :prompt-cache? true
                                   :stream-structured-output? true
@@ -48,8 +49,8 @@
                                                                 :supports-streaming true
                                                                 :supports-tools true
                                                                 :supports-vision true}}
-                                         :temperature 0.2
-                                         :max-tokens 1024
+                                         :temperature defaults/llm-temperature
+                                         :max-tokens defaults/llm-max-tokens
                                          :stream? false
                                          :prompt-cache? true
                                          :stream-structured-output? true
@@ -63,7 +64,7 @@
                       :minimum-idle 2
                       :connection-timeout-ms 30000
                       :destructive-reset-on-drift? false}}
-   :chat {:max-steps 6
+   :chat {:max-steps defaults/chat-max-steps
           :profiles {:default {:small-model? false
                               :respond-tool? false
                               :force-tool-choice? false

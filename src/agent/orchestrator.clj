@@ -1,6 +1,7 @@
 (ns agent.orchestrator
   "Rewritten in-memory orchestrator/subagent runtime."
   (:require
+   [agent.defaults :as defaults]
    [agent.mcp.core :as mcp]
    [agent.telemetry :as telemetry]
    [agent.util :as util]
@@ -13,9 +14,6 @@
 
 (defn- random-id [prefix]
   (str prefix "-" (UUID/randomUUID)))
-
-(def ^:private agent-inbox-buffer-size 64)
-(def ^:private channel-bus-buffer-size 128)
 
 (defn- emit-event!
   [orchestrator event]
@@ -238,7 +236,7 @@
                 :status "idle"
                 :created-at created-at
                 :messages []
-                :inbox (async/chan agent-inbox-buffer-size)}]
+                :inbox (async/chan defaults/agent-inbox-buffer-size)}]
       (swap-state! orchestrator assoc-in [:agents (:id agent*)] agent*)
       (emit-event! orchestrator
                    {:event-type :agent.created
@@ -916,7 +914,7 @@
                    :participants participant-set
                    :created-at (now)
                    :messages []
-                   :bus (async/chan channel-bus-buffer-size)}]
+                   :bus (async/chan defaults/channel-bus-buffer-size)}]
       (swap-state! orchestrator assoc-in [:channels (:id channel)] channel)
       (emit-event! orchestrator
                    {:event-type :channel.created

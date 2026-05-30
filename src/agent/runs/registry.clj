@@ -2,6 +2,7 @@
   "Durable distributed run registry and control-plane primitives."
   (:require
    [agent.broker.core :as broker]
+   [agent.defaults :as defaults]
    [agent.persistence.sqlite :as sqlite]
    [agent.runners.core :as runners]
    [agent.util :as util]
@@ -403,7 +404,7 @@
   (let [broker-instance (:broker runtime)
         subscription (broker/subscribe! broker-instance (broker/run-events-subject run-id)
                                         {:buffer-strategy :sliding
-                                         :buffer-size 256
+                                         :buffer-size defaults/event-stream-buffer-size
                                          :slow-client :drop-new})
         timeout-ch (async/timeout timeout-ms)]
     (try

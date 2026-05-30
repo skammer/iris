@@ -2,12 +2,13 @@
   "In-process broker backend with wildcard subscriptions."
   (:require
    [agent.broker.core :as broker]
+   [agent.defaults :as defaults]
    [clojure.core.async :as async])
   (:import
    (java.util UUID)))
 
 (defn- channel-buffer [{:keys [buffer-size buffer-strategy]
-                        :or {buffer-size 64
+                        :or {buffer-size defaults/broker-channel-buffer-size
                              ;; Default to :sliding so the :park (async/put!) path can never
                              ;; accumulate pending puts and throw at the 1024 hard cap: a sliding
                              ;; buffer never reports full, it drops the oldest message instead.

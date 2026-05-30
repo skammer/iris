@@ -6,6 +6,7 @@
    [agent.api.serializers :as ser]
    [agent.api.streaming :as streaming]
    [agent.broker.core :as broker]
+   [agent.defaults :as defaults]
    [agent.persistence.sqlite :as sqlite]
    [agent.runners.options :as runner-options]
    [agent.runs.service :as runs]
@@ -274,9 +275,9 @@
                   (streaming/send-sse-error! ctx "stream_error" (.getMessage error)))}
      (fn [ctx]
        (let [subscription (streaming/subscribe! ctx
-                                                broker-instance
-                                                (broker/all-runs-subject)
-                                                {:buffer-size 256
+                                               broker-instance
+                                               (broker/all-runs-subject)
+                                                {:buffer-size defaults/event-stream-buffer-size
                                                  :buffer-strategy :sliding
                                                  :slow-client :drop-new})
              ch (:channel subscription)]

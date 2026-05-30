@@ -1,6 +1,7 @@
 (ns agent.llm.providers.openai-compatible
   "OpenAI-compatible provider, used for OpenRouter first and other compatible APIs."
   (:require
+   [agent.defaults :as defaults]
    [agent.llm.core :as llm-core]
    [agent.llm.dsml :as dsml]
    [agent.llm.messages :as llm-messages]
@@ -127,12 +128,12 @@
                     :messages (llm-messages/internal->openai-compatible messages)
                     :temperature (or (:temperature opts)
                                      (:temperature config)
-                                     0.2)
+                                     defaults/llm-temperature)
                     :max_tokens (or (:max-tokens opts)
                                     (:max_tokens opts)
                                     (:max-tokens config)
                                     (:max_tokens config)
-                                    1024)
+                                    defaults/llm-max-tokens)
                     :stream false}
                    (prompt-cache-fields base-url model config opts)
                    extra-body)
@@ -177,12 +178,12 @@
                     :input (llm-messages/internal->openai-responses messages)
                     :temperature (or (:temperature opts)
                                      (:temperature config)
-                                     0.2)
+                                     defaults/llm-temperature)
                     :max_output_tokens (or (:max-tokens opts)
                                            (:max_tokens opts)
                                            (:max-tokens config)
                                            (:max_tokens config)
-                                           1024)
+                                           defaults/llm-max-tokens)
                     :stream false}
                    (prompt-cache-fields base-url model config opts)
                    extra-body)

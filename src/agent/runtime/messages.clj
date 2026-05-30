@@ -1,6 +1,7 @@
 (ns agent.runtime.messages
   "LLM message repair and tool-protocol message construction."
   (:require
+   [agent.defaults :as defaults]
    [agent.llm.messages :as llm-messages]
    [agent.runtime.schema :as runtime-schema]
    [cheshire.core :as json]
@@ -53,7 +54,7 @@
       (str "Memory tool failed: " (or (:reason receipt) (:error-type receipt) "unknown error")))))
 
 (defn tool-output-content
-  ([receipt] (tool-output-content receipt 8000))
+  ([receipt] (tool-output-content receipt defaults/tool-output-max-chars))
   ([receipt tool-output-max-chars]
    (if (= "memory" (some-> (:tool-name receipt) name))
      (memory-tool-output-content receipt tool-output-max-chars)
@@ -78,7 +79,7 @@
 
 (defn tool-protocol-messages
   ([request-id content tool-calls receipts]
-   (tool-protocol-messages request-id content tool-calls receipts 8000))
+   (tool-protocol-messages request-id content tool-calls receipts defaults/tool-output-max-chars))
   ([request-id content tool-calls receipts tool-output-max-chars]
    (let [tool-calls* (mapv (fn [[idx tool-call]]
                              (normalize-tool-call-block request-id idx tool-call))

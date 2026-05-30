@@ -2,6 +2,7 @@
   "Evented chat-agent loop. No persistence or transport concerns live here."
   (:refer-clojure :exclude [run!])
   (:require
+   [agent.defaults :as defaults]
    [agent.llm.messages :as llm-messages]
    [agent.planner :as planner]
    [agent.runtime.doom-loop :as doom-loop]
@@ -244,8 +245,8 @@
            tool-output-max-chars doom-loop-config chat-profile]
     :or {planner-fn planner/plan-step!
          context-pack-fn identity
-         max-steps 6
-         tool-output-max-chars 8000
+         max-steps defaults/chat-max-steps
+         tool-output-max-chars defaults/tool-output-max-chars
          doom-loop-config doom-loop/default-config}}]
   (let [base {:entity-type :session :entity-id session-id :request-id request-id}
         agent-id* (or agent-id session-id "chat")

@@ -4,6 +4,7 @@
    [agent.broker.core :as broker]
    [agent.chat :as chat]
    [agent.channels.core :as channels]
+   [agent.defaults :as defaults]
    [agent.persistence.sqlite :as sqlite]
    [agent.prompts :as prompts]
    [agent.skills :as skills]
@@ -644,7 +645,7 @@
   (let [broker-instance (or (:event-bus system) (:broker system))
         subscription (broker/subscribe! broker-instance (broker/all-events-subject)
                                          {:buffer-strategy :sliding
-                                          :buffer-size 256
+                                          :buffer-size defaults/event-stream-buffer-size
                                           :slow-client :drop-new})
         ch (:channel subscription)
         result-ch (async/chan 1)

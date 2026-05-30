@@ -1,8 +1,21 @@
-(ns agent.config-test
+(ns ^{:clj-kondo/config '{:lint-as {agent.config-test/with-isolated-config clojure.core/let}
+                          :linters {:unused-binding {:level :off}
+                                    :unresolved-symbol {:exclude [root]}}}}
+  agent.config-test
   (:require
    [agent.config :as config]
+   [agent.defaults :as defaults]
+   [clojure.edn :as edn]
    [clojure.java.io :as io]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
+
+(defn- thrown-message
+  [f]
+  (try
+    (f)
+    nil
+    (catch clojure.lang.ExceptionInfo e
+      (.getMessage e))))
 
 (defn- temp-dir []
   (.toFile (java.nio.file.Files/createTempDirectory
@@ -47,7 +60,7 @@
               :supports-vision true}
              (get-in cfg [:llm :providers :openai-compatible :models "gpt-4o-mini"])))
       (is (true? (get-in cfg [:tools :http :enabled])))
-      (is (= 6 (get-in cfg [:chat :max-steps])))
+      (is (= defaults/chat-max-steps (get-in cfg [:chat :max-steps])))
       (is (= {:max-iterations 10
               :plan-file "LOOP_PLAN.md"
               :summary-max-chars 1200
@@ -108,6 +121,15 @@
              (:nrepl cfg)))
       (is (false? (get-in cfg [:orchestrator :enabled])))
       (is (= "65532:65532" (get-in cfg [:runners :docker :user]))))))
+
+(deftest default-config-template-matches-code-defaults-test
+  (let [template (edn/read-string (slurp (io/resource "config/default.edn")))]
+    (doseq [provider [:ollama :openrouter :openai-compatible]]
+      (is (= defaults/llm-temperature
+             (get-in template [:llm :providers provider :temperature])))
+      (is (= defaults/llm-max-tokens
+             (get-in template [:llm :providers provider :max-tokens]))))
+    (is (= defaults/chat-max-steps (get-in template [:chat :max-steps])))))
 
 (deftest orchestrator-env-enables-experimental-api-test
   (with-isolated-config [_root {"AGENT_ORCHESTRATOR_ENABLED" "true"}]
@@ -291,9 +313,8 @@
       (spit file "{:llm {:active-provider :deepseek\n       :providers {:deepseek {:type :openai-compatible\n                              :base-url \"https://api.deepseek.com/v1\"\n                              :api-key \"test-key\"}}}}")
       (try
         (binding [*err* err]
-          (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                                #"Invalid iris config"
-                                (config/load-config (.getAbsolutePath file)))))
+          (is (re-find #"Invalid iris config"
+                       (thrown-message #(config/load-config (.getAbsolutePath file))))))
         (is (re-find #"ERROR iris config invalid" (str err)))
         (is (re-find #":model" (str err)))
         (finally
@@ -306,9 +327,8 @@
       (spit file "{:llm {:active-provider :openrouter\n       :providers {:openrouter {:type :openrouter\n                                :base-url \"https://openrouter.ai/api/v1\"\n                                :model \"openai/gpt-4o-mini\"}}}}")
       (try
         (binding [*err* err]
-          (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                                #"Invalid iris config"
-                                (config/load-config (.getAbsolutePath file)))))
+          (is (re-find #"Invalid iris config"
+                       (thrown-message #(config/load-config (.getAbsolutePath file))))))
         (is (re-find #"ERROR iris config invalid" (str err)))
         (is (re-find #":api-key" (str err)))
         (finally
@@ -400,9 +420,8 @@
       (.mkdirs global-dir)
       (spit (io/file global-dir "config.edn")
             "{:llm {:provider :ollama :model \"legacy-model\"}}")
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                            #"Invalid iris config"
-                            (config/load-config))))))
+      (is (re-find #"Invalid iris config"
+                   (thrown-message #(config/load-config)))))))
 
 (deftest migrate-legacy-config-file-test
   (with-isolated-config [root {}]

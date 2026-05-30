@@ -8,6 +8,7 @@
    [agent.broker.core :as broker]
    [agent.chat :as chat]
    [agent.config :as config]
+   [agent.defaults :as defaults]
    [clojure.core.async :as async]))
 
 (defn- complete! [system messages {:keys [session-id]}]
@@ -100,9 +101,9 @@
                   (streaming/send-sse-done! ctx))}
      (fn [ctx]
        (let [subscription (streaming/subscribe! ctx
-                                                broker-instance
-                                                (broker/all-events-subject)
-                                                {:buffer-size 256
+                                               broker-instance
+                                               (broker/all-events-subject)
+                                                {:buffer-size defaults/event-stream-buffer-size
                                                  :buffer-strategy :sliding
                                                  :slow-client :drop-new})
              events-ch (:channel subscription)

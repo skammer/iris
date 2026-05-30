@@ -9,6 +9,7 @@
    [agent.chat.subscribers :as subscribers]
    [agent.chat.util :as chat-util]
    [agent.config :as config]
+   [agent.defaults :as defaults]
    [agent.kernel.runtime :as kernel-runtime]
    [agent.kernel.schema :as kernel-schema]
    [agent.llm.core :as llm-core]
@@ -28,8 +29,6 @@
    [clojure.string :as str])
   (:import
    (java.time Instant)))
-
-(def default-max-steps 6)
 
 (defn- iris-context-message [system]
   (when-let [context (some-> (get-in system [:config :iris :context]) str/trim not-empty)]
@@ -143,7 +142,7 @@
            :as opts}]
   (let [max-steps (long (or max-steps
                             (get-in system [:config :chat :max-steps])
-                            default-max-steps))
+                            defaults/chat-max-steps))
         request-id (or (:request-id opts) (service/request-id))
         cancelled? (or cancellation-token (atom false))
         prompt (history/latest-user-prompt messages)

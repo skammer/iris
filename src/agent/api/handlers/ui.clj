@@ -10,6 +10,7 @@
    [agent.api.validation :as v]
    [agent.broker.core :as broker]
    [agent.chat :as chat]
+   [agent.defaults :as defaults]
    [agent.memory.core :as memory]
    [agent.runners.options :as runner-options]
    [agent.sessions.service :as session-service]
@@ -124,7 +125,7 @@
        (let [subscription (streaming/subscribe! ctx
                                                 broker-instance
                                                 (broker/all-events-subject)
-                                                {:buffer-size 256
+                                                {:buffer-size defaults/event-stream-buffer-size
                                                  :buffer-strategy :sliding
                                                  :slow-client :drop-new})
              ch (:channel subscription)]
@@ -151,7 +152,7 @@
              subscription (streaming/subscribe! ctx
                                                 broker-instance
                                                 (broker/all-events-subject)
-                                                {:buffer-size 256
+                                                {:buffer-size defaults/event-stream-buffer-size
                                                  :buffer-strategy :sliding
                                                  :slow-client :drop-new})
              ch (:channel subscription)
@@ -246,7 +247,7 @@
        (let [subscription (streaming/subscribe! ctx
                                                 broker-instance
                                                 (broker/all-events-subject)
-                                                {:buffer-size 256
+                                                {:buffer-size defaults/event-stream-buffer-size
                                                  :buffer-strategy :sliding
                                                  :slow-client :drop-new})
              ch (:channel subscription)
@@ -273,7 +274,7 @@
        (let [subscription (streaming/subscribe! ctx
                                                 broker-instance
                                                 (broker/all-events-subject)
-                                                {:buffer-size 256
+                                                {:buffer-size defaults/event-stream-buffer-size
                                                  :buffer-strategy :sliding
                                                  :slow-client :drop-new})
              ch (:channel subscription)]
