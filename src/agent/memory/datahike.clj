@@ -355,15 +355,73 @@
            (:source-fact-id result)
            (str/join " " (:tags result))])))
 
+(def ^:private edge-pull-pattern
+  '[*
+    {:edge/source [*]}
+    {:edge/target [*]}
+    {:edge/episodes [*]}])
+
+(defn- pull-edges [db rows]
+  (map #(d/pull db edge-pull-pattern (first %)) rows))
+
 (defn- query-edges [db]
-  (->> (d/q '[:find (pull ?e [*
-                              {:edge/source [*]}
-                              {:edge/target [*]}
-                              {:edge/episodes [*]}])
+  (->> (d/q '[:find ?e
               :where
-              [?e :edge/id ?id]]
+              [?e :edge/id _]]
             db)
-       (map first)))
+       (pull-edges db)))
+
+(defn- query-edge-by-id [db edge-id]
+  (when-not (str/blank? (or edge-id ""))
+    (->> (d/q '[:find ?e
+                :in $ ?edge-id
+                :where
+                [?e :edge/id ?edge-id]]
+              db
+              edge-id)
+         (pull-edges db))))
+
+(defn- query-edges-by-source-fact-id [db source-fact-id]
+  (when-not (str/blank? (or source-fact-id ""))
+    (->> (d/q '[:find ?e
+                :in $ ?source-fact-id
+                :where
+                [?e :edge/source-fact-id ?source-fact-id]]
+              db
+              source-fact-id)
+         (pull-edges db))))
+
+(defn- query-edges-by-entity-id [db entity-id]
+  (if (str/blank? (or entity-id ""))
+    []
+    (->> (concat
+          (d/q '[:find ?edge
+                 :in $ ?entity-id
+                 :where
+                 [?entity :entity/id ?entity-id]
+                 [?edge :edge/source ?entity]]
+               db
+               entity-id)
+          (d/q '[:find ?edge
+                 :in $ ?entity-id
+                 :where
+                 [?entity :entity/id ?entity-id]
+                 [?edge :edge/target ?entity]]
+               db
+               entity-id))
+         (pull-edges db)
+         (distinct-by* :edge/id))))
+
+(defn- query-edges-by-entity-ids [db entity-ids]
+  (->> entity-ids
+       (remove #(str/blank? (or % "")))
+       distinct
+       (mapcat #(query-edges-by-entity-id db %))
+       (distinct-by* :edge/id)))
+
+(defn- active-edges-by-entity-id [db entity-id as-of include-historical?]
+  (->> (query-edges-by-entity-id db entity-id)
+       (filter #(active-at? as-of include-historical? %))))
 
 (defn- entity-neighborhood [db entity depth as-of include-historical?]
   (let [start (canonical-entity-id db entity)
@@ -374,11 +432,9 @@
            results []]
       (if (or (empty? frontier) (>= level max-depth))
         results
-        (let [edges (->> (query-edges db)
-                         (filter #(active-at? as-of include-historical? %))
-                         (filter (fn [edge]
-                                   (or (contains? frontier (get-in edge [:edge/source :entity/id]))
-                                       (contains? frontier (get-in edge [:edge/target :entity/id]))))))
+        (let [edges (->> frontier
+                         (mapcat #(active-edges-by-entity-id db % as-of include-historical?))
+                         (distinct-by* :edge/id))
               next-ids (->> edges
                             (mapcat (fn [edge]
                                       [(get-in edge [:edge/source :entity/id])
@@ -395,35 +451,39 @@
         to-id (canonical-entity-id db to)
         max-depth* (max 1 (or max-depth 4))
         limit* (or limit 20)
-        active-edges (->> (query-edges db)
-                          (filter #(active-at? as-of include-historical? %))
-                          vec)]
-    (loop [queue [{:node-id from-id
-                   :node-ids [from-id]
-                   :start-id from-id
-                   :start-label from
-                   :edges []
-                   :seen #{from-id}}]
-           results []]
-      (cond
-        (or (empty? queue) (>= (count results) limit*)) results
-        :else
-        (let [{:keys [node-id edges seen] :as path} (first queue)
-              queue* (subvec (vec queue) 1)]
-          (if (and (= node-id to-id) (seq edges))
-            (recur queue* (conj results path))
-            (let [next-paths (if (>= (count edges) max-depth*)
-                               []
-                               (->> active-edges
-                                    (keep (fn [edge]
-                                            (when-let [next-id (edge-target-id node-id edge)]
-                                              (when-not (contains? seen next-id)
-                                                (assoc path
-                                                       :node-id next-id
-                                                       :node-ids (conj (:node-ids path) next-id)
-                                                       :edges (conj edges edge)
-                                                       :seen (conj seen next-id))))))))]
-              (recur (into queue* next-paths) results))))))))
+        edge-cache (atom {})]
+    (letfn [(active-edges-for [node-id]
+              (if-let [entry (find @edge-cache node-id)]
+                (val entry)
+                (let [edges (vec (active-edges-by-entity-id db node-id as-of include-historical?))]
+                  (swap! edge-cache assoc node-id edges)
+                  edges)))]
+      (loop [queue [{:node-id from-id
+                     :node-ids [from-id]
+                     :start-id from-id
+                     :start-label from
+                     :edges []
+                     :seen #{from-id}}]
+             results []]
+        (cond
+          (or (empty? queue) (>= (count results) limit*)) results
+          :else
+          (let [{:keys [node-id edges seen] :as path} (first queue)
+                queue* (subvec (vec queue) 1)]
+            (if (and (= node-id to-id) (seq edges))
+              (recur queue* (conj results path))
+              (let [next-paths (if (>= (count edges) max-depth*)
+                                 []
+                                 (->> (active-edges-for node-id)
+                                      (keep (fn [edge]
+                                              (when-let [next-id (edge-target-id node-id edge)]
+                                                (when-not (contains? seen next-id)
+                                                  (assoc path
+                                                         :node-id next-id
+                                                         :node-ids (conj (:node-ids path) next-id)
+                                                         :edges (conj edges edge)
+                                                         :seen (conj seen next-id))))))))]
+                (recur (into queue* next-paths) results)))))))))
 
 (defn- query-mode [opts]
   (keyword (or (:mode opts)
@@ -434,7 +494,7 @@
 (defn- invalidation-tx [db fact new-edge-id observed-at]
   (let [subject-id (canonical-entity-id db (:subject fact))
         object-id (canonical-entity-id db (:object fact))]
-    (->> (query-edges db)
+    (->> (query-edges-by-entity-id db subject-id)
          (filter (fn [edge]
                    (and (= subject-id (get-in edge [:edge/source :entity/id]))
                         (= (:predicate fact) (:edge/predicate edge))
@@ -466,8 +526,22 @@
 
 (defn- remove-edge-tx [db fact observed-at]
   (let [invalidated-by (or (:invalidated-by fact)
-                           (str "removed:" (UUID/randomUUID)))]
-    (->> (query-edges db)
+                           (str "removed:" (UUID/randomUUID)))
+        id (:id fact)
+        source-id (when-not (str/blank? (or (:subject fact) ""))
+                    (canonical-entity-id db (:subject fact)))
+        candidate-edges (cond
+                          (not (str/blank? (or id "")))
+                          (concat (query-edge-by-id db id)
+                                  (query-edges-by-source-fact-id db id))
+
+                          source-id
+                          (query-edges-by-entity-id db source-id)
+
+                          :else
+                          [])]
+    (->> candidate-edges
+         (distinct-by* :edge/id)
          (filter #(remove-edge-match? db fact %))
          (mapv (fn [edge]
                  {:db/id (:db/id edge)
@@ -494,6 +568,7 @@
                             (remove #(= canonical-id (:entity/id %)))
                             (distinct-by* :db/id))
         alias-dbids (set (map :db/id alias-entities))
+        alias-edges (query-edges-by-entity-ids db (map :entity/id alias-entities))
         edge-retargets (mapcat
                         (fn [edge]
                           (cond-> []
@@ -503,7 +578,7 @@
                             (contains? alias-dbids (get-in edge [:edge/target :db/id]))
                             (conj {:db/id (:db/id edge)
                                    :edge/target [:entity/id canonical-id]})))
-                        (query-edges db))
+                        alias-edges)
         alias-retractions (mapcat
                            (fn [entity]
                              [[:db/retract (:db/id entity) :entity/id (:entity/id entity)]

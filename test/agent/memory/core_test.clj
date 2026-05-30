@@ -2,11 +2,12 @@
   (:require
    [agent.llm.core :as llm-core]
    [agent.memory.core :as memory]
+   [agent.memory.datahike :as datahike]
    [agent.persistence.sqlite :as sqlite]
    [cheshire.core :as json]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defrecord FactProvider [responses]
   llm-core/ILLMProvider
@@ -634,6 +635,44 @@
                (mapv :predicate (:edges (first historical))))))
       (finally
         (io/delete-file db-path true)))))
+
+(deftest graph-neighborhood-and-path-avoid-full-edge-scan-test
+  (let [db-path (temp-db-path)
+        graph-root (temp-dir)
+        graph-path (.getAbsolutePath (io/file graph-root "graph-store"))
+        store (sqlite/create-store {:path db-path})
+        service (memory/create-memory-service
+                 {:prompt {:paths []}
+                  :search {:default-limit 10}
+                  :graph {:enabled true
+                          :backend :datahike
+                          :datahike {:path graph-path
+                                     :keep-history? true}}}
+                 store)]
+    (try
+      (memory/save-graph-fact! service
+                               {:subject "Alice"
+                                :predicate "likes"
+                                :object "Clojure"
+                                :observed-at "2026-01-01T00:00:00Z"})
+      (memory/save-graph-fact! service
+                               {:subject "Clojure"
+                                :predicate "runs-on"
+                                :object "JVM"
+                                :observed-at "2026-01-02T00:00:00Z"})
+      (with-redefs [datahike/query-edges (fn [_]
+                                           (throw (ex-info "full edge scan"
+                                                           {:type :full-edge-scan})))]
+        (let [neighborhood (memory/query-graph-memory service nil {:entity "Alice" :depth 2})
+              paths (memory/query-graph-memory service nil {:mode :paths
+                                                            :from "Alice"
+                                                            :to "JVM"
+                                                            :max-depth 3})]
+          (is (= #{"likes" "runs-on"} (set (map :predicate neighborhood))))
+          (is (= ["likes" "runs-on"] (mapv :predicate (:edges (first paths)))))))
+      (finally
+        (io/delete-file db-path true)
+        (io/delete-file graph-root true)))))
 
 (deftest cross-session-memory-eval-recall-and-rank-test
   (let [db-path (temp-db-path)
