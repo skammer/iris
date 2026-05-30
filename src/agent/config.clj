@@ -230,6 +230,10 @@
                       :discord {:enabled false}
                       :slack {:enabled false}}
    :runners {:default-substrate :auto
+             ;; Substrates a remote API caller may request. Excludes
+             ;; :local-unsandboxed (no isolation) so the run API cannot be used
+             ;; as a host-exec endpoint. Internal/system callers are unrestricted.
+             :api-selectable-substrates [:seatbelt :bubblewrap :docker :podman]
              :docker {:image "clojure:temurin-21-alpine"
                       :image-mode :mounted-dev
                       :pull-policy :missing

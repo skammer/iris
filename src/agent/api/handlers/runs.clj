@@ -49,17 +49,60 @@
         :runner-not-found (not-found! "runner_not_found" "Runner not found")
         (throw e)))))
 
-(defn- normalize-run-request [body]
-  {:agent-id (:agent_id body)
-   :parent-run-id (:parent_run_id body)
-   :idempotency-key (:idempotency_key body)
-   :name (:name body)
-   :substrate (some-> (:substrate body) keyword)
-   :capabilities (or (:capabilities body) [])
-   :network-identity (:network_identity body)
-   :runner-options (:runner_options body)
-   :requested-by (or (:requested_by body) "api")
-   :auto-launch? (true? (:auto_launch body))})
+(def ^:private default-api-selectable-substrates
+  #{:seatbelt :bubblewrap :docker :podman})
+
+;; runner_options keys that select what/where/how code runs. A remote caller
+;; must never control these — together they collapse the sandbox/auth threat
+;; model into an arbitrary-exec endpoint. The server config supplies them at
+;; launch (see runners.options/prepare-runner-options). Both kebab- and
+;; snake-case spellings are stripped so neither JSON nor EDN clients slip one in.
+(def ^:private execution-controlling-runner-option-keys
+  #{:command
+    :working-dir :working_dir
+    :binds :mounts :env :user
+    :share-network? :share-network :share_network
+    :image :image-mode :image_mode :pull-policy :pull_policy
+    :control-url :control_url
+    :profile :profile-file :profile_file :profile-name :profile_name
+    :profile-string :profile_string
+    :sandbox-exec-binary :sandbox_exec_binary
+    :read-only-paths :read_only_paths :read-write-paths :read_write_paths
+    :host-working-dir :host_working_dir
+    :container-working-dir :container_working_dir
+    :container-home-dir :container_home_dir
+    :container-data-dir :container_data_dir})
+
+(defn- api-selectable-substrates [system]
+  (set (or (get-in system [:config :runners :api-selectable-substrates])
+           default-api-selectable-substrates)))
+
+(defn- assert-api-substrate! [system substrate]
+  (when (and substrate
+             (not (contains? (api-selectable-substrates system) substrate)))
+    (throw (errors/api-error 400 "bad_request"
+                             (str "Substrate not selectable via API: " (name substrate))
+                             {:substrate substrate
+                              :allowed (vec (sort (api-selectable-substrates system)))}))))
+
+(defn- sanitize-api-runner-options [runner-options]
+  (when (map? runner-options)
+    (let [safe (apply dissoc runner-options execution-controlling-runner-option-keys)]
+      (when (seq safe) safe))))
+
+(defn- normalize-run-request [system body]
+  (let [substrate (some-> (:substrate body) keyword)]
+    (assert-api-substrate! system substrate)
+    {:agent-id (:agent_id body)
+     :parent-run-id (:parent_run_id body)
+     :idempotency-key (:idempotency_key body)
+     :name (:name body)
+     :substrate substrate
+     :capabilities (or (:capabilities body) [])
+     :network-identity (:network_identity body)
+     :runner-options (sanitize-api-runner-options (:runner_options body))
+     :requested-by (or (:requested_by body) "api")
+     :auto-launch? (true? (:auto_launch body))}))
 
 (defn list-runs [system _request]
   (responses/json-response 200 {:data (mapv ser/run->response (list-runs* system))}))
@@ -74,8 +117,10 @@
     (not-found! "run_not_found" "Run not found")))
 
 (defn create [system request]
-  (let [body (h/read-json-body request)
-        req (cond-> (normalize-run-request body)
+  ;; Use the Malli-coerced body (request :parameters :body), not raw JSON, so the
+  ;; route schema actually gates input instead of being validated then ignored.
+  (let [body (or (-> request :parameters :body) (h/read-json-body request))
+        req (cond-> (normalize-run-request system body)
               (and (nil? (:idempotency_key body))
                    (h/header request "Idempotency-Key"))
               (assoc :idempotency-key (h/header request "Idempotency-Key")))
@@ -89,7 +134,8 @@
   (responses/json-response 200 {:data (ser/run->response (launch-run! system run-id))}))
 
 (defn signal [system request run-id]
-  (let [{:keys [command_type]} (h/read-json-body request)]
+  (let [{:keys [command_type]} (or (-> request :parameters :body)
+                                   (h/read-json-body request))]
     (responses/json-response 200
                              {:data (signal-run! system run-id {:command-type command_type})})))
 

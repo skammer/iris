@@ -129,9 +129,7 @@
       (let [run-resp (helpers/http-post (str base-url "/v1/runs")
                                         {:agent_id "smoke-agent"
                                          :name "smoke"
-                                         :substrate "local-unsandboxed"
-                                         :runner_options {:command ["sh" "-lc" "true"]
-                                                          :working-dir "."}})
+                                         :substrate "docker"})
             run-id (get-in (json/parse-string (:body run-resp) true) [:data :id])
             {:keys [status body]} (helpers/http-get
                                    (str base-url "/ui/run-detail-body?run_id=" run-id))]
