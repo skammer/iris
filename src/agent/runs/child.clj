@@ -182,6 +182,12 @@
                                          (sqlite/log-event! store %))
                           :recorded-event-sink logging/log-system-event!})})))
 
+(defn- close-control!
+  [control]
+  (when (and (= :sqlite (:type control))
+             (:store control))
+    (sqlite/close-store! (:store control))))
+
 (defn run-child!
   [{:keys [sqlite-path run-id bootstrap-spec control-url control-token child-sqlite-path]}]
   (logging/start! {:enabled true
@@ -232,13 +238,16 @@
           (transition-run! control run-id :failed {:last-error (.getMessage ex)})
           (throw ex))
         (finally
-          (let [complete? (and (not (stopped? stop-latch))
-                               (not (:failed? @state)))]
-            (stop! stop-latch)
-            (future-cancel heartbeat-loop)
-            (when complete?
-              (transition-run! control run-id :completed))
-            (log-out! "child-runtime" "exit" run-id)))))))
+          (try
+            (let [complete? (and (not (stopped? stop-latch))
+                                 (not (:failed? @state)))]
+              (stop! stop-latch)
+              (future-cancel heartbeat-loop)
+              (when complete?
+                (transition-run! control run-id :completed))
+              (log-out! "child-runtime" "exit" run-id))
+            (finally
+              (close-control! control))))))))
 
 (defn -main
   [& _args]

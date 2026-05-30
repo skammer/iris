@@ -26,7 +26,9 @@
     (is (number? (:pid launch-result)))
     (is (true? (:alive status-before)))
     (is (some? exit-result))
-    (is (false? (:alive status-after)))))
+    (is (= {:run-id "run-local-test"
+            :known false}
+           status-after))))
 
 (deftest local-unsandboxed-runner-captures-stdout-and-stderr-test
   (let [events* (atom [])

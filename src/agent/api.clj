@@ -26,6 +26,7 @@
    [agent.api.routes :as routes]
    [agent.logging :as logging]
    [agent.ui :as ui-views]
+   [clojure.string :as str]
    [clojure.walk :as walk]
    [muuntaja.core :as m]
    [org.httpkit.server :as http-kit]
@@ -252,8 +253,32 @@
     (fn [_] (responses/not-found-response)))
    (:api (:config system))))
 
+(defn- loopback-bind-host?
+  [host]
+  (let [host* (str/trim (or host ""))]
+    (or (str/blank? host*)
+        (= "localhost" (str/lower-case host*))
+        (try
+          (let [addr (java.net.InetAddress/getByName host*)]
+            (and (not (.isAnyLocalAddress addr))
+                 (.isLoopbackAddress addr)))
+          (catch Exception _
+            false)))))
+
+(defn- assert-api-auth-safe!
+  [{:keys [host key]}]
+  (when (and (not (loopback-bind-host? host))
+             (str/blank? (some-> key str)))
+    (throw (ex-info "Refusing to bind API to a non-loopback host without :api :key"
+                    {:type :api-auth-required
+                     :host host
+                     :config-path [:api :key]}))))
+
 (defn start-server!
   [system {:keys [host port]}]
+  (assert-api-auth-safe! (merge (:api (:config system))
+                                {:host host
+                                 :port port}))
   (let [system-ref (or (:system-ref system) (atom nil))
         system* (assoc system :system-ref system-ref)
         _ (reset! system-ref system*)

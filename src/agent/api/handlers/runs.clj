@@ -8,7 +8,9 @@
    [agent.broker.core :as broker]
    [agent.persistence.sqlite :as sqlite]
    [agent.runners.options :as runner-options]
-   [agent.runs.service :as runs]))
+   [agent.runs.service :as runs]
+   [agent.security :as security]
+   [clojure.string :as str]))
 
 (defn- not-found!
   [code message]
@@ -171,7 +173,9 @@
   (let [run (or (get-run* system run-id)
                 (not-found! "run_not_found" "Run not found"))
         token (h/control-token request)]
-    (when-not (and token (= token (:bootstrap-token run)))
+    (when-not (and (not (str/blank? token))
+                   (not (str/blank? (:bootstrap-token run)))
+                   (security/constant-time= token (:bootstrap-token run)))
       (throw (errors/api-error 401 "unauthorized" "Invalid run control token")))
     run))
 

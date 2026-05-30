@@ -46,6 +46,27 @@
     (is (true? (get-in health [:details :up-to-date?])))
     (io/delete-file path true)))
 
+(deftest sqlite-tool-approval-decision-is-pending-cas-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        approval (sqlite/create-tool-approval! store
+                                               {:tool-name :shell
+                                                :input {:argv ["printf" "ok"]}
+                                                :input-hash "hash"
+                                                :requested-permissions #{:shell-exec}
+                                                :requested-by "tester"
+                                                :reason "test"
+                                                :expires-at nil})]
+    (try
+      (is (= "approved"
+             (:status (sqlite/decide-tool-approval! store (:id approval) :approved "tester" "ok"))))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"not pending"
+                            (sqlite/decide-tool-approval! store (:id approval) :denied "tester" "late")))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest sqlite-session-active-mode-flow-test
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})

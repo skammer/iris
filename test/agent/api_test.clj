@@ -251,6 +251,15 @@
         (api/stop-server! server)
         (io/delete-file path true)))))
 
+(deftest api-refuses-non-loopback-bind-without-key-test
+  (let [base-system (system/create-system)
+        system (assoc-in base-system [:config :api] {:host "0.0.0.0"
+                                                     :port (free-port)
+                                                     :key nil})]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"Refusing to bind API to a non-loopback host without :api :key"
+                          (api/start-server! system (:api (:config system)))))))
+
 (deftest session-mode-api-test
   (let [path (temp-db-path)
         port (free-port)

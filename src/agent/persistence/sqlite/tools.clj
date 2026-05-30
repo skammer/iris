@@ -72,8 +72,8 @@
                                                                      :decision_reason decision-reason
                                                                      :decided_at decided-at}))]
           (when (zero? updated)
-            (throw (ex-info "Approval request not found"
-                            {:type :approval-not-found
+            (throw (ex-info "Approval request is not pending or does not exist"
+                            {:type :approval-decision-conflict
                              :approval-id approval-id})))))))
   (get-tool-approval store approval-id))
 

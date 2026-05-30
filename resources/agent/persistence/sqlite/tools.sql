@@ -21,6 +21,7 @@ set status = :status,
     decision_reason = :decision_reason,
     decided_at = :decided_at
 where id = :id
+  and status = 'pending'
 
 -- :name count-tool-approvals :? :1
 select count(*) as n

@@ -115,7 +115,7 @@
                    :share-network? (cond
                                      (contains? runner-options :share-network?) (true? (:share-network? runner-options))
                                      (contains? runner-cfg :share-network?) (true? (:share-network? runner-cfg))
-                                     :else true))
+                                     :else false))
       (not (seq (:command runner-options)))
       (assoc :command (runtime-child/current-container-child-command)))))
 

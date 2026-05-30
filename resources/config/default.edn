@@ -232,7 +232,7 @@
                     :container-home-dir "/tmp/iris/home"
                     :user "65532:65532"
                     :host-working-dir "."
-                    :share-network? true}
+                    :share-network? false}
            :podman {:image "clojure:temurin-21-alpine"
                     :image-mode :mounted-dev
                     :pull-policy :missing
@@ -241,7 +241,7 @@
                     :container-home-dir "/tmp/iris/home"
                     :user "65532:65532"
                     :host-working-dir "."
-                    :share-network? true}}
+                    :share-network? false}}
  :nrepl {:enabled true
          :bind "127.0.0.1"
          :port 0

@@ -1,10 +1,10 @@
 (ns agent.api.middleware
   (:require [agent.api.responses :as responses]
             [agent.logging :as logging]
+            [agent.security :as security]
             [clojure.string :as str]
             [org.httpkit.server :as http-kit])
   (:import
-   (java.security MessageDigest)
    (java.util Base64)
    (java.util UUID)))
 
@@ -16,7 +16,7 @@
           response (handler (assoc request :request-id request-id))]
       (if (and response
                (not (satisfies? http-kit/Channel (:body response))))
-        (update response :headers #(assoc (or %) "X-Request-Id" request-id))
+        (update response :headers #(assoc (or % {}) "X-Request-Id" request-id))
         response))))
 
 (defn wrap-error-boundary
@@ -74,11 +74,6 @@
       (catch IllegalArgumentException _
         nil))))
 
-(defn- constant-time= [left right]
-  (let [left-bytes (.getBytes (str left) "UTF-8")
-        right-bytes (.getBytes (str right) "UTF-8")]
-    (MessageDigest/isEqual left-bytes right-bytes)))
-
 (defn- request-api-key [request]
   (or (get-in request [:headers "x-api-key"])
       (bearer-token (get-in request [:headers "authorization"]))
@@ -91,7 +86,7 @@
       (if (and api-key
                (protected-path? (:uri request))
                (not (run-control-path? (:uri request)))
-               (not (constant-time= api-key (or (request-api-key request) ""))))
+               (not (security/constant-time= api-key (request-api-key request))))
         (responses/json-response 401
                                  {:error "unauthorized"
                                   :message "Invalid or missing API key"}

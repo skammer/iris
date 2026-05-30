@@ -55,8 +55,7 @@
           working-dir (or (:working-dir runner-options) ".")
           env-extra (or (:env runner-options) {})
           process-builder (ProcessBuilder. command)
-          process (doto process-builder
-                    (.directory (io/file working-dir)))
+          _ (.directory process-builder (io/file working-dir))
           env (.environment process-builder)]
       (.put env "AGENT_RUN_ID" (:run-id run-spec))
       (.put env "AGENT_AGENT_ID" (:agent-id run-spec))
@@ -76,11 +75,15 @@
                    :started-at started-at}]
         (swap! processes assoc (:run-id run-spec) entry)
         (future
-          (.waitFor process*)
-          (when on-exit
-            (on-exit (:run-id run-spec)
-                     {:exit-code (.exitValue process*)
-                      :finished-at (now)})))
+          (try
+            (.waitFor process*)
+            (swap! processes dissoc (:run-id run-spec))
+            (when on-exit
+              (on-exit (:run-id run-spec)
+                       {:exit-code (.exitValue process*)
+                        :finished-at (now)}))
+            (finally
+              (swap! processes dissoc (:run-id run-spec)))))
         (process-status entry))))
   (signal [_ run-id command]
     (if-let [entry (get @processes run-id)]
