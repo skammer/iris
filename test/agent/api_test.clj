@@ -408,20 +408,28 @@
                                           {:agent_id "docker-agent"
                                            :name "docker-run"
                                            :substrate "docker"
+                                           ;; caller-supplied execution keys must be stripped on the API path
                                            :runner_options {:image "iris:test"
                                                             :working-dir "."
                                                             :share-network? true}})
             created-docker-run-body (json/parse-string (:body created-docker-run) true)
             docker-run-id (get-in created-docker-run-body [:data :id])
-            created-run (http-post (str base-url "/v1/runs")
-                                   {:agent_id "runner-agent"
-                                    :name "runner"
-                                    :substrate "local-unsandboxed"
-                                    :runner_options {:command ["sh" "-lc" "sleep 30"]
-                                                     :working-dir "."}
-                                    :auto_launch true})
-            created-run-body (json/parse-string (:body created-run) true)
-            run-id (get-in created-run-body [:data :id])
+            ;; The run API must reject the unsandboxed substrate outright (RCE guard).
+            rejected-unsandboxed (http-post (str base-url "/v1/runs")
+                                            {:agent_id "evil"
+                                             :name "evil"
+                                             :substrate "local-unsandboxed"
+                                             :runner_options {:command ["sh" "-lc" "touch pwned"]}
+                                             :auto_launch true})
+            ;; Drive the lifecycle endpoints with a real launched run created via
+            ;; the trusted internal path (system-initiated runs are unrestricted).
+            created-run (runs/request-run! system {:agent-id "runner-agent"
+                                                   :name "runner"
+                                                   :substrate :local-unsandboxed
+                                                   :runner-options {:command ["sh" "-lc" "sleep 30"]
+                                                                    :working-dir "."}})
+            run-id (:id created-run)
+            _ (runs/launch-run! system run-id)
             _ (runs/register-run! system run-id
                                   {:capabilities [:chat]
                                    :network-identity {:logical-id "agent://runner"}
@@ -667,12 +675,14 @@
         (is (= 400 (:status bad-chat)))
         (is (= 201 (:status created-docker-run)))
         (is (= "docker" (get-in created-docker-run-body [:data :substrate])))
-        (is (= "iris:test" (get-in created-docker-run-body [:data :runner_options :image])))
-        (is (= true (get-in created-docker-run-body [:data :runner_options :share-network?])))
+        (is (nil? (get-in created-docker-run-body [:data :runner_options :image]))
+            "API-supplied image must be stripped (server config supplies it)")
+        (is (nil? (get-in created-docker-run-body [:data :runner_options :share-network?]))
+            "API-supplied share-network must be stripped")
         (is (= "mounted-dev" (get-in fetched-docker-run-body [:data :container_contract :image-mode])))
-        (is (= 201 (:status created-run)))
-        (is (= "launched" (get-in created-run-body [:data :status])))
-        (is (= "local-unsandboxed" (get-in created-run-body [:data :substrate])))
+        (is (= 400 (:status rejected-unsandboxed))
+            "local-unsandboxed is not selectable via the API")
+        (is (some? run-id))
         (is (= 200 (:status fetched-run)))
         (is (= true (get-in fetched-run-body [:data :runner_status :alive])))
         (is (number? (get-in fetched-run-body [:data :runner_status :pid])))
