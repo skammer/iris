@@ -8,7 +8,7 @@
    [agent.ui.render :as ui-render]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defn- temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-ui-" ".db")))

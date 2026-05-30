@@ -4,7 +4,7 @@
    [agent.runners.seatbelt :as seatbelt]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (deftest build-seatbelt-profile-test
   (let [profile (seatbelt/build-seatbelt-profile

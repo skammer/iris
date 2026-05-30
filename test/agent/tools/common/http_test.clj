@@ -3,7 +3,7 @@
    [agent.tools.common.http :as http-tool]
    [agent.tools.core :as tools]
    [clj-http.client :as http]
-   [clojure.test :refer :all])
+   [clojure.test :refer [deftest is]])
   (:import
    [java.net InetAddress]))
 

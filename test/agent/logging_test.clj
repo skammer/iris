@@ -3,7 +3,7 @@
    [agent.logging :as logging]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (deftest start-and-write-log-file
   (let [dir (io/file (System/getProperty "java.io.tmpdir")

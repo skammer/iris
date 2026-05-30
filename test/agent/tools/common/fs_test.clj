@@ -3,7 +3,7 @@
    [agent.tools.common.fs :as fs-tool]
    [agent.tools.core :as tools]
    [clojure.java.io :as io]
-   [clojure.test :refer :all])
+   [clojure.test :refer [deftest is]])
   (:import
    [java.nio.file Files]))
 
