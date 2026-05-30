@@ -3,7 +3,8 @@
   (:require
    [agent.llm.messages :as llm-messages]
    [agent.runtime.schema :as runtime-schema]
-   [clojure.string :as str]))
+   [clojure.string :as str]
+   [clojure.walk :as walk]))
 
 (def default-config
   {:max-context-tokens 8192
@@ -36,7 +37,13 @@
     :else (str (:role message))))
 
 (defn- message-tokens [message]
-  (estimate-tokens message))
+  (estimate-tokens
+   (walk/postwalk
+    (fn [value]
+      (if (map? value)
+        (dissoc value :raw :annotations)
+        value))
+    message)))
 
 (defn- messages-tokens [messages]
   (reduce + 0 (map message-tokens messages)))
@@ -280,7 +287,7 @@
                          summary)}]})
 
 (defn- pack-by-prefix-summary
-  [{:keys [messages system-prompt tools summarizer-fn] :as ctx} cfg decisions]
+  [{:keys [messages summarizer-fn] :as ctx} cfg decisions]
   (let [prefix-count (leading-system-count messages)
         protected (protected-indices messages)
         limit (threshold-tokens (:max-context-tokens cfg)

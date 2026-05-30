@@ -97,3 +97,20 @@
                :config {:max-context-tokens 10000}})]
     (is (= ["first" "real tool" "NUDGE (bare-text): current"]
            (mapv text (:messages pack))))))
+
+(deftest token-estimate-ignores-provider-raw-payloads-test
+  (let [base-message {:role "assistant"
+                      :content [{:type :tool-call
+                                 :id "call_1"
+                                 :name "fs"
+                                 :arguments {:action "list"}}]}
+        bloated-message (assoc-in base-message [:content 0 :raw]
+                                  {:provider-object (big "x" 8000)})
+        pack (fn [message]
+               (context-pack/pack-context
+                {:messages [message]
+                 :tools []
+                 :config {:max-context-tokens 10000
+                          :reserve-output-tokens 0}}))]
+    (is (= (:tokens-before (pack base-message))
+           (:tokens-before (pack bloated-message))))))

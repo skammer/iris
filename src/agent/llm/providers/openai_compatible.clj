@@ -198,20 +198,30 @@
   ;; OpenAI streams tool_calls as partial deltas keyed by :index. Each delta may
   ;; carry id/type/function.name once and successive function.arguments fragments
   ;; that must be string-concatenated into a complete JSON payload.
-  (reduce (fn [acc tc]
-            (let [idx (or (:index tc) (count acc))
+  (let [fresh-call? (fn [tc]
+                      (or (:id tc)
+                          (get-in tc [:function :name])))]
+    (:tool-calls
+     (reduce (fn [{:keys [tool-calls last-index] :as state} tc]
+               (let [idx (or (:index tc)
+                             (when (fresh-call? tc) (count tool-calls))
+                             last-index
+                             (count tool-calls))
                   tc-name (get-in tc [:function :name])
                   tc-args (get-in tc [:function :arguments])]
-              (update acc idx
-                      (fn [existing]
-                        (cond-> (or existing {})
-                          (:id tc) (assoc :id (:id tc))
-                          (:type tc) (assoc :type (:type tc))
-                          tc-name (assoc-in [:function :name] tc-name)
-                          tc-args (update-in [:function :arguments]
-                                             (fnil str "") tc-args))))))
-          tool-calls
-          deltas))
+                 (-> state
+                     (assoc :last-index idx)
+                     (update :tool-calls update idx
+                             (fn [existing]
+                               (cond-> (or existing {})
+                                 (:id tc) (assoc :id (:id tc))
+                                 (:type tc) (assoc :type (:type tc))
+                                 tc-name (assoc-in [:function :name] tc-name)
+                                 tc-args (update-in [:function :arguments]
+                                                    (fnil str "") tc-args)))))))
+             {:tool-calls tool-calls
+              :last-index (some-> (last tool-calls) key)}
+             deltas))))
 
 (defn- stream->turn
   ([body-stream] (stream->turn body-stream nil))
