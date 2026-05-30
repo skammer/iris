@@ -642,3 +642,27 @@
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
+
+(deftest draft-id-stays-positive
+  (let [next-draft-id @#'telegram/next-draft-id
+        rotate-draft-id @#'telegram/rotate-draft-id
+        valid? @#'telegram/valid-draft-id?
+        max-id @#'telegram/max-draft-id]
+    (testing "generated ids are in [1, max]"
+      (let [id (next-draft-id)]
+        (is (pos? id))
+        (is (<= id max-id))))
+    (testing "rotation never yields 0/negative/over-max and wraps at the ceiling"
+      (is (= 1 (rotate-draft-id max-id)))
+      (let [ids (take 5000 (iterate rotate-draft-id (- max-id 2)))]
+        (is (every? pos? ids))
+        (is (every? #(<= % max-id) ids))
+        (is (some #(= 1 %) ids) "wraps back to 1")))
+    (testing "external draft ids are validated"
+      (is (valid? 1))
+      (is (valid? max-id))
+      (is (not (valid? 0)))
+      (is (not (valid? -5)))
+      (is (not (valid? (inc max-id))))
+      (is (not (valid? 1.5)))
+      (is (not (valid? nil))))))
