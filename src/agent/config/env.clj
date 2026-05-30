@@ -70,6 +70,9 @@
    {:names "OPENAI_BASE_URL" :apply (assoc-path [:llm :providers :openai-compatible :base-url])}
    {:names "OPENAI_API_KEY" :apply (assoc-path [:llm :providers :openai-compatible :api-key])}
    {:names "AGENT_SQLITE_PATH" :apply (assoc-path [:storage :sqlite :path])}
+   {:names "AGENT_SQLITE_MAXIMUM_POOL_SIZE" :parse parse-long* :apply (assoc-path [:storage :sqlite :maximum-pool-size])}
+   {:names "AGENT_SQLITE_MINIMUM_IDLE" :parse parse-long* :apply (assoc-path [:storage :sqlite :minimum-idle])}
+   {:names "AGENT_SQLITE_CONNECTION_TIMEOUT_MS" :parse parse-long* :apply (assoc-path [:storage :sqlite :connection-timeout-ms])}
    {:names "AGENT_SQLITE_DESTRUCTIVE_RESET_ON_DRIFT" :parse parse-bool :apply (assoc-path [:storage :sqlite :destructive-reset-on-drift?])}
    {:names "AGENT_CHAT_MAX_STEPS" :parse parse-long* :apply (assoc-path [:chat :max-steps])}
    {:names "AGENT_LOOP_MAX_ITERATIONS" :parse parse-long* :apply (assoc-path [:loop :max-iterations])}

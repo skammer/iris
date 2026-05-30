@@ -297,6 +297,9 @@
   ([store run-id] (runs/list-agent-run-commands store run-id))
   ([store run-id opts] (runs/list-agent-run-commands store run-id opts)))
 
+(defn count-pending-agent-run-commands [store]
+  (runs/count-pending-agent-run-commands store))
+
 (defn get-agent-run-command [store command-id]
   (runs/get-agent-run-command store command-id))
 

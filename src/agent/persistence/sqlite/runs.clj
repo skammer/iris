@@ -352,6 +352,14 @@
                                                                   :limit limit})
                                  identity))))))
 
+(defn count-pending-agent-run-commands [store]
+  (common/with-connection
+    store
+    (fn [conn]
+      (some-> (common/select-one conn (count-pending-agent-run-commands-sqlvec) identity)
+              :n
+              int))))
+
 (defn get-agent-run-command [store command-id]
   (common/with-connection
     store

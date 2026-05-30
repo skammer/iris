@@ -144,6 +144,11 @@ limit :limit
 select count(*) as n
 from agent_runs
 
+-- :name count-pending-agent-run-commands :? :1
+select count(*) as n
+from agent_run_commands
+where status = 'pending'
+
 -- :name start-agent-run-activity :! :n
 insert or ignore into agent_run_activities (activity_key, run_id, command_id, activity_name, status, input_json, result_json, error, created_at, updated_at)
 values (:activity_key, :run_id, :command_id, :activity_name, 'running', :input_json, null, null, :created_at, :updated_at)

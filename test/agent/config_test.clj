@@ -33,6 +33,13 @@
       (is (true? (get-in cfg [:llm :providers :ollama :prompt-cache?])))
       (is (true? (get-in cfg [:llm :providers :ollama :stream-structured-output?])))
       (is (= "http://localhost:11434" (get-in cfg [:llm :providers :ollama :base-url])))
+      (is (= {:path (get-in cfg [:storage :sqlite :path])
+              :journal-mode "WAL"
+              :maximum-pool-size 8
+              :minimum-idle 2
+              :connection-timeout-ms 30000
+              :destructive-reset-on-drift? false}
+             (:sqlite (:storage cfg))))
       (is (= {:context-window 128000
               :max-output-tokens 16384
               :supports-streaming true
@@ -105,6 +112,15 @@
   (with-isolated-config [_root {"AGENT_ORCHESTRATOR_ENABLED" "true"}]
     (let [cfg (config/load-config)]
       (is (true? (get-in cfg [:orchestrator :enabled]))))))
+
+(deftest sqlite-pool-env-overrides-test
+  (with-isolated-config [_root {"AGENT_SQLITE_MAXIMUM_POOL_SIZE" "12"
+                                "AGENT_SQLITE_MINIMUM_IDLE" "3"
+                                "AGENT_SQLITE_CONNECTION_TIMEOUT_MS" "1500"}]
+    (let [cfg (config/load-config)]
+      (is (= 12 (get-in cfg [:storage :sqlite :maximum-pool-size])))
+      (is (= 3 (get-in cfg [:storage :sqlite :minimum-idle])))
+      (is (= 1500 (get-in cfg [:storage :sqlite :connection-timeout-ms]))))))
 
 (deftest default-data-paths-use-global-data-dir-test
   (with-isolated-config [root {}]

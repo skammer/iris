@@ -57,6 +57,9 @@
                                          :api-key nil}}}
    :storage {:sqlite {:path "data/agent.db"
                       :journal-mode "WAL"
+                      :maximum-pool-size 8
+                      :minimum-idle 2
+                      :connection-timeout-ms 30000
                       :destructive-reset-on-drift? false}}
    :chat {:max-steps 6
           :profiles {:default {:small-model? false

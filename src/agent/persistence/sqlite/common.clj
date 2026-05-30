@@ -83,8 +83,8 @@
 
 (defn create-datasource
   [{:keys [path maximum-pool-size minimum-idle connection-timeout-ms pool-name]
-    :or {maximum-pool-size 4
-         minimum-idle 1
+    :or {maximum-pool-size 8
+         minimum-idle 2
          connection-timeout-ms 30000}}]
   (ensure-parent-dir! path)
   (let [config (doto (HikariConfig.)

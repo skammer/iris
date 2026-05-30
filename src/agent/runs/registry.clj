@@ -356,18 +356,19 @@
   ([runtime run] (stale-run? runtime run {}))
   ([runtime run {:keys [grace-seconds]
                  :or {grace-seconds default-stale-grace-seconds}}]
-   (let [lease (or (:lease run)
-                   (sqlite/latest-agent-run-lease (:store runtime) (:id run)))
-         heartbeat (or (:heartbeat run)
-                       (sqlite/latest-agent-run-heartbeat (:store runtime) (:id run)))
-         now* (now-instant)
-         lease-expired? (when-let [expires-at (some-> lease :expires-at parse-instant)]
-                          (.isAfter now* expires-at))
-         heartbeat-expired? (when-let [observed-at (some-> heartbeat :observed-at parse-instant)]
-                              (.isAfter now* (.plusSeconds observed-at (long grace-seconds))))
-         active? (contains? #{"requested" "launched" "running"} (:status run))]
-     (boolean (and active?
-                   (or lease-expired? heartbeat-expired?))))))
+   (let [active? (contains? #{"requested" "launched" "running"} (:status run))]
+     (if-not active?
+       false
+       (let [lease (or (:lease run)
+                       (sqlite/latest-agent-run-lease (:store runtime) (:id run)))
+             heartbeat (or (:heartbeat run)
+                           (sqlite/latest-agent-run-heartbeat (:store runtime) (:id run)))
+             now* (now-instant)
+             lease-expired? (when-let [expires-at (some-> lease :expires-at parse-instant)]
+                              (.isAfter now* expires-at))
+             heartbeat-expired? (when-let [observed-at (some-> heartbeat :observed-at parse-instant)]
+                                  (.isAfter now* (.plusSeconds observed-at (long grace-seconds))))]
+         (boolean (or lease-expired? heartbeat-expired?)))))))
 
 (defn recovery-plan
   [runtime run-id]
@@ -522,11 +523,7 @@
   [runtime]
   (let [runs (sqlite/list-agent-runs (:store runtime) {:limit 1000})
         stale (count (filter #(stale-run? runtime %) runs))
-        pending (reduce
-                 (fn [acc run]
-                   (+ acc (count (sqlite/list-agent-run-commands (:store runtime) (:id run) {:status "pending"}))))
-                 0
-                 runs)]
+        pending (sqlite/count-pending-agent-run-commands (:store runtime))]
     {:healthy true
      :run-count (count runs)
      :stale-run-count stale
