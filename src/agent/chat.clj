@@ -2,26 +2,26 @@
   "First-class session chat loop."
   (:refer-clojure :exclude [run!])
   (:require
+   [agent.chat.kernel-ops :as chat-kernel-ops]
+   [agent.chat.memory :as chat-memory]
+   [agent.chat.streaming :as chat-streaming]
+   [agent.chat.util :as chat-util]
    [agent.config :as config]
-   [agent.kernel.ops :as kernel-ops]
    [agent.kernel.runtime :as kernel-runtime]
    [agent.kernel.schema :as kernel-schema]
    [agent.llm.core :as llm-core]
    [agent.llm.messages :as llm-messages]
    [agent.loop :as loop-support]
-   [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.planner :as planner]
    [agent.prompts :as prompts]
    [agent.runtime.compaction :as compaction]
    [agent.runtime.context-pack :as context-pack]
    [agent.runtime.loop :as runtime-loop]
-   [agent.runtime.tools :as runtime-tools]
    [agent.skills :as skills]
    [agent.telemetry :as telemetry]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
-   [cheshire.core :as json]
    [clojure.core.async :as async]
    [clojure.string :as str])
   (:import
@@ -29,10 +29,7 @@
    (java.util UUID)))
 
 (def default-max-steps 6)
-(def memory-result-limit 5)
-(def memory-max-chars 6000)
 (def history-message-max-chars 8000)
-(def stream-flush-interval-ms 50)
 (def queued-message-metadata-key :queued)
 
 (defn- request-id []
@@ -144,24 +141,6 @@
     (when-let [state (some-> system :chat-service :streaming-state)]
       (swap! state dissoc session-id))))
 
-(defn- emit! [system event]
-  (if-let [sink (:event-sink system)]
-    (sink event)
-    (sqlite/log-event! (:store system) event)))
-
-(defn- emit-operation-failed!
-  ([system session-id request-id operation error]
-   (emit-operation-failed! system session-id request-id operation error nil))
-  ([system session-id request-id operation error extra]
-   (emit! system {:event-type :chat.operation.failed
-                  :entity-type :session
-                  :entity-id session-id
-                  :request-id request-id
-                  :payload (cond-> {:operation operation
-                                     :message (.getMessage ^Throwable error)}
-                             (ex-data error) (assoc :type (some-> error ex-data :type))
-                             extra (merge extra))})))
-
 (defn- state-event-payload [state reason]
   {:working (boolean (:working? state))
    :queued-count (:queued-count state 0)
@@ -173,7 +152,7 @@
 
 (defn- emit-session-state! [system session-id reason]
   (when (and system session-id)
-    (emit! system {:event-type :session-state-changed
+    (chat-util/emit! system {:event-type :session-state-changed
                    :entity-type :session
                    :entity-id session-id
                    :payload (state-event-payload (session-state system session-id)
@@ -198,7 +177,7 @@
    (append-message! system session-id role content nil))
   ([system session-id role content extra]
    (let [message (append-message-record! system session-id role content extra)]
-     (emit! system {:event-type :message-end
+     (chat-util/emit! system {:event-type :message-end
                     :entity-type :session
                     :entity-id session-id
                     :payload (message-end-payload role content extra)})
@@ -331,33 +310,6 @@
       (when (or (not (str/blank? content)) extra)
         (append-message-record! system session-id "user" content extra)))))
 
-(defn- compact-memory-json
-  "Serializes recalled memory to JSON, capped at memory-max-chars to keep
-   recall payloads bounded."
-  [value]
-  (let [text (json/generate-string value)]
-    (if (> (count text) memory-max-chars)
-      (subs text 0 memory-max-chars)
-      text)))
-
-(defn- recall-memory [system session-id query]
-  (let [prompt (memory/read-prompt-memory (:memory-service system))
-        search (when-not (str/blank? (or query ""))
-                 (memory/search-memory (:memory-service system)
-                                       query
-                                       {:limit memory-result-limit
-                                        :session-id session-id
-                                        :entity-type :session
-                                        :entity-id session-id
-                                        :scope {:type :session :id session-id}}))]
-    {:prompt prompt
-     :search search}))
-
-(defn- memory-message [recall]
-  {:role "system"
-   :content (prompts/render "memory-context"
-                            {:memory_json (compact-memory-json recall)})})
-
 (defn- iris-context-message [system]
   (when-let [context (some-> (get-in system [:config :iris :context]) str/trim not-empty)]
     {:role "system" :content context}))
@@ -372,59 +324,6 @@
 (defn- approval-expires-at [system]
   (str (.plusSeconds (Instant/now)
                      (long (get-in system [:config :tools :approvals :ttl-seconds] 900)))))
-
-(defn- profile-permissions [system profile]
-  (set (get-in system [:config :tools :permissions profile]
-               (get-in system [:config :tools :permissions :agent] #{}))))
-
-(defn- all-tool-names [system]
-  (set (map :name (tools/list-tools (:tool-registry system)))))
-
-(defn- chat-tool-context [system session-id request-id extra-context context]
-  (merge (or extra-context {})
-         context
-         {:user (or session-id "chat")
-          :session-id session-id
-          :request-id request-id
-          :permissions (profile-permissions system :chat)
-          :allowed-tools (all-tool-names system)
-          :yolo? (true? (get-in system [:config :tools :yolo?]))}
-         (select-keys extra-context [:allowed-tools])
-         (select-keys context [:allowed-tools])))
-
-(defrecord ChatKernelOps [system session-id request-id extra-context]
-  kernel-ops/KernelOps
-  (spawn-task-worker! [_ _]
-    (throw (ex-info "Chat loop cannot spawn workers yet"
-                    {:type :unsupported-directive})))
-  (execute-agent-tool! [_ _ tool-name input context]
-    (tools/execute-tool (:tool-registry system)
-                        tool-name
-                        input
-                        (chat-tool-context system session-id request-id extra-context context)))
-  (send-agent-message! [_ _ _]
-    (throw (ex-info "Chat loop cannot send agent messages yet"
-                    {:type :unsupported-directive})))
-  (patch-agent-state! [_ _ patch] patch)
-  (set-agent-status! [_ _ _] nil)
-  (emit-kernel-event! [_ event] (emit! system event))
-
-  kernel-ops/KernelToolBatchOps
-  (execute-agent-tool-batch! [_ _ calls context opts]
-    (let [calls* (mapv (fn [call]
-                         (update call :context #(chat-tool-context system
-                                                                   session-id
-                                                                   request-id
-                                                                   extra-context
-                                                                   (merge context (or % {})))))
-                       calls)]
-      (runtime-tools/execute-batch! (:tool-registry system)
-                                    calls*
-                                    {}
-                                    (select-keys opts [:mode
-                                                       :tool-execution-modes
-                                                       :cancellation-token
-                                                       :cancelled?])))))
 
 (defn- request-approval! [system session-id receipt]
   (let [tool-name (keyword (:tool-name receipt))
@@ -452,28 +351,6 @@
                              :response content})
     assistant-message)))
 
-(defn- extract-turn-memory! [system session-id user-message assistant-message request-id]
-  (when (and session-id user-message assistant-message)
-    (try
-      (memory/extract-and-save-facts!
-       (:memory-service system)
-       (or (:fact-llm-provider system) (:llm-provider system))
-       {:user-message (:content user-message)
-        :assistant-message (:content assistant-message)}
-       {:session-id session-id
-        :source-session-id session-id
-        :source-message-ids [(:id user-message) (:id assistant-message)]
-        :source-request-id request-id
-        :model (config/active-model (get-in system [:config :llm]))})
-      (catch Exception e
-        (emit! system {:event-type :message-update
-                       :entity-type :session
-                       :entity-id session-id
-                       :request-id request-id
-                       :payload {:kind :memory-extract-failed
-                                 :message (.getMessage e)
-                                 :type (some-> e ex-data :type)}})))))
-
 (defn- error-content [error]
   (str "Chat failed: " (.getMessage ^Throwable error)))
 
@@ -490,16 +367,6 @@
     (nil? value) ""
     :else (str value)))
 
-(defn- canonical-event-type [event]
-  (keyword (str/replace (name (:event-type event)) #"_" "-")))
-
-(defn- same-event-type? [event event-type]
-  (= event-type (canonical-event-type event)))
-
-(defn- event-payload [event]
-  (let [payload (:payload event)]
-    (if (map? payload) payload {:value payload})))
-
 (defn- loop-event-sink
   [system subscribers]
   (fn [event]
@@ -507,65 +374,13 @@
       (try
         (f event)
         (catch Exception e
-          (emit-operation-failed! system
+          (chat-util/emit-operation-failed! system
                                   (:entity-id event)
                                   (:request-id event)
                                   operation
                                   e
                                   {:trigger-event-type (:event-type event)}))))
-    (emit! system event)))
-
-(defn- text-delta-event? [event]
-  (let [payload (event-payload event)]
-    (and (same-event-type? event :message-update)
-         (string? (:delta payload))
-         (not= "" (:delta payload)))))
-
-(defn- buffered-delta-event [event text]
-  (-> event
-      (assoc :payload (assoc (event-payload event) :delta text))
-      (assoc :timestamp (str (Instant/now)))))
-
-(defn- stream-delta-flusher
-  [emit-event!]
-  (let [lock (Object.)
-        state (atom {:text ""
-                     :event nil
-                     :scheduled? false
-                     :timer-id 0})
-        flush! (fn [expected-timer-id]
-                 (let [event* (locking lock
-                                (let [{:keys [text event timer-id]} @state]
-                                  (when (or (nil? expected-timer-id)
-                                            (= expected-timer-id timer-id))
-                                    (swap! state assoc
-                                           :text ""
-                                           :event nil
-                                           :scheduled? false)
-                                    (when (and event (not= "" text))
-                                      (buffered-delta-event event text)))))]
-                   (when event*
-                     (emit-event! event*))))]
-    {:flush! #(flush! nil)
-     :emit! (fn [event]
-              (if (text-delta-event? event)
-                (let [[schedule? timer-id] (locking lock
-                                             (let [schedule? (not (:scheduled? @state))]
-                                               (swap! state
-                                                      (fn [s]
-                                                        (cond-> (-> s
-                                                                    (update :text str (get-in event [:payload :delta]))
-                                                                    (assoc :event event
-                                                                           :scheduled? true))
-                                                          schedule? (update :timer-id inc))))
-                                               [schedule? (:timer-id @state)]))]
-                  (when schedule?
-                    (future
-                      (Thread/sleep stream-flush-interval-ms)
-                      (flush! timer-id))))
-                (do
-                  (flush! nil)
-                  (emit-event! event))))}))
+    (chat-util/emit! system event)))
 
 (defn- persist-final-assistant!
   ([system session-id prompt content request-id]
@@ -579,17 +394,17 @@
 (defn- persistence-subscriber
   [system session-id prompt request-id persisted]
   (fn [event]
-    (let [payload (event-payload event)]
+    (let [payload (chat-util/event-payload event)]
       (cond
         (and session-id
-             (same-event-type? event :message-update)
+             (chat-util/same-event-type? event :message-update)
              (contains? #{:context-compacted "context-compacted"} (:kind payload)))
         (sqlite/append-entry! (:store system)
                               session-id
                               {:type :compaction
                                :payload (:compaction payload)})
 
-        (same-event-type? event :message-end)
+        (chat-util/same-event-type? event :message-end)
         (let [{:keys [role content final? tool-turn? audit? tool-calls tool-call-id]} payload]
           (cond
             (and (= "assistant" role) final?)
@@ -613,9 +428,9 @@
 (defn- streaming-subscriber
   [system session-id on-delta]
   (fn [event]
-    (let [payload (event-payload event)]
+    (let [payload (chat-util/event-payload event)]
       (cond
-        (and (same-event-type? event :message-update)
+        (and (chat-util/same-event-type? event :message-update)
              (string? (:delta payload))
              (not= "" (:delta payload)))
         (do
@@ -625,7 +440,7 @@
           (when on-delta
             (on-delta (:delta payload))))
 
-        (and (same-event-type? event :message-end)
+        (and (chat-util/same-event-type? event :message-end)
              (or (:final? payload) (:tool-turn? payload)))
         (clear-streaming! system session-id)))))
 
@@ -633,8 +448,8 @@
   [on-tool-call]
   (fn [event]
     (when (and on-tool-call
-               (same-event-type? event :tool-execution-end))
-      (let [{:keys [tool-call receipt]} (event-payload event)]
+               (chat-util/same-event-type? event :tool-execution-end))
+      (let [{:keys [tool-call receipt]} (chat-util/event-payload event)]
         (on-tool-call {:tool-call tool-call :receipt receipt})))))
 
 (defn- consume-llm-stream-with!
@@ -719,11 +534,11 @@
             (try
               (compaction/auto-compact! (:store system) session-id (:chat (:config system)))
               (catch Exception e
-                (emit-operation-failed! system session-id request-id :auto-compact e))))
+                (chat-util/emit-operation-failed! system session-id request-id :auto-compact e))))
         history (if session-id
                   (session-messages system session-id)
                   (llm-messages/messages->internal messages))
-        recall (recall-memory system session-id prompt)
+        recall (chat-memory/recall-memory system session-id prompt)
         iris-context (iris-context-message system)
         active-mode (some-> (and session-id
                                   (sqlite/get-session (:store system) session-id))
@@ -740,15 +555,15 @@
                      {:operation :tool-call-callback
                       :f (tool-call-subscriber on-tool-call)}]
         event-sink* (loop-event-sink system subscribers)
-        flusher (stream-delta-flusher event-sink*)
+        flusher (chat-streaming/stream-delta-flusher event-sink*)
         event-sink (:emit! flusher)
-        ops (->ChatKernelOps system session-id request-id context)
+        ops (chat-kernel-ops/->ChatKernelOps system session-id request-id context)
         pack-context (context-pack-fn system)
         context-injectors (cond-> []
                             iris-context (conj (constantly [iris-context]))
                             (seq mode-messages) (conj (constantly mode-messages))
                             skill-message (conj (constantly [skill-message]))
-                            true (conj (constantly [(memory-message recall)])))]
+                            true (conj (constantly [(chat-memory/memory-message recall)])))]
     (event-sink {:event-type :message-update
                  :entity-type :session
                  :entity-id session-id
@@ -799,7 +614,7 @@
                                                        error
                                                        stream?
                                                        emit-delta))})]
-        (extract-turn-memory! system
+        (chat-memory/extract-turn-memory! system
                               session-id
                               user-message
                               (:assistant-message @persisted)
@@ -855,7 +670,7 @@
                                              :session-id (:session-id queued-message)
                                              :reparent-to-current-leaf? true
                                              :select-leaf? true})
-      (emit! system {:event-type :message.updated
+      (chat-util/emit! system {:event-type :message.updated
                      :entity-type :session
                      :entity-id (:session-id queued-message)
                      :request-id request-id
@@ -936,7 +751,7 @@
                     :queued-message queued-message
                     :result result}]
           (swap! (:session-runtimes service) update session-id enqueue-item item)
-          (emit! system {:event-type :turn-queued
+          (chat-util/emit! system {:event-type :turn-queued
                          :entity-type :session
                          :entity-id session-id
                          :request-id request-id
