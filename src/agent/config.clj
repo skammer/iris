@@ -135,7 +135,7 @@
            :permissions {:api [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write]
                          :ui [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write]
                          :agent [:http-request :memory-read :memory-write :todo-read :todo-write]
-                         :chat [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write]}
+                         :chat [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec]}
            :policy {:allowlist []
                     :blocklist []
                     :tool-scopes {}}

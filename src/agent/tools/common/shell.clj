@@ -19,6 +19,7 @@
    {:argv ["tail" "**"] :action :allow}
    {:argv ["wc" "**"] :action :allow}
    {:argv ["df" "**"] :action :allow}
+   {:argv ["uname" "**"] :action :allow}
    {:argv ["sort" "**"] :action :allow}
    {:argv ["uniq" "**"] :action :allow}
    {:argv ["cut" "**"] :action :allow}

@@ -60,7 +60,7 @@
                      (tools/register-tool tool))]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"approval policy"
-                          (tools/execute-tool registry :shell {:argv ["uname" "-a"]}
+                          (tools/execute-tool registry :shell {:argv ["whoami"]}
                                               {:permissions #{:shell-exec}})))
     (.delete root)))
 
