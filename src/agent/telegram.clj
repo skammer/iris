@@ -511,8 +511,21 @@
 (defn- private-chat? [chat]
   (= "private" (:type chat)))
 
+(def ^:private max-draft-id 2147483647)
+
+(defn- valid-draft-id?
+  "Telegram requires a draft_id that is a strictly positive 32-bit int."
+  [id]
+  (and (integer? id) (pos? id) (<= id max-draft-id)))
+
 (defn- next-draft-id []
-  (inc (mod (System/currentTimeMillis) 2147483647)))
+  (inc (mod (System/currentTimeMillis) max-draft-id)))
+
+(defn- rotate-draft-id
+  "Advance to the next draft id, wrapping to 1 at the int32 ceiling so the id
+   can never become 0 or negative (which Telegram rejects)."
+  [id]
+  (if (>= id max-draft-id) 1 (inc id)))
 
 (defn- telegram-operation-failed!
   [system chat-id operation error]
@@ -561,7 +574,7 @@
                       (let [text @accumulator]
                         (reset! accumulator "")
                         (reset! last-flush 0)
-                        (swap! draft-id #(inc (mod % 2147483647)))
+                        (swap! draft-id rotate-draft-id)
                         (when-not (str/blank? text)
                           (safe-telegram! system chat-id :draft-finalize
                                           #(send-msg! chat-id text)))))]
@@ -827,8 +840,10 @@
   channels/IChannelDrafts
   (send-adapter-draft! [_ message]
     (let [message* (channels/normalize-send-message nil message)
-          draft-id (long (or (get-in message* [:metadata :draft-id])
-                             (next-draft-id)))]
+          provided (get-in message* [:metadata :draft-id])
+          draft-id (if (valid-draft-id? provided)
+                     (long provided)
+                     (next-draft-id))]
       (send-message-draft! (:bot-token config) (:recipient message*) draft-id (:content message*))
       {:channel :telegram
        :recipient (:recipient message*)
