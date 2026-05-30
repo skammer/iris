@@ -178,12 +178,7 @@
                            {:argv ["git" "diff" "**"] :action :allow}
                            {:argv ["git" "show" "**"] :action :allow}
                            {:argv ["git" "branch" "**"] :action :allow}
-                           {:argv ["cargo" "check" "**"] :action :allow}
-                           {:argv ["cargo" "build" "**"] :action :allow}
-                           {:argv ["cargo" "test" "**"] :action :allow}
                            {:argv ["cargo" "fmt" "**"] :action :allow}
-                           {:argv ["cargo" "clippy" "**"] :action :allow}
-                           {:argv ["npm" "run" "**"] :action :allow}
                            {:argv ["rm" "-rf" "/*"] :action :deny}
                            {:argv ["sudo" "rm" "-rf" "/*"] :action :deny}
                            {:argv ["dd" "**"] :action :deny}

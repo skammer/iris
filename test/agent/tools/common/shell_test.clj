@@ -72,9 +72,34 @@
         registry (-> (tools/create-registry)
                      (tools/register-tool tool))]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"denied by shell rule"
+                          #"authoritative shell safety rule"
                           (tools/execute-tool registry :shell {:argv ["rm" "-rf" "/tmp/iris-shell-deny-test"]}
                                               {:permissions #{:shell-exec}})))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"authoritative shell safety rule"
+                          (tools/execute-tool registry :shell {:argv ["/bin/rm" "-rf" "/tmp/iris-shell-deny-test"]}
+                                              {:permissions #{:shell-exec}})))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"authoritative shell safety rule"
+                          (tools/execute-tool registry :shell {:argv ["sh" "-c" "rm -rf /tmp/iris-shell-deny-test"]}
+                                              {:permissions #{:shell-exec}})))
+    (.delete root)))
+
+(deftest shell-tool-default-script-build-commands-require-approval-test
+  (let [root (temp-dir)
+        tool (shell-tool/create-shell-tool {:roots [(.getAbsolutePath root)]
+                                            :working-dir (.getAbsolutePath root)
+                                            :timeout-ms 5000})
+        registry (-> (tools/create-registry)
+                     (tools/register-tool tool))]
+    (doseq [argv [["npm" "run" "build"]
+                  ["cargo" "build"]
+                  ["cargo" "test"]
+                  ["cargo" "clippy"]]]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"approval policy"
+                            (tools/execute-tool registry :shell {:argv argv}
+                                                {:permissions #{:shell-exec}}))))
     (.delete root)))
 
 (deftest shell-tool-yolo-does-not-bypass-deny-rule-test
@@ -85,7 +110,7 @@
         registry (-> (tools/create-registry)
                      (tools/register-tool tool))]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"denied by shell rule"
+                          #"authoritative shell safety rule"
                           (tools/execute-tool registry :shell {:argv ["dd" "if=/dev/zero" "of=/tmp/iris-shell-deny-test"]}
                                               {:permissions #{:shell-exec}
                                                :yolo? true})))

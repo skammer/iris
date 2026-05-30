@@ -32,12 +32,7 @@
    {:argv ["git" "diff" "**"] :action :allow}
    {:argv ["git" "show" "**"] :action :allow}
    {:argv ["git" "branch" "**"] :action :allow}
-   {:argv ["cargo" "check" "**"] :action :allow}
-   {:argv ["cargo" "build" "**"] :action :allow}
-   {:argv ["cargo" "test" "**"] :action :allow}
    {:argv ["cargo" "fmt" "**"] :action :allow}
-   {:argv ["cargo" "clippy" "**"] :action :allow}
-   {:argv ["npm" "run" "**"] :action :allow}
    {:argv ["rm" "-rf" "/*"] :action :deny}
    {:argv ["sudo" "rm" "-rf" "/*"] :action :deny}
    {:argv ["dd" "**"] :action :deny}
@@ -65,6 +60,52 @@
 
 (defn- split-command [command]
   (vec (remove str/blank? (str/split (str/trim (or command "")) #"\s+"))))
+
+(defn- binary-basename [value]
+  (.getName (io/file (or value ""))))
+
+(defn- policy-argv [argv]
+  (if (seq argv)
+    (update argv 0 binary-basename)
+    argv))
+
+(def ^:private shell-wrapper-binaries #{"sh" "bash" "zsh" "dash"})
+(def ^:private always-denied-binaries #{"dd" "mkfs" "fdisk" "mkswap"})
+
+(defn- rm-recursive-force? [args]
+  (let [options (filter #(str/starts-with? % "-") args)
+        recursive? (some #(or (str/includes? % "r")
+                              (str/includes? % "R")) options)
+        force? (some #(str/includes? % "f") options)]
+    (boolean (and recursive? force?))))
+
+(defn- authoritative-deny [argv]
+  (let [[binary & args] (policy-argv argv)]
+    (cond
+      (nil? binary) nil
+
+      (= "sudo" binary)
+      (authoritative-deny (vec args))
+
+      (and (contains? shell-wrapper-binaries binary)
+           (= "-c" (first args))
+           (second args))
+      (authoritative-deny (split-command (second args)))
+
+      (and (= "rm" binary)
+           (rm-recursive-force? args))
+      {:action :deny
+       :reason "Command denied by authoritative shell safety rule"
+       :details {:binary binary
+                 :argv argv}}
+
+      (contains? always-denied-binaries binary)
+      {:action :deny
+       :reason "Command denied by authoritative shell safety rule"
+       :details {:binary binary
+                 :argv argv}}
+
+      :else nil)))
 
 (defn- normalize-action [action]
   (cond
@@ -111,7 +152,7 @@
 (defn- legacy-policy-action [config argv]
   (let [allowed (set (:allowed-commands config))
         blocked (set (:blocked-commands config))
-        binary (first argv)]
+        binary (binary-basename (first argv))]
     (cond
       (contains? blocked binary) {:action :deny
                                   :reason "Command is in shell blocklist"
@@ -126,7 +167,8 @@
 
 (defn- rule-policy-action [config argv]
   (let [rules (keep normalize-rule (:rules config))
-        matches (filter #(argv-pattern-matches? (:argv %) argv) rules)
+        argv* (policy-argv argv)
+        matches (filter #(argv-pattern-matches? (:argv %) argv*) rules)
         rule (last matches)]
     {:action (or (:action rule)
                  (normalize-action (:default-action config))
@@ -134,9 +176,11 @@
      :rule rule}))
 
 (defn- shell-policy-action [config argv]
-  (if (legacy-policy-config? config)
-    (legacy-policy-action config argv)
-    (rule-policy-action config argv)))
+  (if-let [deny (authoritative-deny argv)]
+    deny
+    (if (legacy-policy-config? config)
+      (legacy-policy-action config argv)
+      (rule-policy-action config argv))))
 
 (defn- validate-input [input]
   (let [argv (or (:argv input)
@@ -175,17 +219,17 @@
 (defn create-shell-tool
   [opts]
   (let [legacy-opts? (legacy-policy-config? opts)
-        config (merge (merge {:roots ["."]
-                              :working-dir "."
-                              :timeout-ms 30000
-                              :max-timeout-ms 30000
-                              :max-output-bytes 65536}
-                             (if legacy-opts?
-                               {:deny-by-default? true
-                                :allowed-commands ["printf" "pwd" "ls" "echo" "cat" "rg" "git" "df"]
-                                :blocked-commands []}
-                               {:default-action :ask
-                                :rules default-rules}))
+        config (merge {:roots ["."]
+                       :working-dir "."
+                       :timeout-ms 30000
+                       :max-timeout-ms 30000
+                       :max-output-bytes 65536}
+                      (if legacy-opts?
+                        {:deny-by-default? true
+                         :allowed-commands ["printf" "pwd" "ls" "echo" "cat" "rg" "git" "df"]
+                         :blocked-commands []}
+                        {:default-action :ask
+                         :rules default-rules})
                       opts)
         roots (mapv canonical-path (:roots config))]
     (tools/create-tool
