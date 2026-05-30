@@ -3,7 +3,9 @@
    [agent.tools.common.fs :as fs-tool]
    [agent.tools.core :as tools]
    [clojure.java.io :as io]
-   [clojure.test :refer :all]))
+   [clojure.test :refer :all])
+  (:import
+   [java.nio.file Files]))
 
 (defn temp-dir []
   (.toFile (java.nio.file.Files/createTempDirectory
@@ -75,6 +77,36 @@
                                               {:permissions #{:filesystem-write}})))
     (io/delete-file file-path true)
     (.delete root)))
+
+(deftest fs-tool-refuses-symlink-paths-test
+  (let [root (temp-dir)
+        target (io/file root "target.txt")
+        link (io/file root "link.txt")
+        tool (fs-tool/create-fs-tool {:roots [(.getAbsolutePath root)]})
+        registry (approved-registry tool)]
+    (spit target "safe")
+    (try
+      (Files/createSymbolicLink (.toPath link)
+                                (.toPath target)
+                                (make-array java.nio.file.attribute.FileAttribute 0))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"symlink"
+                            (tools/execute-tool registry :fs {:action :read
+                                                              :path (.getAbsolutePath link)}
+                                                {:permissions #{:filesystem-read}})))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"symlink"
+                            (tools/execute-tool registry :fs {:action :write
+                                                              :path (.getAbsolutePath link)
+                                                              :content "blocked"}
+                                                {:permissions #{:filesystem-write}})))
+      (is (= "safe" (slurp target)))
+      (catch UnsupportedOperationException _
+        (is true "symbolic links unsupported"))
+      (finally
+        (io/delete-file link true)
+        (io/delete-file target true)
+        (.delete root)))))
 
 (deftest fs-tool-replace-requires-unique-old-string-test
   (let [root (temp-dir)

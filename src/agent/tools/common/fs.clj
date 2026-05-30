@@ -3,7 +3,11 @@
   (:require
    [agent.tools.core :as tools]
    [clojure.java.io :as io]
-   [clojure.string :as str]))
+   [clojure.string :as str])
+  (:import
+   [java.nio.charset StandardCharsets]
+   [java.nio.file Files LinkOption OpenOption StandardOpenOption]
+   [java.nio.file.attribute BasicFileAttributes]))
 
 (def ^:private allowed-actions
   #{:read :write :create :replace :list :delete :mkdir})
@@ -25,6 +29,12 @@
 (defn- canonical-path [path]
   (.getCanonicalPath (io/file (expand-home path))))
 
+(defn- nio-path [path]
+  (-> (io/file (expand-home path))
+      .getAbsoluteFile
+      .toPath
+      .normalize))
+
 (defn- within-root? [roots path]
   (let [target (canonical-path path)]
     (some #(or (= target %)
@@ -34,14 +44,60 @@
 (defn- resolve-allowed-path! [roots path]
   (when-not (and (string? path) (not (str/blank? path)))
     (throw (tools/validation-error "path must be a non-blank string" {:path path})))
-  (let [candidate (io/file path)
+  (let [candidate (io/file (expand-home path))
         canonical (canonical-path candidate)]
     (when-not (within-root? roots canonical)
       (throw (tools/tool-error :path-not-allowed
                                "Path is outside allowed roots"
                                 {:path canonical
                                  :roots roots})))
-    canonical))
+    {:roots roots
+     :path canonical
+     :nio-path (nio-path path)}))
+
+(defn- symlink-segment [roots path]
+  (loop [current path]
+    (cond
+      (nil? current) nil
+      (and (Files/isSymbolicLink current)
+           (within-root? roots (.toFile current))) current
+      :else (recur (.getParent current)))))
+
+(defn- ensure-no-symlink-segments! [{:keys [roots path nio-path]}]
+  (when-let [segment (symlink-segment roots nio-path)]
+    (throw (tools/tool-error :path-not-allowed
+                             "Path must not contain symlink segments"
+                             {:path path
+                              :segment (str segment)}))))
+
+(defn- nofollow-link-options []
+  (into-array LinkOption [LinkOption/NOFOLLOW_LINKS]))
+
+(defn- nofollow-open-options [& opts]
+  (into-array OpenOption (conj (vec opts) LinkOption/NOFOLLOW_LINKS)))
+
+(defn- regular-file-attrs! [{:keys [path nio-path] :as path-info}]
+  (ensure-no-symlink-segments! path-info)
+  (let [attrs (Files/readAttributes nio-path BasicFileAttributes (nofollow-link-options))]
+    (when-not (.isRegularFile attrs)
+      (throw (tools/tool-error :not-found "File not found" {:path path})))
+    attrs))
+
+(defn- read-file-content! [path-info]
+  (with-open [in (Files/newInputStream (:nio-path path-info)
+                                       (nofollow-open-options))]
+    (slurp in)))
+
+(defn- write-file-content! [path-info content create-new?]
+  (ensure-no-symlink-segments! path-info)
+  (Files/write (:nio-path path-info)
+               (.getBytes content StandardCharsets/UTF_8)
+               (if create-new?
+                 (nofollow-open-options StandardOpenOption/CREATE_NEW
+                                        StandardOpenOption/WRITE)
+                 (nofollow-open-options StandardOpenOption/CREATE
+                                        StandardOpenOption/TRUNCATE_EXISTING
+                                        StandardOpenOption/WRITE))))
 
 (defn- sensitive-action? [input]
   (contains? #{:write :create :replace :delete :mkdir} (:action input)))
@@ -108,20 +164,19 @@
       :execute-fn
       (fn [input context]
         (let [action (:action input)
-              path (resolve-allowed-path! roots (:path input))]
+              path-info (resolve-allowed-path! roots (:path input))
+              path (:path path-info)]
           (ensure-permission! context action)
           (case action
-            :read (let [file (io/file path)
-                        size (.length file)]
-                    (when-not (.isFile file)
-                      (throw (tools/tool-error :not-found "File not found" {:path path})))
-                     (when (> size (:max-read-bytes config))
+            :read (let [attrs (regular-file-attrs! path-info)
+                        size (.size attrs)]
+                    (when (> size (:max-read-bytes config))
                       (throw (tools/tool-error :file-too-large "File exceeds max-read-bytes"
                                                {:path path
                                                 :size size
                                                 :max-read-bytes (:max-read-bytes config)})))
                      {:path path
-                      :content (slurp file)})
+                      :content (read-file-content! path-info)})
             :write (do
                      (let [content (or (:content input) "")
                            size (alength (.getBytes content "UTF-8"))]
@@ -130,30 +185,27 @@
                                                   {:path path
                                                    :size size
                                                    :max-write-bytes (:max-write-bytes config)})))
-                       (spit path content))
+                       (write-file-content! path-info content false))
                      {:path path
                       :written true})
             :create (do
-                      (let [file (io/file path)
-                            content (or (:content input) "")
+                      (let [content (or (:content input) "")
                             size (alength (.getBytes content "UTF-8"))]
-                        (when (.exists file)
+                        (when (Files/exists (:nio-path path-info) (nofollow-link-options))
                           (throw (tools/tool-error :already-exists "Path already exists" {:path path})))
                         (when (> size (:max-write-bytes config))
                           (throw (tools/tool-error :file-too-large "Content exceeds max-write-bytes"
                                                    {:path path
                                                     :size size
                                                     :max-write-bytes (:max-write-bytes config)})))
-                        (spit file content))
+                        (write-file-content! path-info content true))
                       {:path path
                        :created true})
-            :replace (let [file (io/file path)
-                           old (:old-string input)
+            :replace (let [old (:old-string input)
                            new (:new-string input)
                            replace-all? (true? (:replace-all? input))]
-                       (when-not (.isFile file)
-                         (throw (tools/tool-error :not-found "File not found" {:path path})))
-                       (let [content (slurp file)
+                       (regular-file-attrs! path-info)
+                       (let [content (read-file-content! path-info)
                              matches (count (re-seq (java.util.regex.Pattern/compile
                                                      (java.util.regex.Pattern/quote old))
                                                     content))]
@@ -178,12 +230,13 @@
                                                       {:path path
                                                        :size size
                                                        :max-write-bytes (:max-write-bytes config)})))
-                           (spit file content*)
+                           (write-file-content! path-info content* false)
                            {:path path
                             :replaced true
                             :matches matches})))
             :list (let [file (io/file path)]
-                    (when-not (.isDirectory file)
+                    (ensure-no-symlink-segments! path-info)
+                    (when-not (Files/isDirectory (:nio-path path-info) (nofollow-link-options))
                       (throw (tools/tool-error :not-directory "Path is not a directory" {:path path})))
                     {:path path
                      :entries (->> (.listFiles file)
@@ -194,12 +247,15 @@
                                    (sort-by :name)
                                    vec)})
             :delete (let [file (io/file path)]
+                      (ensure-no-symlink-segments! path-info)
                       (when-not (.exists file)
                         (throw (tools/tool-error :not-found "Path not found" {:path path})))
                       (io/delete-file file true)
                       {:path path
                        :deleted true})
-            :mkdir (let [file (io/file path)]
-                     (.mkdirs file)
+            :mkdir (do
+                     (ensure-no-symlink-segments! path-info)
+                     (Files/createDirectories (:nio-path path-info)
+                                              (make-array java.nio.file.attribute.FileAttribute 0))
                      {:path path
                       :created true}))))})))
