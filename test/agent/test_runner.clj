@@ -6,6 +6,7 @@
    [agent.broker.local-test]
    [agent.channels.core-test]
    [agent.chat-harness-test]
+   [agent.chat.streaming-test]
    [agent.chat-test]
    [clojure.test :as t]
    [agent.config-test]
@@ -63,6 +64,7 @@
     agent.broker.local-test
     agent.channels.core-test
     agent.chat-harness-test
+    agent.chat.streaming-test
     agent.chat-test
     agent.config-test
     agent.federation.http-test

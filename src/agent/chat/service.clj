@@ -6,7 +6,8 @@
    [agent.loop :as loop-support]
    [agent.runtime.loop :as runtime-loop])
   (:import
-   (java.util UUID)))
+   (java.util UUID)
+   (java.util.concurrent Executors ThreadFactory TimeUnit)))
 
 (def stopped-content runtime-loop/stopped-content)
 
@@ -15,7 +16,12 @@
 
 (defn create-service
   []
-  {:streaming-state (atom {})
+  {:stream-flush-scheduler (Executors/newSingleThreadScheduledExecutor
+                            (reify ThreadFactory
+                              (newThread [_ runnable]
+                                (doto (Thread. runnable "iris-chat-stream-flush")
+                                  (.setDaemon true)))))
+   :streaming-state (atom {})
    :session-runtimes (atom {})
    :loop-workers (atom {})
    :manager-lock (Object.)})
@@ -31,6 +37,10 @@
     (do
       (doseq [worker (vals @(:loop-workers service))]
         (future-cancel worker))
+      (when-let [scheduler (:stream-flush-scheduler service)]
+        (.shutdown scheduler)
+        (when-not (.awaitTermination scheduler 1 TimeUnit/SECONDS)
+          (.shutdownNow scheduler)))
       (reset! (:loop-workers service) {})
       (reset! (:session-runtimes service) {})
       (reset! (:streaming-state service) {})

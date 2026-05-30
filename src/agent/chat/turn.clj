@@ -174,7 +174,9 @@
                      {:operation :tool-call-callback
                       :f (subscribers/tool-call-subscriber on-tool-call)}]
         event-sink* (subscribers/loop-event-sink system subscribers)
-        flusher (chat-streaming/stream-delta-flusher event-sink*)
+        flusher (chat-streaming/stream-delta-flusher
+                 event-sink*
+                 (get-in system [:chat-service :stream-flush-scheduler]))
         event-sink (:emit! flusher)
         ops (chat-kernel-ops/->ChatKernelOps system session-id request-id context)
         pack-context (context-pack-fn system)

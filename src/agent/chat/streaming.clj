@@ -5,7 +5,8 @@
   (:require
    [agent.chat.util :as util])
   (:import
-   (java.time Instant)))
+   (java.time Instant)
+   (java.util.concurrent TimeUnit)))
 
 (def stream-flush-interval-ms 50)
 
@@ -24,7 +25,8 @@
   "Returns {:flush! fn :emit! fn}. :emit! coalesces consecutive text deltas and
    schedules a flush; any non-delta event flushes pending text first, preserving
    ordering."
-  [emit-event!]
+  ([emit-event!] (stream-delta-flusher emit-event! nil))
+  ([emit-event! scheduler]
   (let [lock (Object.)
         state (atom {:text ""
                      :event nil
@@ -57,9 +59,14 @@
                                                           schedule? (update :timer-id inc))))
                                                [schedule? (:timer-id @state)]))]
                   (when schedule?
-                    (future
-                      (Thread/sleep stream-flush-interval-ms)
-                      (flush! timer-id))))
+                    (if scheduler
+                      (.schedule scheduler
+                                 ^Runnable #(flush! timer-id)
+                                 (long stream-flush-interval-ms)
+                                 TimeUnit/MILLISECONDS)
+                      (future
+                        (Thread/sleep stream-flush-interval-ms)
+                        (flush! timer-id)))))
                 (do
                   (flush! nil)
-                  (emit-event! event))))}))
+                  (emit-event! event))))})))
