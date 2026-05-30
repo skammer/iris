@@ -22,6 +22,7 @@
                               :keep-alive "5m"
                               :embedding-model "nomic-embed-text"}
                      :openrouter {:type :openrouter
+                                  :api :chat-completions
                                   :base-url "https://openrouter.ai/api/v1"
                                   :model "openai/gpt-4o-mini"
                                   :models {"openai/gpt-4o-mini" {:context-window 128000
@@ -39,6 +40,7 @@
                                   :app-name "iris"
                                   :api-key nil}
                      :openai-compatible {:type :openai-compatible
+                                         :api :chat-completions
                                          :base-url "https://api.openai.com/v1"
                                          :model "gpt-4o-mini"
                                          :models {"gpt-4o-mini" {:context-window 128000
@@ -430,7 +432,7 @@
    :openai-compatible :openai-compatible})
 
 (def ^:private legacy-llm-provider-option-keys
-  [:model :temperature :max-tokens :stream? :prompt-cache?
+  [:model :api :temperature :max-tokens :stream? :prompt-cache?
    :stream-structured-output? :timeout-ms :site-url :app-name])
 
 (defn- normalize-provider-config
@@ -478,6 +480,13 @@
    :openrouter [:base-url :model :api-key]
    :openai-compatible [:base-url :model :api-key]})
 
+(def ^:private openai-compatible-provider-types
+  #{:openrouter :openai-compatible})
+
+(def ^:private openai-compatible-apis
+  #{:chat :chat-completion :chat-completions :completions
+    :response :responses})
+
 (defn- present-config-value? [value]
   (if (string? value)
     (not (str/blank? value))
@@ -499,11 +508,18 @@
         :message (str "unsupported active LLM provider type " type)}]
 
       :else
-      (vec
-       (for [k (provider-required-keys type)
-             :when (not (present-config-value? (get provider-cfg k)))]
-         {:path [:llm :providers provider k]
-          :message (str "active LLM provider " provider " missing required key " k)})))))
+      (cond-> (vec
+               (for [k (provider-required-keys type)
+                     :when (not (present-config-value? (get provider-cfg k)))]
+                 {:path [:llm :providers provider k]
+                  :message (str "active LLM provider " provider " missing required key " k)}))
+        (and (openai-compatible-provider-types type)
+             (some? (:api provider-cfg))
+             (not (openai-compatible-apis (:api provider-cfg))))
+        (conj {:path [:llm :providers provider :api]
+               :message (str "active LLM provider " provider
+                             " has unsupported :api " (:api provider-cfg)
+                             "; expected :chat-completions or :responses")})))))
 
 (defn- positive-number-error [cfg path]
   (let [value (get-in cfg path)]

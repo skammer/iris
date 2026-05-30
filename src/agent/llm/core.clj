@@ -218,7 +218,7 @@
   (merge
    (:opts request)
    (select-keys request
-                [:model :temperature :max-tokens :top-p :frequency-penalty
+                [:model :api :temperature :max-tokens :top-p :frequency-penalty
                  :presence-penalty :tools :tool-choice :structured-output
                  :response-format :cache-control :cache_control :modalities
                  :metadata :extra-body :stream-structured-output?

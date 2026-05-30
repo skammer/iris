@@ -26,6 +26,9 @@
 (defn- chat-url [base-url]
   (str (trim-trailing-slash base-url) "/chat/completions"))
 
+(defn- responses-url [base-url]
+  (str (trim-trailing-slash base-url) "/responses"))
+
 (defn- embeddings-url [base-url]
   (str (trim-trailing-slash base-url) "/embeddings"))
 
@@ -37,6 +40,35 @@
    :json_schema {:name (or name "structured_output")
                  :schema schema
                  :strict (not (false? strict?))}})
+
+(defn- responses-output-format [{:keys [name schema strict?]}]
+  {:format {:type "json_schema"
+            :name (or name "structured_output")
+            :schema schema
+            :strict (not (false? strict?))}})
+
+(def ^:private api-aliases
+  {nil :chat-completions
+   :responses :responses
+   :response :responses
+   :chat :chat-completions
+   :chat-completions :chat-completions
+   :chat-completion :chat-completions
+   :completions :chat-completions})
+
+(defn- normalize-api [value]
+  (let [value* (cond
+                 (keyword? value) value
+                 (string? value) (keyword (str/lower-case value))
+                 :else value)]
+    (or (api-aliases value*)
+        (throw (ex-info (str "Unsupported OpenAI-compatible API: " value)
+                        {:type :unsupported-openai-compatible-api
+                         :api value})))))
+
+(defn- responses-api? [config opts]
+  (= :responses (normalize-api (or (:api opts)
+                                   (:api config)))))
 
 (defn- provider-kind [base-url]
   (let [url (str/lower-case (or base-url ""))]
@@ -122,6 +154,52 @@
     (or (:structured-output opts) (:include-usage? opts true))
     (assoc :stream_options {:include_usage true})))
 
+(defn- responses-tool [tool]
+  (if (and (= "function" (:type tool)) (:function tool))
+    (let [function (:function tool)]
+      (merge (select-keys tool [:type :strict])
+             (select-keys function [:name :description :parameters :strict])))
+    tool))
+
+(defn- responses-tool-choice [choice]
+  (if (and (map? choice)
+           (= "function" (:type choice))
+           (:function choice))
+    {:type "function"
+     :name (get-in choice [:function :name])}
+    choice))
+
+(defn- responses-text-format [format]
+  (cond
+    (nil? format) nil
+    (:format format) format
+    :else {:format format}))
+
+(defn- responses-body [base-url default-model config messages opts]
+  (let [model (or (:model opts) default-model)
+        extra-body (merge (or (:extra-body config) {})
+                          (or (:extra-body opts) {}))]
+    (cond-> (merge {:model model
+                    :input (llm-messages/internal->openai-responses messages)
+                    :temperature (or (:temperature opts)
+                                     (:temperature config)
+                                     0.2)
+                    :max_output_tokens (or (:max-tokens opts)
+                                           (:max_tokens opts)
+                                           (:max-tokens config)
+                                           (:max_tokens config)
+                                           1024)
+                    :stream false}
+                   (prompt-cache-fields base-url model config opts)
+                   extra-body)
+      (:tools opts) (assoc :tools (mapv responses-tool (:tools opts)))
+      (:tool-choice opts) (assoc :tool_choice (responses-tool-choice (:tool-choice opts)))
+      (:structured-output opts) (assoc :text (responses-output-format (:structured-output opts)))
+      (:response-format opts) (assoc :text (responses-text-format (:response-format opts))))))
+
+(defn- responses-stream-body [base-url default-model config messages opts]
+  (assoc (responses-body base-url default-model config messages opts) :stream true))
+
 (defn- parse-sse-line [line]
   (when (str/starts-with? line "data: ")
     (let [payload (subs line 6)]
@@ -134,6 +212,14 @@
      :prompt-tokens (or (:prompt_tokens usage) 0)
      :completion-tokens (or (:completion_tokens usage) 0)
      :cached-tokens (or (get-in usage [:prompt_tokens_details :cached_tokens]) 0)
+     :cost-usd nil}))
+
+(defn- responses-usage->estimate [response]
+  (let [usage (:usage response)]
+    {:tokens (or (:total_tokens usage) 0)
+     :prompt-tokens (or (:input_tokens usage) 0)
+     :completion-tokens (or (:output_tokens usage) 0)
+     :cached-tokens (or (get-in usage [:input_tokens_details :cached_tokens]) 0)
      :cost-usd nil}))
 
 (defn- retryable-http-error [response]
@@ -199,6 +285,50 @@
                            :reasoning-content? (some? (:reasoning_content message))
                            :reasoning-chars (count (or (:reasoning_content message) ""))
                            :usage (usage->estimate body)})
+    turn))
+
+(defn- responses-output-text [item]
+  (when (= "message" (:type item))
+    (apply str
+           (keep (fn [part]
+                   (case (:type part)
+                     "output_text" (:text part)
+                     "refusal" (:refusal part)
+                     nil))
+                 (:content item)))))
+
+(defn- responses-tool-call [item]
+  (when (= "function_call" (:type item))
+    {:id (:call_id item)
+     :type "function"
+     :function {:name (:name item)
+                :arguments (:arguments item)}
+     :raw item}))
+
+(defn- responses->turn [body]
+  (when (or (:error body) (= "failed" (:status body)))
+    (let [error (:error body)]
+      (throw (llm-core/llm-error :provider-error
+                                 (or (:message error)
+                                     (:message body)
+                                     "LLM response failed")
+                                 {:response body}))))
+  (let [output (vec (or (:output body) []))
+        content (apply str (keep responses-output-text output))
+        tool-calls (vec (keep responses-tool-call output))
+        usage (responses-usage->estimate body)
+        incomplete? (= "incomplete" (:status body))
+        turn (dsml/recover-tool-calls
+              {:role "assistant"
+               :content content
+               :tool-calls tool-calls
+               :usage usage
+               :raw body})]
+    (throw-empty-content! (:content turn)
+                          (:tool-calls turn)
+                          {:finish-reason (when incomplete? "length")
+                           :reasoning-content? false
+                           :usage usage})
     turn))
 
 (defn- merge-tool-call-deltas [tool-calls deltas]
@@ -275,10 +405,80 @@
                                   :usage (usage->estimate {:usage usage})})
            turn))))))
 
+(defn- responses-stream->turn
+  ([body-stream] (responses-stream->turn body-stream nil))
+  ([body-stream on-content-delta]
+   (with-open [reader (io/reader body-stream)]
+     (loop [content []
+            output-items (sorted-map)
+            final-response nil
+            failed-response nil
+            raw []
+            event-count 0]
+       (if-let [line (.readLine reader)]
+         (if-let [event (parse-sse-line line)]
+           (let [event-type (:type event)
+                 chunk (case event-type
+                         "response.output_text.delta" (:delta event)
+                         "response.refusal.delta" (:delta event)
+                         nil)]
+             (when (and on-content-delta (string? chunk) (not= "" chunk))
+               (on-content-delta chunk))
+             (recur (cond-> content chunk (conj chunk))
+                    (if (= "response.output_item.done" event-type)
+                      (assoc output-items (:output_index event) (:item event))
+                      output-items)
+                    (if (= "response.completed" event-type)
+                      (:response event)
+                      final-response)
+                    (if (or (= "response.failed" event-type)
+                            (= "error" event-type))
+                      (or (:response event) event)
+                      failed-response)
+                    (conj raw event)
+                    (inc event-count)))
+           (recur content output-items final-response failed-response raw event-count))
+         (let [body (cond
+                      final-response final-response
+                      failed-response failed-response
+                      :else {:output (vec (vals output-items))
+                             :usage nil
+                             :status "completed"})
+               error (or (:error failed-response)
+                         (:error body))]
+           (when error
+             (throw (llm-core/llm-error :provider-error
+                                        (or (:message error)
+                                            (:message body)
+                                            "LLM response failed")
+                                        {:response body
+                                         :event-count event-count})))
+           (let [usable-output? (or (seq (remove str/blank?
+                                                  (keep responses-output-text (:output body))))
+                                    (seq (keep responses-tool-call (:output body))))
+                 body* (if usable-output?
+                         body
+                         (assoc body :output [{:type "message"
+                                               :role "assistant"
+                                               :content [{:type "output_text"
+                                                          :text (apply str content)}]}]))
+                 turn (responses->turn body*)]
+             (assoc turn :stream-events raw))))))))
+
 (defn- post-stream-turn
   ([url request] (post-stream-turn url request nil))
   ([url request on-content-delta]
    (stream->turn
+    (:body (checked-response
+            (http/post url (assoc request
+                                  :throw-exceptions false
+                                  :as :stream))))
+    on-content-delta)))
+
+(defn- post-responses-stream-turn
+  ([url request] (post-responses-stream-turn url request nil))
+  ([url request on-content-delta]
+   (responses-stream->turn
     (:body (checked-response
             (http/post url (assoc request
                                   :throw-exceptions false
@@ -299,8 +499,33 @@
 (defrecord OpenAICompatibleProvider [base-url api-key default-model site-url app-name extra-headers config api-key-resolver]
   llm-core/ILLMProvider
   (complete [this messages opts]
-    (let [request {:headers (provider-headers this)}]
-      (if (stream-structured-output? config opts)
+    (let [request {:headers (provider-headers this)}
+          responses? (responses-api? config opts)]
+      (cond
+        (and responses? (stream-structured-output? config opts))
+        (:content (post-responses-stream-turn
+                   (responses-url base-url)
+                   (assoc request
+                          :body (json/generate-string
+                                 (responses-stream-body base-url
+                                                        default-model
+                                                        config
+                                                        messages
+                                                        opts)))))
+
+        responses?
+        (let [response (post-json (responses-url base-url)
+                                  (assoc request
+                                         :body (json/generate-string
+                                                (responses-body base-url
+                                                                default-model
+                                                                config
+                                                                messages
+                                                                opts))
+                                         :as :json))]
+          (:content (responses->turn (:body response))))
+
+        (stream-structured-output? config opts)
         (:content (post-stream-turn
                    (chat-url base-url)
                    (assoc request
@@ -310,6 +535,8 @@
                                               config
                                               messages
                                               opts)))))
+
+        :else
         (let [response (post-json (chat-url base-url)
                                   (assoc request
                                          :body (json/generate-string
@@ -325,49 +552,62 @@
     (let [ch (async/chan)]
       (async/thread
         (try
-          (let [response (checked-response
-                          (http/post (chat-url base-url)
-                                     {:headers (provider-headers this)
-                                      :body (json/generate-string
-                                             (stream-body base-url
-                                                          default-model
-                                                          config
-                                                          messages
-                                                          opts))
-                                      :throw-exceptions false
-                                      :as :stream}))]
-            (with-open [reader (io/reader (:body response))]
-              (let [state (atom {:content? false
-                                 :reasoning? false
-                                 :finish-reason nil
-                                 :content-chars 0
-                                 :reasoning-chars 0
-                                 :event-count 0})]
-                (doseq [line (line-seq reader)]
-                  (when-let [event (parse-sse-line line)]
-                    (let [choice (-> event :choices first)
-                          delta (:delta choice)]
-                      (swap! state
-                             (fn [s]
-                               (cond-> (-> s
-                                           (update :event-count inc)
-                                           (update :content-chars + (count (or (:content delta) "")))
-                                           (update :reasoning-chars + (count (or (:reasoning_content delta) ""))))
-                                 (:finish_reason choice) (assoc :finish-reason (:finish_reason choice))
-                                 (some? (:reasoning_content delta)) (assoc :reasoning? true))))
-                      (when-let [content (:content delta)]
-                        (when-not (str/blank? content)
-                          (swap! state assoc :content? true))
-                        (async/>!! ch content)))))
-                (let [{:keys [content? reasoning? finish-reason reasoning-chars content-chars event-count]} @state]
-                  (when (and (not content?)
-                             (or (= "length" finish-reason) reasoning?))
-                    (throw (empty-content-error
-                            {:finish-reason finish-reason
-                             :reasoning-content? reasoning?
-                             :reasoning-chars reasoning-chars
-                             :content-chars content-chars
-                             :event-count event-count})))))))
+          (if (responses-api? config opts)
+            (let [response (checked-response
+                            (http/post (responses-url base-url)
+                                       {:headers (provider-headers this)
+                                        :body (json/generate-string
+                                               (responses-stream-body base-url
+                                                                      default-model
+                                                                      config
+                                                                      messages
+                                                                      opts))
+                                        :throw-exceptions false
+                                        :as :stream}))]
+              (responses-stream->turn (:body response) #(async/>!! ch %)))
+            (let [response (checked-response
+                            (http/post (chat-url base-url)
+                                       {:headers (provider-headers this)
+                                        :body (json/generate-string
+                                               (stream-body base-url
+                                                            default-model
+                                                            config
+                                                            messages
+                                                            opts))
+                                        :throw-exceptions false
+                                        :as :stream}))]
+              (with-open [reader (io/reader (:body response))]
+                (let [state (atom {:content? false
+                                   :reasoning? false
+                                   :finish-reason nil
+                                   :content-chars 0
+                                   :reasoning-chars 0
+                                   :event-count 0})]
+                  (doseq [line (line-seq reader)]
+                    (when-let [event (parse-sse-line line)]
+                      (let [choice (-> event :choices first)
+                            delta (:delta choice)]
+                        (swap! state
+                               (fn [s]
+                                 (cond-> (-> s
+                                             (update :event-count inc)
+                                             (update :content-chars + (count (or (:content delta) "")))
+                                             (update :reasoning-chars + (count (or (:reasoning_content delta) ""))))
+                                   (:finish_reason choice) (assoc :finish-reason (:finish_reason choice))
+                                   (some? (:reasoning_content delta)) (assoc :reasoning? true))))
+                        (when-let [content (:content delta)]
+                          (when-not (str/blank? content)
+                            (swap! state assoc :content? true))
+                          (async/>!! ch content)))))
+                  (let [{:keys [content? reasoning? finish-reason reasoning-chars content-chars event-count]} @state]
+                    (when (and (not content?)
+                               (or (= "length" finish-reason) reasoning?))
+                      (throw (empty-content-error
+                              {:finish-reason finish-reason
+                               :reasoning-content? reasoning?
+                               :reasoning-chars reasoning-chars
+                               :content-chars content-chars
+                               :event-count event-count}))))))))
           (catch Exception e
             (async/>!! ch (llm-core/stream-error-event e)))
           (finally
@@ -414,16 +654,27 @@
 (extend-type OpenAICompatibleProvider
   llm-core/ILLMProviderWithTools
   (complete-with-tools [this messages tools opts]
-    (let [response (post-json (chat-url (:base-url this))
-                              {:headers (provider-headers this)
-                               :body (json/generate-string
-                                      (completion-body (:base-url this)
-                                                       (:default-model this)
-                                                       (:config this)
-                                                       messages
-                                                       (assoc opts :tools tools)))
-                               :as :json})]
-      (message->turn (:body response)))))
+    (if (responses-api? (:config this) opts)
+      (let [response (post-json (responses-url (:base-url this))
+                                {:headers (provider-headers this)
+                                 :body (json/generate-string
+                                        (responses-body (:base-url this)
+                                                        (:default-model this)
+                                                        (:config this)
+                                                        messages
+                                                        (assoc opts :tools tools)))
+                                 :as :json})]
+        (responses->turn (:body response)))
+      (let [response (post-json (chat-url (:base-url this))
+                                {:headers (provider-headers this)
+                                 :body (json/generate-string
+                                        (completion-body (:base-url this)
+                                                         (:default-model this)
+                                                         (:config this)
+                                                         messages
+                                                         (assoc opts :tools tools)))
+                                 :as :json})]
+        (message->turn (:body response))))))
 
 (extend-type OpenAICompatibleProvider
   llm-core/ILLMProviderInvoke
@@ -432,8 +683,45 @@
           stream-with-delta? (some? (:on-content-delta opts))
           on-content-delta (dsml/guard-content-delta (:on-content-delta opts)
                                                      (:tools opts))
+          responses? (responses-api? (:config this) opts)
           request* {:headers (provider-headers this)}
           response (cond
+                     (and responses? stream-with-delta?)
+                     (post-responses-stream-turn
+                      (responses-url (:base-url this))
+                      (assoc request*
+                             :body (json/generate-string
+                                    (responses-stream-body (:base-url this)
+                                                           (:default-model this)
+                                                           (:config this)
+                                                           (:messages request)
+                                                           opts)))
+                      on-content-delta)
+
+                     (and responses? (stream-structured-output? (:config this) opts))
+                     (post-responses-stream-turn
+                      (responses-url (:base-url this))
+                      (assoc request*
+                             :body (json/generate-string
+                                    (responses-stream-body (:base-url this)
+                                                           (:default-model this)
+                                                           (:config this)
+                                                           (:messages request)
+                                                           opts))))
+
+                     responses?
+                     (let [response* (post-json
+                                      (responses-url (:base-url this))
+                                      (assoc request*
+                                             :body (json/generate-string
+                                                    (responses-body (:base-url this)
+                                                                    (:default-model this)
+                                                                    (:config this)
+                                                                    (:messages request)
+                                                                    opts))
+                                             :as :json))]
+                       (responses->turn (:body response*)))
+
                      stream-with-delta?
                      (post-stream-turn
                       (chat-url (:base-url this))
@@ -535,7 +823,8 @@
                               app-name
                               extra-headers
                               (merge (select-keys opts
-                                                  [:prompt-cache?
+                                                  [:api
+                                                   :prompt-cache?
                                                    :prompt-cache-retention
                                                    :prompt_cache_retention
                                                    :cache-control
@@ -557,7 +846,8 @@
          app-name "iris"}}]
   (create-openai-compatible-provider
    (merge (select-keys opts
-                       [:prompt-cache?
+                       [:api
+                        :prompt-cache?
                         :prompt-cache-retention
                         :prompt_cache_retention
                         :cache-control

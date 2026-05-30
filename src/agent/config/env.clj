@@ -52,6 +52,7 @@
    {:names "OPENROUTER_MODEL" :apply (assoc-path [:llm :providers :openrouter :model])}
    {:names "OLLAMA_MODEL" :apply (assoc-path [:llm :providers :ollama :model])}
    {:names "AGENT_LLM_MODEL" :apply (assoc-active-provider-option :model)}
+   {:names "AGENT_LLM_API" :parse parse-keyword* :apply (assoc-active-provider-option :api)}
    {:names "AGENT_LLM_TIMEOUT_MS" :parse parse-long* :apply (assoc-active-provider-option :timeout-ms)}
    {:names "AGENT_LLM_TEMPERATURE" :parse parse-double* :apply (assoc-active-provider-option :temperature)}
    {:names "AGENT_LLM_MAX_TOKENS" :parse parse-long* :apply (assoc-active-provider-option :max-tokens)}

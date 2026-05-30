@@ -52,7 +52,8 @@ clojure -J--enable-native-access=ALL-UNNAMED -M -m agent.core --config config/de
 Configuration:
 
 - `~/.config/iris/config.edn` uses the same shape as `resources/config/default.edn`. Create missing global files with `clojure -M -m agent.core config init`.
-- LLM model settings live under provider entries: `{:llm {:active-provider :ollama :providers {:ollama {:type :ollama :base-url "http://localhost:11434" :model "llama3.2:3b"} :deepseek {:type :openai-compatible :base-url "https://api.deepseek.com/v1" :api-key "..." :model "deepseek-chat"}}}}`.
+- LLM model settings live under provider entries: `{:llm {:active-provider :ollama :providers {:ollama {:type :ollama :base-url "http://localhost:11434" :model "llama3.2:3b"} :deepseek {:type :openai-compatible :api :chat-completions :base-url "https://api.deepseek.com/v1" :api-key "..." :model "deepseek-chat"}}}}`.
+- OpenAI-compatible providers default to `:api :chat-completions`; use `:api :responses` only for endpoints/models that support `/responses`.
 - Legacy LLM config can be converted with `clojure -M -m agent.core config migrate path/to/config.edn`.
 - If a generated file starts with `#:iris`, nested keys like `:api` read as `:iris/api`; current loader normalizes this, but prefer normal map syntax: `{:iris/config-version 1 :api {:port 9090}}`.
 - Config dir resolution: `IRIS_CONFIG_DIR`, then `$XDG_CONFIG_HOME/iris`, then `~/.config/iris`.
@@ -234,7 +235,7 @@ Required/important env:
 - `AGENT_ORCHESTRATOR_ENABLED=false`: keep false unless testing experimental process-local agent/federation APIs.
 - `JAVA_TOOL_OPTIONS=--enable-native-access=ALL-UNNAMED`: suppresses sqlite-jdbc native access warning.
 - Tool permissions/policy: `AGENT_API_TOOL_PERMISSIONS`, `AGENT_UI_TOOL_PERMISSIONS`, `AGENT_AGENT_TOOL_PERMISSIONS`, `AGENT_TOOL_ALLOWLIST`, `AGENT_TOOL_BLOCKLIST`, `AGENT_TOOL_APPROVAL_TTL_SECONDS`, `AGENT_TOOLS_YOLO`.
-- LLM: `AGENT_LLM_PROVIDER`, `AGENT_LLM_MODEL`, plus `OLLAMA_BASE_URL`, `OPENROUTER_API_KEY`, or `OPENAI_API_KEY`.
+- LLM: `AGENT_LLM_PROVIDER`, `AGENT_LLM_MODEL`, `AGENT_LLM_API=chat-completions|responses`, plus `OLLAMA_BASE_URL`, `OPENROUTER_API_KEY`, or `OPENAI_API_KEY`.
 - Telegram: env `AGENT_TELEGRAM_ENABLED`, `AGENT_TELEGRAM_BOT_TOKEN`, `AGENT_TELEGRAM_ALLOWED_USER_IDS`, `AGENT_TELEGRAM_ALLOWED_CHAT_IDS`, `AGENT_TELEGRAM_ALLOW_ALL`. Empty allowlist denies by default. Telegram chats appear in the Sessions sidebar as `Telegram: <name>`.
 - Memory: `AGENT_MEMORY_PROMPT_PATHS`, `AGENT_MEMORY_SEARCH_DEFAULT_LIMIT`, `AGENT_MEMORY_SEARCH_MAX_LIMIT`, `AGENT_MEMORY_GRAPH_ENABLED`, `AGENT_MEMORY_GRAPH_PATH`.
 - Fact extraction: `AGENT_FACT_EXTRACTOR_ENABLED`, `AGENT_FACT_EXTRACTOR_PROVIDER`, `AGENT_FACT_EXTRACTOR_MODEL`.

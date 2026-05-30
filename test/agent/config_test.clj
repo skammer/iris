@@ -354,6 +354,25 @@
                 :min-score 0.45}
                (get-in cfg [:memory :search])))))))
 
+(deftest env-overrides-active-provider-api-test
+  (with-isolated-config [root {"AGENT_LLM_PROVIDER" "openai-compatible"
+                               "OPENAI_API_KEY" "test-key"
+                               "AGENT_LLM_API" "responses"}]
+    (let [cfg (config/load-config)]
+      (is (= :responses
+             (get-in cfg [:llm :providers :openai-compatible :api]))))))
+
+(deftest active-provider-rejects-unsupported-api-test
+  (with-isolated-config [root {"AGENT_LLM_PROVIDER" "openai-compatible"
+                               "OPENAI_API_KEY" "test-key"
+                               "AGENT_LLM_API" "missing"}]
+    (try
+      (config/load-config)
+      (is false "expected invalid config")
+      (catch clojure.lang.ExceptionInfo e
+        (is (re-find #"unsupported :api"
+                     (-> e ex-data :errors first :message)))))))
+
 (deftest trace-env-config-test
   (with-isolated-config [root {"AGENT_TRACE_MODE" "rolling"
                                "AGENT_TRACE_PATH" "dev-trace.jsonl"

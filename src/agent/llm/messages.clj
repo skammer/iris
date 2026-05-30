@@ -216,6 +216,66 @@
 (defn- tool-result-block [blocks]
   (first (filter #(= :tool-result (:type %)) blocks)))
 
+(defn- openai-responses-content-part [block]
+  (case (:type block)
+    :text {:type "input_text" :text (:text block)}
+    :image (cond-> {:type "input_image"
+                    :image_url (source-data-uri block)}
+             (:detail block) (assoc :detail (part-detail (:detail block))))
+    (:video :file) (cond-> {:type "input_file"
+                            :file_data (source-data-uri block)}
+                     (:filename block) (assoc :filename (:filename block)))
+    {:type "input_text" :text (json-text block)}))
+
+(defn- openai-responses-content [blocks]
+  (if (some #(contains? media-block-types (:type %)) blocks)
+    (mapv openai-responses-content-part blocks)
+    (text-content blocks)))
+
+(defn internal-tool-call->openai-response-call
+  [block]
+  (let [block* (runtime-schema/normalize-block block)
+        call-id (:id block*)]
+    (cond-> {:type "function_call"
+             :name (name (:name block*))
+             :arguments (json/generate-string (or (:arguments block*) {}))}
+      call-id (assoc :call_id call-id))))
+
+(defn internal-tool-result->openai-response-output
+  [block]
+  (let [block* (runtime-schema/normalize-block block)]
+    {:type "function_call_output"
+     :call_id (:tool-call-id block*)
+     :output (json-text (:content block*))}))
+
+(defn internal->openai-responses
+  [messages]
+  (mapv identity
+        (mapcat (fn [message]
+                  (let [message* (message->internal message)
+                        role (:role message*)
+                        blocks (content-blocks message*)
+                        tool-calls (tool-call-blocks blocks)]
+                    (case role
+                      "assistant"
+                      (let [text (text-content blocks)]
+                        (concat
+                         (when-not (str/blank? text)
+                           [{:role "assistant" :content text}])
+                         (map internal-tool-call->openai-response-call tool-calls)))
+
+                      "tool"
+                      [(internal-tool-result->openai-response-output
+                        (or (tool-result-block blocks)
+                            {:type :tool-result
+                             :tool-call-id (:tool-call-id message)
+                             :content (text-content blocks)}))]
+
+                      [(cond-> {:role role
+                                :content (openai-responses-content blocks)}
+                         (:name message) (assoc :name (:name message)))])))
+                messages)))
+
 (defn internal->openai-compatible
   [messages]
   (mapv (fn [message]

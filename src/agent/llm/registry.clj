@@ -130,6 +130,7 @@
                         (or (:extra-headers opts) {}))]
      (compact-map
       {:temperature (maybe-double (:temperature opts))
+       :api (:api opts)
        :max-tokens (maybe-long (or (:max-tokens opts) (:max_tokens opts)))
        :reasoning (normalize-reasoning (:reasoning opts))
        :cache-retention (or (:cache-retention opts)
