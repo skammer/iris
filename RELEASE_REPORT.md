@@ -35,7 +35,7 @@ All **12 Critical/High findings (§3) are fixed, verified, and merged** to `mast
 
 | Finding (§3) | Status | Commit | Notes |
 |---|---|---|---|
-| api-arbitrary-substrate | ✅ fixed | `6b3c7e6` | API substrate allow-list + strip caller-supplied execution keys (command/binds/network/…) |
+| api-arbitrary-substrate | ✅ fixed | `6b3c7e6` + working tree | API substrate enum/allow-list + closed `runner_options`; raw-body guard rejects execution keys |
 | api-body-coercion-discarded | ✅ fixed | `6b3c7e6` | create/signal handlers use the Malli-coerced `:parameters :body` |
 | federation-verify-noop | ✅ fixed | `f194677` | `verify-request!` fails closed: auth required, nil key → `:signature-missing` |
 | federated-interop-bypass | ✅ fixed | `f194677` | sender trust/route enforced on the federated path (`1478ee4` wires test keys) |
@@ -117,7 +117,7 @@ Severities are the **corrected** severities after adversarial verification. ✓ 
 
 | ID | Sev | Verdict | Status | Where | Issue |
 |---|---|---|---|---|---|
-| api-arbitrary-substrate | **CRIT→HIGH** | ✓ | ✅ `6b3c7e6` | `api/routes.clj:40`, `handlers/runs.clj:57` | Run API accepts `substrate:"local-unsandboxed"` + arbitrary `command` → host RCE outside any sandbox |
+| api-arbitrary-substrate | **CRIT→HIGH** | ✓ | ✅ `6b3c7e6` + working tree | `api/routes.clj:40`, `handlers/runs.clj:57` | Run API previously accepted `substrate:"local-unsandboxed"` + arbitrary `command` -> host RCE outside any sandbox |
 | federation-verify-noop | **HIGH** | ◐ | ✅ `f194677` | `federation/http.clj:115` | Signature verification skipped for a registered peer with no key → unsigned/replayable inbox |
 | broker-park-overflow | **HIGH** | ✓ | ✅ `1ade0dd` | `broker/local.clj:27` | Default subscriber uses unbounded `put!`; a slow consumer can throw at 1024 pending puts, aborting event emission for everyone |
 | max-token-discards-toolcalls | **HIGH** | ✓ | ✅ `19febce` | `runtime/loop.clj:389` | `finish_reason="length"` aborts the turn even when valid tool calls were emitted |
@@ -191,7 +191,7 @@ For each finding: **problem → why it matters → fix.** Line numbers are from 
 
 ### 5.1 Security (most important)
 
-**🔴 api-arbitrary-substrate — HIGH (CRIT downgraded for default loopback).** `create-run-body` (`routes.clj:40`) declares `:substrate` as open `:string` and `:runner_options` as open `:map`. `normalize-run-request` (`handlers/runs.clj:57-60`) passes both straight through. `:local-unsandboxed` is in the request-selectable registry (`runs/service.clj:54`), and `prepare-runner-options` (`runners/options.clj:130`) only injects a default `:command` *when none is supplied* — a caller-supplied command is preserved and run via raw `ProcessBuilder` (`local_unsandboxed.clj:57`) with no isolation. `POST /v1/runs {"substrate":"local-unsandboxed","runner_options":{"command":["/bin/sh","-c","…"]},"auto_launch":true}` ⇒ arbitrary host RCE. **Why:** collapses the entire seatbelt/bwrap/container threat model into a remote exec endpoint for anyone holding the (single, shared, possibly-absent) API key. Reachable unauthenticated on loopback by default (`:key nil`); network-exposed if bound to `0.0.0.0`. **Fix:** (1) split the runner registry into an internal set (keeps `:local-unsandboxed` as the delegate that bwrap/seatbelt/docker wrap) and an **API-selectable** set that excludes it; (2) add `:runners :api-selectable-substrates` config (default `[:seatbelt :bubblewrap :docker :podman]`) and reject others in `runtime/create-run-request`; (3) on the API path, strip caller-supplied execution-controlling keys (`:command :working-dir :binds :mounts :env :user :share-network? :image :control-url` + seatbelt profile keys) — honor them only from server config; (4) tighten the schema to `[:enum …]` + closed `:runner_options`.
+**🔴 api-arbitrary-substrate — HIGH (CRIT downgraded for default loopback).** `create-run-body` now constrains `:substrate` to `["seatbelt" "bubblewrap" "docker" "podman"]`, closes the request body map, and closes `:runner_options`. `normalize-run-request` still enforces the configured API substrate allow-list and rejects non-empty raw `runner_options`, because Reitit coercion can drop closed-map extra keys before the handler sees them. `:local-unsandboxed` remains internal so seatbelt/bwrap/container runners can delegate to it, but remote API callers cannot select it or provide `:command`, mounts, env, image, network, control URL, or seatbelt profile knobs. Regression coverage rejects both `substrate:"local-unsandboxed"` and `runner_options.command`.
 
 **🟠 federation-verify-noop — HIGH (partial).** `verify-request!` (`federation/http.clj:103-136`) wraps **all** checks (missing-auth, skew, signature, nonce-replay) in `(when public-key* …)` and unconditionally returns `true`. A peer **registered without a key** (`orchestrator.clj:390` only adds `:keys` when a public key is supplied) resolves `public-key*` → nil → all checks skipped → unsigned, replayable message accepted. (A *truly unknown* peer is rejected later by `receive-federated-message!`'s `:peer-not-found` guard, so that sub-claim is refuted; the hole is the keyless-registered peer.) **Fix:** fail closed — require auth fields unconditionally, then if `public-key*` is nil `throw {:type :signature-missing}` (→ 401).
 
@@ -303,7 +303,7 @@ Markers (2026-05-30): ✅ done · ◐ partial · ⬜ open.
 **P0 — Release blockers (do before any release/deploy)**
 1. ⬜ Fix `Dockerfile` `COPY config` (B1) — Docker build is dead.
 2. ⬜ Point CI at `master`, unify the jar name, drop the k8s deploy job (B2) — tests/lint/build currently never run.
-3. ✅ `api-arbitrary-substrate` — `:local-unsandboxed` removed from the API-selectable registry + caller-supplied `:command`/binds/network rejected on the API path. (`6b3c7e6`)
+3. ✅ `api-arbitrary-substrate` — `:local-unsandboxed` removed from the API-selectable registry; API schema now uses substrate enum + closed `runner_options`; raw-body guard rejects caller-supplied execution keys. (`6b3c7e6` + working tree)
 4. ✅ `auth-disabled-when-key-nil` — non-loopback API bind now requires a key. (`190db38`)
 5. ✅ `federation-verify-noop` — `verify-request!` fails closed when no peer key resolves. (`f194677`)
 6. ✅ `broker-park-overflow` — default subscriptions now use a non-blocking (`:sliding`) buffer; Telegram + `wait-for-run!` subscriptions fixed. (`1ade0dd`)

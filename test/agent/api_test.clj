@@ -429,19 +429,21 @@
             created-docker-run (http-post (str base-url "/v1/runs")
                                           {:agent_id "docker-agent"
                                            :name "docker-run"
-                                           :substrate "docker"
-                                           ;; caller-supplied execution keys must be stripped on the API path
-                                           :runner_options {:image "iris:test"
-                                                            :working-dir "."
-                                                            :share-network? true}})
+                                           :substrate "docker"})
             created-docker-run-body (json/parse-string (:body created-docker-run) true)
             docker-run-id (get-in created-docker-run-body [:data :id])
+            ;; API runner_options is closed; raw-body guard prevents silent coercion drops.
+            rejected-runner-options (http-post (str base-url "/v1/runs")
+                                               {:agent_id "evil"
+                                                :name "evil"
+                                                :substrate "docker"
+                                                :runner_options {:command ["sh" "-lc" "touch pwned"]}})
             ;; The run API must reject the unsandboxed substrate outright (RCE guard).
             rejected-unsandboxed (http-post (str base-url "/v1/runs")
                                             {:agent_id "evil"
                                              :name "evil"
                                              :substrate "local-unsandboxed"
-                                             :runner_options {:command ["sh" "-lc" "touch pwned"]}
+                                             :runner_options {}
                                              :auto_launch true})
             ;; Drive the lifecycle endpoints with a real launched run created via
             ;; the trusted internal path (system-initiated runs are unrestricted).
@@ -701,11 +703,9 @@
         (is (= 400 (:status bad-chat)))
         (is (= 201 (:status created-docker-run)))
         (is (= "docker" (get-in created-docker-run-body [:data :substrate])))
-        (is (nil? (get-in created-docker-run-body [:data :runner_options :image]))
-            "API-supplied image must be stripped (server config supplies it)")
-        (is (nil? (get-in created-docker-run-body [:data :runner_options :share-network?]))
-            "API-supplied share-network must be stripped")
         (is (= "mounted-dev" (get-in fetched-docker-run-body [:data :container_contract :image-mode])))
+        (is (= 400 (:status rejected-runner-options))
+            "API runner_options is closed; execution keys must not reach handlers")
         (is (= 400 (:status rejected-unsandboxed))
             "local-unsandboxed is not selectable via the API")
         (is (some? run-id))

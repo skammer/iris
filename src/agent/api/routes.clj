@@ -31,16 +31,22 @@
 (def ^:private chat-stop-body
   [:map [:session_id schemas/NonBlankString]])
 
+(def ^:private create-run-substrate
+  [:enum "seatbelt" "bubblewrap" "docker" "podman"])
+
+(def ^:private create-run-runner-options
+  [:map {:closed true}])
+
 (def ^:private create-run-body
-  [:map
+  [:map {:closed true}
    [:agent_id {:optional true} :string]
    [:parent_run_id {:optional true} :string]
    [:idempotency_key {:optional true} :string]
    [:name {:optional true} :string]
-   [:substrate {:optional true} :string]
+   [:substrate {:optional true} create-run-substrate]
    [:capabilities {:optional true} schemas/StringVec]
    [:network_identity {:optional true} :map]
-   [:runner_options {:optional true} :map]
+   [:runner_options {:optional true} create-run-runner-options]
    [:requested_by {:optional true} :string]
    [:auto_launch {:optional true} :boolean]])
 

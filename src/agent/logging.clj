@@ -109,8 +109,16 @@
 
 (declare mask-sensitive)
 
+(defn- empty-map-result [m]
+  (try
+    (empty m)
+    (catch UnsupportedOperationException _
+      {})
+    (catch AbstractMethodError _
+      {})))
+
 (defn- mask-map [m]
-  (into (empty m)
+  (into (empty-map-result m)
         (map (fn [[k v]]
                [k (if (sensitive-key? k)
                     "***REDACTED***"
