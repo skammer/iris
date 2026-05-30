@@ -85,22 +85,6 @@
     (when-not (set/subset? required actual)
       (throw (tools/permission-error required actual)))))
 
-(defn- enforce-approval-preflight! [registry tool description input context]
-  (when (and (not (:yolo? context))
-             ((:sensitive-fn tool) input))
-    (if-let [approval-check (:approval-check registry)]
-      (when-let [decision (approval-check {:tool description
-                                           :input input
-                                           :context context})]
-        (when (:block decision)
-          (throw (tools/tool-error :approval-required
-                                   (or (:reason decision)
-                                       "Sensitive tool requires approved request")
-                                   {:tool-name (:name description)}))))
-      (throw (tools/tool-error :approval-required
-                               "Sensitive tool requires approval policy"
-                               {:tool-name (:name description)})))))
-
 (defn preflight-tool-call
   [registry call context opts source-index]
   (throw-if-cancelled! opts)
@@ -133,7 +117,9 @@
                     :input validated-input
                     :context context*}]
       (try
-        (enforce-approval-preflight! registry tool description validated-input context*)
+        ;; Approval is enforced authoritatively in tools.core/execute-tool, not
+        ;; here. Running it twice through divergent code paths (allow-on-ambiguous
+        ;; vs block-on-ambiguous) was the double-tool-enforcement bug.
         (when-let [decision (when-let [before (:before-tool-call opts)]
                               (before hook-ctx))]
           (when (:block decision)
@@ -160,7 +146,12 @@
   (throw-if-cancelled! opts)
   (let [sink (:event-sink opts)
         start (now-ns)
+        ;; :preflighted? tells execute-tool that allow-list/permission/validation
+        ;; already ran here and that this layer owns the tool-execution events
+        ;; (it carries tool-call-id/source-index that chat + UI correlate on).
+        ;; execute-tool still enforces approval and runs its registry hooks.
         context* (assoc (:context preflight)
+                        :preflighted? true
                         :on-tool-update (update-fn sink preflight)
                         :tool-update! (update-fn sink preflight))]
     (event! sink {:event-type :tool-execution-start
