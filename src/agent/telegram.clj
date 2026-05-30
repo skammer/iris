@@ -629,7 +629,10 @@
 (defn- run-chat-events!
   [system chat-id session-id user-text stream-controls on-tool-call]
   (let [broker-instance (or (:event-bus system) (:broker system))
-        subscription (broker/subscribe! broker-instance (broker/all-events-subject))
+        subscription (broker/subscribe! broker-instance (broker/all-events-subject)
+                                         {:buffer-strategy :sliding
+                                          :buffer-size 256
+                                          :slow-client :drop-new})
         ch (:channel subscription)
         result-ch (async/chan 1)
         saw-delta? (atom false)

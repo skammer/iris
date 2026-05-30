@@ -399,7 +399,10 @@
 (defn- wait-for-run-event!
   [runtime run-id timeout-ms]
   (let [broker-instance (:broker runtime)
-        subscription (broker/subscribe! broker-instance (broker/run-events-subject run-id))
+        subscription (broker/subscribe! broker-instance (broker/run-events-subject run-id)
+                                        {:buffer-strategy :sliding
+                                         :buffer-size 256
+                                         :slow-client :drop-new})
         timeout-ch (async/timeout timeout-ms)]
     (try
       (if-let [run (get-run runtime run-id)]
