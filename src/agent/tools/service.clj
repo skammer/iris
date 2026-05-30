@@ -175,10 +175,10 @@
 
 (defn agent-tool-context
   [system agent agent-id context]
-  (merge {:permissions (tool-permissions system :agent)
-          :yolo? (true? (get-in system [:config :tools :yolo?]))}
-         context
-         {:user (or (:user context) agent-id)
+  (merge context
+         {:permissions (tool-permissions system :agent)
+          :yolo? (true? (get-in system [:config :tools :yolo?]))
+          :user (or (:user context) agent-id)
           :allowed-tools (set (:tool-access agent))}))
 
 (defn execute-agent-tool!

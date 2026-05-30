@@ -145,6 +145,41 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest agent-tool-context-ignores-caller-security-overrides
+  (let [path (temp-db-path)
+        target "agent-tool-context-security-test.txt"
+        store (sqlite/create-store {:path path})
+        system (-> (system/create-system)
+                   (assoc :store store
+                          :config config/default-config
+                          :tool-registry (tool-service/create-tool-registry
+                                          (:tools config/default-config)
+                                          (constantly nil)
+                                          store))
+                   (assoc-in [:orchestrator :enabled?] true))
+        agent (kernel-service/spawn-agent! system
+                                           {:name "Worker"
+                                            :kind "worker"
+                                            :role "worker"
+                                            :tool-access ["fs"]})]
+    (try
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"approved request"
+                            (tool-service/execute-agent-tool!
+                             system
+                             (:id agent)
+                             :fs
+                             {:action "write"
+                              :path target
+                              :content "blocked"}
+                             {:permissions #{:filesystem-write}
+                              :yolo? true})))
+      (is (not (.exists (io/file target))))
+      (finally
+        (io/delete-file target true)
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest tool-policy-enforces-scope-and-approval-test
   (let [path (temp-db-path)
         target "tool-policy-scope-test.txt"
