@@ -55,9 +55,6 @@
   .finding.crit .sv{color:var(--crit)} .finding.high .sv{color:var(--high)}
   .finding.med .sv{color:var(--med)} .finding.low .sv{color:var(--low)}
   .finding .ti{font-size:12.5px;margin-top:2px;color:var(--txt)}
-  .finding.fixed{border-color:var(--control);opacity:.62}
-  .finding.fixed .sv{color:var(--control)}
-  .finding.fixed .ti{text-decoration:line-through;text-decoration-color:var(--dim)}
   .finding .fix{font-size:10px;color:var(--control);margin-top:3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   .flow{padding:14px 18px}
   .flow ol{margin:0;padding-left:18px} .flow li{margin-bottom:7px;color:var(--dim);font-size:12.5px}
@@ -75,8 +72,8 @@
 <body>
 <header>
   <h1>Iris — Agentic Workflow Map</h1>
-  <span class="sub">one user message → response · <code>src/agent</code></span>
-  <span class="hint">click a node → file + role + findings · hover an edge highlights flow</span>
+  <span class="sub">release-risk map · <code>src/agent</code></span>
+  <span class="hint">click node → role + actionable findings · hover edge highlights flow</span>
 </header>
 <div id="wrap">
   <div id="stage">
@@ -99,7 +96,9 @@ const NODES = {
   http:{l:'HTTP /v1/chat/completions',t:'entry',f:'api/handlers/chat.clj',s:0,d:'Validates + normalizes the chat request, ensures the session, then complete! (non-stream) or stream-response (SSE).'},
   tg:{l:'Telegram poller',t:'entry',f:'telegram.clj',s:0,d:'Long-polls getUpdates, persists to channel inbox, allowlist-checks, maps chat→session, downloads media, calls run-chat! → chat/run!.'},
   sse:{l:'SSE streaming handler',t:'transport',f:'api/streaming.clj',s:1,d:'managed-response opens an SSE channel, runs chat/run! on a worker future, converts broker events → OpenAI-style chat.completion.chunk.'},
+  ui:{l:'Server-rendered UI',t:'transport',f:'ui.clj · api/handlers/ui.clj',s:1,d:'Hiccup/Datastar operator UI for chat, sessions, runs, tools, approvals, logs, and memory workspace.'},
   broker:{l:'Event broker / bus',t:'transport',f:'system/events.clj · broker/local.clj',s:1,d:'publish! fans events synchronously to all subscriptions. SSE + Telegram subscribe here.'},
+  orchestrator:{l:'Orchestrator control-plane',t:'control',f:'orchestrator.clj',s:2,d:'Separate multi-agent APIs for worker agents, channels, interop, federation, state/status patching, and inbox consumption.'},
   chatrun:{l:'chat/run! + queue manager',t:'runtime',f:'chat.clj · chat/queue.clj',s:2,d:'Facade dispatches to queue/service owners: loop-control, active turn, or persisted queued item under manager-lock.'},
   runturn:{l:'chat/run-turn!',t:'runtime',f:'chat/turn.clj',s:3,d:'Persists user turn, auto-compacts, loads history, recalls memory, builds context-injectors, wires the layered event-sink, then calls the loop.'},
   compaction:{l:'auto-compact!',t:'memory',f:'runtime/compaction.clj',s:4,d:'Trims persisted session entries above token thresholds, writing a deterministic :compaction entry. (Uses its own estimator, separate from context-pack.)'},
@@ -124,6 +123,9 @@ const NODES = {
 };
 const EDGES = [
   ['cli','chatrun','chat/run! {:on-delta}'],['http','chatrun','complete!'],['http','sse','stream-response'],
+  ['http','ui','/ui shell/forms'],['http','orchestrator','agent/orchestrator APIs'],
+  ['ui','chatrun','chat form'],['ui','runners','create run'],
+  ['orchestrator','kernel','KernelOps host'],['orchestrator','eventsink','events'],
   ['sse','chatrun','run-task! {:stream? true}'],['sse','broker','subscribe all-events'],
   ['tg','chatrun','run-chat!'],['tg','broker','subscribe (stream)'],
   ['chatrun','runturn','run-active-item!'],
@@ -148,54 +150,39 @@ const EDGES = [
   ['runners','eventsink','durable-run control-plane (separate)'],
 ];
 const STAGE_NAMES = ['Ingress','Transport','Orchestrate','Per-turn prep','Loop','Loop','Plan / control','Plan / control','LLM','Tools','Tools / sandbox','Return','Persist / memory','Output'];
-// finding tuple: [severity, title, fixedCommit?]  — a 3rd element = resolved (2026-05-30)
+// finding tuple: [severity, title]  — open/actionable only; completed items removed.
 const FIND = {
-  cli:[['med','no-jvm-shutdown-hook — serve/CLI leak the pool, poller, nREPL on exit']],
-  http:[['high','api-body-coercion-discarded — coerced body validated then ignored; handler re-reads raw JSON','6b3c7e6'],
-        ['med','auth-disabled-when-key-nil — non-loopback API bind now requires configured key','190db38']],
-  tg:[['high','telegram-draft-id-invalid — draft id can rotate to 0/negative, violates API contract','7e72b44'],
-      ['high','broker firehose overflow — subscribes with no opts; a slow turn can throw publish! for everyone','1ade0dd'],
-      ['med','draft streaming can lose the final reply when no closer arrives']],
-  sse:[['med','run-task! future cancelled but the synchronous chat turn is not actually interrupted on disconnect']],
-  broker:[['high','broker-park-overflow — default subscriber uses unbounded put!; 1024 pending puts → throw on the sink thread','1ade0dd']],
-  chatrun:[['high','chat-god-namespace — chat.clj is now a 44-line facade; behavior split under agent.chat.*','9f089db'],
-           ['med','stream-flusher-thread-per-flush — shared daemon ScheduledExecutorService replaces per-flush futures','34c2cfe']],
-  runturn:[['med','memory dual-write — SQLite + graph can silently diverge (best-effort)']],
-  loop:[['high','max-token-discards-toolcalls — finish_reason="length" aborts the turn even with valid tool calls','19febce'],
-        ['high','run-bang-god-function — 346 lines, ~12 deep, 8 duplicated terminal-result maps','aa69766'],
-        ['med','max-token-loses-final-messages — that branch drops accumulated prior-turn messages','19febce']],
-  ctxpack:[['med','token-estimate-counts-raw — provider :raw/:annotations stripped before estimating tokens','593b412'],
-           ['med','pack-by-prefix-summary choose-cut is O(n²) over message count'],
-           ['low','budget-report double-counts tool-result tokens across budgets']],
-  prompts:[['med','slash skill names can silently shadow built-in loop-control commands']],
-  memrecall:[['med','graph items scored twice in search-memory']],
-  compaction:[['high','two independent token estimators/thresholds (compaction vs context-pack) with no shared truth']],
-  router:[['med','default-to-read routing can hide tools from the model']],
+  cli:[],
+  http:[['high','P0 remote Actions not release-trustworthy until full clj-kondo is green'],
+        ['med','P1 schema-backed handlers still mix coerced :parameters/:body with raw/body-params reads']],
+  ui:[['med','P1 UI run creation exposes local-unsandboxed, arbitrary command, and share_network controls'],
+      ['med','P2 ui.clj remains 880 lines; split shell/router, sessions, runs, tools, telemetry panels']],
+  tg:[['med','P2 telegram.clj remains 938 lines; split polling, drafts, media, chat bridge, task lifecycle']],
+  sse:[['low','P2 worker future is cancelled on disconnect, but broader worker supervision remains ad hoc']],
+  broker:[],
+  orchestrator:[['med','P2 orchestrator.clj remains 1034 lines; split agents, interop, channels, federation']],
+  chatrun:[['med','P2 chat queue/loop-control still uses raw futures; central worker supervision remains thin']],
+  runturn:[['med','P2 fact extraction runs after turns by default; cost/latency visibility is weak']],
+  loop:[],
+  ctxpack:[],
+  prompts:[],
+  memrecall:[['med','P2 graph memory is derived/off by default; drift reconciliation is manual and not in health']],
+  compaction:[['med','P1 coverage gate missing for compaction/retrieval quality; no LCOV/cloverage baseline']],
+  router:[],
   planner:[],
-  llm:[['high','telemetry completion path discards tool calls and real usage','4efd399'],
-       ['med','retry-with-backoff: blocking Thread/sleep in async threads, no jitter (thundering herd)']],
-  provider:[['med','openai-stream-leak-on-error — non-2xx response bodies closed before throw (same in ollama)','1be7a90'],
-            ['med','streaming-toolcall-index-fallback — index-less fragments attach to last open tool call','593b412'],
-            ['med','provider-helper-copypaste — byte-identical helpers across the two providers']],
-  kernel:[['med','dual-kernelops-divergent — ChatKernelOps silently no-ops state-patch/complete; no capability gate']],
+  llm:[['low','P2 retry-with-backoff uses blocking sleep and no jitter; retry storms can align']],
+  provider:[['med','P2 openai_compatible.clj remains 834 lines; split payloads, streaming parser, response normalization']],
+  kernel:[['med','P1 kernel/runtime/schema need direct tests; coverage report shows missing namespace tests']],
   kerneldown:[],
-  batch:[['high','double-tool-enforcement — gate/validate runs twice through divergent paths (allow- vs block-on-ambiguous)','d59975c'],
-         ['med','parallel-tool-pool-unbounded — tool batch pool capped by :tools :max-parallelism','e3a65e7']],
-  toolreg:[['med','execute-tool repeats the :tool-execution-end map 4× and nanoTime calc 2×; blocked/failed omit duration']],
-  shell:[['med','shell-denylist-bypassable — basename/wrapper-aware authoritative deny; risky auto-allows removed','783d0d0'],
-         ['med','http-ssrf-dns-rebinding — resolve-then-connect TOCTOU'],
-         ['low','fs default root is process CWD; check-then-use symlink window']],
-  runners:[['high','api-arbitrary-substrate — API accepts local-unsandboxed + arbitrary command → host RCE','6b3c7e6'],
-           ['med','container default share-network? = true — fixed: docker/podman now default network off','190db38'],
-           ['med','local-runner-process-map-leak — dead Process objects pruned by exit watcher','190db38'],
-           ['low','seatbelt paths not canonicalized; root only forbidden for docker/podman']],
+  batch:[],
+  toolreg:[],
+  shell:[],
+  runners:[['high','P0 Dockerfile binds 0.0.0.0 but sets no AGENT_API_KEY; default container startup conflicts with auth guard'],
+           ['med','P1 UI run path bypasses API substrate allow-list; gate unsafe run modes explicitly']],
   eventsink:[],
-  persist:[['high','sqlite-retry wraps connection acquisition only, not statement execution','5788de9'],
-           ['med','migration-checksum-cosmetic — never hashes the SQL; drift undetectable'],
-           ['med','pool-config-not-forwarded — sqlite pool defaults + env overrides now wired','15b4fa2'],
-           ['med','runtime-health N+1 — pending command counts use one grouped query','15b4fa2'],
-           ['med','decide-approval has no status=pending guard / CAS — fixed with pending-only update + 409 conflict','190db38']],
-  factmem:[['low','datahike full edge-table scan per query / per BFS level (prototype)']],
+  persist:[['high','P0 full clj-kondo sees HugSQL generated SQL fns as unresolved; CI lint fails'],
+           ['med','P1 persistence internals lack direct tests despite migration/run/session complexity']],
+  factmem:[['med','P2 graph save/remove failures are non-fatal events; add health/drift policy if graph enabled']],
   output:[],
 };
 const SEVRANK={crit:0,high:1,med:2,low:3};
@@ -280,18 +267,16 @@ Object.entries(NODES).forEach(([id,n])=>{
   g.setAttribute('class','node'); g.setAttribute('transform',`translate(${p.x-NW/2},${p.y-NH/2})`);
   const col=`var(--${n.t})`;
   const fset=FIND[id]||[];
-  const open = fset.filter(f=>!f[2]);
-  const worst = open.length? open.reduce((w,f)=>SEVRANK[f[0]]<SEVRANK[w]?f[0]:w,'low') : null;
+  const worst = fset.length? fset.reduce((w,f)=>SEVRANK[f[0]]<SEVRANK[w]?f[0]:w,'low') : null;
   g.innerHTML=`
     <rect width="${NW}" height="${NH}" rx="8" fill="var(--panel2)" stroke="${col}"/>
     <rect width="4" height="${NH}" rx="2" fill="${col}"/>
     <text class="lbl" x="12" y="19">${n.l.length>26?n.l.slice(0,25)+'…':n.l}</text>
     <text class="file" x="12" y="34">${n.f}</text>`;
   if(fset.length){
-    const allFixed = open.length===0;
     const bg=document.createElementNS(SVGNS,'g'); bg.setAttribute('class','badge');
-    bg.innerHTML=`<circle cx="${NW-13}" cy="13" r="9" fill="${allFixed?'var(--control)':SEVCOL[worst]}"/>
-      <text x="${NW-13}" y="16.5" text-anchor="middle">${allFixed?'✓':open.length}</text>`;
+    bg.innerHTML=`<circle cx="${NW-13}" cy="13" r="9" fill="${SEVCOL[worst]}"/>
+      <text x="${NW-13}" y="16.5" text-anchor="middle">${fset.length}</text>`;
     g.appendChild(bg);
   }
   g.addEventListener('click',()=>select(id));
@@ -324,12 +309,12 @@ function highlight(id,showLabels){
 function select(id){
   selected=id; highlight(id,true);
   const n=NODES[id]; const f=FIND[id]||[]; const {ins,outs}=neighbors(id);
-  const findHtml = f.length? f.map(([sv,ti,fix])=>{
-    const cls=(sv==='crit'?'crit':sv)+(fix?' fixed':'');
-    const lab=fix?'✓ Fixed':(sv==='crit'?'CRITICAL':sv.toUpperCase());
-    return `<div class="finding ${cls}"><div class="sv">${lab}</div><div class="ti">${ti}</div>${fix?`<div class="fix">${fix}</div>`:''}</div>`;
+  const findHtml = f.length? f.map(([sv,ti])=>{
+    const cls=(sv==='crit'?'crit':sv);
+    const lab=(sv==='crit'?'CRITICAL':sv.toUpperCase());
+    return `<div class="finding ${cls}"><div class="sv">${lab}</div><div class="ti">${ti}</div></div>`;
   }).join('') : `<div class="empty">No findings attached — clean in this review.</div>`;
-  const openN=f.filter(x=>!x[2]).length, fixN=f.length-openN;
+  const openN=f.length;
   const flowList = `
     <div class="sec"><h3>Inbound</h3>${ins.length?ins.map(e=>`<div style="font-size:12.5px;margin:3px 0"><b style="color:var(--accent)">${NODES[e[0]].l}</b> <span style="color:var(--dim)">— ${e[2]}</span></div>`).join(''):'<div class="empty">entry point</div>'}</div>
     <div class="sec"><h3>Outbound</h3>${outs.length?outs.map(e=>`<div style="font-size:12.5px;margin:3px 0"><b style="color:var(--accent)">${NODES[e[1]].l}</b> <span style="color:var(--dim)">— ${e[2]}</span></div>`).join(''):'<div class="empty">terminal</div>'}</div>`;
@@ -340,26 +325,23 @@ function select(id){
       <div class="file">${n.f}</div>
       <div class="desc">${n.d}</div>
     </div>
-    <div class="sec"><h3>Findings (${openN} open${fixN?` · ${fixN} fixed`:''})</h3>${findHtml}</div>
+    <div class="sec"><h3>Findings (${openN} open)</h3>${findHtml}</div>
     ${flowList}`;
 }
 function intro(){
   selected=null; highlight(null,false);
-  const counts={crit:0,high:0,med:0,low:0}; let fixed=0;
-  Object.values(FIND).forEach(arr=>arr.forEach(f=>{ if(f[2]){fixed++;} else {counts[f[0]]++;} }));
+  const counts={crit:0,high:0,med:0,low:0};
+  Object.values(FIND).forEach(arr=>arr.forEach(f=>{counts[f[0]]++;}));
   document.getElementById('panel').innerHTML=`
-    <div class="ph"><h2>The agentic turn</h2>
-      <div class="desc">One user message flows from an ingress (CLI / HTTP / Telegram) through <b>chat/run!</b> into the pure evented <b>runtime.loop/run!</b>, which plans with the LLM, executes tools through the kernel, streams events back out, and persists everything. Click any node for its file, role, and findings.</div>
+    <div class="ph"><h2>Release review map</h2>
+      <div class="desc">Open findings only. Completed historical items were removed. Map follows the main chat/runtime workflow plus adjacent UI, orchestrator, runner, and persistence release-risk surfaces.</div>
     </div>
-    <div class="flow"><h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin:0 0 10px">Findings on this map (open)</h3>
-      <div class="finding fixed"><div class="sv">✓ RESOLVED × ${fixed}</div><div class="ti">all 12 Critical/High + highest-risk §5 Mediums — merged 2026-05-30</div></div>
-      <div class="finding high"><div class="sv">HIGH × ${counts.high}</div><div class="ti">remaining (none on this map are High)</div></div>
-      <div class="finding med"><div class="sv">MEDIUM × ${counts.med}</div></div>
-      <div class="finding low"><div class="sv">LOW × ${counts.low}</div></div>
-      <div class="desc" style="margin-top:14px">Termination stop-reasons (all explicit in the loop):<br><span style="color:var(--txt)">completed · approval-required · max-steps · max-tokens · doom-loop · guardrail-exhausted · cancelled · planner-error</span></div>
-      <div class="desc" style="margin-top:12px">The dashed edge from <b>runners/*</b> is the separate durable-run control-plane (spawned agent runs), not the synchronous chat turn — the two meet only at the event sink.</div>
-      <div class="desc" style="margin-top:12px"><b style="color:var(--control)">2026-05-30:</b> the two federation High fixes (verify-noop, interop-bypass) aren't on this turn map but are merged. Auth, shell policy, container networking, token estimates, streaming tool calls, bounded tool parallelism, stream flushing, sqlite health, approval CAS, and provider error-body cleanup are also fixed.</div>
-      <div class="desc" style="margin-top:12px">Full prose + remediation ledger: <b style="color:var(--accent)">RELEASE_REPORT.md</b> §1A.</div>
+    <div class="flow"><h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin:0 0 10px">Open findings</h3>
+      <div class="finding high"><div class="sv">P0 / HIGH × ${counts.high}</div><div class="ti">Release gates: CI lint, Docker startup contract, remote Actions verification.</div></div>
+      <div class="finding med"><div class="sv">P1-P2 / MEDIUM × ${counts.med}</div><div class="ti">Security/product hardening, coverage, namespace splits, worker supervision, memory operations.</div></div>
+      <div class="finding low"><div class="sv">P2 / LOW × ${counts.low}</div><div class="ti">Retry ergonomics and lower operational polish.</div></div>
+      <div class="desc" style="margin-top:14px">Local verification: full tests pass, uberjar builds, script syntax passes. Full clj-kondo fails: 92 errors, 60 warnings.</div>
+      <div class="desc" style="margin-top:12px">Release verdict: do not tag until P0 closes. See <b style="color:var(--accent)">RELEASE_REPORT.md</b>.</div>
     </div>`;
 }
 intro();

@@ -13,7 +13,7 @@ usage() {
     "" \
     "Options via env:" \
     "  IRIS_SANDBOX=seatbelt|bubblewrap" \
-    "  IRIS_JAR=target/iris-0.1.0.jar" \
+    "  IRIS_JAR=target/iris.jar" \
     "  JAVA_CMD=/path/to/java"
 }
 
@@ -48,7 +48,10 @@ find_iris_jar() {
   fi
 
   local jar
-  jar="$(find target -maxdepth 1 -type f -name 'iris-*.jar' -print 2>/dev/null | sort | tail -n 1 || true)"
+  jar="target/iris.jar"
+  if [[ ! -f "$jar" ]]; then
+    jar="$(find target -maxdepth 1 -type f -name 'iris-*.jar' -print 2>/dev/null | sort | tail -n 1 || true)"
+  fi
   if [[ -z "$jar" ]]; then
     printf '%s\n' "No Iris jar found under target/." >&2
     printf '%s\n' "Run: clojure -T:uberjar uberjar" >&2

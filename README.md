@@ -144,7 +144,7 @@ mkdir -p ~/.config/iris
 scripts/iris-isolated.sh serve
 ```
 
-`scripts/iris-isolated.sh` runs the main Iris process under Seatbelt on macOS and Bubblewrap on Linux. It allows read access to host files, but write/delete access only under the launch cwd and `~/.config/iris`. Override with `IRIS_SANDBOX=seatbelt|bubblewrap`, `IRIS_JAR=target/iris-0.1.0.jar`, or `JAVA_CMD=/path/to/java`.
+`scripts/iris-isolated.sh` runs the main Iris process under Seatbelt on macOS and Bubblewrap on Linux. It allows read access to host files, but write/delete access only under the launch cwd and `~/.config/iris`. Override with `IRIS_SANDBOX=seatbelt|bubblewrap`, `IRIS_JAR=target/iris.jar`, or `JAVA_CMD=/path/to/java`.
 
 Ubuntu 24.04 may block unprivileged Bubblewrap with AppArmor. For a local test:
 

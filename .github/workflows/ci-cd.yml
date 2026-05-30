@@ -1,12 +1,12 @@
-# GitHub Actions CI/CD Pipeline for Clojure AI Agent
+# GitHub Actions CI/CD Pipeline for Iris
 
 name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ master ]
   pull_request:
-    branches: [ main ]
+    branches: [ master ]
   release:
     types: [published]
 
@@ -61,13 +61,13 @@ jobs:
         /tmp/clj-kondo/clj-kondo --lint src test
     
     - name: Build uberjar
-      run: clojure -T:uberjar uberjar :jar '"target/clj-agent.jar"'
+      run: clojure -T:uberjar uberjar :jar '"target/iris.jar"'
     
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: clj-agent-jar
-        path: target/clj-agent.jar
+        name: iris-jar
+        path: target/iris.jar
 
   # Docker build and push
   docker:
@@ -81,12 +81,6 @@ jobs:
     
     steps:
     - uses: actions/checkout@v4
-    
-    - name: Download build artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: clj-agent-jar
-        path: target/
     
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -120,51 +114,6 @@ jobs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
-  # Deploy to Kubernetes
-  deploy:
-    needs: docker
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    environment: production
-    permissions:
-      contents: read
-      packages: write
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up kubectl
-      uses: azure/setup-kubectl@v3
-      with:
-        version: 'latest'
-    
-    - name: Configure Kubernetes
-      run: |
-        mkdir -p $HOME/.kube
-        echo "${{ secrets.KUBECONFIG }}" | base64 --decode > $HOME/.kube/config
-    
-    - name: Deploy to Kubernetes
-      run: |
-        # Update image in deployment
-        kubectl set image deployment/clj-agent \
-          agent=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main \
-          --namespace=clj-agent
-        
-        # Wait for rollout to complete
-        kubectl rollout status deployment/clj-agent \
-          --namespace=clj-agent \
-          --timeout=300s
-    
-    - name: Run smoke tests
-      run: |
-        # Wait for service to be ready
-        sleep 30
-        
-        # Test health endpoint
-        SERVICE_URL=$(kubectl get svc clj-agent -n clj-agent -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-        curl -f http://$SERVICE_URL/health || exit 1
-
   # Security scanning
   security:
     runs-on: ubuntu-latest
@@ -188,7 +137,7 @@ jobs:
 
   # Notifications
   notify:
-    needs: [build, docker, deploy]
+    needs: [build, docker, security]
     runs-on: ubuntu-latest
     if: always()
     

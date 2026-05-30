@@ -4,8 +4,7 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-version="${IRIS_VERSION:-0.1.0}"
-jar_path="${IRIS_DEPLOY_JAR:-target/iris-${version}.jar}"
+jar_path="${IRIS_DEPLOY_JAR:-target/iris.jar}"
 remote_host="${IRIS_DEPLOY_HOST:-}"
 remote_user="${IRIS_DEPLOY_USER:-}"
 remote_dir="${IRIS_DEPLOY_DIR:-.local/bin}"

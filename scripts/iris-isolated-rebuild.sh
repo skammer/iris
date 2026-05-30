@@ -8,7 +8,7 @@ usage() {
     "Builds a fresh Iris jar, then runs scripts/iris-isolated.sh." \
     "" \
     "Options via env:" \
-    "  IRIS_JAR=target/iris-0.1.0.jar" \
+    "  IRIS_JAR=target/iris.jar" \
     "  IRIS_BUILD_CMD='clojure -T:uberjar uberjar'"
 }
 
@@ -19,7 +19,7 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 project_dir="$(cd "$script_dir/.." && pwd -P)"
-jar_path="${IRIS_JAR:-target/iris-0.1.0.jar}"
+jar_path="${IRIS_JAR:-target/iris.jar}"
 build_cmd="${IRIS_BUILD_CMD:-clojure -T:uberjar uberjar}"
 
 cd "$project_dir"

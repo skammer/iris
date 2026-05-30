@@ -6,7 +6,7 @@ set -e
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION="1.0.0"
-JAR_NAME="iris-${VERSION}.jar"
+JAR_NAME="iris.jar"
 
 # Colors for output
 RED='\033[0;31m'
