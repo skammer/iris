@@ -4,7 +4,7 @@
 **Reviewed:** 2026-05-29 · `master` @ `96b6930` · **Remediated:** 2026-05-30 · `master` @ `58d700c` (+ `feat/web-ui-usage-stats` @ `fce5cd7`) · **JDK (local):** 25 · **Clojure:** 1.12.4
 **Method:** 12 parallel subsystem readers → 7 cross-cutting reviewers (architecture, concurrency, security, error/resource, smells, data, agentic-correctness) → adversarial verification of every High/Critical finding, plus an independent ground-truth pass (build, CI, full test suite, hand-read of the loop / auth / shell / fs / migrations / sandbox spine). An interactive map of the agentic workflow is in **`iris-workflow-map.html`** (open in a browser).
 
-> **Status (2026-05-30):** all **12 Critical/High findings are fixed and merged** to `master`, plus the highest-risk §5 Medium/security backlog items fixed through `58d700c`. Build/CI blockers **B1, B2** and a smaller Medium backlog remain open. See **§1A** for the remediation ledger.
+> **Status (2026-05-30):** all **12 Critical/High findings are fixed and merged** to `master`, plus the highest-risk §5 Medium/security backlog items fixed through `58d700c`. Build/CI blocker **B2** and a smaller Medium backlog remain open; **B1 is fixed in the working tree**. See **§1A** for the remediation ledger.
 
 ---
 
@@ -24,7 +24,7 @@ Grades below are **at-review (2026-05-29)**; the trailing arrow notes the post-r
 | Concurrency | **B+ → A−** | Sound threading model; ✅ broker park-overflow fixed (sliding default); remaining edges are MEDIUM |
 | Error handling / resources | **B → B+** | Good per-request boundaries; ✅ child store, runner map, provider error-body leaks, SQLite retry, and CLI shutdown fixed |
 | Data / persistence | **A−** | Parameterized, transactional, idempotent; ✅ `SQLITE_BUSY`, pool sizing, runtime health, and approval CAS fixed |
-| Build / CI / release | **D** | **Docker build broken; CI never runs; 3 jar names** — *unchanged (B1/B2 open)* |
+| Build / CI / release | **D+** | **Docker build fixed in working tree; CI never runs; 3 jar names** — *B2 open* |
 | Tests | **B** | 404 tests, 396 pass; 8 fail in one env-sensitive e2e test (`child-runtime`); 0 errors |
 
 ---
@@ -79,7 +79,8 @@ Additional §5 Medium remediation landed on `master`:
 A live-path telemetry token-key bug is also fixed on `feat/web-ui-usage-stats` (✅ `fce5cd7`, `planner.clj` read `:total-tokens` which providers never set).
 
 **Still open** (out of scope for the Critical/High pass):
-- **B1** (Dockerfile `COPY config`) and **B2** (CI targets `main`/`develop`, not `master`) — the release blockers in §2 are untouched.
+- **B1** (Dockerfile `COPY config`) is fixed in the working tree; local `docker build` verification was blocked because the Docker daemon/socket was unavailable.
+- **B2** (CI targets `main`/`develop`, not `master`) remains open.
 - **B3** — still 8 failures, all in the same env-sensitive `child-runtime-local-unsandboxed-flow-test` (subprocess + loopback under a restricted sandbox); 0 errors, no new failures.
 - Remaining §5 Medium backlog: migration checksum hashing/re-baseline, memory dual-write divergence, and provider/common util duplication.
 - Structural §4.2 follow-up from 2026-05-30 is now done on `master`: `agent.runtime.*` run registry/control-plane moved to `agent.runs.*`, `KernelOps` has explicit capabilities, SSE metrics moved to `agent.streaming.metrics`, and orchestrator mutators enforce `:enabled?`.
@@ -92,9 +93,9 @@ A live-path telemetry token-key bug is also fixed on `feat/web-ui-usage-stats` (
 
 These I verified directly, outside the review agents.
 
-### 🔴 B1 — Docker build is broken on a clean checkout
-`Dockerfile:26-27` does `COPY config ./config`, but there is **no tracked `config/` directory** (only `resources/config/default.edn`; `git ls-files config` → empty, and `config/*.local.edn` is git-ignored). `docker build` fails at that COPY layer. The README prominently documents `docker build -t iris:0.1 .` as the 0.1 deploy target, so the headline deployment path does not work.
-**Fix:** remove the `COPY config ./config` lines (config is generated at runtime via `config init` / env vars and lives in `resources/`), or commit a real `config/` dir. Verify with a from-scratch `docker build`.
+### ✅ B1 — Docker build no longer copies untracked `config/`
+`Dockerfile` no longer does `COPY config ./config`; runtime config is provided by `resources/config/default.edn`, `config init`, and env vars. This removes the clean-checkout build failure caused by the untracked/ignored `config/` path.
+**Verification:** `git ls-files config` is empty as expected. Local `docker build -t iris:b1-fix .` could not run because Docker was unavailable (`unix:///Users/example/.docker/run/docker.sock` missing); rerun in an environment with Docker daemon available for full image verification.
 
 ### 🔴 B2 — CI never runs on this repo
 `.github/workflows/ci-cd.yml` triggers on `push`/`pull_request` to **`main`/`develop`**, but the repository's default branch is **`master`**. No job (build, test, lint, Trivy) has ever run for the current branch. The test suite, clj-kondo lint, and uberjar build are effectively dead. This is *why* the issues below survived to release.
@@ -315,7 +316,7 @@ Termination stop-reasons (all explicit, auditable): `completed · approval-requi
 Markers (2026-05-30): ✅ done · ◐ partial · ⬜ open.
 
 **P0 — Release blockers (do before any release/deploy)**
-1. ⬜ Fix `Dockerfile` `COPY config` (B1) — Docker build is dead.
+1. ✅ Fix `Dockerfile` `COPY config` (B1) — removed dead clean-checkout copy; full local image build blocked by unavailable Docker daemon.
 2. ⬜ Point CI at `master`, unify the jar name, drop the k8s deploy job (B2) — tests/lint/build currently never run.
 3. ✅ `api-arbitrary-substrate` — `:local-unsandboxed` removed from the API-selectable registry; API schema now uses substrate enum + closed `runner_options`; raw-body guard rejects caller-supplied execution keys. (`6b3c7e6` + working tree)
 4. ✅ `auth-disabled-when-key-nil` — non-loopback API bind now requires a key. (`190db38`)
@@ -351,4 +352,4 @@ Markers (2026-05-30): ✅ done · ◐ partial · ⬜ open.
 - Where a fix proposed by an agent was itself wrong (e.g. the `@system-ref` local name; the `(when-not (>!! …) (reduced))` non-fix; the migration re-baseline omission), the corrected fix is what appears above.
 - Line numbers are a snapshot; re-confirm before editing. Several findings cluster in `loop.clj` and `chat.clj` — fixing the structural debt (§3) makes the correctness fixes safer.
 
-*Bottom line: strong foundations, a short and concrete blocker list. As of 2026-05-30 the security/correctness P0–P1 code fixes are done (all 12 Critical/High closed) and the highest-risk §5 security Mediums are closed through `58d700c`; the remaining gates to a credible 0.1 are **B1 + B2**, plus migration checksum, orchestrator inbox overflow, memory dual-write divergence, and provider/common cleanup.*
+*Bottom line: strong foundations, a short and concrete blocker list. As of 2026-05-30 the security/correctness P0–P1 code fixes are done (all 12 Critical/High closed), the highest-risk §5 security Mediums are closed through `58d700c`, and B1 is fixed in the working tree; the remaining gates to a credible 0.1 are **B2**, plus migration checksum, orchestrator inbox overflow, memory dual-write divergence, and provider/common cleanup.*

@@ -23,7 +23,6 @@ WORKDIR /app
 
 COPY --from=builder /app/target/iris.jar ./iris.jar
 
-COPY config ./config
 COPY resources ./resources
 
 ENV AGENT_API_HOST=0.0.0.0 \
