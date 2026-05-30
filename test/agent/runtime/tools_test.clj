@@ -172,6 +172,27 @@
     (is (= :error (get-in result [:results 0 :status])))
     (is (= :approval-required (get-in result [:results 0 :error-type])))))
 
+(deftest tool-execution-events-emitted-once-through-batch-test
+  ;; Both the runtime batch layer and tools.core/execute-tool used to emit
+  ;; tool-execution-start/end with divergent payloads. The batch path must now
+  ;; emit each exactly once, and keep the runtime layer's event (it carries the
+  ;; tool-call-id that chat + UI correlate on).
+  (let [events (atom [])
+        sink #(swap! events conj %)
+        reg (-> (tools/create-registry {:event-sink sink})
+                (tools/register-tool (test-tool :a (fn [input _] input))))
+        _ (runtime-tools/execute-batch!
+           reg
+           [{:tool-name :a :input {:value 1}}]
+           {:permissions #{:a}}
+           {:mode :sequential :event-sink sink})
+        starts (filter #(= :tool-execution-start (:event-type %)) @events)
+        ends (filter #(= :tool-execution-end (:event-type %)) @events)]
+    (is (= 1 (count starts)) "exactly one tool-execution-start")
+    (is (= 1 (count ends)) "exactly one tool-execution-end")
+    (is (= "tool-call-0" (get-in (first starts) [:payload :tool-call-id]))
+        "retained event is the runtime layer's (has tool-call-id)")))
+
 (deftest permission-denied-test
   (let [reg (registry (test-tool :a (fn [input _] input)))
         result (runtime-tools/execute-batch!
