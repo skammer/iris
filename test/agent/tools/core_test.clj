@@ -3,7 +3,15 @@
    [agent.tools.display :as display]
    [agent.tools.core :as tools]
    [clojure.string :as str]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
+
+(defn- thrown-message
+  [f]
+  (try
+    (f)
+    nil
+    (catch clojure.lang.ExceptionInfo e
+      (.getMessage e))))
 
 (deftest display-telegram-summary-includes-args-and-code-output-test
   (let [text (display/telegram-summary
@@ -64,15 +72,20 @@
     (is (= [[:before :echo] [:after :echo]] @hooks))
     (is (= ["tool-execution-start" "tool-execution-end"]
            (mapv (comp name :event-type) @events)))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"Insufficient permissions"
-                          (tools/execute-tool registry :echo {:message "hi"} {})))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"Unknown tool"
-                          (tools/execute-tool registry :missing {} {})))))
+    (let [payload (:payload (last @events))]
+      (is (= "succeeded" (:status payload)))
+      (is (= "builtin" (:source payload)))
+      (is (= {:message "hi"} (:input payload)))
+      (is (= {:echoed "hi"} (:result payload)))
+      (is (number? (:duration-ms payload))))
+    (is (re-find #"Insufficient permissions"
+                 (thrown-message #(tools/execute-tool registry :echo {:message "hi"} {}))))
+    (is (re-find #"Unknown tool"
+                 (thrown-message #(tools/execute-tool registry :missing {} {}))))))
 
 (deftest registry-blocks-tool-via-hook-test
-  (let [tool (tools/create-tool
+  (let [events (atom [])
+        tool (tools/create-tool
               {:description (tools/create-tool-description
                              :echo
                              "Echo tool"
@@ -80,12 +93,16 @@
                              :required-permissions #{:echo})
                :execute-fn (fn [input _context] input)})
         registry (-> (tools/create-registry
-                      {:before-execute (fn [_] {:block true
+                      {:event-sink #(swap! events conj %)
+                       :before-execute (fn [_] {:block true
                                                 :reason "disabled"})})
                      (tools/register-tool tool))]
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"disabled"
-                          (tools/execute-tool registry :echo {:message "hi"} {:permissions #{:echo}})))))
+    (is (re-find #"disabled"
+                 (thrown-message #(tools/execute-tool registry :echo {:message "hi"} {:permissions #{:echo}}))))
+    (let [payload (:payload (last @events))]
+      (is (= "blocked" (:status payload)))
+      (is (= "disabled" (:reason payload)))
+      (is (number? (:duration-ms payload))))))
 
 (deftest registry-enforces-allowed-tools-test
   (let [tool (tools/create-tool
@@ -101,11 +118,10 @@
            (tools/execute-tool registry :echo {:message "hi"}
                                {:permissions #{:echo}
                                 :allowed-tools #{:echo}})))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"Tool not allowed"
-                          (tools/execute-tool registry :echo {:message "hi"}
-                                              {:permissions #{:echo}
-                                               :allowed-tools #{:http}})))))
+    (is (re-find #"Tool not allowed"
+                 (thrown-message #(tools/execute-tool registry :echo {:message "hi"}
+                                                      {:permissions #{:echo}
+                                                       :allowed-tools #{:http}}))))))
 
 (deftest registry-requires-approval-policy-for-sensitive-tools-test
   (let [tool (tools/create-tool
@@ -119,13 +135,32 @@
         registry (-> (tools/create-registry)
                      (tools/register-tool tool))
         approved-registry (tools/with-approval registry (fn [_] {:allow true}))]
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"requires approval policy"
-                          (tools/execute-tool registry :sensitive-echo {:message "hi"}
-                                              {:permissions #{:echo}})))
+    (is (re-find #"requires approval policy"
+                 (thrown-message #(tools/execute-tool registry :sensitive-echo {:message "hi"}
+                                                      {:permissions #{:echo}}))))
     (is (= {:message "hi"}
            (tools/execute-tool approved-registry :sensitive-echo {:message "hi"}
                                {:permissions #{:echo}})))))
+
+(deftest registry-emits-duration-on-failed-execution-test
+  (let [events (atom [])
+        tool (tools/create-tool
+              {:description (tools/create-tool-description
+                             :fail
+                             "Fail tool"
+                             :input-schema [:map [:message :string]]
+                             :required-permissions #{:fail})
+               :execute-fn (fn [_input _context]
+                             (throw (ex-info "boom" {:type :boom})))})
+        registry (-> (tools/create-registry {:event-sink #(swap! events conj %)})
+                     (tools/register-tool tool))]
+    (is (re-find #"boom"
+                 (thrown-message #(tools/execute-tool registry :fail {:message "hi"} {:permissions #{:fail}}))))
+    (let [payload (:payload (last @events))]
+      (is (= "failed" (:status payload)))
+      (is (= "boom" (:error payload)))
+      (is (= {:message "hi"} (:input payload)))
+      (is (number? (:duration-ms payload))))))
 
 (deftest registry-dedupes-tools-with-activity-context-test
   (let [calls (atom 0)
