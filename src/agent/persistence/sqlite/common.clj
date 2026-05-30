@@ -130,16 +130,16 @@
                    (recur (inc attempt))))))))
 
 (defn- open-configured-connection! [store ^HikariDataSource datasource]
-  (with-sqlite-retry
-    store
-    (fn []
-      (let [conn (.getConnection datasource)]
-        (try
-          (configure-connection! store conn)
-          conn
-          (catch Exception ex
-            (.close conn)
-            (throw ex)))))))
+  ;; No retry here: with-connection / with-transaction wrap the whole
+  ;; unit-of-work (acquire + execute) in with-sqlite-retry, so connection
+  ;; acquisition and statement execution share a single retry layer.
+  (let [conn (.getConnection datasource)]
+    (try
+      (configure-connection! store conn)
+      conn
+      (catch Exception ex
+        (.close conn)
+        (throw ex)))))
 
 (defn apply-journal-mode! [store]
   (let [datasource ^HikariDataSource (:datasource store)
@@ -159,30 +159,40 @@
       (.close conn))))
 
 (defn with-connection [store f]
-  (let [datasource ^HikariDataSource (:datasource store)
-        conn (open-configured-connection! store datasource)]
-    (try
-      (f conn)
-      (finally
-        (close-connection! store datasource conn)))))
+  (let [datasource ^HikariDataSource (:datasource store)]
+    (with-sqlite-retry
+      store
+      (fn []
+        (let [conn (open-configured-connection! store datasource)]
+          (try
+            (f conn)
+            (finally
+              (close-connection! store datasource conn))))))))
 
 (defn with-transaction [store f]
   (locking (:tx-lock store)
-    (let [datasource ^HikariDataSource (:datasource store)
-          conn (open-configured-connection! store datasource)]
-      (try
-        (.setAutoCommit conn false)
-        (try
-          (let [result (f conn)]
-            (.commit conn)
-            result)
-          (catch Exception e
-            (.rollback conn)
-            (throw e))
-          (finally
-            (.setAutoCommit conn true)))
-        (finally
-          (close-connection! store datasource conn))))))
+    (let [datasource ^HikariDataSource (:datasource store)]
+      ;; Retry the whole transaction (fresh connection per attempt) on a
+      ;; transient SQLITE_BUSY/LOCKED — whether it surfaces at acquisition,
+      ;; statement execution, or commit. Each attempt is rolled back before
+      ;; the error propagates, so the unit-of-work replays cleanly.
+      (with-sqlite-retry
+        store
+        (fn []
+          (let [conn (open-configured-connection! store datasource)]
+            (try
+              (.setAutoCommit conn false)
+              (try
+                (let [result (f conn)]
+                  (.commit conn)
+                  result)
+                (catch Exception e
+                  (.rollback conn)
+                  (throw e))
+                (finally
+                  (.setAutoCommit conn true)))
+              (finally
+                (close-connection! store datasource conn)))))))))
 
 (defn bind-params! [^PreparedStatement stmt params]
   (doseq [[idx value] (map-indexed vector params)]
