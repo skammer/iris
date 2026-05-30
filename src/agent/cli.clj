@@ -14,6 +14,14 @@
 
 (def session-title-max-chars 80)
 
+(def ^:dynamic *add-shutdown-hook!*
+  (fn [^Thread hook]
+    (.addShutdownHook (Runtime/getRuntime) hook)))
+
+(def ^:dynamic *serve-block!*
+  (fn []
+    @(promise)))
+
 (defn usage []
   (str/join
    \newline
@@ -242,6 +250,50 @@
   (cfg/init-config!)
   (system/create-system config-path))
 
+(defn- with-system!
+  [config-path f]
+  (let [system (create-system! config-path)]
+    (try
+      (f system)
+      (finally
+        (system/close-system! system)))))
+
+(defn- serve-shutdown!
+  [system nrepl-server]
+  (let [closed? (atom false)]
+    (fn []
+      (when (compare-and-set! closed? false true)
+        (try
+          (some-> @nrepl-server nrepl/stop!)
+          (catch Exception e
+            (logging/log-error! :agent.cli.lifecycle/nrepl-stop-failed e {})))
+        (system/close-system! system)))))
+
+(defn- register-shutdown-hook!
+  [shutdown!]
+  (*add-shutdown-hook!* (Thread. (reify Runnable
+                                   (run [_]
+                                     (shutdown!)))
+                                 "iris-shutdown-hook")))
+
+(defn- run-serve!
+  [config-path]
+  (let [system (system/start-api! (create-system! config-path))
+        nrepl-server (atom nil)
+        shutdown! (serve-shutdown! system nrepl-server)
+        {:keys [host port]} (:api (:config system))]
+    (try
+      (reset! nrepl-server (nrepl/start! system (:nrepl (:config system))))
+      (register-shutdown-hook! shutdown!)
+      (logging/log! :agent.cli/serve {:host host :port port})
+      (println (str "API listening on http://" host ":" port))
+      (when-let [server @nrepl-server]
+        (println (str "nREPL listening on " (:bind server) ":" (:port server)
+                      " (" (:port-file server) ")")))
+      (*serve-block!*)
+      (finally
+        (shutdown!)))))
+
 (defn- loop-prompt [parsed]
   (or (some-> (:loop-prompt parsed) str/trim not-empty)
       (some-> (:prompt parsed) str/trim not-empty)))
@@ -284,30 +336,19 @@
   (let [{:keys [config-path command prompt no-session?] :as parsed} (parse-args args)]
     (cond
       (= "serve" command)
-      (let [system (system/start-api! (create-system! config-path))
-            nrepl-server (nrepl/start! system (:nrepl (:config system)))
-            {:keys [host port]} (:api (:config system))]
-        (logging/log! :agent.cli/serve {:host host :port port})
-        (println (str "API listening on http://" host ":" port))
-        (when nrepl-server
-          (println (str "nREPL listening on " (:bind nrepl-server) ":" (:port nrepl-server)
-                        " (" (:port-file nrepl-server) ")")))
-        @(promise))
+      (run-serve! config-path)
 
       (= "config" command)
       (run-config-command! prompt)
 
       (= "skills" command)
-      (let [system (create-system! config-path)]
-        (print-skills! system prompt))
+      (with-system! config-path #(print-skills! % prompt))
 
       (= "memory" command)
-      (let [system (create-system! config-path)]
-        (run-memory-command! system prompt))
+      (with-system! config-path #(run-memory-command! % prompt))
 
       (= "loop" command)
-      (let [system (create-system! config-path)]
-        (run-loop! system parsed))
+      (with-system! config-path #(run-loop! % parsed))
 
       (str/blank? prompt)
       (do
@@ -316,9 +357,11 @@
         (System/exit 1))
 
       :else
-      (let [system (create-system! config-path)
-            session-id (session-id-for-prompt system parsed prompt)]
-        (logging/log! :agent.cli/prompt {:prompt-length (count prompt)
-                                         :session-id session-id
-                                         :ephemeral? (boolean no-session?)})
-        (stream-prompt! system prompt session-id)))))
+      (with-system!
+        config-path
+        (fn [system]
+          (let [session-id (session-id-for-prompt system parsed prompt)]
+            (logging/log! :agent.cli/prompt {:prompt-length (count prompt)
+                                             :session-id session-id
+                                             :ephemeral? (boolean no-session?)})
+            (stream-prompt! system prompt session-id)))))))

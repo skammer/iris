@@ -4,10 +4,11 @@
    [agent.cli :as cli]
    [agent.logging :as logging]
    [agent.memory.core :as memory]
+   [agent.nrepl :as nrepl]
    [agent.sessions.service :as sessions]
    [agent.system :as system]
    [clojure.string :as str]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (deftest parse-headless-session-flags-test
   (is (= {:config-path "local.edn"
@@ -53,8 +54,64 @@
                                                   :repair? (:repair? opts)
                                                   :counts {:missing 0}})]
     (is (= "{:service :agent.cli-test/memory, :repair? true, :counts {:missing 0}}\n"
-           (with-out-str
-             (cli/main ["memory" "reconcile" "--repair"]))))))
+             (with-out-str
+               (cli/main ["memory" "reconcile" "--repair"]))))))
+
+(deftest one-shot-cli-closes-system-test
+  (let [closed (atom [])]
+    (with-redefs [system/create-system (fn [_] {:id :memory
+                                                :memory-service ::memory})
+                  system/close-system! #(swap! closed conj (:id %))
+                  memory/reconcile-graph-memory (fn [_ _] {:ok true})]
+      (is (= "{:ok true}\n"
+             (with-out-str
+               (cli/main ["memory" "reconcile"])))))
+    (is (= [:memory] @closed))))
+
+(deftest one-shot-cli-closes-system-on-error-test
+  (let [closed (atom [])
+        error (ex-info "boom" {:type :test})]
+    (with-redefs [system/create-system (fn [_] {:id :prompt})
+                  system/close-system! #(swap! closed conj (:id %))
+                  sessions/create-session! (fn [_ _] {:id "new-session"})
+                  chat/run! (fn [_ _] (throw error))
+                  logging/log! (fn [& _] nil)]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"boom"
+                            (with-out-str
+                              (cli/main ["prompt"])))))
+    (is (= [:prompt] @closed))))
+
+(deftest serve-cli-registers-idempotent-shutdown-hook-test
+  (let [hooks (atom [])
+        stopped (atom [])
+        closed (atom [])
+        started-system {:id :serve
+                        :config {:api {:host "127.0.0.1"
+                                       :port 8787}
+                                 :nrepl {:enabled true}}}
+        api-system (assoc started-system :api-server ::api)
+        nrepl-server {:server ::nrepl
+                      :bind "127.0.0.1"
+                      :port 8999
+                      :port-file ".test-nrepl-port"}]
+    (with-redefs [system/create-system (fn [_] started-system)
+                  system/start-api! (fn [system] (assoc system :api-server ::api))
+                  system/close-system! #(swap! closed conj %)
+                  nrepl/start! (fn [_ _] nrepl-server)
+                  nrepl/stop! #(swap! stopped conj %)
+                  logging/log! (fn [& _] nil)]
+      (binding [cli/*add-shutdown-hook!* #(swap! hooks conj %)
+                cli/*serve-block!* (fn [] nil)]
+        (is (str/includes?
+             (with-out-str
+               (cli/main ["serve"]))
+             "API listening on http://127.0.0.1:8787")))
+      (is (= 1 (count @hooks)))
+      (.run ^Thread (first @hooks))
+      (.run ^Thread (first @hooks))
+      (is (= [nrepl-server] @stopped))
+      (is (= [api-system] @closed)))))
 
 (deftest loop-cli-runs-one-iteration-test
   (let [calls (atom [])]

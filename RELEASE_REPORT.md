@@ -22,7 +22,7 @@ Grades below are **at-review (2026-05-29)**; the trailing arrow notes the post-r
 | Agentic loop correctness | **B → A−** | Bounded & well-structured; ✅ the truncation bug that discarded valid tool calls is fixed |
 | Security | **C+ → A−** | Strong SQL/static-file/crypto layers; ✅ run-API RCE, keyless federation, federated interop, auth fail-open, share-network default, shell policy, bootstrap compare, SSRF/DNS-rebind, log/fs/seatbelt/UI-fragment hardening fixed |
 | Concurrency | **B+ → A−** | Sound threading model; ✅ broker park-overflow fixed (sliding default); remaining edges are MEDIUM |
-| Error handling / resources | **B → B+** | Good per-request boundaries; ✅ child store, runner map, and provider error-body leaks fixed; JVM shutdown hook still open |
+| Error handling / resources | **B → B+** | Good per-request boundaries; ✅ child store, runner map, provider error-body leaks, SQLite retry, and CLI shutdown fixed |
 | Data / persistence | **A−** | Parameterized, transactional, idempotent; ✅ `SQLITE_BUSY`, pool sizing, runtime health, and approval CAS fixed |
 | Build / CI / release | **D** | **Docker build broken; CI never runs; 3 jar names** — *unchanged (B1/B2 open)* |
 | Tests | **B** | 404 tests, 396 pass; 8 fail in one env-sensitive e2e test (`child-runtime`); 0 errors |
@@ -57,6 +57,7 @@ Additional §5 Medium remediation landed on `master`:
 | bootstrap-token-non-constant-time | ✅ fixed | `190db38` | shared constant-time compare; blank/nil tokens rejected |
 | child-control-store-not-closed | ✅ fixed | `190db38` | child sqlite control store closes in `finally` |
 | local-runner-process-map-leak | ✅ fixed | `190db38` | exit watcher prunes dead processes |
+| no-jvm-shutdown-hook | ✅ fixed | this commit | `serve` registers an idempotent shutdown hook; one-shot CLI commands close systems in `finally` |
 | decide-approval-no-pending-guard | ✅ fixed | `190db38` | SQL CAS requires `status='pending'`; API maps conflict to 409 |
 | pool-config-not-forwarded | ✅ fixed | `15b4fa2` | sqlite pool defaults + env overrides added |
 | runtime-health-n+1 | ✅ fixed | `15b4fa2` | pending command counts now one grouped query |
@@ -80,7 +81,7 @@ A live-path telemetry token-key bug is also fixed on `feat/web-ui-usage-stats` (
 **Still open** (out of scope for the Critical/High pass):
 - **B1** (Dockerfile `COPY config`) and **B2** (CI targets `main`/`develop`, not `master`) — the release blockers in §2 are untouched.
 - **B3** — still 8 failures, all in the same env-sensitive `child-runtime-local-unsandboxed-flow-test` (subprocess + loopback under a restricted sandbox); 0 errors, no new failures.
-- Remaining §5 Medium backlog: JVM shutdown hook + one-shot `finally`, migration checksum hashing/re-baseline, memory dual-write divergence, and provider/common util duplication.
+- Remaining §5 Medium backlog: migration checksum hashing/re-baseline, memory dual-write divergence, and provider/common util duplication.
 - Structural §4.2 follow-up from 2026-05-30 is now done on `master`: `agent.runtime.*` run registry/control-plane moved to `agent.runs.*`, `KernelOps` has explicit capabilities, SSE metrics moved to `agent.streaming.metrics`, and orchestrator mutators enforce `:enabled?`.
 
 **Current focused suites:** §4.2 structural pass → **69 tests, 537 assertions, 0 failures, 0 errors**. §5 Medium/security focused suites all passed: `agent.api-test`, `agent.runners.local-unsandboxed-test`, `agent.runners.seatbelt-test`, `agent.persistence.sqlite-test`, `agent.config-test`, `agent.runs.registry-test`, `agent.runtime.context-pack-test`, `agent.llm.providers.openai-compatible-test`, `agent.llm.providers.ollama-test`, `agent.runtime.tools-test`, `agent.chat.streaming-test`, `agent.tools.common.shell-test`, `agent.tools.common.http-test`, `agent.tools.common.fs-test`, `agent.logging-test`, `agent.ui-test`, plus targeted `agent.system-test/agent-tool-context-ignores-caller-security-overrides`. Targeted `clj-kondo` clean on touched source/test files except known HugSQL/config macro false positives.
@@ -135,7 +136,7 @@ Severities are the **corrected** severities after adversarial verification. ✓ 
 
 Fixed in this pass: `auth-disabled-when-key-nil` (`190db38`), `container-default-share-network-true` (`190db38`), `shell-denylist-bypassable` (`783d0d0`), `http-ssrf-dns-rebinding` (`e536f1a`), `bootstrap-token-non-constant-time` (`190db38`), `child-control-store-not-closed` (`190db38`), `local-runner-process-map-leak` (`190db38`), `openai-stream-leak-on-error` (`1be7a90`), `pool-config-not-forwarded` (`15b4fa2`), `runtime-health-n+1` (`15b4fa2`), `decide-approval-no-pending-guard` (`190db38`), `token-estimate-counts-raw` (`593b412`), `streaming-toolcall-index-fallback` (`593b412`), `parallel-tool-pool-unbounded` (`e3a65e7`), `stream-flusher-thread-per-flush` (`34c2cfe`), `orchestrator-inbox-sliding-silent-loss` (working tree), `log-error-exdata-unredacted` (`19049c0`), `fs-write-toctou-symlink` (`2061994`), `seatbelt-paths-not-canonicalized` (`214268a`), `trusted-fragment-xss` (`58d700c`), plus `max-token-loses-final-messages` (`19febce`) and `dual-kernelops-divergent`/`orchestrator-enabled-flag-decorative` (`183e879`).
 
-Still open: `no-jvm-shutdown-hook` (`cli.clj:286`), `migration-checksum-cosmetic` (`migrations.clj:733`), `memory-dual-write-divergence` (`memory/core.clj:384`), and provider-common cleanup.
+Still open: `migration-checksum-cosmetic` (`migrations.clj:733`), `memory-dual-write-divergence` (`memory/core.clj:384`), and provider-common cleanup.
 
 ### Refuted / downgraded (transparency)
 
@@ -236,17 +237,19 @@ For each finding: **problem → why it matters → fix.** Line numbers are from 
 
 **🟡 stream-flusher-thread-per-flush — MEDIUM.** `chat.clj:562` spawns `(future (Thread/sleep 50) (flush!))` per scheduled flush — continuous send-off-pool churn under streaming. Bounded to ~1 per active turn but wasteful across many sessions; competes with `run-task!`/queued runs/telegram workers. **Fix:** one shared `ScheduledExecutorService` created in `create-service`, shut down in `stop!`. **Status:** ✅ fixed in `34c2cfe`; chat service owns one daemon scheduled flusher and shuts it down.
 
-**🟡 orchestrator-inbox-sliding-silent-loss — MEDIUM.** Agent inboxes (`orchestrator.clj:242`) and channel buses (`orchestrator.clj:920`) used sliding buffers that silently dropped oldest messages on overflow while delivery/post events claimed success. **Status:** ✅ fixed in working tree; both queues are now fixed-capacity and use `async/offer!`, with overflow surfaced via `agent.interop.message.dropped` or `channel.message.dropped` events. Regression coverage fills interop inboxes and channel buffers past capacity and asserts drop events instead of silent loss.
+**🟡 orchestrator-inbox-sliding-silent-loss — MEDIUM.** Agent inboxes (`orchestrator.clj:242`) and channel buses (`orchestrator.clj:920`) used sliding buffers that silently dropped oldest messages on overflow while delivery/post events claimed success. **Status:** ✅ fixed in this commit; both queues are now fixed-capacity and use `async/offer!`, with overflow surfaced via `agent.interop.message.dropped` or `channel.message.dropped` events. Regression coverage fills interop inboxes and channel buffers past capacity and asserts drop events instead of silent loss.
 
 ### 5.4 Error handling & resource lifecycle
 
-**🟠 no-jvm-shutdown-hook — MEDIUM (was HIGH).** `close-system!` (`system.clj:137`) exists and is correct but is **only** called from `full-reload-now!`. The `serve` path blocks on `@(promise)` (`cli.clj:295`) with no `addShutdownHook`; one-shot CLI commands (`cli.clj:300-324`) exit without closing. On SIGTERM the HikariCP pool, nREPL socket, and Telegram poller are abandoned (WAL is crash-safe so no corruption, but no clean checkpoint). **Fix:** register a shutdown hook in the `serve` branch (calling `nrepl/stop!` + `close-system!`), wrap one-shot branches in `try/finally`. *(Note: the proposed `@system-ref` in the agent's draft fix is wrong — the local is `system`.)*
+**Verification (2026-05-30):** all §5.4 items are fixed: `no-jvm-shutdown-hook`, `child-control-store-not-closed`, `local-runner-process-map-leak`, `openai-stream-leak-on-error`, and `sqlite-retry-conn-only`. Focused suites: **82 tests, 317 assertions, 0 failures, 0 errors** (`agent.cli-test`, `agent.persistence.sqlite-test`, `agent.config-test`, `agent.runs.registry-test`, `agent.runners.local-unsandboxed-test`, `agent.runs.child-test`, `agent.llm.providers.openai-compatible-test`, `agent.llm.providers.ollama-test`).
+
+**🟠 no-jvm-shutdown-hook — MEDIUM (was HIGH).** `close-system!` (`system.clj:137`) exists and is correct but was **only** called from `full-reload-now!`. The `serve` path blocked forever with no `addShutdownHook`; one-shot CLI commands exited without closing. On SIGTERM the HikariCP pool, nREPL socket, and Telegram poller were abandoned (WAL is crash-safe so no corruption, but no clean checkpoint). **Fix:** register a shutdown hook in the `serve` branch (calling `nrepl/stop!` + `close-system!`), wrap one-shot branches in `try/finally`. *(Note: the proposed `@system-ref` in the agent's draft fix is wrong — the local is `system`.)* **Status:** ✅ fixed in this commit; `serve-shutdown!`/`run-serve!` (`cli.clj:261-295`) provide idempotent shutdown and one-shot commands use `with-system!` (`cli.clj:253-259`).
 
 **🟠 child-control-store-not-closed / local-runner-process-map-leak — MEDIUM each.** `run-child!`'s `finally` (`child.clj:234`) never closes the control store's HikariCP pool. `LocalUnsandboxedRunner` (`local_unsandboxed.clj:77`) only ever `assoc`s into `processes`; nothing ever `dissoc`s, so dead `Process` objects accumulate for the runtime's life. **Fix:** `(when (= :sqlite (:type control)) (sqlite/close-store! (:store control)))` in the child finally; `(swap! processes dissoc run-id)` in the exit-watcher `finally` (the other substrate runners delegate to this one — single fix covers all). **Status:** ✅ fixed in `190db38`; child store closes and local runner prunes dead processes.
 
 **🟠 openai-stream-leak-on-error — MEDIUM.** In both streaming entry points (`openai_compatible.clj:261-269,307-322`), `checked-response` is evaluated and **throws on non-2xx before** the body is placed under `with-open`, leaking the connection/socket on exactly the common 429/5xx case (defeating the retry logic). Same in `ollama.clj:101,206`. **Fix:** capture the raw response, `(some-> (:body resp) .close)` on the error path before throwing. **Status:** ✅ fixed in `1be7a90`; OpenAI-compatible and Ollama providers close non-2xx bodies before throwing.
 
-**🟢 sqlite-retry-conn-only — HIGH (from subsystem map).** `with-sqlite-retry`/connection helpers (`common.clj:116`) retry **connection acquisition** but the actual statement execution isn't wrapped, so a `SQLITE_BUSY` on a statement (under WAL write contention) isn't retried. **Fix:** wrap statement execution in the retry, not just `getConnection`.
+**🟢 sqlite-retry-conn-only — HIGH (from subsystem map).** `with-sqlite-retry`/connection helpers (`common.clj:116`) used to retry **connection acquisition** but not statement execution, so a `SQLITE_BUSY` on a statement (under WAL write contention) was not retried. **Fix:** wrap statement execution in the retry, not just `getConnection`. **Status:** ✅ fixed in `5788de9`; `with-connection` and `with-transaction` now wrap the whole unit of work, including acquire, statements, commit/rollback, and close.
 
 ### 5.5 Data & persistence
 
@@ -324,7 +327,7 @@ Markers (2026-05-30): ✅ done · ◐ partial · ⬜ open.
 12. ✅ `decide-approval-no-pending-guard`. (`190db38`)
 
 **P2 — Robustness / resources**
-13. ◐ JVM shutdown hook + one-shot `try/finally` ⬜; child store close + runner process-map prune ✅ (`190db38`); OpenAI/Ollama stream-on-error close ✅ (`1be7a90`).
+13. ✅ JVM shutdown hook + one-shot `try/finally` (this commit); child store close + runner process-map prune ✅ (`190db38`); OpenAI/Ollama stream-on-error close ✅ (`1be7a90`).
 14. ✅ `sqlite-retry-conn-only` (`5788de9`), pool-config forwarding + `runtime-health` N+1 (`15b4fa2`).
 15. ✅ `http-ssrf-dns-rebinding` (`e536f1a`); `container-default-share-network-true` + `bootstrap-token-non-constant-time` ✅ (`190db38`); `shell-denylist` hardening ✅ (`783d0d0`); lower log/fs/seatbelt security hardening ✅ (`19049c0`, `2061994`, `214268a`).
 16. ✅ `parallel-tool-pool-unbounded` (`e3a65e7`); `stream-flusher-thread-per-flush` (`34c2cfe`); `orchestrator-inbox` silent loss (working tree).
@@ -344,4 +347,4 @@ Markers (2026-05-30): ✅ done · ◐ partial · ⬜ open.
 - Where a fix proposed by an agent was itself wrong (e.g. the `@system-ref` local name; the `(when-not (>!! …) (reduced))` non-fix; the migration re-baseline omission), the corrected fix is what appears above.
 - Line numbers are a snapshot; re-confirm before editing. Several findings cluster in `loop.clj` and `chat.clj` — fixing the structural debt (§3) makes the correctness fixes safer.
 
-*Bottom line: strong foundations, a short and concrete blocker list. As of 2026-05-30 the security/correctness P0–P1 code fixes are done (all 12 Critical/High closed) and the highest-risk §5 security Mediums are closed through `58d700c`; the remaining gates to a credible 0.1 are **B1 + B2**, plus migration checksum, JVM shutdown, orchestrator inbox overflow, memory dual-write divergence, and provider/common cleanup.*
+*Bottom line: strong foundations, a short and concrete blocker list. As of 2026-05-30 the security/correctness P0–P1 code fixes are done (all 12 Critical/High closed) and the highest-risk §5 security Mediums are closed through `58d700c`; the remaining gates to a credible 0.1 are **B1 + B2**, plus migration checksum, orchestrator inbox overflow, memory dual-write divergence, and provider/common cleanup.*
