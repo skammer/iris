@@ -1,4 +1,4 @@
-(ns agent.runtime.control-client
+(ns agent.runs.control-client
   "HTTP control-plane client used by isolated child runtimes."
   (:require
    [cheshire.core :as json]

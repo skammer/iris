@@ -74,6 +74,17 @@
 (defn- swap-state! [orchestrator f & args]
   (apply swap! (:state orchestrator) f args))
 
+(defn enabled? [orchestrator]
+  (true? (:enabled? orchestrator)))
+
+(defn- ensure-enabled! [orchestrator operation]
+  (when-not (enabled? orchestrator)
+    (throw (ex-info "Orchestrator disabled"
+                    {:type :orchestrator-disabled
+                     :status 409
+                     :error "orchestrator_disabled"
+                     :operation operation}))))
+
 (defn- update-state-result! [orchestrator f]
   (let [state* (:state orchestrator)]
     (loop []
@@ -201,31 +212,31 @@
                  :or {name "Subagent"
                       role "worker"
                       capabilities []}}]
+  (ensure-enabled! orchestrator :spawn-agent)
   (let [kind* (or kind (if (= "orchestrator" role) "orchestrator" "worker"))
         created-at (now)
-        agent {:id (random-id "agent")
-               :name name
-               :kind kind*
-               :role role
-               :parent-id parent-id
-               :system-prompt system-prompt
-               :logical-address logical-address
-               :capabilities (set capabilities)
-               :tool-access (set (or tool-access []))
-               :memory-scopes (vec (or memory-scopes []))
-               :budgets (or budgets {})
-               :task task
-               :state {}
-               :allow-direct? (true? allow-direct?)
-               :trusted-peers (set trusted-peers)
-               :trusted-peer-policies (normalize-trust-policies trust-policies)
-               :interop-rate-limit-per-minute (long (or interop-rate-limit-per-minute 60))
-               :status "idle"
-               :created-at created-at
-               :messages []
-               :inbox (async/chan (async/sliding-buffer 64))}]
-    (let [resolved-address (or logical-address (make-logical-address (:id agent)))
-          agent* (assoc agent :logical-address resolved-address)]
+        agent-id (random-id "agent")
+        agent* {:id agent-id
+                :name name
+                :kind kind*
+                :role role
+                :parent-id parent-id
+                :system-prompt system-prompt
+                :logical-address (or logical-address (make-logical-address agent-id))
+                :capabilities (set capabilities)
+                :tool-access (set (or tool-access []))
+                :memory-scopes (vec (or memory-scopes []))
+                :budgets (or budgets {})
+                :task task
+                :state {}
+                :allow-direct? (true? allow-direct?)
+                :trusted-peers (set trusted-peers)
+                :trusted-peer-policies (normalize-trust-policies trust-policies)
+                :interop-rate-limit-per-minute (long (or interop-rate-limit-per-minute 60))
+                :status "idle"
+                :created-at created-at
+                :messages []
+                :inbox (async/chan (async/sliding-buffer 64))}]
       (swap-state! orchestrator assoc-in [:agents (:id agent*)] agent*)
       (emit-event! orchestrator
                    {:event-type :agent.created
@@ -246,7 +257,7 @@
                               :trusted-peers (vec (:trusted-peers agent*))
                               :trusted-peer-policies (trust-policies-view (:trusted-peer-policies agent*))
                               :interop-rate-limit-per-minute (:interop-rate-limit-per-minute agent*)}})
-      (agent-view agent*))))
+      (agent-view agent*)))
 
 (defn list-agents
   [orchestrator]
@@ -322,6 +333,7 @@
 (defn register-agent-capabilities!
   [orchestrator agent-ref {:keys [capabilities allow-direct? trusted-peers trust-policies interop-rate-limit-per-minute
                                   tool-access memory-scopes budgets]}]
+  (ensure-enabled! orchestrator :register-agent-capabilities)
   (let [agent (ensure-agent-by-ref! orchestrator agent-ref)
         updated (-> agent
                     (assoc :capabilities (set capabilities))
@@ -351,6 +363,7 @@
 
 (defn patch-agent-state!
   [orchestrator agent-ref patch]
+  (ensure-enabled! orchestrator :patch-agent-state)
   (let [agent (ensure-agent-by-ref! orchestrator agent-ref)
         updated (update agent :state merge patch)]
     (swap-state! orchestrator assoc-in [:agents (:id agent)] updated)
@@ -364,6 +377,7 @@
 
 (defn set-agent-status!
   [orchestrator agent-ref status]
+  (ensure-enabled! orchestrator :set-agent-status)
   (let [agent (ensure-agent-by-ref! orchestrator agent-ref)
         updated (assoc agent :status status)]
     (swap-state! orchestrator assoc-in [:agents (:id agent)] updated)
@@ -378,6 +392,7 @@
   [orchestrator {:keys [id name base-url logical-address-prefix capabilities status key-id public-key private-key]
                  :or {capabilities []
                       status "online"}}]
+  (ensure-enabled! orchestrator :register-federated-peer)
   (let [peer-id (or id (random-id "peer"))
         key-id* (or key-id "default")
         peer {:id peer-id
@@ -418,6 +433,7 @@
 (defn send-agent-message!
   [orchestrator llm-provider agent-id {:keys [role content]
                                        :or {role "user"}}]
+  (ensure-enabled! orchestrator :send-agent-message)
   (when-not (and (string? content) (not (str/blank? content)))
     (throw (ex-info "content must be a non-blank string"
                     {:type :validation-failed
@@ -709,6 +725,7 @@
   [orchestrator from-agent-ref to-agent-ref {:keys [message-type content route request-id delivery-mode]
                                              :or {message-type "request"
                                                   delivery-mode "at-most-once"}}]
+  (ensure-enabled! orchestrator :send-interop-message)
   (validate-interop-content! content)
   (let [from-agent (ensure-agent-by-ref! orchestrator from-agent-ref)
         {:keys [to-agent federated-target]} (resolve-interop-target orchestrator to-agent-ref)
@@ -741,6 +758,7 @@
 (defn acknowledge-interop-message!
   [orchestrator agent-ref message-id {:keys [ack-type]
                                       :or {ack-type "ack"}}]
+  (ensure-enabled! orchestrator :acknowledge-interop-message)
   (let [agent (ensure-agent-by-ref! orchestrator agent-ref)
         envelope (ensure-interop-message! orchestrator message-id)]
     (when-not (= (:to-agent-id envelope) (:id agent))
@@ -769,6 +787,7 @@
 
 (defn retry-interop-message!
   [orchestrator agent-ref message-id]
+  (ensure-enabled! orchestrator :retry-interop-message)
   (let [agent (ensure-agent-by-ref! orchestrator agent-ref)
         envelope (ensure-interop-message! orchestrator message-id)]
     (when-not (= (:from-agent-id envelope) (:id agent))
@@ -822,6 +841,7 @@
 
 (defn receive-federated-message!
   [orchestrator peer-id to-agent-ref envelope]
+  (ensure-enabled! orchestrator :receive-federated-message)
   (when-not (get (federated-peers-map orchestrator) peer-id)
     (throw (ex-info "Federated peer not found"
                     {:type :peer-not-found
@@ -864,6 +884,7 @@
   [orchestrator {:keys [name participants]
                  :or {name "Channel"
                       participants []}}]
+  (ensure-enabled! orchestrator :create-channel)
   (let [participant-set (set participants)]
     (doseq [participant-id participant-set]
       (ensure-agent! orchestrator participant-id))
@@ -895,6 +916,7 @@
 
 (defn post-channel-message!
   [orchestrator channel-id {:keys [sender-id content]}]
+  (ensure-enabled! orchestrator :post-channel-message)
   (when-not (and (string? content) (not (str/blank? content)))
     (throw (ex-info "content must be a non-blank string"
                     {:type :validation-failed
@@ -934,6 +956,7 @@
 
 (defn consume-agent-inbox!
   [orchestrator llm-provider agent-id]
+  (ensure-enabled! orchestrator :consume-agent-inbox)
   (let [agent (ensure-agent! orchestrator agent-id)
         inbox (:inbox agent)
         drained (loop [acc []]

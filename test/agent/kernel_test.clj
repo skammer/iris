@@ -4,7 +4,7 @@
    [agent.kernel.ops :as kernel-ops]
    [agent.kernel.runtime :as kernel-runtime]
    [agent.kernel.schema :as kernel-schema]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (deftest orchestrator-spawn-worker-step-test
   (let [result (kernel/orchestrator-spawn-worker-step
@@ -48,6 +48,8 @@
               (patch-agent-state! [_ _ _] nil)
               (set-agent-status! [_ _ _] nil)
               (emit-kernel-event! [_ _] nil)
+              kernel-ops/KernelCapabilities
+              (supported-directives [_] #{:tool-call :complete})
               kernel-ops/KernelToolBatchOps
               (execute-agent-tool-batch! [_ agent-id calls _context _opts]
                 {:results (mapv (fn [idx {:keys [tool-name input id context]}]
@@ -77,3 +79,27 @@
              :input {:url "https://example.com"}
              :context {}}]
            @executed))))
+
+(deftest unsupported-directive-returns-receipt-test
+  (let [status-updates (atom [])
+        ops (reify kernel-ops/KernelOps
+              (spawn-task-worker! [_ _] (throw (ex-info "should not spawn" {})))
+              (execute-agent-tool! [_ _ _ _ _] (throw (ex-info "should not execute" {})))
+              (send-agent-message! [_ _ _] (throw (ex-info "should not send" {})))
+              (patch-agent-state! [_ _ _] (throw (ex-info "should not patch" {})))
+              (set-agent-status! [_ agent-id status] (swap! status-updates conj [agent-id status]))
+              (emit-kernel-event! [_ _] nil)
+              kernel-ops/KernelCapabilities
+              (supported-directives [_] #{:tool-call}))
+        receipt (kernel-runtime/execute-directive!
+                 ops
+                 "agent-1"
+                 (kernel/directive :spawn-worker {:task {:id "x"}}))
+        complete (kernel-runtime/execute-directive!
+                  ops
+                  "agent-1"
+                  (kernel/directive :complete {:result {:ok true}}))]
+    (is (= :unsupported (:status receipt)))
+    (is (= :spawn-worker (:directive receipt)))
+    (is (= :completed (:status complete)))
+    (is (empty? @status-updates))))

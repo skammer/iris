@@ -27,6 +27,10 @@
          (select-keys context [:allowed-tools])))
 
 (defrecord ChatKernelOps [system session-id request-id extra-context]
+  kernel-ops/KernelCapabilities
+  (supported-directives [_]
+    #{:tool-call :complete})
+
   kernel-ops/KernelOps
   (spawn-task-worker! [_ _]
     (throw (ex-info "Chat loop cannot spawn workers yet"

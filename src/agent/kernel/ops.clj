@@ -9,5 +9,8 @@
   (set-agent-status! [this agent-id status])
   (emit-kernel-event! [this event]))
 
+(defprotocol KernelCapabilities
+  (supported-directives [this]))
+
 (defprotocol KernelToolBatchOps
   (execute-agent-tool-batch! [this agent-id calls context opts]))

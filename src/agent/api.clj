@@ -54,27 +54,20 @@
     (responses/json-response (if (= :scheduled (:status result)) 202 200)
                              {:data result})))
 
-(def ^:private orchestrator-handler-ids
-  #{:list-agents
-    :create-agent
-    :agent-messages
+(def ^:private orchestrator-mutating-handler-ids
+  #{:create-agent
     :agent-message
     :agent-tool-execute
     :orchestrator-spawn-worker
     :agent-step-execute
     :consume-agent-inbox
-    :agent-interop
     :agent-interop-capabilities
     :agent-interop-message
-    :agent-interop-messages
     :agent-interop-ack
     :agent-interop-retry
-    :list-federated-peers
     :create-federated-peer
     :federation-inbox
-    :list-channels
     :create-channel
-    :channel-messages
     :channel-message})
 
 (defn- orchestrator-enabled?
@@ -89,7 +82,7 @@
 
 (defn- maybe-orchestrator-handler
   [system handler-id handler]
-  (if (contains? orchestrator-handler-ids handler-id)
+  (if (contains? orchestrator-mutating-handler-ids handler-id)
     (fn [request]
       (if (orchestrator-enabled? system)
         (handler request)

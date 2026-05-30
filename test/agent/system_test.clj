@@ -10,13 +10,13 @@
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.runs.service :as runs]
-   [agent.runtime.core :as runtime]
+   [agent.runs.registry :as runtime]
    [agent.skills :as skills]
    [agent.system :as system]
    [agent.system.health :as system-health]
    [agent.tools.service :as tool-service]
    [clojure.java.io :as io]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defn temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-system-" ".db")))
@@ -208,7 +208,7 @@
                   {:substrate "docker"
                    :runner-options {}})]
     (is (= "clojure:temurin-21-alpine" (:image prepared)))
-    (is (= ["clojure" "-M" "-m" "agent.runtime.child"] (:command prepared)))
+    (is (= ["clojure" "-M" "-m" "agent.runs.child"] (:command prepared)))
     (is (= "/workspace" (:container-working-dir prepared)))
     (is (= "/tmp/iris/home" (:container-home-dir prepared)))
     (is (= "65532:65532" (:user prepared)))
@@ -221,7 +221,7 @@
     (is (not (contains? (set (map :target (:mounts prepared))) "/agent-data")))))
 
 (deftest spawn-task-worker-produces-scoped-worker
-  (let [system (system/create-system)
+  (let [system (assoc-in (system/create-system) [:orchestrator :enabled?] true)
         worker (kernel-service/spawn-task-worker! system
                                         {:task {:id "task-1" :prompt "collect facts"}
                                          :name "Fact Worker"
@@ -236,7 +236,7 @@
     (is (= {:max_tokens 1000} (:budgets worker)))))
 
 (deftest execute-step-produces-receipts
-  (let [system (system/create-system)
+  (let [system (assoc-in (system/create-system) [:orchestrator :enabled?] true)
         orchestrator (kernel-service/spawn-agent! system {:name "Planner" :kind "orchestrator" :role "orchestrator"})
         step (agent.kernel/orchestrator-spawn-worker-step
               {:task {:id "task-2"}
@@ -247,3 +247,16 @@
     (is (= 2 (count (:receipts executed))))
     (is (= :ok (get-in executed [:receipts 0 :status])))
     (is (= :deferred (get-in executed [:receipts 1 :status])))))
+
+(deftest disabled-orchestrator-kernel-mutators-return-unsupported
+  (let [system (system/create-system)
+        spawn (kernel-service/execute-directive!
+               system
+               "agent-disabled"
+               (agent.kernel/directive :spawn-worker {:task {:id "blocked"}}))
+        complete (kernel-service/execute-directive!
+                  system
+                  "agent-disabled"
+                  (agent.kernel/directive :complete {:result {:ok true}}))]
+    (is (= :unsupported (:status spawn)))
+    (is (= :completed (:status complete)))))

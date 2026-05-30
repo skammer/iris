@@ -1,11 +1,11 @@
-(ns agent.runtime.child
+(ns agent.runs.child
   "Child runtime shim for launched subagents."
   (:gen-class)
   (:require
    [agent.logging :as logging]
    [agent.persistence.sqlite :as sqlite]
-   [agent.runtime.control-client :as control-client]
-   [agent.runtime.core :as runtime]
+   [agent.runs.control-client :as control-client]
+   [agent.runs.registry :as runtime]
    [clojure.edn :as edn]
    [clojure.java.io :as io]
    [clojure.string :as str])
@@ -20,14 +20,14 @@
    (System/getProperty "java.class.path")
    "clojure.main"
    "-m"
-   "agent.runtime.child"])
+   "agent.runs.child"])
 
 (defn current-container-child-command
   []
   ["clojure"
    "-M"
    "-m"
-   "agent.runtime.child"])
+   "agent.runs.child"])
 
 (defn- parse-bootstrap-spec [value]
   (when-not value

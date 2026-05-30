@@ -116,4 +116,4 @@
    :container-working-dir (or (:container-working-dir runner-options) "/workspace")
    :required-mounts ["/workspace"]
    :required-env ["AGENT_RUN_ID" "AGENT_AGENT_ID" "AGENT_BOOTSTRAP_TOKEN" "AGENT_BOOTSTRAP_SPEC" "AGENT_CONTROL_URL" "AGENT_CHILD_SQLITE_PATH" "AGENT_LOG_FILE"]
-   :default-command ["clojure" "-M" "-m" "agent.runtime.child"]})
+   :default-command ["clojure" "-M" "-m" "agent.runs.child"]})

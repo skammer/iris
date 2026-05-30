@@ -11,7 +11,7 @@
    [agent.runners.core :as runners]
    [agent.runners.docker-podman :as docker-podman]
    [agent.runners.options :as runner-options]
-   [agent.runtime.core :as runtime]
+   [agent.runs.registry :as runtime]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [agent.ui.memory :as ui-memory]

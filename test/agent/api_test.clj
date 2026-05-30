@@ -9,7 +9,7 @@
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.runs.service :as runs]
-   [agent.runtime.core :as runtime]
+   [agent.runs.registry :as runtime]
    [agent.system.components :as components]
    [agent.system.events :as events]
    [agent.tools.service :as tool-service]
@@ -17,7 +17,7 @@
    [clojure.core.async :as async]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [clojure.test :refer :all])
+   [clojure.test :refer [deftest is]])
   (:import
    (java.io BufferedReader InputStreamReader)
    (java.net URI)
@@ -218,7 +218,13 @@
       (let [disabled-agents (http-get-headers (str base-url "/v1/agents")
                                               {"Authorization" "Bearer secret"})
             disabled-body (json/parse-string (:body disabled-agents) true)]
-        (is (= 404 (:status disabled-agents)))
+        (is (= 200 (:status disabled-agents)))
+        (is (= [] (:data disabled-body))))
+      (let [disabled-create (http-post-headers (str base-url "/v1/agents")
+                                               {:name "blocked"}
+                                               {"Authorization" "Bearer secret"})
+            disabled-body (json/parse-string (:body disabled-create) true)]
+        (is (= 404 (:status disabled-create)))
         (is (= "not_found" (:error disabled-body)))
         (is (str/includes? (:message disabled-body) "Orchestrator API disabled")))
       (is (= 200 (:status (http-get-headers

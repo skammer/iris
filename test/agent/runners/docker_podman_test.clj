@@ -15,7 +15,7 @@
                         {:source "/tmp/cache" :target "/cache" :mode :ro}]
                :env {"A" "1" "B" "two"}
                :user "1000:1000"
-               :command ["clojure" "-M" "-m" "agent.runtime.child"]})]
+               :command ["clojure" "-M" "-m" "agent.runs.child"]})]
     (is (= "docker" (first argv)))
     (is (some #{"--rm"} argv))
     (is (some #{"--network"} argv))
@@ -25,7 +25,7 @@
     (is (some #{"iris:test"} argv))
     (is (some #{"-v"} argv))
     (is (some #{"A=1"} argv))
-    (is (= ["clojure" "-M" "-m" "agent.runtime.child"] (subvec argv (- (count argv) 4))))))
+    (is (= ["clojure" "-M" "-m" "agent.runs.child"] (subvec argv (- (count argv) 4))))))
 
 (deftest build-podman-argv-test
   (let [argv (docker-podman/build-container-argv
@@ -71,7 +71,7 @@
 	                   :bootstrap-token "token-1"
                    :bootstrap-spec {:run-id "run-1"}
                    :runner-options {:image "iris:test"
-                                    :command ["clojure" "-M" "-m" "agent.runtime.child"]}})]
+                                    :command ["clojure" "-M" "-m" "agent.runs.child"]}})]
     (runners/launch runner run-spec)
     (let [argv (get-in @captured [:runner-options :command])]
       (is (some #{"AGENT_RUN_ID=run-1"} argv))

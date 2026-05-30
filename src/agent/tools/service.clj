@@ -1,7 +1,7 @@
 (ns agent.tools.service
   "Tool registry factory, policy, and execution facade."
   (:require
-   [agent.runtime.core :as runtime]
+   [agent.runs.registry :as runtime]
    [agent.runtime.tools :as runtime-tools]
    [agent.runtime.trace :as runtime-trace]
    [agent.orchestrator :as orchestrator]

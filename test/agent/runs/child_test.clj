@@ -1,10 +1,10 @@
-(ns agent.runtime.child-test
+(ns agent.runs.child-test
   (:require
    [agent.persistence.sqlite :as sqlite]
    [agent.runs.service :as runs]
    [agent.system.events :as events]
    [clojure.java.io :as io]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defn temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-child-" ".db")))

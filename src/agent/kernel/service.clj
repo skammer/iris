@@ -10,6 +10,12 @@
 (declare spawn-task-worker! send-agent-message! execute-agent-tool!)
 
 (defrecord SystemKernelOps [system]
+  kernel-ops/KernelCapabilities
+  (supported-directives [_]
+    (if (orchestrator/enabled? (:orchestrator system))
+      #{:spawn-worker :tool-call :send-message :state-patch :complete}
+      #{:tool-call}))
+
   kernel-ops/KernelOps
   (spawn-task-worker! [_ spec]
     (spawn-task-worker! system spec))

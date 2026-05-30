@@ -1,11 +1,11 @@
-(ns agent.runtime.core-test
+(ns agent.runs.registry-test
   (:require
    [agent.broker.core :as broker]
    [agent.broker.local :as local-broker]
    [agent.persistence.sqlite :as sqlite]
-   [agent.runtime.core :as runtime]
+   [agent.runs.registry :as runtime]
    [clojure.java.io :as io]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defn temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-runtime-" ".db")))

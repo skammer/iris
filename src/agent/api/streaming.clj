@@ -2,37 +2,19 @@
   "Server-Sent Events helpers for http-kit channels."
   (:require
    [agent.broker.core :as broker]
+   [agent.streaming.metrics :as metrics]
    [cheshire.core :as json]
    [clojure.core.async :as async]
    [clojure.string :as str]
    [org.httpkit.server :as http-kit]))
 
-(def ^:private initial-metrics
-  {:opened 0
-   :closed 0
-   :completed 0
-   :errors 0
-   :send-errors 0
-   :dropped-events 0
-   :unsubscribed 0
-   :cleanup-errors 0})
-
-(defonce ^:private metrics* (atom initial-metrics))
-
 (declare send-sse-chunk!)
 
 (defn metrics []
-  @metrics*)
+  (metrics/metrics))
 
 (defn reset-metrics! []
-  (reset! metrics* initial-metrics))
-
-(defn- record! [k]
-  (swap! metrics* update k (fnil inc 0)))
-
-(defn- add-count! [k n]
-  (when (pos? (long (or n 0)))
-    (swap! metrics* update k (fnil + 0) n)))
+  (metrics/reset-metrics!))
 
 (defn- context? [target]
   (and (map? target)
@@ -52,7 +34,7 @@
     (when (or (not (context? target))
               (compare-and-set! (:open? target) true false))
       (when (context? target)
-        (record! :closed))
+        (metrics/record! :closed))
       (http-kit/close channel))))
 
 (defn- cleanup! [ctx]
@@ -62,7 +44,7 @@
       (try
         (cleanup)
         (catch Throwable _
-          (record! :cleanup-errors))))))
+          (metrics/record! :cleanup-errors))))))
 
 (defn register-cleanup! [ctx cleanup]
   (when (context? ctx)
@@ -77,9 +59,9 @@
      (register-cleanup!
       ctx
       (fn []
-        (add-count! :dropped-events (some-> subscription :dropped-count deref))
+        (metrics/add-count! :dropped-events (some-> subscription :dropped-count deref))
         (broker/unsubscribe! broker-instance subscription)
-        (record! :unsubscribed)))
+        (metrics/record! :unsubscribed)))
      subscription)))
 
 (defn take! [ctx ch]
@@ -136,13 +118,13 @@
     (try
       (let [sent? (true? (http-kit/send! (target-channel channel) text false))]
         (when-not sent?
-          (record! :dropped-events))
+          (metrics/record! :dropped-events))
         sent?)
       (catch Throwable _
-        (record! :send-errors)
+        (metrics/record! :send-errors)
         false))
     (do
-      (record! :dropped-events)
+      (metrics/record! :dropped-events)
       false)))
 
 (defn send-sse-chunk! [channel payload]
@@ -181,15 +163,15 @@
                    :cleaned? (atom false)
                    :cleanups (atom [])}]
           (reset! ctx* ctx)
-          (record! :opened)
+          (metrics/record! :opened)
           (reset!
            worker*
            (future
              (try
                (stream-fn ctx)
-               (record! :completed)
+               (metrics/record! :completed)
                (catch Throwable t
-                 (record! :errors)
+                 (metrics/record! :errors)
                  ((or on-error default-error!) ctx t))
                (finally
                  (cleanup! ctx)
@@ -198,7 +180,7 @@
       (fn [_ _status]
         (when-let [ctx @ctx*]
           (when (compare-and-set! (:open? ctx) true false)
-            (record! :closed))
+            (metrics/record! :closed))
           (cleanup! ctx))
         (when-let [worker @worker*]
           (future-cancel worker)))

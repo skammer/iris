@@ -29,10 +29,10 @@
    [agent.runners.docker-podman-test]
    [agent.runners.local-unsandboxed-test]
    [agent.runners.seatbelt-test]
-   [agent.runtime.child-test]
+   [agent.runs.child-test]
    [agent.runtime.compaction-test]
    [agent.runtime.context-pack-test]
-   [agent.runtime.core-test]
+   [agent.runs.registry-test]
    [agent.runtime.loop-test]
    [agent.runtime.nudge-test]
    [agent.runtime.schema-test]
@@ -85,10 +85,10 @@
     agent.runners.docker-podman-test
     agent.runners.local-unsandboxed-test
     agent.runners.seatbelt-test
-    agent.runtime.child-test
+    agent.runs.child-test
     agent.runtime.compaction-test
     agent.runtime.context-pack-test
-    agent.runtime.core-test
+    agent.runs.registry-test
     agent.runtime.loop-test
     agent.runtime.nudge-test
     agent.runtime.schema-test

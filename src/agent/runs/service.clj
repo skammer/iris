@@ -8,7 +8,7 @@
    [agent.runners.local-unsandboxed :as local-unsandboxed]
    [agent.runners.options :as runner-options]
    [agent.runners.seatbelt :as seatbelt]
-   [agent.runtime.core :as runtime]))
+   [agent.runs.registry :as runtime]))
 
 (defn create-runtime-service
   ([store event-sink]

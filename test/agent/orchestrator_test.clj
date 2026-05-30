@@ -3,7 +3,7 @@
    [agent.llm.core :as llm-core]
    [agent.orchestrator :as orchestrator]
    [clojure.core.async :as async]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defrecord TestProvider []
   llm-core/ILLMProvider
@@ -123,3 +123,19 @@
                  (catch Exception e (:reason (ex-data e))))]
     (is (= :peer-not-trusted denied)
         "a sender that does not trust the federated peer is rejected")))
+
+(deftest disabled-orchestrator-allows-reads-and-blocks-mutators-test
+  (let [runtime (orchestrator/create-orchestrator {:enabled? false})]
+    (is (empty? (orchestrator/list-agents runtime)))
+    (is (empty? (orchestrator/list-channels runtime)))
+    (is (true? (:healthy (orchestrator/health-check runtime))))
+    (is (false? (:enabled (orchestrator/health-check runtime))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"Orchestrator disabled"
+                          (orchestrator/spawn-agent! runtime {:name "Blocked"})))
+    (try
+      (orchestrator/create-channel! runtime {:name "blocked"})
+      (is false "create-channel should fail")
+      (catch Exception e
+        (is (= :orchestrator-disabled (:type (ex-data e))))
+        (is (= :create-channel (:operation (ex-data e))))))))

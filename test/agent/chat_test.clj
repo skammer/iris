@@ -19,7 +19,7 @@
    [clojure.core.async :as async]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defrecord PlannerProvider [responses requests]
   llm-core/ILLMProvider

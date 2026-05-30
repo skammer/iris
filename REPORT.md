@@ -13,8 +13,14 @@ Verification:
   `clj-kondo --lint src/agent/config.clj src/agent/config/env.clj src/agent/runtime/loop.clj src/agent/runtime/messages.clj src/agent/ui.clj src/agent/ui/memory.clj`
 - Result: 0 errors, 0 warnings.
 - Latest focused API/UI/system tests pass:
-  `IRIS_CONFIG_DIR=/private/tmp/iris-refactor-api-config IRIS_DATA_DIR=/private/tmp/iris-refactor-api-data clojure -M:test -e "(require 'agent.api-test :reload 'agent.api-smoke-test :reload 'agent.system-test :reload 'agent.ui-test :reload 'agent.chat-test :reload 'agent.runtime.child-test :reload) (clojure.test/run-tests 'agent.api-test 'agent.api-smoke-test 'agent.system-test 'agent.ui-test 'agent.chat-test 'agent.runtime.child-test)"`
+  `IRIS_CONFIG_DIR=/private/tmp/iris-refactor-api-config IRIS_DATA_DIR=/private/tmp/iris-refactor-api-data clojure -M:test -e "(require 'agent.api-test :reload 'agent.api-smoke-test :reload 'agent.system-test :reload 'agent.ui-test :reload 'agent.chat-test :reload 'agent.runs.child-test :reload) (clojure.test/run-tests 'agent.api-test 'agent.api-smoke-test 'agent.system-test 'agent.ui-test 'agent.chat-test 'agent.runs.child-test)"`
 - Result: 78 tests, 542 assertions, 0 failures, 0 errors.
+- Latest §4.2 structural tests pass:
+  `IRIS_CONFIG_DIR=/private/tmp/iris-42-config IRIS_DATA_DIR=/private/tmp/iris-42-data clojure -M:test -e "(require 'agent.chat-test :reload 'agent.kernel-test :reload 'agent.system-test :reload 'agent.api-test :reload 'agent.runs.registry-test :reload 'agent.runs.child-test :reload 'agent.orchestrator-test :reload) (let [r (clojure.test/run-tests 'agent.chat-test 'agent.kernel-test 'agent.system-test 'agent.api-test 'agent.runs.registry-test 'agent.runs.child-test 'agent.orchestrator-test)] (shutdown-agents) (System/exit (+ (:fail r) (:error r))))"`
+- Result: 69 tests, 537 assertions, 0 failures, 0 errors.
+- Latest §4.2 changed-file lint passes:
+  `clj-kondo --lint src/agent/chat.clj src/agent/chat src/agent/kernel src/agent/runs src/agent/system/health.clj src/agent/api/streaming.clj src/agent/streaming/metrics.clj src/agent/orchestrator.clj test/agent/chat_test.clj test/agent/kernel_test.clj test/agent/system_test.clj test/agent/api_test.clj test/agent/runs test/agent/orchestrator_test.clj`
+- Result: 0 errors, 0 warnings.
 - Latest memory reconciliation tests pass:
   `clojure -M:test -e "(require 'agent.memory.core-test :reload 'agent.cli-test :reload 'agent.tools.common.memory-test :reload) (clojure.test/run-tests 'agent.memory.core-test 'agent.cli-test 'agent.tools.common.memory-test)"`
 - Result: 28 tests, 122 assertions, 0 failures, 0 errors.
@@ -29,10 +35,14 @@ Security/control-plane bugs are fixed. Public process-local orchestrator APIs ar
 - runtime/chat/API event contract is now canonical; historical event conversion moved to one API boundary
 - SSE lifecycle/error/cleanup mechanics moved into one managed streaming service
 - UI memory rendering, runtime message repair, and config env overrides moved into owner namespaces
+- chat behavior moved behind a 44-line `agent.chat` facade
+- durable run registry/control-plane moved from `agent.runtime.*` to `agent.runs.*`
+- `KernelOps` dispatch is capability-gated
+- orchestrator mutators now enforce `:enabled?`; reads/lists/health remain available
 
 Remaining support cost is architectural:
 
-- `agent.chat`, `agent.ui`, `agent.config`, and `agent.orchestrator` are still too large
+- `agent.ui`, `agent.config`, `agent.orchestrator`, `agent.telegram`, memory core, and migrations are still too large
 - config still concentrates defaults, migration, validation, and path finalization in one namespace
 - memory graph remains experimental/off by default, but SQLite-vs-graph reconciliation and Datahike log noise are fixed
 
@@ -188,8 +198,12 @@ Status: partially fixed.
 
 Evidence:
 
-- Large namespaces remain: `src/agent/chat.clj`, `src/agent/orchestrator.clj`, `src/agent/telegram.clj`, `src/agent/memory/core.clj`, `src/agent/config.clj`, `src/agent/persistence/sqlite/migrations.clj`, and `src/agent/runtime/loop.clj`.
-- Current large namespace line counts after this refactor: `src/agent/chat.clj` 985, `src/agent/orchestrator.clj` 937, `src/agent/telegram.clj` 919, `src/agent/memory/core.clj` 835, `src/agent/config.clj` 682 plus `src/agent/config/env.clj` 140 extracted, `src/agent/runtime/loop.clj` 591 plus `src/agent/runtime/messages.clj` 182 extracted, `src/agent/ui.clj` 879 plus `src/agent/ui/render.clj` 224 and `src/agent/ui/memory.clj` 289 extracted.
+- Large namespaces remain: `src/agent/orchestrator.clj`, `src/agent/telegram.clj`, `src/agent/memory/core.clj`, `src/agent/config.clj`, `src/agent/persistence/sqlite/migrations.clj`, `src/agent/runtime/loop.clj`, and `src/agent/ui.clj`.
+- Current line counts after this refactor: `src/agent/chat.clj` 44 facade; `src/agent/chat/turn.clj` 243, `history.clj` 165, `queue.clj` 147, `service.clj` 133, `subscribers.clj` 83, `loop_control.clj` 71; `src/agent/orchestrator.clj` 994; `src/agent/telegram.clj` 937; `src/agent/memory/core.clj` 835; `src/agent/config.clj` 686 plus `src/agent/config/env.clj` 140; `src/agent/runtime/loop.clj` 585 plus `src/agent/runtime/messages.clj` 182; `src/agent/ui.clj` 880 plus `src/agent/ui/render.clj` 309 and `src/agent/ui/memory.clj` 289.
+- Durable run registry/control-plane ownership is explicit: `src/agent/runs/registry.clj` 533, `src/agent/runs/child.clj` 257, `src/agent/runs/control_client.clj` 84; old `agent.runtime.core`, `agent.runtime.child`, and `agent.runtime.control-client` namespaces were removed.
+- `src/agent/kernel/ops.clj` now defines `KernelCapabilities`; `src/agent/kernel/runtime.clj` returns uniform `:unsupported` receipts before dispatching unsupported host directives.
+- SSE metrics moved to neutral `src/agent/streaming/metrics.clj`; `src/agent/system/health.clj` no longer requires `agent.api.streaming`.
+- `src/agent/orchestrator.clj` now rejects disabled-state mutators (`spawn-agent!`, `send-agent-message!`, interop send/ack/retry, channel create/post, federation register/receive, capability/state/status patch, inbox consume) while read/list/health calls remain available.
 - `src` still contains many `defonce`, raw `future`, broad `catch`, `Thread/sleep`, `legacy`, and `println` hits.
 - UI message/tool/run rendering helpers moved from `src/agent/ui.clj` to `src/agent/ui/render.clj`, reducing the biggest namespace by 218 lines while keeping route/panel ownership in `agent.ui`.
 - UI memory workspace/results moved from `src/agent/ui.clj` to `src/agent/ui/memory.clj`; `agent.ui` keeps compatibility facade vars for API handlers/tests.
@@ -204,7 +218,7 @@ Evidence:
 
 Reasoning:
 
-The codebase remains hard to support because ownership is not visually obvious. Large namespaces hide local invariants; broad catches hide causality. This pass split UI memory rendering, runtime message/protocol repair, and config env override ownership while preserving public facades. Earlier work split one UI rendering seam and made the highest-risk callback, compaction, Telegram delivery, MCP initialization, and HTTP JSON parse failures observable. It did not split `chat`, `orchestrator`, `telegram`, or memory core.
+The codebase remains hard to support because ownership is not visually obvious in the remaining large namespaces. This pass split `chat` by behavior owner, renamed the run registry/control-plane out of `agent.runtime.*`, made kernel host support explicit, moved SSE metrics out of the API layer, and made the orchestrator enabled flag enforceable. Earlier work split UI rendering/memory, runtime message repair, and config env override ownership, and made high-risk hidden failures observable. It did not split `orchestrator`, `telegram`, memory core, config, migrations, or UI.
 
 Fix direction:
 

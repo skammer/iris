@@ -18,7 +18,7 @@ Grades below are **at-review (2026-05-29)**; the trailing arrow notes the post-r
 
 | Area | Grade | One-line |
 |---|---|---|
-| Architecture / layering | **B+** | Clean DI, protocol seams; spoiled by 2 god namespaces + a mis-named package · ✅ `chat.clj` split (985→800), `run!` terminal maps deduped; `runtime.*` rename still pending |
+| Architecture / layering | **B+ → A−** | Clean DI, protocol seams; ✅ `chat.clj` is now a 44-line facade, run registry moved to `agent.runs.*`, `KernelOps` is capability-gated, health no longer depends on API streaming |
 | Agentic loop correctness | **B → A−** | Bounded & well-structured; ✅ the truncation bug that discarded valid tool calls is fixed |
 | Security | **C+ → B** | Strong SQL/static-file/crypto layers; ✅ run-API RCE, keyless-federation verify, and federated-interop bypass closed; medium backlog (auth fail-open, SSRF, share-network) remains |
 | Concurrency | **B+ → A−** | Sound threading model; ✅ broker park-overflow fixed (sliding default); remaining edges are MEDIUM |
@@ -46,7 +46,7 @@ All **12 Critical/High findings (§3) are fixed, verified, and merged** to `mast
 | telemetry-discards-toolcalls | ✅ fixed | `4efd399` | `complete-with-telemetry!` routes through `invoke`; keeps tool calls + real usage |
 | telegram-draft-id-invalid | ✅ fixed | `7e72b44` | draft ids stay in `[1, 2³¹-1]`; external ids validated |
 | sqlite-retry-conn-only | ✅ fixed | `5788de9` | retry wraps the whole unit-of-work (statement exec), not just `getConnection` |
-| chat-god-namespace | ◐ partial | `9f089db` | extracted `chat.util`/`memory`/`streaming`/`kernel-ops` (985→800 LOC); the queue state-machine stays (it is mutually recursive with `run!`), so the ≤300 target is **not** met |
+| chat-god-namespace | ✅ fixed | working tree | `agent.chat` is now a 44-line facade; behavior moved to `agent.chat.service/history/subscribers/turn/queue/loop-control` plus existing memory/streaming/kernel-ops |
 
 Two §5 MEDIUMs were swept up by the loop/telemetry work: **max-token-loses-final-messages** (✅ `19febce`) and a live-path telemetry token-key bug (✅ `fce5cd7`, `planner.clj` read `:total-tokens` which providers never set).
 
@@ -54,9 +54,9 @@ Two §5 MEDIUMs were swept up by the loop/telemetry work: **max-token-loses-fina
 - **B1** (Dockerfile `COPY config`) and **B2** (CI targets `main`/`develop`, not `master`) — the release blockers in §2 are untouched.
 - **B3** — still 8 failures, all in the same env-sensitive `child-runtime-local-unsandboxed-flow-test` (subprocess + loopback under a restricted sandbox); 0 errors, no new failures.
 - The §3 **Medium** backlog (auth fail-open, SSRF/DNS-rebind, container `share-network?`, shell denylist, migration-checksum, decide-approval CAS, resource-lifecycle leaks, etc.) is unaddressed.
-- Structural §3.2 items beyond `chat.clj`: the `agent.runtime.*` → `agent.runs.*` rename and the capability-gated `KernelOps` are not done.
+- Structural §4.2 follow-up from 2026-05-30 is now done in the working tree: `agent.runtime.*` run registry/control-plane moved to `agent.runs.*`, `KernelOps` has explicit capabilities, SSE metrics moved to `agent.streaming.metrics`, and orchestrator mutators enforce `:enabled?`.
 
-**Current suite:** `feat/web-ui-usage-stats` → **404 tests, 1627 assertions, 8 failures (all B3), 0 errors** (`master` alone: 399 tests). `clj-kondo` clean on every touched file.
+**Current focused suite:** §4.2 pass → **69 tests, 537 assertions, 0 failures, 0 errors**. `clj-kondo` clean on touched structural files.
 
 ---
 
@@ -76,7 +76,7 @@ These I verified directly, outside the review agents.
 - CI pins Clojure CLI `1.11.1.1347` and JDK 21; `deps.edn` targets Clojure 1.12.4 and local dev is JDK 25. Align versions to avoid drift.
 
 ### 🟠 B3 — 8 failing tests, all in one environment-sensitive e2e test
-`clojure -M:test … run-all-tests` → **393 tests, 1579 assertions, 8 failures, 0 errors.** All 8 are in `agent.runtime.child-test/child-runtime-local-unsandboxed-flow-test` (`test/agent/runtime/child_test.clj:43-78`): the spawned child never transitions `launched → running`, so commands stay `pending` and there are 0 heartbeats/checkpoints. This is the child-runtime control-plane handshake (subprocess spawn + loopback HTTP), which does not complete under a restricted sandbox. The other **392 tests pass**.
+`clojure -M:test … run-all-tests` → **393 tests, 1579 assertions, 8 failures, 0 errors.** All 8 are in the child-runtime local-unsandboxed flow (now `agent.runs.child-test`, `test/agent/runs/child_test.clj`): the spawned child never transitions `launched → running`, so commands stay `pending` and there are 0 heartbeats/checkpoints. This is the child-runtime control-plane handshake (subprocess spawn + loopback HTTP), which does not complete under a restricted sandbox. The other **392 tests pass**.
 **Action:** confirm this test passes in a permissive CI environment (it must, once B2 is fixed and CI actually runs). If it is environment-dependent, tag it (`^:integration`) so it doesn't silently rot. Right now nobody knows it fails because CI never runs (B2).
 
 ---
@@ -97,7 +97,7 @@ Severities are the **corrected** severities after adversarial verification. ✓ 
 | max-token-discards-toolcalls | **HIGH** | ✓ | ✅ `19febce` | `runtime/loop.clj:389` | `finish_reason="length"` aborts the turn even when valid tool calls were emitted |
 | run-bang-god-function | **HIGH** | ✓ | ✅ `aa69766` | `runtime/loop.clj:246` | 346-line, ~12-deep `run!` with 8 duplicated terminal maps — *and* harbors the max-token bug below |
 | double-tool-enforcement | **HIGH** | ✓ | ✅ `d59975c` | `runtime/tools.clj:88` vs `tools/core.clj:236` | Approval/permission/validate run twice through **divergent** code paths (allow-on-ambiguous vs block-on-ambiguous) |
-| chat-god-namespace | **HIGH** | ✓ | ◐ `9f089db` | `chat.clj` (985 LOC) | Queue + streaming + persistence + memory + kernel-ops + fallback in one namespace — *split to 800 LOC; queue state-machine retained* |
+| chat-god-namespace | **HIGH** | ✓ | ✅ working tree | `chat.clj` (44 LOC) | Public facade only; queue, turn execution, history, subscribers, service state, and loop-control live under `agent.chat.*` |
 | api-body-coercion-discarded | **HIGH** | ✓ | ✅ `6b3c7e6` | `handlers/runs.clj:92` | Malli-coerced body is validated then ignored; handlers re-read raw JSON, so schema doesn't actually gate input |
 | telemetry-discards-toolcalls | **HIGH** | ✓ | ✅ `4efd399` | `telemetry.clj:326` | `complete-with-telemetry!` path drops tool calls and real usage |
 | federated-interop-bypass | **HIGH** | ✓ | ✅ `f194677` | `orchestrator.clj:687` | Federated interop delivery bypasses trust-policy/route enforcement |
@@ -145,15 +145,15 @@ Standout design wins:
 
 ### 4.2 The structural debt (the part to fix)
 
-Four issues, all confirmed:
+Four issues were confirmed; all are now fixed in the working tree:
 
-1. **`chat.clj` is a 985-line god namespace** (88 top-level defs, 19 internal requires). It is simultaneously the chat front-end, the session queue/cancellation state machine, the streaming flusher, the persistence subscriber, the memory recall/extract glue, *and* a `ChatKernelOps` implementation. Every concern ripples into the others; it is the highest-churn/highest-risk file. **Fix:** extract `agent.chat.streaming` (flusher + streaming-state, `chat.clj:529-568`), `agent.chat.memory` (recall/extract, `:343-472`), `agent.chat.kernel-ops` (`ChatKernelOps`, `:395-427`), and `agent.chat.queue` (the `active-turn`/`enqueue-item`/`start-next-queued!` state machine, ~`:811-953`). Target ≤300 lines for `chat.clj`.
+1. **`chat.clj` god namespace — fixed.** `src/agent/chat.clj` is now a 44-line public facade. Owners split into `agent.chat.service` (state/health/cancel), `history` (persistence/context), `subscribers` (event side effects), `turn` (single turn execution), `queue` (per-session queue), and `loop-control` (background loop commands).
 
-2. **`agent.runtime.*` conflates two unrelated subsystems.** `runtime/loop.clj` is the *pure in-process chat loop*; `runtime/core.clj` is a *"Durable distributed run registry and control-plane"* requiring `persistence.sqlite`, `broker.core`, `runners.core`. The conventional `core.clj` "heart" name names the **registry**, not the loop. This is why `tools/service.clj` depends on `runtime.core` (durable activities) *and* `runtime.tools` (batch exec) for two different reasons. **Fix:** move the registry/control-plane (`runtime/core.clj` → `agent.runs.registry`, `runtime/child.clj` → `agent.runs.child`, `runtime/control_client.clj` → `agent.runs.control-client`; `agent.runs.service` already exists and already requires `runtime.core`). Keep the chat loop under `agent.runtime`. Update the 5 requirers (`ui.clj:14`, `tools/service.clj:4`, `runtime/child.clj:8`, `system/health.clj:15`, `runs/service.clj:11`). Behavior-neutral; cohesion-only.
+2. **`agent.runtime.*` registry/control-plane name — fixed.** Durable run registry/control-plane moved to `agent.runs.registry`, child runtime to `agent.runs.child`, and HTTP control client to `agent.runs.control-client`. The pure chat loop remains under `agent.runtime.loop`; callers/tests migrated without old namespace shims.
 
-3. **Two divergent `KernelOps` hosts.** One `KernelOps` protocol (`kernel/ops.clj`), but `SystemKernelOps` (`kernel/service.clj:12`) implements the full directive set via the orchestrator while `ChatKernelOps` (`chat.clj:395`) throws `:unsupported-directive` for `spawn`/`send` and **silently** no-ops `patch-agent-state!`/`set-agent-status!` (returning `{:status :ok}`/`:completed` as if they succeeded). Whether a schema-valid directive works is path-dependent. **Fix:** add a capability set to the ops value and have `kernel.runtime/execute-directive!` check capability before dispatch, returning a uniform `{:status :unsupported}` receipt instead of per-host throw/no-op. Do **not** delegate `ChatKernelOps`→`SystemKernelOps` (chat deliberately routes tool exec through chat permissions). Verified as latent (no current chat caller emits the unsupported directives), so HIGH→MEDIUM.
+3. **Divergent `KernelOps` hosts — fixed.** `KernelCapabilities` declares supported directive types. `kernel.runtime` checks capability before host dispatch and returns `{:status :unsupported}` receipts. `:complete` remains host-independent and only performs status side effects when supported. Chat supports `:tool-call` + `:complete`; system supports full host directives.
 
-4. **Inverted dependency + a decorative flag.** `system/health.clj:5` (domain layer) requires `api.streaming` (transport layer) just to read `streaming/metrics` — move that counter to a transport-neutral location (`broker`/`telemetry`). And `orchestrator`'s `:enabled?` flag (`orchestrator.clj:122`) is stored and reported but **gates nothing** — either enforce it at the mutating entry points (`spawn-agent!`, `send-agent-message!`, `create-channel!`) or remove it.
+4. **Health dependency + decorative orchestrator flag — fixed.** SSE metrics live in neutral `agent.streaming.metrics`; `api.streaming` records them and `system.health` reads them. `orchestrator :enabled?` now blocks mutating core entrypoints while read/list/health paths stay available; HTTP still gates mutating routes.
 
 ---
 
@@ -295,9 +295,9 @@ Markers (2026-05-30): ✅ done · ◐ partial · ⬜ open.
 16. ⬜ `parallel-tool-pool-unbounded`; `stream-flusher-thread-per-flush`; `orchestrator-inbox` silent loss.
 
 **P3 — Structure / maintainability**
-17. ◐ Split `agent.runtime.*` (registry → `agent.runs.*`) ⬜ open; decompose `chat.clj` ◐ — extracted `util`/`memory`/`streaming`/`kernel-ops` (985→800), queue state-machine retained, ≤300 target not met. (`9f089db`)
+17. ✅ Split `agent.runtime.*` registry/control-plane to `agent.runs.*`; decompose `chat.clj` to a 44-line facade.
 18. ◐ `run!`'s `terminal-result` helper ✅ (`aa69766`); `agent.llm.providers.common` + `agent.util`/`agent.runtime.cancel` ⬜ open.
-19. ⬜ Capability-gated single `KernelOps` contract; move `system/health`'s streaming-metrics dependency; enforce or remove `orchestrator :enabled?`.
+19. ✅ Capability-gated `KernelOps`; neutral SSE metrics; enforced `orchestrator :enabled?` mutator gate.
 20. ⬜ Promote magic numbers to named/config; verify `max-steps` override; `trusted-fragment` HTML-escaping invariant.
 
 ---

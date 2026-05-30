@@ -1,4 +1,4 @@
-(ns agent.runtime.core
+(ns agent.runs.registry
   "Durable distributed run registry and control-plane primitives."
   (:require
    [agent.broker.core :as broker]
@@ -281,7 +281,7 @@
             (throw ex)))))))
 
 (defn acknowledge-command!
-  [runtime run-id command-id]
+  [runtime _run-id command-id]
   (let [existing (sqlite/get-agent-run-command (:store runtime) command-id)]
     (when-not (or (= "acknowledged" (:status existing))
                   (contains? terminal-command-statuses (:status existing)))
@@ -293,7 +293,7 @@
 (defn complete-command!
   ([runtime run-id command-id status error]
    (complete-command! runtime run-id command-id status error nil))
-  ([runtime run-id command-id status error response]
+  ([runtime _run-id command-id status error response]
    (let [existing (sqlite/get-agent-run-command (:store runtime) command-id)
          before-event-id (when-not (contains? terminal-command-statuses (:status existing))
                            (event-watermark runtime))

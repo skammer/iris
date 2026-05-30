@@ -2,7 +2,7 @@
   "Shared runner option preparation for API/system launch paths."
   (:require
    [agent.runners.docker-podman :as docker-podman]
-   [agent.runtime.child :as runtime-child]
+   [agent.runs.child :as runtime-child]
    [clojure.java.io :as io]))
 
 (defn- default-child-env

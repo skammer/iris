@@ -35,6 +35,15 @@
      :tool-name tool-name
      :input input}))
 
+(defn- supported-directive? [ops directive-type]
+  (or (not (satisfies? ops/KernelCapabilities ops))
+      (contains? (set (ops/supported-directives ops)) directive-type)))
+
+(defn- unsupported-receipt [directive]
+  {:directive (:type directive)
+   :status :unsupported
+   :reason (str "Directive " (name (:type directive)) " is not supported by this kernel host")})
+
 (defn- batch-result->receipt [result]
   (let [base {:directive :tool-call
               :tool-name (:tool-name result)
@@ -65,23 +74,30 @@
 (defn- execute-tool-directive-batch! [ops parent-agent-id directives opts]
   (if-not (satisfies? ops/KernelToolBatchOps ops)
     (mapv #(execute-directive! ops parent-agent-id % opts) directives)
-    (let [executable (filterv #(executable-tool-directive? % opts) directives)
-          blocked (keep-indexed (fn [idx directive]
-                                  (when-not (executable-tool-directive? directive opts)
-                                    [idx (blocked-tool-receipt directive)]))
-                                directives)
+    (let [indexed (map-indexed vector directives)
+          unsupported (keep (fn [[idx directive]]
+                              (when-not (supported-directive? ops (:type directive))
+                                [idx (unsupported-receipt directive)]))
+                            indexed)
+          executable (filterv (fn [[_ directive]]
+                                (and (supported-directive? ops (:type directive))
+                                     (executable-tool-directive? directive opts)))
+                              indexed)
+          blocked (keep (fn [[idx directive]]
+                          (when (and (supported-directive? ops (:type directive))
+                                     (not (executable-tool-directive? directive opts)))
+                            [idx (blocked-tool-receipt directive)]))
+                        indexed)
           executed (if (seq executable)
-                     (let [calls (mapv directive->batch-call executable)
+                     (let [calls (mapv (comp directive->batch-call second) executable)
                            batch (ops/execute-agent-tool-batch! ops parent-agent-id calls {} opts)]
                        (mapv batch-result->receipt (:results batch)))
                      [])
-          executable-receipts (atom executed)]
-      (mapv (fn [idx directive]
-              (if-let [[_ receipt] (some #(when (= idx (first %)) %) blocked)]
-                receipt
-                (let [receipt (first @executable-receipts)]
-                  (swap! executable-receipts subvec 1)
-                  receipt)))
+          receipts-by-index (merge (into {} unsupported)
+                                   (into {} blocked)
+                                   (zipmap (map first executable) executed))]
+      (mapv (fn [idx _directive]
+              (get receipts-by-index idx))
             (range)
             directives))))
 
@@ -92,6 +108,8 @@
   (let [directive (schema/validate-directive! directive)]
     (case (:type directive)
     :spawn-worker
+    (if-not (supported-directive? ops (:type directive))
+      (unsupported-receipt directive)
     (let [{:keys [task name role capability-bundle memory-scopes budgets system-prompt]} (:payload directive)
           worker (ops/spawn-task-worker! ops {:task task
                                               :name name
@@ -103,13 +121,15 @@
                                               :parent-id parent-agent-id})]
       {:directive (:type directive)
        :status :ok
-       :worker-id (:id worker)})
+       :worker-id (:id worker)}))
 
     :await
     {:directive (:type directive)
      :status :deferred}
 
     :tool-call
+    (if-not (supported-directive? ops (:type directive))
+      (unsupported-receipt directive)
     (let [{:keys [tool-name input context]} (:payload directive)
           context* (cond-> (or context {})
                      (:approval_id context) (assoc :approval-id (:approval_id context)))]
@@ -146,26 +166,31 @@
         {:directive (:type directive)
          :status :approval-required
          :tool-name tool-name
-         :input input}))
+         :input input})))
 
     :send-message
+    (if-not (supported-directive? ops (:type directive))
+      (unsupported-receipt directive)
     (let [{:keys [agent-id message]} (:payload directive)
           result (ops/send-agent-message! ops (or agent-id parent-agent-id) message)]
       {:directive (:type directive)
        :status :ok
        :agent-id (or agent-id parent-agent-id)
-       :response (:response result)})
+       :response (:response result)}))
 
     :state-patch
+    (if-not (supported-directive? ops (:type directive))
+      (unsupported-receipt directive)
     (let [{:keys [patch]} (:payload directive)
           state (ops/patch-agent-state! ops parent-agent-id patch)]
       {:directive (:type directive)
        :status :ok
-       :state state})
+       :state state}))
 
     :complete
     (let [{:keys [result]} (:payload directive)]
-      (ops/set-agent-status! ops parent-agent-id "completed")
+      (when (supported-directive? ops (:type directive))
+        (ops/set-agent-status! ops parent-agent-id "completed"))
       {:directive (:type directive)
        :status :completed
        :result result})
