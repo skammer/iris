@@ -26,13 +26,13 @@
                      :command command})))
   command)
 
-(defn- absolute-path [path]
-  (.getAbsolutePath (io/file path)))
+(defn- canonical-path [path]
+  (.getCanonicalPath (io/file path)))
 
 (defn- normalize-paths [paths]
   (->> paths
        (keep identity)
-       (map absolute-path)
+       (map canonical-path)
        distinct
        vec))
 
@@ -91,10 +91,10 @@
   runners/IRunner
   (launch [_ run-spec]
     (let [run-spec (policy/validate-launch-spec run-spec)
-          runner-options (:runner-options run-spec)
-          host-working-dir (absolute-path (or (:host-working-dir runner-options)
-                                              (:working-dir runner-options)
-                                              "."))
+        runner-options (:runner-options run-spec)
+          host-working-dir (canonical-path (or (:host-working-dir runner-options)
+                                               (:working-dir runner-options)
+                                               "."))
           profile-string (build-seatbelt-profile
                           {:working-dir host-working-dir
                            :read-only-paths (:read-only-paths runner-options)

@@ -59,6 +59,35 @@
                      :profile-file (:profile-file runner-options)
                      :profile-name (:profile-name runner-options)}))))
 
+(defn- validate-seatbelt-path! [field path]
+  (when-not (and (string? path)
+                 (not (str/blank? path))
+                 (not (str/includes? path "\u0000")))
+    (throw (ex-info "seatbelt path must be a non-blank string"
+                    {:type :validation-failed
+                     :field field
+                     :path path})))
+  (when-not (.exists (io/file path))
+    (throw (ex-info "seatbelt path must exist"
+                    {:type :validation-failed
+                     :field field
+                     :path path}))))
+
+(defn- validate-seatbelt-paths! [runner-options]
+  (validate-seatbelt-path! :working-dir
+                           (or (:host-working-dir runner-options)
+                               (:working-dir runner-options)
+                               "."))
+  (doseq [field [:read-only-paths :read-write-paths]]
+    (when-let [paths (get runner-options field)]
+      (when-not (sequential? paths)
+        (throw (ex-info "seatbelt paths must be sequential"
+                        {:type :validation-failed
+                         :field field
+                         :paths paths})))
+      (doseq [path paths]
+        (validate-seatbelt-path! field path)))))
+
 (defn validate-launch-spec [run-spec]
   (let [substrate (:substrate run-spec)
         runner-options (:runner-options run-spec)]
@@ -67,6 +96,8 @@
     (case substrate
       :bubblewrap (doseq [bind (or (:binds runner-options) [])]
                     (validate-bubblewrap-bind! bind))
-      :seatbelt (validate-seatbelt-profile! runner-options)
+      :seatbelt (do
+                  (validate-seatbelt-profile! runner-options)
+                  (validate-seatbelt-paths! runner-options))
       nil)
     run-spec))
