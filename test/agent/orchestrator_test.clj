@@ -22,6 +22,7 @@
         llm (->TestProvider)
         parent (orchestrator/spawn-agent! runtime {:name "Parent" :role "orchestrator"
                                                    :capabilities ["delegate" "route"]
+                                                   :trusted-peers ["mesh-1"]
                                                    :allow-direct? true})
         child (orchestrator/spawn-agent! runtime {:name "Child" :role "worker"
                                                   :parent-id (:id parent)
@@ -102,3 +103,23 @@
     (is (= 1 (count channel-messages)))
     (is (= 3 (:consumed consumed)))
     (is (= "test-response" (get-in consumed [:response :content])))))
+
+(deftest federated-interop-denied-for-untrusted-peer-test
+  ;; Federated delivery must enforce the sender's trust of the target peer,
+  ;; not bypass trust/route enforcement the way local delivery applies it.
+  (let [runtime (orchestrator/create-orchestrator)
+        sender (orchestrator/spawn-agent! runtime {:name "Sender"
+                                                   :capabilities ["execute"]})
+        _ (orchestrator/register-federated-peer! runtime
+                                                 {:id "mesh-9"
+                                                  :base-url "https://mesh-9.internal"})
+        denied (try
+                 (orchestrator/send-interop-message! runtime
+                                                     (:id sender)
+                                                     "federation://mesh-9/remote-agent"
+                                                     {:message-type "delegate.request"
+                                                      :content "leak"})
+                 nil
+                 (catch Exception e (:reason (ex-data e))))]
+    (is (= :peer-not-trusted denied)
+        "a sender that does not trust the federated peer is rejected")))

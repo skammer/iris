@@ -112,27 +112,36 @@
                         (some-> store
                                 (sqlite/get-federation-peer-key peer-id key_id)
                                 :public-key))]
-    (when public-key*
-      (when-not (and key_id timestamp nonce signature)
-        (throw (ex-info "Federation auth missing"
-                        {:type :signature-missing})))
-      (when-not (within-skew? timestamp max-clock-skew-ms)
-        (throw (ex-info "Federation timestamp outside skew"
-                        {:type :timestamp-skew})))
-      (verify-signature! request public-key* signature)
-      (when store
-        (try
-          (sqlite/insert-federation-nonce!
-           store
-           {:peer-id peer-id
-            :nonce nonce
-            :expires-at (nonce-expires-at timestamp max-clock-skew-ms)})
-          (catch SQLException e
-            (throw (ex-info "Federation nonce replay"
-                            {:type :nonce-replay
-                             :peer-id peer-id
-                             :nonce nonce}
-                            e)))))))
+    ;; Fail closed. Auth fields are required unconditionally, and a peer with no
+    ;; resolvable key is rejected — previously every check sat inside
+    ;; (when public-key* ...), so a peer registered without a key (orchestrator
+    ;; only stores :keys when one is supplied) bypassed signature + replay checks
+    ;; entirely and any unsigned, replayable message was accepted.
+    (when-not (and key_id timestamp nonce signature)
+      (throw (ex-info "Federation auth missing"
+                      {:type :signature-missing})))
+    (when-not public-key*
+      (throw (ex-info "Federation signing key not found for peer"
+                      {:type :signature-missing
+                       :peer-id peer-id
+                       :key-id key_id})))
+    (when-not (within-skew? timestamp max-clock-skew-ms)
+      (throw (ex-info "Federation timestamp outside skew"
+                      {:type :timestamp-skew})))
+    (verify-signature! request public-key* signature)
+    (when store
+      (try
+        (sqlite/insert-federation-nonce!
+         store
+         {:peer-id peer-id
+          :nonce nonce
+          :expires-at (nonce-expires-at timestamp max-clock-skew-ms)})
+        (catch SQLException e
+          (throw (ex-info "Federation nonce replay"
+                          {:type :nonce-replay
+                           :peer-id peer-id
+                           :nonce nonce}
+                          e))))))
   true)
 
 (defn- request-body

@@ -37,6 +37,34 @@
     (sqlite/close-store! store)
     (io/delete-file (:path store) true)))
 
+(deftest verify-request-fails-closed-for-keyless-peer
+  ;; A peer registered without a public key must NOT bypass verification:
+  ;; previously every check sat inside (when public-key* ...), so an unsigned,
+  ;; replayable message from a keyless peer was accepted.
+  (let [store (temp-store)]
+    (testing "missing auth fields are rejected even with no key on file"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"Federation auth missing"
+                            (federation-http/verify-request!
+                             {:store store}
+                             {:peer_id "peer-x"
+                              :to_agent_ref "agent-1"
+                              :envelope {:id "msg-1"}}))))
+    (testing "a fully-formed request from a peer with no resolvable key is rejected"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"signing key not found"
+                            (federation-http/verify-request!
+                             {:store store}
+                             {:peer_id "peer-x"
+                              :to_agent_ref "agent-1"
+                              :envelope {:id "msg-1"}
+                              :auth {:key_id "k1"
+                                     :timestamp (str (java.time.Instant/now))
+                                     :nonce "n1"
+                                     :signature "ZmFrZQ=="}}))))
+    (sqlite/close-store! store)
+    (io/delete-file (:path store) true)))
+
 (deftest forwarder-retries-retryable-statuses
   (let [store (temp-store)
         keys (federation-http/generate-ed25519-keypair)
