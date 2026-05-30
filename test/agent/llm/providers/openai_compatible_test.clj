@@ -69,6 +69,22 @@
         (is (= 4096 (:max_tokens @body*)))
         (is (= 0.2 (:presence_penalty @body*)))))))
 
+(deftest openai-compatible-sends-user-from-session-id-test
+  (let [bodies* (atom [])]
+    (with-redefs [http/post (fn [_ request]
+                              (swap! bodies* conj (json/parse-string (:body request) true))
+                              {:status 200
+                               :headers {"Content-Type" "application/json"}
+                               :body {:choices [{:message {:content "ok"}}]}})]
+      (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})]
+        (llm-core/invoke llm {:messages [{:role "user" :content "hi"}]
+                              :session-id "session-1"})
+        (llm-core/invoke llm {:messages [{:role "user" :content "hi"}]
+                              :session-id "session-1"
+                              :user "explicit-user"})
+        (is (= "session-1" (:user (first @bodies*))))
+        (is (= "explicit-user" (:user (second @bodies*))))))))
+
 (deftest openai-compatible-provider-resolves-api-key-per-call-test
   (let [headers* (atom [])
         token (atom "k1")]

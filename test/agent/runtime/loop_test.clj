@@ -68,6 +68,14 @@
     (is (= [:agent-start :turn-start :message-start :turn-end :message-update :message-end :agent-end]
            (mapv :event-type @events)))))
 
+(deftest passes-session-id-to-planner-test
+  (let [request* (atom nil)
+        {:keys [result]} (run-loop {:planner-fn (fn [_ request]
+                                                 (reset! request* request)
+                                                 (complete-step "done"))})]
+    (is (= "done" (:content result)))
+    (is (= "session-1" (:session-id @request*)))))
+
 (deftest streamed-completion-test
   (let [{:keys [result events]}
         (run-loop {:stream? true

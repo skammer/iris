@@ -314,7 +314,7 @@
         observer (:observer attrs)
         trace (:trace attrs)
         attrs* (dissoc attrs :observer :trace)
-        opts* (merge (select-keys attrs* [:model]) opts)
+        opts* (merge (select-keys attrs* [:model :user :session-id :session_id]) opts)
         observe! (fn [observation]
                    (if observer
                      (do

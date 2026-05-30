@@ -258,6 +258,7 @@
                                   :trace trace
                                   :agent-id agent-id*
                                   :request-id request-id
+                                  :session-id session-id
                                   :model model
                                   :system-prompt system-prompt
                                   :context-pack context-pack

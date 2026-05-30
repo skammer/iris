@@ -76,3 +76,19 @@
     (is (= "fs" (get-in step [:directives 0 :payload :tool-name])))
     (is (= {:action "list" :path "."} (get-in step [:directives 0 :payload :input])))
     (is (= "call_1" (get-in step [:directives 0 :payload :context :provider-tool-call-id])))))
+
+(deftest planner-passes-session-id-test
+  (let [captured (atom nil)
+        provider (reify llm/ILLMProviderInvoke
+                   (invoke [_ request]
+                     (reset! captured request)
+                     {:role "assistant"
+                      :content "ok"
+                      :tool-calls []
+                      :usage nil
+                      :raw nil})
+                   (generate [this messages opts]
+                     (llm/invoke this (assoc opts :messages messages))))]
+    (planner/plan-step! provider {:messages [{:role "user" :content "hi"}]
+                                  :session-id "session-1"})
+    (is (= "session-1" (:session-id @captured)))))

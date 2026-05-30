@@ -93,6 +93,7 @@
                                                         messages
                                                         {}
                                                         {:agent-id (or session-id "chat")
+                                                         :session-id session-id
                                                          :observer (:observer system)
                                                          :trace (:trace system)
                                                          :request-id request-id

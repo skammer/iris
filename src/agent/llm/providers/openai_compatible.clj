@@ -120,8 +120,18 @@
 (defn- stream-structured-output? [config opts]
   (provider-common/stream-structured-output? config opts))
 
+(defn- request-user [config opts]
+  (when-let [value (or (:user opts)
+                       (:session-id opts)
+                       (:session_id opts)
+                       (:user config))]
+    (let [value* (str value)]
+      (when-not (str/blank? value*)
+        value*))))
+
 (defn- completion-body [base-url default-model config messages opts]
   (let [model (or (:model opts) default-model)
+        user (request-user config opts)
         extra-body (merge (or (:extra-body config) {})
                           (or (:extra-body opts) {}))]
     (cond-> (merge {:model model
@@ -137,11 +147,12 @@
                     :stream false}
                    (prompt-cache-fields base-url model config opts)
                    extra-body)
-    (:tools opts) (assoc :tools (:tools opts))
-    (:tool-choice opts) (assoc :tool_choice (:tool-choice opts))
-    (:structured-output opts) (assoc :response_format (structured-output-format (:structured-output opts)))
-    (:response-format opts) (assoc :response_format (:response-format opts))
-    (:cache-control opts) (assoc :cache_control (:cache-control opts))
+      user (assoc :user user)
+      (:tools opts) (assoc :tools (:tools opts))
+      (:tool-choice opts) (assoc :tool_choice (:tool-choice opts))
+      (:structured-output opts) (assoc :response_format (structured-output-format (:structured-output opts)))
+      (:response-format opts) (assoc :response_format (:response-format opts))
+      (:cache-control opts) (assoc :cache_control (:cache-control opts))
       (:cache_control opts) (assoc :cache_control (:cache_control opts)))))
 
 (defn- stream-body [base-url default-model config messages opts]
@@ -172,6 +183,7 @@
 
 (defn- responses-body [base-url default-model config messages opts]
   (let [model (or (:model opts) default-model)
+        user (request-user config opts)
         extra-body (merge (or (:extra-body config) {})
                           (or (:extra-body opts) {}))]
     (cond-> (merge {:model model
@@ -187,6 +199,7 @@
                     :stream false}
                    (prompt-cache-fields base-url model config opts)
                    extra-body)
+      user (assoc :user user)
       (:tools opts) (assoc :tools (mapv responses-tool (:tools opts)))
       (:tool-choice opts) (assoc :tool_choice (responses-tool-choice (:tool-choice opts)))
       (:structured-output opts) (assoc :text (responses-output-format (:structured-output opts)))
