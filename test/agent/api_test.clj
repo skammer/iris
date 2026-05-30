@@ -2,6 +2,7 @@
   (:require
    [agent.api :as api]
    [agent.config :as cfg]
+   [agent.federation.http :as federation-http]
    [agent.system :as system]
    [agent.llm.core :as llm-core]
    [agent.llm.messages :as llm-messages]
@@ -372,6 +373,7 @@
         base-url (str "http://127.0.0.1:" port)
         base-system (system/create-system)
         messages* (atom nil)
+        fed-keys (federation-http/generate-ed25519-keypair)
         store (sqlite/create-store {:path path})
         event-bus (events/create-event-bus)
         event-sink (events/create-event-sink store event-bus)
@@ -381,7 +383,12 @@
                           :chat (:chat cfg/default-config))
                    (assoc-in [:memory :facts :extractor :enabled] false)
                    (assoc-in [:memory :graph :enabled] false)
-                   (assoc-in [:orchestrator :enabled] true))
+                   (assoc-in [:orchestrator :enabled] true)
+                   ;; Sign outgoing federation requests so the self-loop inbox
+                   ;; (now fail-closed) can verify them.
+                   (assoc-in [:orchestrator :federation]
+                             {:key-id "iris-test"
+                              :private-key (:private-key fed-keys)}))
         system (assoc base-system
                       :llm-provider (->TestProvider messages*)
                       :store store
@@ -548,7 +555,9 @@
                                     {:name "Peer"
                                      :role "router"
                                      :capabilities ["route"]
-                                     :allow_direct true})
+                                     :allow_direct true
+                                     ;; must trust the federated peer to send to it
+                                     :trusted_peers ["mesh-1"]})
             created-peer-body (json/parse-string (:body created-peer) true)
             peer-id (:id created-peer-body)
             created-orchestrator (http-post (str base-url "/v1/agents")
@@ -560,7 +569,9 @@
             created-federated-peer (http-post (str base-url "/v1/federation/peers")
                                               {:id "mesh-1"
                                                :base_url base-url
-                                               :capabilities ["interop"]})
+                                               :capabilities ["interop"]
+                                               :key_id "iris-test"
+                                               :public_key (:public-key fed-keys)})
             created-federated-peer-body (json/parse-string (:body created-federated-peer) true)
             federation-peers (http-get (str base-url "/v1/federation/peers"))
             federation-peers-body (json/parse-string (:body federation-peers) true)
