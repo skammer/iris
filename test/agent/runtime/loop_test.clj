@@ -317,6 +317,25 @@
                     :payload
                     :excluded-from-context?)))))
 
+(deftest max-token-with-tool-calls-executes-instead-of-dead-ending-test
+  ;; finish_reason="length" with a valid tool_calls array must NOT discard the
+  ;; turn: the model emitted a real call before hitting the output cap.
+  (let [steps (atom [(-> (tool-step "call_1" :fs {:action "list"})
+                         (assoc-in [:llm-response :stop-reason] "length"))
+                     (complete-step "done")])
+        {:keys [result events]}
+        (run-loop {:planner-fn (fn [_ _]
+                                 (let [step (first @steps)]
+                                   (swap! steps rest)
+                                   step))})]
+    (is (= :completed (:stop-reason result))
+        "tool calls run and the loop continues to completion")
+    (is (not= :max-tokens (:stop-reason result)))
+    (is (= "done" (:content result)))
+    (is (some #(= "tool" (get-in % [:payload :role]))
+              (filter #(= :message-end (:event-type %)) @events))
+        "the truncated tool call actually executed (emitted a tool turn)")))
+
 (deftest small-profile-retries-bare-text-and-suppresses-stream-test
   (let [steps (atom [(complete-step "bad")
                      (tool-step "call_respond" :respond {:content "done"})])

@@ -131,7 +131,12 @@
              {:tool-name (keyword (:tool-name first-tool-call))
               :input (:input first-tool-call)})]
     (cond
-      max-token?
+      ;; finish_reason="length" routinely accompanies a complete tool_calls
+      ;; array (the model emitted the call, then hit the output cap). Only
+      ;; treat truncation as a guardrail event when there are no tool calls
+      ;; to fall through to; otherwise let the tools run.
+      (and max-token?
+           (empty? (:tool-calls llm-response)))
       {:reason :max-token-truncation
        :fingerprint {:stop-reason (some-> (:stop-reason llm-response) name)}}
 
