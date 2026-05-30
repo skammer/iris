@@ -1,12 +1,12 @@
 (ns agent.persistence.sqlite.common
   (:require
+   [agent.util :as util]
    [cheshire.core :as json]
    [clojure.java.io :as io]
    [clojure.string :as str])
   (:import
    (com.zaxxer.hikari HikariConfig HikariDataSource)
    (java.sql Connection PreparedStatement ResultSet)
-   (java.time Instant)
    (java.util UUID)
    (org.sqlite SQLiteException)))
 
@@ -30,7 +30,7 @@
     :else (str value)))
 
 (defn now-str []
-  (str (Instant/now)))
+  (util/now-str))
 
 (defn uuid-str []
   (str (UUID/randomUUID)))

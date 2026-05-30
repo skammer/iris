@@ -5,10 +5,8 @@
    [agent.llm.core :as llm]
    [agent.prompts :as prompts]
    [agent.runtime.trace :as runtime-trace]
-   [agent.telemetry :as telemetry]))
-
-(defn- duration-ms [start-ns]
-  (/ (double (- (System/nanoTime) start-ns)) 1000000.0))
+   [agent.telemetry :as telemetry]
+   [agent.util :as util]))
 
 (defn planner-system-prompt []
   (prompts/load-prompt "planner-system"))
@@ -55,7 +53,7 @@
         llm-request (build-llm-request request)]
     (try
       (let [response (llm/invoke provider llm-request)
-            duration (duration-ms start-ns)
+            duration (util/duration-ms start-ns)
             step (-> response
                      response->step
                      kernel-schema/normalize-step
@@ -87,7 +85,7 @@
                                                 :tool-call-count (count (:tool-calls response))}})
         (assoc step :llm-response response))
       (catch Exception e
-        (let [duration (duration-ms start-ns)]
+        (let [duration (util/duration-ms start-ns)]
           (telemetry/record-planner! telemetry
                                      {:agent-id agent-id
                                       :duration-ms duration

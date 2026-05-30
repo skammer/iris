@@ -1,6 +1,7 @@
 (ns agent.channels.core
   "Pluggable channel adapter contracts for rewritten runtime."
   (:require
+   [agent.util :as util]
    [clojure.set :as set]))
 
 (def supported-capabilities
@@ -93,7 +94,7 @@
    :reply-target reply-target
    :content (str content)
    :channel channel
-   :timestamp (or timestamp (str (java.time.Instant/now)))
+   :timestamp (or timestamp (util/now-str))
    :thread-id thread-id
    :thread-scope thread-scope
    :attachments (vec attachments)

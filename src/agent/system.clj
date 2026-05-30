@@ -12,7 +12,8 @@
    [agent.system.components :as components]
    [agent.system.health :as system-health]
    [agent.telegram :as telegram]
-   [agent.tools.service :as tool-service]))
+   [agent.tools.service :as tool-service]
+   [agent.util :as util]))
 
 (declare reload! start-api! current-system reload-status)
 
@@ -126,7 +127,7 @@
     (reset! (:reload-state new-system)
             (assoc result
                    :source (:source opts)
-                   :reloaded-at (str (java.time.Instant/now))))
+                   :reloaded-at (util/now-str)))
     ((:event-sink new-system)
      {:event-type :system.config.reloaded
       :entity-type :system
@@ -195,7 +196,7 @@
     (reset! reload-state
             (assoc result
                    :source (:source opts)
-                   :reloaded-at (str (java.time.Instant/now))))
+                   :reloaded-at (util/now-str)))
     ((:event-sink new-system)
      {:event-type :system.config.reloaded
       :entity-type :system
@@ -211,7 +212,7 @@
             {:mode :full
              :status :scheduled
              :source (:source opts)
-             :scheduled-at (str (java.time.Instant/now))})
+             :scheduled-at (util/now-str)})
     (future
       (Thread/sleep (long (or (:delay-ms opts) 500)))
       (try
@@ -222,7 +223,7 @@
                    :status :failed
                    :source (:source opts)
                    :message (.getMessage e)
-                   :failed-at (str (java.time.Instant/now))})
+                   :failed-at (util/now-str)})
           (logging/log-error! :agent.system.lifecycle/full-reload-failed e {}))))
     @reload-state))
 
@@ -244,7 +245,7 @@
                   :status :failed
                   :source (:source opts)
                   :message (.getMessage e)
-                  :failed-at (str (java.time.Instant/now))}))
+                  :failed-at (util/now-str)}))
        (logging/log-error! :agent.system.lifecycle/reload-failed e {:mode mode})
        (throw e)))))
 

@@ -1,10 +1,10 @@
 (ns agent.health
   "Process-local component health registry."
   (:require
+   [agent.util :as util]
    [clojure.string :as str])
   (:import
-   (java.lang.management ManagementFactory)
-   (java.time Instant)))
+   (java.lang.management ManagementFactory)))
 
 (def default-components
   [:api
@@ -17,8 +17,7 @@
    :memory
    :channel-adapters])
 
-(defn- now []
-  (str (Instant/now)))
+(def ^:private now util/now-str)
 
 (defn- component-id [component]
   (if (keyword? component)

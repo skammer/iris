@@ -9,10 +9,9 @@
    [agent.runtime.nudge :as nudge]
    [agent.runtime.schema :as runtime-schema]
    [agent.runtime.tool-router :as tool-router]
-   [cheshire.core :as json]
-   [clojure.string :as str])
-  (:import
-   (java.time Instant)))
+   [agent.runtime.cancel :as cancel]
+   [agent.util :as util]
+   [clojure.string :as str]))
 
 (def stopped-content runtime-messages/stopped-content)
 (def max-steps-content runtime-messages/max-steps-content)
@@ -25,39 +24,21 @@
 (def tool-protocol-messages runtime-messages/tool-protocol-messages)
 (def normalize-chat-history runtime-messages/normalize-chat-history)
 
-(defn- now-str [] (str (Instant/now)))
-
 (defn- event!
   [sink event-type base payload]
   (let [event (runtime-schema/validate-runtime-event!
                (merge base
                       {:event-type event-type
-                       :timestamp (now-str)}
+                       :timestamp (util/now-str)}
                       (when (some? payload)
                         {:payload payload})))]
-    (when sink
-      (sink event))
-    event))
+    (util/emit! sink event)))
 
-(defn- cancelled-error []
-  (ex-info "Chat stopped" {:type :chat-cancelled}))
+(def cancelled? cancel/cancelled?)
 
-(defn cancelled? [token]
-  (cond
-    (nil? token) false
-    (instance? clojure.lang.IDeref token) (true? @token)
-    (fn? token) (true? (token))
-    :else (true? token)))
+(def throw-if-cancelled! cancel/throw-if-cancelled!)
 
-(defn throw-if-cancelled! [token]
-  (when (cancelled? token)
-    (throw (cancelled-error))))
-
-(defn- result-text [value]
-  (cond
-    (string? value) value
-    (nil? value) ""
-    :else (json/generate-string value)))
+(def ^:private result-text util/result-content)
 
 (defn- approval-receipts [receipts]
   (filter #(= :approval-required (keyword (:status %))) receipts))

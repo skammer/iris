@@ -1,6 +1,7 @@
 (ns agent.loop
   "Task-list-driven self-iteration prompt support."
   (:require
+   [agent.util :as util]
    [clojure.java.io :as io]
    [clojure.string :as str]))
 
@@ -29,7 +30,7 @@
    :run-cmd run-cmd
    :last-run-output nil
    :active? true
-   :started-at (str (java.time.Instant/now))})
+   :started-at (util/now-str)})
 
 (defn options
   [cfg overrides]
@@ -224,7 +225,7 @@
   [session-id]
   (locking state-lock
     (let [state (active-state session-id)]
-      (swap! loop-states update session-id assoc :active? false :stopped-at (str (java.time.Instant/now)))
+      (swap! loop-states update session-id assoc :active? false :stopped-at (util/now-str))
       {:content (if state "Loop stopped." "No active loop.")
        :stopped? (boolean state)})))
 
@@ -279,10 +280,10 @@
         (let [updated (assoc state*
                              :last-summary summary
                              :last-run-output validation-output
-                             :updated-at (str (java.time.Instant/now)))
+                             :updated-at (util/now-str))
               stopped? (should-stop? updated)
               updated* (cond-> updated stopped? (assoc :active? false
-                                                       :stopped-at (str (java.time.Instant/now))))]
+                                                       :stopped-at (util/now-str)))]
           (swap! loop-states assoc session-id updated*)
           {:state updated*
            :stopped? stopped?

@@ -7,9 +7,8 @@
    [agent.chat.service :as service]
    [agent.chat.turn :as turn]
    [agent.chat.util :as chat-util]
-   [agent.loop :as loop-support])
-  (:import
-   (java.time Instant)))
+   [agent.loop :as loop-support]
+   [agent.util :as util]))
 
 (declare run! run-queued-item!)
 
@@ -18,7 +17,7 @@
 
 (defn- active-turn [request-id cancelled? stream?]
   {:request-id request-id
-   :started-at (str (Instant/now))
+   :started-at (util/now-str)
    :cancelled? cancelled?
    :stream? (boolean stream?)
    :stream-state (atom {})})

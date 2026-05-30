@@ -4,6 +4,7 @@
    [agent.llm.core :as llm]
    [agent.persistence.sqlite :as sqlite]
    [agent.prompts :as prompts]
+   [agent.util :as util]
    [cheshire.core :as json]
    [clojure.edn :as edn]
    [clojure.java.io :as io]
@@ -286,7 +287,7 @@
   {:op op
    :type (:type (ex-data e))
    :message (.getMessage e)
-   :at (str (java.time.Instant/now))})
+   :at (util/now-str)})
 
 (defn- record-graph-failure!
   [memory-service op e]
@@ -364,15 +365,15 @@
                       vec)
                  (catch Exception e
                    (record-graph-failure! memory-service :query e)
-                   []))]
-     (let [results {:query query
-                    :messages messages
-                    :events events
-                    :facts facts
-                    :graph graph}]
-       (assoc results :ranked (rank-memory-results query results {:limit limit
-                                                                   :min-score min-score
-                                                                   :dedupe? (:dedupe? opts)}))))))
+                   []))
+         results {:query query
+                  :messages messages
+                  :events events
+                  :facts facts
+                  :graph graph}]
+     (assoc results :ranked (rank-memory-results query results {:limit limit
+                                                                :min-score min-score
+                                                                :dedupe? (:dedupe? opts)})))))
 
 (defn save-memory-fact!
   ([memory-service fact] (save-memory-fact! memory-service fact {}))
@@ -567,8 +568,7 @@
                    (parse-datalog-query query)
                    (update opts :args parse-datalog-args))))
 
-(defn- now-str []
-  (str (java.time.Instant/now)))
+(def ^:private now-str util/now-str)
 
 (defn- fact-summary
   [fact]

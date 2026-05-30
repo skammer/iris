@@ -3,14 +3,13 @@
   (:require
    [agent.mcp.core :as mcp]
    [agent.telemetry :as telemetry]
+   [agent.util :as util]
    [clojure.core.async :as async]
    [clojure.string :as str])
   (:import
-   (java.time Instant)
    (java.util UUID)))
 
-(defn- now []
-  (str (Instant/now)))
+(def ^:private now util/now-str)
 
 (defn- random-id [prefix]
   (str prefix "-" (UUID/randomUUID)))
@@ -566,7 +565,7 @@
 
 (defn- enforce-interop-rate-limit!
   [orchestrator from-agent]
-  (let [now-ms (.toEpochMilli (Instant/now))
+  (let [now-ms (System/currentTimeMillis)
         agent-id (:id from-agent)
         limit (long (or (:interop-rate-limit-per-minute from-agent) 60))
         accepted? (update-state-result!

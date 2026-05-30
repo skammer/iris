@@ -2,6 +2,7 @@
   (:require
    [agent.persistence.sqlite :as sqlite]
    [agent.telemetry :as telemetry]
+   [agent.util :as util]
    [cheshire.core :as json]
    [clj-http.client :as http]
    [clojure.string :as str])
@@ -16,7 +17,7 @@
 (def retry-statuses #{408 429 500 502 503 504})
 
 (defn- now [] (Instant/now))
-(defn- now-str [] (str (now)))
+(def ^:private now-str util/now-str)
 (defn- random-nonce [] (str (UUID/randomUUID)))
 
 (defn- b64-encode [bytes]
@@ -173,7 +174,7 @@
   (filterv #(<= (- now-ms %) 60000) xs))
 
 (defn- acquire-peer!
-  [state* peer-id {:keys [max-concurrency rate-limit-per-minute circuit-open-ms]}]
+  [state* peer-id {:keys [max-concurrency rate-limit-per-minute]}]
   (let [now-ms (System/currentTimeMillis)]
     (loop []
       (let [old @state*
@@ -320,7 +321,7 @@
      :or {timeout-ms 10000
           inbox-path "/v1/federation/inbox"}}]
    (let [state (atom {:peers {}})]
-     (fn [{:keys [peer-id peer remote-agent-id envelope] :as delivery}]
+     (fn [{:keys [peer-id peer] :as delivery}]
        (let [url (delivery-url peer inbox-path)
              unsigned (request-body delivery)
              key-id* (or (:key-id peer) key-id)

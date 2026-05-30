@@ -1,13 +1,13 @@
 (ns agent.runtime.trace
   "Privacy-safe runtime JSONL trace."
   (:require
+   [agent.util :as util]
    [cheshire.core :as json]
    [clojure.java.io :as io]
    [clojure.string :as str])
   (:import
-   (java.nio.file Files LinkOption)
+   (java.nio.file Files)
    (java.nio.file.attribute PosixFilePermissions)
-   (java.time Instant)
    (java.util UUID)))
 
 (def modes #{:none :rolling :full})
@@ -117,7 +117,7 @@
   [trace {:keys [event-type turn-id provider model channel success error-message payload]}]
   (when (enabled? trace)
     (let [event {:id (str (UUID/randomUUID))
-                 :timestamp (str (Instant/now))
+                 :timestamp (util/now-str)
                  :event-type (name event-type)
                  :turn-id turn-id
                  :provider provider

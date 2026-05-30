@@ -4,6 +4,7 @@
    [agent.broker.core :as broker]
    [agent.persistence.sqlite :as sqlite]
    [agent.runners.core :as runners]
+   [agent.util :as util]
    [clojure.core.async :as async])
   (:import
    (java.time Instant)
@@ -17,7 +18,7 @@
 
 (declare get-run)
 
-(defn- now [] (str (Instant/now)))
+(def ^:private now util/now-str)
 
 (defn- plus-seconds [seconds]
   (str (.plus (Instant/now) (long seconds) ChronoUnit/SECONDS)))

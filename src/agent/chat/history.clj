@@ -5,9 +5,8 @@
    [agent.chat.util :as chat-util]
    [agent.llm.messages :as llm-messages]
    [agent.persistence.sqlite :as sqlite]
-   [clojure.string :as str])
-  (:import
-   (java.time Instant)))
+   [agent.util :as util]
+   [clojure.string :as str]))
 
 (def history-message-max-chars 8000)
 (def queued-message-metadata-key :queued)
@@ -146,7 +145,7 @@
     (let [metadata (-> (:metadata queued-message)
                        (dissoc queued-message-metadata-key)
                        (assoc :request-id request-id
-                              :activated-at (str (Instant/now))))]
+                              :activated-at (util/now-str)))]
       (sqlite/update-message-runtime-flags! (:store system)
                                             (:id queued-message)
                                             {:metadata metadata

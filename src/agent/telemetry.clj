@@ -3,7 +3,8 @@
   (:require
    [agent.llm.core :as llm-core]
    [agent.logging :as logging]
-   [agent.runtime.trace :as runtime-trace])
+   [agent.runtime.trace :as runtime-trace]
+   [agent.util :as util])
   (:import
    (java.time Instant)))
 
@@ -111,9 +112,6 @@
 
 (defn- now-ms []
   (System/currentTimeMillis))
-
-(defn- duration-ms [start-ns]
-  (/ (double (- (System/nanoTime) start-ns)) 1000000.0))
 
 (defn- parse-instant [value]
   (when value
@@ -353,7 +351,7 @@
                          (turn-usage->observation (:usage turn)))
             observation (merge attrs*
                                usage
-                               {:duration-ms (duration-ms start-ns)
+                               {:duration-ms (util/duration-ms start-ns)
                                 :success? true
                                 :tool-calls tool-calls
                                 :stop-reason (:stop-reason turn)})]
@@ -363,14 +361,14 @@
       (catch Exception e
         (let [observation (merge attrs*
                                  (usage-estimate provider messages "" opts*)
-                                 {:duration-ms (duration-ms start-ns)
+                                 {:duration-ms (util/duration-ms start-ns)
                                   :success? false
                                   :error e})]
           (observe! observation))
         (throw e)))))
 
 (defn record-tool!
-  [collector {:keys [tool-name duration-ms success? error user] :as attrs}]
+  [collector {:keys [tool-name duration-ms success? error user]}]
   (when (enabled? collector)
     (let [tool-name* (name tool-name)
           success?* (not (false? success?))]

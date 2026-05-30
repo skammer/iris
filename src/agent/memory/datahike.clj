@@ -2,13 +2,13 @@
   "Prototype graph-memory backend using Datahike."
   (:require
    [agent.memory.core]
+   [agent.util :as util]
    [clojure.java.io :as io]
    [clojure.set :as set]
    [clojure.string :as str]
    [datahike.api :as d]
    [taoensso.timbre :as timbre])
   (:import
-   (java.time Instant)
    (java.util UUID)))
 
 (def ^:private schema
@@ -164,7 +164,7 @@
     (when-not (.exists (io/file path))
       (d/create-database (assoc cfg :initial-tx schema)))))
 
-(defn- now [] (str (Instant/now)))
+(def ^:private now util/now-str)
 
 (defn- ensure-schema! [conn]
   (d/transact conn {:tx-data schema}))

@@ -3,13 +3,13 @@
   (:require
    [agent.runners.core :as runners]
    [agent.runners.policy :as policy]
+   [agent.util :as util]
    [clojure.java.io :as io]
    [clojure.string :as str])
   (:import
-   (java.io BufferedReader InputStreamReader)
-   (java.time Instant)))
+   (java.io BufferedReader InputStreamReader)))
 
-(defn- now [] (str (Instant/now)))
+(def ^:private now util/now-str)
 
 (defn- normalize-command [runner-options]
   (let [command (:command runner-options)]

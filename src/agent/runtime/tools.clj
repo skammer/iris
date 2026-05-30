@@ -1,8 +1,9 @@
 (ns agent.runtime.tools
   "Batch tool execution over agent.tools.core registries."
   (:require
+   [agent.runtime.cancel :as cancel]
    [agent.tools.core :as tools]
-   [cheshire.core :as json]
+   [agent.util :as util]
    [clojure.set :as set])
   (:import
    (java.util.concurrent Callable ExecutorCompletionService Executors TimeUnit)))
@@ -11,9 +12,6 @@
 (def default-max-parallelism 6)
 
 (defn- now-ns [] (System/nanoTime))
-
-(defn- duration-ms [start-ns]
-  (/ (double (- (System/nanoTime) start-ns)) 1000000.0))
 
 (defn- normalize-tool-name [value]
   (cond
@@ -27,32 +25,9 @@
 (defn- call-id [idx call]
   (str (or (:id call) (:tool-call-id call) (:tool_call_id call) (str "tool-call-" idx))))
 
-(defn- cancelled-error []
-  (ex-info "Chat stopped" {:type :chat-cancelled}))
+(def ^:private cancelled? cancel/cancelled?)
 
-(defn- cancelled? [token]
-  (cond
-    (nil? token) false
-    (instance? clojure.lang.IDeref token) (true? @token)
-    (fn? token) (true? (token))
-    :else (true? token)))
-
-(defn- cancellation-token [opts]
-  (or (:cancellation-token opts) (:cancelled? opts)))
-
-(defn- throw-if-cancelled! [opts]
-  (when (cancelled? (cancellation-token opts))
-    (throw (cancelled-error))))
-
-(defn- event! [sink event]
-  (when sink
-    (sink event)))
-
-(defn- result-content [value]
-  (cond
-    (string? value) value
-    (nil? value) ""
-    :else (json/generate-string value)))
+(def ^:private event! util/emit!)
 
 (defn- error-result [preflight ex]
   (let [data (ex-data ex)]
@@ -70,9 +45,9 @@
    :tool-call-id (:tool-call-id result)
    :name (some-> (:tool-name result) name)
    :content (if (= :ok (:status result))
-              (result-content (:result result))
-              (result-content {:error (:error result)
-                               :type (some-> (:error-type result) name)}))})
+              (util/result-content (:result result))
+              (util/result-content {:error (:error result)
+                                    :type (some-> (:error-type result) name)}))})
 
 (defn- allowed-tool? [context tool-name]
   (let [allowed (set (map normalize-tool-name (:allowed-tools context)))]
@@ -88,7 +63,7 @@
 
 (defn preflight-tool-call
   [registry call context opts source-index]
-  (throw-if-cancelled! opts)
+  (cancel/throw-if-cancelled! opts)
   (let [tool-name (normalize-tool-name (or (:tool-name call) (:name call)))
         tool (or (tools/get-tool registry tool-name)
                  (throw (tools/tool-error :tool-not-found
@@ -144,7 +119,7 @@
                                   (if (map? payload) payload {:value payload}))})))
 
 (defn- execute-preflight! [registry preflight opts]
-  (throw-if-cancelled! opts)
+  (cancel/throw-if-cancelled! opts)
   (let [sink (:event-sink opts)
         start (now-ns)
         ;; :preflighted? tells execute-tool that allow-list/permission/validation
@@ -171,7 +146,7 @@
                      :input (:input preflight)
                      :result raw-result
                      :terminate? (true? (:terminate raw-result))
-                     :duration-ms (duration-ms start)}
+                     :duration-ms (util/duration-ms start)}
             override (when-let [after (:after-tool-call opts)]
                        (after (assoc preflight
                                      :context context*
@@ -193,7 +168,7 @@
         result)
       (catch Exception e
         (let [result (assoc (error-result preflight e)
-                            :duration-ms (duration-ms start))]
+                            :duration-ms (util/duration-ms start))]
           (event! sink {:event-type :tool-execution-end
                         :entity-type :tool
                         :entity-id (name (:tool-name preflight))
@@ -236,7 +211,7 @@
 
 (defn- execute-sequential! [registry preflights opts]
   (mapv (fn [preflight]
-          (throw-if-cancelled! opts)
+          (cancel/throw-if-cancelled! opts)
           (if-let [error (:preflight-error preflight)]
             (error-result preflight error)
             (execute-preflight! registry preflight opts)))
@@ -253,7 +228,7 @@
         futures (atom [])]
     (try
       (doseq [preflight ready]
-        (throw-if-cancelled! opts)
+        (cancel/throw-if-cancelled! opts)
         (swap! futures conj
                (.submit ecs ^Callable #(execute-preflight! registry preflight opts))))
       (loop [remaining (count ready)
@@ -261,12 +236,12 @@
         (if (zero? remaining)
           results
           (let [future (.take ecs)
-                _ (throw-if-cancelled! opts)
+                _ (cancel/throw-if-cancelled! opts)
                 result (.get future)]
             (recur (dec remaining) (conj results result)))))
       (catch Exception e
         (when (or (= :chat-cancelled (some-> e ex-data :type))
-                  (cancelled? (cancellation-token opts)))
+                  (cancelled? opts))
           (doseq [future @futures]
             (.cancel future true))
           (.shutdownNow pool))
@@ -325,7 +300,7 @@
   ([registry calls context] (execute-batch! registry calls context {}))
   ([registry calls context opts]
    (let [opts* (update opts :mode #(normalize-tool-name (or % default-mode)))
-         _ (throw-if-cancelled! opts*)
+         _ (cancel/throw-if-cancelled! opts*)
          preflights (mapv (fn [[idx call]]
                             (preflight-or-error registry call context opts* idx))
                           (map-indexed vector calls))

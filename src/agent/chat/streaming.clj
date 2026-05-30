@@ -1,25 +1,25 @@
 (ns agent.chat.streaming
   "Streaming delta coalescing for the chat loop. The flusher batches rapid
-   message-update deltas into one event per flush interval and passes all other
-   events straight through."
+  message-update deltas into one event per flush interval and passes all other
+  events straight through."
   (:require
-   [agent.chat.util :as util])
+   [agent.chat.util :as chat-util]
+   [agent.util :as util])
   (:import
-   (java.time Instant)
    (java.util.concurrent TimeUnit)))
 
 (def stream-flush-interval-ms 50)
 
 (defn- text-delta-event? [event]
-  (let [payload (util/event-payload event)]
-    (and (util/same-event-type? event :message-update)
+  (let [payload (chat-util/event-payload event)]
+    (and (chat-util/same-event-type? event :message-update)
          (string? (:delta payload))
          (not= "" (:delta payload)))))
 
 (defn- buffered-delta-event [event text]
   (-> event
-      (assoc :payload (assoc (util/event-payload event) :delta text))
-      (assoc :timestamp (str (Instant/now)))))
+      (assoc :payload (assoc (chat-util/event-payload event) :delta text))
+      (assoc :timestamp (util/now-str))))
 
 (defn stream-delta-flusher
   "Returns {:flush! fn :emit! fn}. :emit! coalesces consecutive text deltas and

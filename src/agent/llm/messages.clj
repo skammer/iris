@@ -3,12 +3,11 @@
   (:require
    [agent.llm.dsml :as dsml]
    [agent.runtime.schema :as runtime-schema]
+   [agent.util :as util]
    [cheshire.core :as json]
-   [clojure.string :as str])
-  (:import
-   (java.time Instant)))
+   [clojure.string :as str]))
 
-(defn- now-str [] (str (Instant/now)))
+(def ^:private now-str util/now-str)
 
 (defn- role-name [role]
   (cond

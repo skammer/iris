@@ -23,6 +23,7 @@
    [agent.telemetry :as telemetry]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
+   [agent.util :as util]
    [clojure.core.async :as async]
    [clojure.string :as str])
   (:import
@@ -189,7 +190,7 @@
                  :entity-type :session
                  :entity-id session-id
                  :request-id request-id
-                 :timestamp (str (Instant/now))
+                 :timestamp (util/now-str)
                  :payload {:kind :memory-recalled
                            :query prompt
                            :message-count (count (get-in recall [:search :messages]))
