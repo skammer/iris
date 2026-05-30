@@ -1,10 +1,10 @@
 # Iris Runtime — Release Review Report
 
 **Scope:** canonical runtime under `src/agent` (~26.5k LOC, ~110 namespaces). `tmp/llx`, `legacy_src`, `restate-data`, `target` excluded.
-**Reviewed:** 2026-05-29 · `master` @ `96b6930` · **Remediated:** 2026-05-30 · `master` @ `783d0d0` (+ `feat/web-ui-usage-stats` @ `fce5cd7`) · **JDK (local):** 25 · **Clojure:** 1.12.4
+**Reviewed:** 2026-05-29 · `master` @ `96b6930` · **Remediated:** 2026-05-30 · `master` @ `58d700c` (+ `feat/web-ui-usage-stats` @ `fce5cd7`) · **JDK (local):** 25 · **Clojure:** 1.12.4
 **Method:** 12 parallel subsystem readers → 7 cross-cutting reviewers (architecture, concurrency, security, error/resource, smells, data, agentic-correctness) → adversarial verification of every High/Critical finding, plus an independent ground-truth pass (build, CI, full test suite, hand-read of the loop / auth / shell / fs / migrations / sandbox spine). An interactive map of the agentic workflow is in **`iris-workflow-map.html`** (open in a browser).
 
-> **Status (2026-05-30):** all **12 Critical/High findings are fixed and merged** to `master`, plus the highest-risk §5 Medium backlog items fixed through `783d0d0`. Build/CI blockers **B1, B2** and a smaller Medium backlog remain open. See **§1A** for the remediation ledger.
+> **Status (2026-05-30):** all **12 Critical/High findings are fixed and merged** to `master`, plus the highest-risk §5 Medium/security backlog items fixed through `58d700c`. Build/CI blockers **B1, B2** and a smaller Medium backlog remain open. See **§1A** for the remediation ledger.
 
 ---
 
@@ -20,7 +20,7 @@ Grades below are **at-review (2026-05-29)**; the trailing arrow notes the post-r
 |---|---|---|
 | Architecture / layering | **B+ → A−** | Clean DI, protocol seams; ✅ `chat.clj` is now a 44-line facade, run registry moved to `agent.runs.*`, `KernelOps` is capability-gated, health no longer depends on API streaming |
 | Agentic loop correctness | **B → A−** | Bounded & well-structured; ✅ the truncation bug that discarded valid tool calls is fixed |
-| Security | **C+ → B+** | Strong SQL/static-file/crypto layers; ✅ run-API RCE, keyless-federation verify, federated-interop bypass, auth fail-open, share-network default, shell policy, bootstrap compare fixed; SSRF/DNS-rebind remains |
+| Security | **C+ → A−** | Strong SQL/static-file/crypto layers; ✅ run-API RCE, keyless federation, federated interop, auth fail-open, share-network default, shell policy, bootstrap compare, SSRF/DNS-rebind, log/fs/seatbelt/UI-fragment hardening fixed |
 | Concurrency | **B+ → A−** | Sound threading model; ✅ broker park-overflow fixed (sliding default); remaining edges are MEDIUM |
 | Error handling / resources | **B → B+** | Good per-request boundaries; ✅ child store, runner map, and provider error-body leaks fixed; JVM shutdown hook still open |
 | Data / persistence | **A−** | Parameterized, transactional, idempotent; ✅ `SQLITE_BUSY`, pool sizing, runtime health, and approval CAS fixed |
@@ -66,6 +66,12 @@ Additional §5 Medium remediation landed on `master`:
 | openai-stream-leak-on-error | ✅ fixed | `1be7a90` | OpenAI-compatible + Ollama close non-2xx response bodies |
 | stream-flusher-thread-per-flush | ✅ fixed | `34c2cfe` | chat service owns one daemon scheduled flusher |
 | shell-denylist-bypassable | ✅ fixed | `783d0d0` | basename/wrapper-aware authoritative deny; risky auto-allows removed |
+| http-ssrf-dns-rebinding | ✅ fixed | `e536f1a` | HTTP tool pins validated DNS per request, revalidates redirects, blocks IPv4-mapped private ranges |
+| per-request-yolo-context | ✅ fixed | `fc91abb` | agent tool context computes permissions/yolo after caller context so directives cannot override security controls |
+| log-error-exdata-unredacted | ✅ fixed | `19049c0` | ex-data is masked before serialization; bearer-like string values are redacted |
+| fs-write-toctou-symlink | ✅ fixed | `2061994` | fs tool rejects symlink path segments and uses no-follow NIO file operations |
+| seatbelt-paths-not-canonicalized | ✅ fixed | `214268a` | Seatbelt profile paths canonicalized; policy rejects raw profiles and invalid/nonexistent paths |
+| trusted-fragment-xss | ✅ fixed | `58d700c` | raw UI fragments must be exact outputs from `render`/`render-many` |
 | max-token-loses-final-messages | ✅ fixed | `19febce` | terminal branch preserves accumulated transcript |
 
 A live-path telemetry token-key bug is also fixed on `feat/web-ui-usage-stats` (✅ `fce5cd7`, `planner.clj` read `:total-tokens` which providers never set).
@@ -73,10 +79,10 @@ A live-path telemetry token-key bug is also fixed on `feat/web-ui-usage-stats` (
 **Still open** (out of scope for the Critical/High pass):
 - **B1** (Dockerfile `COPY config`) and **B2** (CI targets `main`/`develop`, not `master`) — the release blockers in §2 are untouched.
 - **B3** — still 8 failures, all in the same env-sensitive `child-runtime-local-unsandboxed-flow-test` (subprocess + loopback under a restricted sandbox); 0 errors, no new failures.
-- Remaining §5 Medium backlog: SSRF/DNS-rebind, JVM shutdown hook + one-shot `finally`, migration checksum hashing/re-baseline, orchestrator inbox overflow signal, memory dual-write divergence, trusted-fragment XSS, provider/common util duplication, and lower fs/log/seatbelt hardening.
+- Remaining §5 Medium backlog: JVM shutdown hook + one-shot `finally`, migration checksum hashing/re-baseline, orchestrator inbox overflow signal, memory dual-write divergence, and provider/common util duplication.
 - Structural §4.2 follow-up from 2026-05-30 is now done on `master`: `agent.runtime.*` run registry/control-plane moved to `agent.runs.*`, `KernelOps` has explicit capabilities, SSE metrics moved to `agent.streaming.metrics`, and orchestrator mutators enforce `:enabled?`.
 
-**Current focused suites:** §4.2 structural pass → **69 tests, 537 assertions, 0 failures, 0 errors**. §5 Medium pass focused suites all passed: `agent.api-test`, `agent.runners.local-unsandboxed-test`, `agent.persistence.sqlite-test`, `agent.config-test`, `agent.runs.registry-test`, `agent.runtime.context-pack-test`, `agent.llm.providers.openai-compatible-test`, `agent.llm.providers.ollama-test`, `agent.runtime.tools-test`, `agent.chat.streaming-test`, `agent.tools.common.shell-test`. Targeted `clj-kondo` clean on touched source/test files except known HugSQL/config macro false positives.
+**Current focused suites:** §4.2 structural pass → **69 tests, 537 assertions, 0 failures, 0 errors**. §5 Medium/security focused suites all passed: `agent.api-test`, `agent.runners.local-unsandboxed-test`, `agent.runners.seatbelt-test`, `agent.persistence.sqlite-test`, `agent.config-test`, `agent.runs.registry-test`, `agent.runtime.context-pack-test`, `agent.llm.providers.openai-compatible-test`, `agent.llm.providers.ollama-test`, `agent.runtime.tools-test`, `agent.chat.streaming-test`, `agent.tools.common.shell-test`, `agent.tools.common.http-test`, `agent.tools.common.fs-test`, `agent.logging-test`, `agent.ui-test`, plus targeted `agent.system-test/agent-tool-context-ignores-caller-security-overrides`. Targeted `clj-kondo` clean on touched source/test files except known HugSQL/config macro false positives.
 
 ---
 
@@ -126,13 +132,13 @@ Severities are the **corrected** severities after adversarial verification. ✓ 
 
 ### Medium (selected — full list in §5)
 
-Fixed in this pass: `auth-disabled-when-key-nil` (`190db38`), `container-default-share-network-true` (`190db38`), `shell-denylist-bypassable` (`783d0d0`), `bootstrap-token-non-constant-time` (`190db38`), `child-control-store-not-closed` (`190db38`), `local-runner-process-map-leak` (`190db38`), `openai-stream-leak-on-error` (`1be7a90`), `pool-config-not-forwarded` (`15b4fa2`), `runtime-health-n+1` (`15b4fa2`), `decide-approval-no-pending-guard` (`190db38`), `token-estimate-counts-raw` (`593b412`), `streaming-toolcall-index-fallback` (`593b412`), `parallel-tool-pool-unbounded` (`e3a65e7`), `stream-flusher-thread-per-flush` (`34c2cfe`), plus `max-token-loses-final-messages` (`19febce`) and `dual-kernelops-divergent`/`orchestrator-enabled-flag-decorative` (`183e879`).
+Fixed in this pass: `auth-disabled-when-key-nil` (`190db38`), `container-default-share-network-true` (`190db38`), `shell-denylist-bypassable` (`783d0d0`), `http-ssrf-dns-rebinding` (`e536f1a`), `bootstrap-token-non-constant-time` (`190db38`), `child-control-store-not-closed` (`190db38`), `local-runner-process-map-leak` (`190db38`), `openai-stream-leak-on-error` (`1be7a90`), `pool-config-not-forwarded` (`15b4fa2`), `runtime-health-n+1` (`15b4fa2`), `decide-approval-no-pending-guard` (`190db38`), `token-estimate-counts-raw` (`593b412`), `streaming-toolcall-index-fallback` (`593b412`), `parallel-tool-pool-unbounded` (`e3a65e7`), `stream-flusher-thread-per-flush` (`34c2cfe`), `log-error-exdata-unredacted` (`19049c0`), `fs-write-toctou-symlink` (`2061994`), `seatbelt-paths-not-canonicalized` (`214268a`), `trusted-fragment-xss` (`58d700c`), plus `max-token-loses-final-messages` (`19febce`) and `dual-kernelops-divergent`/`orchestrator-enabled-flag-decorative` (`183e879`).
 
-Still open: `http-ssrf-dns-rebinding` (`tools/common/http.clj:85`), `no-jvm-shutdown-hook` (`cli.clj:286`), `migration-checksum-cosmetic` (`migrations.clj:733`), `memory-dual-write-divergence` (`memory/core.clj:384`), `orchestrator-inbox-sliding-silent-loss` (`orchestrator.clj:226`), `trusted-fragment-xss` (`ui/render.clj:18`), and lower fs/log/seatbelt/provider-common cleanup.
+Still open: `no-jvm-shutdown-hook` (`cli.clj:286`), `migration-checksum-cosmetic` (`migrations.clj:733`), `memory-dual-write-divergence` (`memory/core.clj:384`), `orchestrator-inbox-sliding-silent-loss` (`orchestrator.clj:226`), and provider-common cleanup.
 
 ### Refuted / downgraded (transparency)
 
-- **`per-request-yolo-override` (claimed CRITICAL) — REFUTED.** The body `yolo`/`yolo?` flag (`handlers/agents.clj:151`) flows only into the *outer dispatch gate* (`kernel/runtime.clj:116`); it is **not** placed into the tool execution context, so `enforce-approval!` (`tools/core.clj:236`) still reads the **config-derived** `:yolo?` and a sensitive tool without an approval-id is still blocked. The body flag does not achieve privilege escalation. *However*, a separate real vector exists: a caller-supplied directive `:payload :context {:yolo? true}` (schema `:context :any`, `kernel/schema.clj:34`) is merged over config in `tools/service.clj:178-182` and *would* flip approval off — harden by computing `:yolo?` **after** the merge. Also recommend removing the dead body flag to avoid confusion.
+- **`per-request-yolo-override` (claimed CRITICAL) — REFUTED.** The body `yolo`/`yolo?` flag (`handlers/agents.clj:151`) flows only into the *outer dispatch gate* (`kernel/runtime.clj:116`); it is **not** placed into the tool execution context, so `enforce-approval!` (`tools/core.clj:236`) still reads the **config-derived** `:yolo?` and a sensitive tool without an approval-id is still blocked. The body flag does not achieve privilege escalation. A separate real vector existed: caller-supplied directive context could override `:yolo?`/`:permissions`; **Status:** ✅ fixed in `fc91abb`; `tools/service.clj` now applies config-derived `:permissions`/`:yolo?` after caller context.
 - **`llm-stream-unbuffered-chan-leak` (claimed HIGH) — PARTIAL → LOW.** Real pattern (`openai_compatible.clj:308/344`, `ollama.clj:108/123`) but: the channel-based `stream` is consumed in exactly one place (the error-fallback path), the producer **does** `close!` in a `finally`, and `async/thread` uses the *unbounded cached* pool (not the 8-wide go dispatch pool), so "exhausts the pool and stalls all streaming" is false. Worth a defensive `close!` on the consumer side, but not high.
 - Several error/resource HIGHs (`no-jvm-shutdown-hook`, `child-control-store-not-closed`, `local-runner-process-map-leak`, `openai-stream-leak-on-error`) were **confirmed but corrected HIGH→MEDIUM**: real leaks, but bounded (SQLite WAL is crash-safe; child JVMs are short-lived; the process map grows one-per-run, not unbounded-per-run).
 
@@ -191,7 +197,7 @@ For each finding: **problem → why it matters → fix.** Line numbers are from 
 
 **🟠 auth-disabled-when-key-nil — MEDIUM.** `wrap-api-key-auth` (`middleware.clj:91`) only enforces when `api-key` is non-blank: `(and api-key (protected-path? …) …)`. Default config ships `:key nil` (`config.clj:276`). Default host is loopback, but an operator who sets `:api :host "0.0.0.0"` (normal for containers) without a key exposes the **entire** code-executing control plane unauthenticated, with no warning. **Fix:** refuse to start (or force loopback) when the bind host is non-local and no key is set; optionally print a generated ephemeral key. *(Good bit: the comparison itself uses constant-time `MessageDigest/isEqual` — `middleware.clj:77`.)* **Status:** ✅ fixed in `190db38`; non-loopback bind without a key fails validation.
 
-**🟠 http-ssrf-dns-rebinding — MEDIUM.** `validate-url!` (`tools/common/http.clj:75-96`) resolves the host, rejects private/loopback/CGNAT/ULA, then returns the **URL string**; `http/request` re-resolves at connect time (TOCTOU). An attacker domain returns a public IP at validation and `169.254.169.254`/`127.0.0.1` at connect. Redirects re-validate with the same gap; IPv4-mapped IPv6 ranges aren't all covered. **Fix:** pin the connection to the validated IP (resolve once, connect by IP with original Host header), re-validate every redirect address, block `::ffff:0:0/96` mapped private ranges. *(Good bit: the static-IP blocklist is otherwise thorough.)*
+**🟠 http-ssrf-dns-rebinding — MEDIUM.** `validate-url!` (`tools/common/http.clj:75-96`) resolved the host, rejected private/loopback/CGNAT/ULA, then returned the **URL string**; `http/request` re-resolved at connect time (TOCTOU). An attacker domain could return a public IP at validation and `169.254.169.254`/`127.0.0.1` at connect. Redirects re-validated with the same gap; IPv4-mapped IPv6 ranges weren't all covered. **Status:** ✅ fixed in `e536f1a`; the HTTP tool now resolves once, pins clj-http's DNS resolver to the validated addresses, revalidates redirects, and blocks IPv4-mapped private ranges.
 
 **🟠 container-default-share-network-true — MEDIUM.** `config.clj:241,249` and `runners/options.clj:115` default docker/podman `:share-network?` to **true**; `--network none` is only added when false (`docker_podman.clj:67`). So the *strongest-isolation* substrate is the *weakest on network* by default — a child reaches host-loopback services (control plane, nREPL, cloud metadata). Bubblewrap/seatbelt correctly default to no network. **Fix:** default `:share-network?` to false for containers; require explicit operator (not request-body) opt-in. **Status:** ✅ fixed in `190db38`; docker/podman defaults now disable shared networking.
 
@@ -199,7 +205,7 @@ For each finding: **problem → why it matters → fix.** Line numbers are from 
 
 **🟡 bootstrap-token-non-constant-time — MEDIUM.** `/v1/runs/:id/control/*` bypasses API-key auth by design (`middleware.clj:93`), protected only by the bootstrap token, which `ensure-run-control!` (`handlers/runs.clj:128`) compares with plain `=` (short-circuits, timing-observable) — unlike the API key. Token is a 122-bit UUID so brute force is impractical, but make it consistent. **Fix:** factor `constant-time=` into a shared ns; reject blank/nil run tokens before comparison. **Status:** ✅ fixed in `190db38`; API key and bootstrap token share constant-time comparison.
 
-**🟢 Lower-severity:** `log-error-exdata-unredacted` (`logging.clj:167`, `pr-str` of ex-data bypasses the secret-masker — add `"key"`/`"bearer"` fragments and mask before serialize), `fs-write-toctou-symlink` (`fs.clj:34`, narrow the default `["."]` root, re-validate realpath after open), `seatbelt-paths-not-canonicalized` (`seatbelt.clj:50`, use `getCanonicalPath`, constrain paths in `policy.clj` like bwrap binds), `trusted-fragment-xss` (`ui/render.clj:18`, any non-render string becomes raw HTML — enforce the invariant).
+**🟢 Lower-severity:** ✅ `log-error-exdata-unredacted` fixed in `19049c0` (ex-data masked before serialize, bearer values redacted); ✅ `fs-write-toctou-symlink` fixed in `2061994` (symlink path segments rejected, no-follow NIO ops); ✅ `seatbelt-paths-not-canonicalized` fixed in `214268a` (canonical profile paths + policy validation); ✅ `trusted-fragment-xss` fixed in `58d700c` (raw fragments require output from `render`/`render-many`).
 
 ### 5.2 Agentic / LLM correctness
 
@@ -313,14 +319,14 @@ Markers (2026-05-30): ✅ done · ◐ partial · ⬜ open.
 **P2 — Robustness / resources**
 13. ◐ JVM shutdown hook + one-shot `try/finally` ⬜; child store close + runner process-map prune ✅ (`190db38`); OpenAI/Ollama stream-on-error close ✅ (`1be7a90`).
 14. ✅ `sqlite-retry-conn-only` (`5788de9`), pool-config forwarding + `runtime-health` N+1 (`15b4fa2`).
-15. ◐ `http-ssrf-dns-rebinding` ⬜; `container-default-share-network-true` + `bootstrap-token-non-constant-time` ✅ (`190db38`); `shell-denylist` hardening ✅ (`783d0d0`).
+15. ✅ `http-ssrf-dns-rebinding` (`e536f1a`); `container-default-share-network-true` + `bootstrap-token-non-constant-time` ✅ (`190db38`); `shell-denylist` hardening ✅ (`783d0d0`); lower log/fs/seatbelt security hardening ✅ (`19049c0`, `2061994`, `214268a`).
 16. ◐ `parallel-tool-pool-unbounded` ✅ (`e3a65e7`); `stream-flusher-thread-per-flush` ✅ (`34c2cfe`); `orchestrator-inbox` silent loss ⬜.
 
 **P3 — Structure / maintainability**
 17. ✅ Split `agent.runtime.*` registry/control-plane to `agent.runs.*`; decompose `chat.clj` to a 44-line facade.
 18. ◐ `run!`'s `terminal-result` helper ✅ (`aa69766`); `agent.llm.providers.common` + `agent.util`/`agent.runtime.cancel` ⬜ open.
 19. ✅ Capability-gated `KernelOps`; neutral SSE metrics; enforced `orchestrator :enabled?` mutator gate.
-20. ⬜ Promote magic numbers to named/config; verify `max-steps` override; `trusted-fragment` HTML-escaping invariant.
+20. ◐ `trusted-fragment` invariant ✅ (`58d700c`); promote magic numbers to named/config + verify `max-steps` override ⬜.
 
 ---
 
@@ -331,4 +337,4 @@ Markers (2026-05-30): ✅ done · ◐ partial · ⬜ open.
 - Where a fix proposed by an agent was itself wrong (e.g. the `@system-ref` local name; the `(when-not (>!! …) (reduced))` non-fix; the migration re-baseline omission), the corrected fix is what appears above.
 - Line numbers are a snapshot; re-confirm before editing. Several findings cluster in `loop.clj` and `chat.clj` — fixing the structural debt (§3) makes the correctness fixes safer.
 
-*Bottom line: strong foundations, a short and concrete blocker list. As of 2026-05-30 the security/correctness P0–P1 code fixes are done (all 12 Critical/High closed) and the highest-risk §5 Mediums are closed through `783d0d0`; the remaining gates to a credible 0.1 are **B1 + B2**, plus SSRF/DNS-rebind, migration checksum, JVM shutdown, orchestrator inbox overflow, and lower hardening.*
+*Bottom line: strong foundations, a short and concrete blocker list. As of 2026-05-30 the security/correctness P0–P1 code fixes are done (all 12 Critical/High closed) and the highest-risk §5 security Mediums are closed through `58d700c`; the remaining gates to a credible 0.1 are **B1 + B2**, plus migration checksum, JVM shutdown, orchestrator inbox overflow, memory dual-write divergence, and provider/common cleanup.*
