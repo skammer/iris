@@ -222,7 +222,7 @@
                  :presence-penalty :tools :tool-choice :structured-output
                  :response-format :cache-control :cache_control :modalities
                  :metadata :extra-body :user :session-id :session_id
-                 :stream-structured-output?
+                 :stream? :stream :stream-structured-output?
                  :on-content-delta])))
 
 (defn normalize-llm-response

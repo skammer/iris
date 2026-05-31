@@ -120,6 +120,12 @@
 (defn- stream-structured-output? [config opts]
   (provider-common/stream-structured-output? config opts))
 
+(defn- request-stream? [config opts]
+  (true? (cond
+           (contains? opts :stream?) (:stream? opts)
+           (contains? opts :stream) (:stream opts)
+           :else (:stream? config))))
+
 (defn- request-user [config opts]
   (when-let [value (or (:user opts)
                        (:session-id opts)
@@ -499,9 +505,11 @@
   llm-core/ILLMProvider
   (complete [this messages opts]
     (let [request {:headers (provider-headers this)}
-          responses? (responses-api? config opts)]
+          responses? (responses-api? config opts)
+          stream? (or (request-stream? config opts)
+                      (stream-structured-output? config opts))]
       (cond
-        (and responses? (stream-structured-output? config opts))
+        (and responses? stream?)
         (:content (post-responses-stream-turn
                    (responses-url base-url)
                    (assoc request
@@ -524,7 +532,7 @@
                                          :as :json))]
           (:content (responses->turn (:body response))))
 
-        (stream-structured-output? config opts)
+        stream?
         (:content (post-stream-turn
                    (chat-url base-url)
                    (assoc request
@@ -670,12 +678,14 @@
   (invoke [this request]
     (let [opts (llm-core/request->completion-opts request)
           stream-with-delta? (some? (:on-content-delta opts))
+          stream-request? (or (request-stream? (:config this) opts)
+                              (stream-structured-output? (:config this) opts))
           on-content-delta (dsml/guard-content-delta (:on-content-delta opts)
                                                      (:tools opts))
           responses? (responses-api? (:config this) opts)
           request* {:headers (provider-headers this)}
           response (cond
-                     (and responses? stream-with-delta?)
+                     (and responses? (or stream-with-delta? stream-request?))
                      (post-responses-stream-turn
                       (responses-url (:base-url this))
                       (assoc request*
@@ -686,17 +696,6 @@
                                                            (:messages request)
                                                            opts)))
                       on-content-delta)
-
-                     (and responses? (stream-structured-output? (:config this) opts))
-                     (post-responses-stream-turn
-                      (responses-url (:base-url this))
-                      (assoc request*
-                             :body (json/generate-string
-                                    (responses-stream-body (:base-url this)
-                                                           (:default-model this)
-                                                           (:config this)
-                                                           (:messages request)
-                                                           opts))))
 
                      responses?
                      (let [response* (post-json
@@ -711,7 +710,7 @@
                                              :as :json))]
                        (responses->turn (:body response*)))
 
-                     stream-with-delta?
+                     (or stream-with-delta? stream-request?)
                      (post-stream-turn
                       (chat-url (:base-url this))
                       (assoc request*
@@ -722,17 +721,6 @@
                                                  (:messages request)
                                                  opts)))
                       on-content-delta)
-
-                     (stream-structured-output? (:config this) opts)
-                     (post-stream-turn
-                      (chat-url (:base-url this))
-                      (assoc request*
-                             :body (json/generate-string
-                                    (stream-body (:base-url this)
-                                                 (:default-model this)
-                                                 (:config this)
-                                                 (:messages request)
-                                                 opts))))
 
                      :else
                      (let [response* (post-json
@@ -818,6 +806,7 @@
                                                    :prompt_cache_retention
                                                    :cache-control
                                                    :cache_control
+                                                   :stream?
                                                    :stream-structured-output?
                                                    :temperature
                                                    :max-tokens
@@ -842,6 +831,7 @@
                         :prompt_cache_retention
                         :cache-control
                         :cache_control
+                        :stream?
                         :stream-structured-output?
                         :temperature
                         :max-tokens
@@ -849,6 +839,7 @@
                         :top-p
                         :top_p
                         :user
+                        :extra-headers
                         :extra-body])
           {:base-url base-url
            :api-key api-key

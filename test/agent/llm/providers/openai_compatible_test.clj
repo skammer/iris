@@ -17,17 +17,21 @@
       (proxy-super close))))
 
 (deftest openrouter-complete-test
-  (with-redefs [http/post (fn [_ _]
-                            {:status 200
-                             :headers {"Content-Type" "application/json"}
-                             :body {:choices [{:message {:content "openrouter-ok"}}]}})]
-    (let [llm (provider/create-openrouter-provider
-               {:api-key "or-key"
-                :model "openai/gpt-4o-mini"
-                :site-url "https://example.com"
-                :app-name "iris-test"})]
-      (is (= "openrouter-ok"
-             (llm-core/complete llm [{:role "user" :content "hi"}] {}))))))
+  (let [headers* (atom nil)]
+    (with-redefs [http/post (fn [_ request]
+                              (reset! headers* (:headers request))
+                              {:status 200
+                               :headers {"Content-Type" "application/json"}
+                               :body {:choices [{:message {:content "openrouter-ok"}}]}})]
+      (let [llm (provider/create-openrouter-provider
+                 {:api-key "or-key"
+                  :model "openai/gpt-4o-mini"
+                  :site-url "https://example.com"
+                  :app-name "iris-test"
+                  :extra-headers {"x-proxy-token" "proxy-token"}})]
+        (is (= "openrouter-ok"
+               (llm-core/complete llm [{:role "user" :content "hi"}] {})))
+        (is (= "proxy-token" (get @headers* "x-proxy-token")))))))
 
 (deftest openai-compatible-default-prompt-cache-test
   (let [bodies* (atom [])]
@@ -233,6 +237,46 @@
         (is (= ["Hello" " world"] @chunks))
         (is (= "Hello world" (:content response)))
         (is (empty? (:tool-calls response)))))))
+
+(deftest invoke-honors-configured-stream-flag-test
+  (let [body* (atom nil)
+        as* (atom nil)]
+    (with-redefs [http/post (fn [_ request]
+                              (reset! body* (json/parse-string (:body request) true))
+                              (reset! as* (:as request))
+                              {:status 200
+                               :headers {"Content-Type" "text/event-stream"}
+                               :body (byte-stream
+                                      (str "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\n"
+                                           "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"total_tokens\":12,\"prompt_tokens_details\":{\"cached_tokens\":5}}}\n\n"
+                                           "data: [DONE]\n\n"))})]
+      (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"
+                                                             :stream? true})
+            response (llm-core/invoke llm {:messages [{:role "user" :content "hi"}]})]
+        (is (= :stream @as*))
+        (is (true? (:stream @body*)))
+        (is (= {:include_usage true} (:stream_options @body*)))
+        (is (= "OK" (:content response)))
+        (is (= 5 (get-in response [:usage :cached-tokens])))))))
+
+(deftest invoke-can-disable-configured-stream-flag-test
+  (let [body* (atom nil)
+        as* (atom nil)]
+    (with-redefs [http/post (fn [_ request]
+                              (reset! body* (json/parse-string (:body request) true))
+                              (reset! as* (:as request))
+                              {:status 200
+                               :headers {"Content-Type" "application/json"}
+                               :body {:choices [{:message {:content "ok"}}]}})]
+      (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"
+                                                             :stream? true})
+            response (llm-core/invoke
+                      llm
+                      {:messages [{:role "user" :content "hi"}]
+                       :stream? false})]
+        (is (= :json @as*))
+        (is (false? (:stream @body*)))
+        (is (= "ok" (:content response)))))))
 
 (deftest invoke-streams-responses-api-content-test
   (let [body* (atom nil)]
