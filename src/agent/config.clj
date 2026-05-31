@@ -585,11 +585,6 @@
     (with-open [reader (java.io.PushbackReader. (io/reader file))]
       (edn/read reader))))
 
-(defn- load-optional-edn
-  [file]
-  (when (.exists file)
-    (load-edn-file (.getPath file))))
-
 (defn- normalize-iris-namespaced-config
   [cfg]
   (reduce (fn [acc k]
@@ -600,6 +595,91 @@
                 acc)))
           cfg
           app-config-keys))
+
+(defn- config-loader-key? [k]
+  (or (= :config k)
+      (and (keyword? k)
+           (= "config" (namespace k)))))
+
+(defn- strip-loader-config [cfg]
+  (if (map? cfg)
+    (into {}
+          (remove (fn [[k _]] (config-loader-key? k)))
+          cfg)
+    cfg))
+
+(defn- throw-invalid-includes! [path value]
+  (throw (ex-info (str "Invalid config include directive: " path)
+                  {:type :config-include-invalid
+                   :path path
+                   :value value})))
+
+(defn- include-list [path value]
+  (cond
+    (not (sequential? value))
+    (throw-invalid-includes! path value)
+
+    (not-every? #(and (string? %) (nonblank %)) value)
+    (throw-invalid-includes! path value)
+
+    :else
+    (vec value)))
+
+(defn- config-includes [path cfg]
+  (when (map? cfg)
+    (let [loader (:config cfg)
+          includes* (cond-> []
+                      (contains? cfg :config/includes)
+                      (conj (:config/includes cfg))
+
+                      (and (contains? cfg :config)
+                           (do
+                             (when-not (map? loader)
+                               (throw-invalid-includes! path loader))
+                             (contains? loader :includes)))
+                      (conj (:includes loader)))]
+      (vec (mapcat #(include-list path %) includes*)))))
+
+(defn- resolve-include-file [base-dir path]
+  (let [path* (expand-home-path path)]
+    (if (absolute-path? path*)
+      (io/file path*)
+      (io/file base-dir path*))))
+
+(defn- canonical-path [file]
+  (.getCanonicalPath (io/file file)))
+
+(declare load-config-file-with-includes)
+
+(defn- load-include-file [base-dir from-path stack include-path]
+  (let [file (resolve-include-file base-dir include-path)]
+    (when-not (.exists file)
+      (throw (ex-info (str "Config include not found: " (.getPath file))
+                      {:type :config-include-not-found
+                       :path (.getPath file)
+                       :include include-path
+                       :declared-from from-path})))
+    (load-config-file-with-includes file stack)))
+
+(defn- load-config-file-with-includes [file stack]
+  (let [path (canonical-path file)]
+    (when (some #(= path %) stack)
+      (throw (ex-info (str "Config include cycle: " path)
+                      {:type :config-include-cycle
+                       :path path
+                       :stack (conj (vec stack) path)})))
+    (let [cfg (some-> (load-edn-file path)
+                      normalize-iris-namespaced-config)
+          base-dir (.getParentFile (io/file path))
+          stack* (conj (vec stack) path)
+          includes (config-includes path cfg)
+          included-configs (map #(load-include-file base-dir path stack* %) includes)]
+      (apply deep-merge (concat included-configs [(strip-loader-config cfg)])))))
+
+(defn- load-optional-config
+  [file]
+  (when (.exists file)
+    (load-config-file-with-includes file [])))
 
 (defn migrate-config-file
   [path]
@@ -655,14 +735,16 @@
    (let [global-dir (global-config-dir)
          local-dir (local-config-dir)
          contexts (load-context-files global-dir local-dir)
-         global-config (load-optional-edn (io/file global-dir config-file-name))
-         local-config (load-optional-edn (io/file local-dir config-file-name))
-         explicit-config (when path (load-edn-file path))
+         global-config (load-optional-config (io/file global-dir config-file-name))
+         local-config (load-optional-config (io/file local-dir config-file-name))
+         explicit-file (when path (io/file path))
+         explicit-config (when (and explicit-file (.exists explicit-file))
+                           (load-config-file-with-includes explicit-file []))
          file-config (deep-merge default-config
-                                 (some-> global-config normalize-iris-namespaced-config)
-                                 (some-> local-config normalize-iris-namespaced-config)
+                                 global-config
+                                 local-config
                                  (iris-runtime-config global-dir local-dir contexts)
-                                 (some-> explicit-config normalize-iris-namespaced-config))]
+                                 explicit-config)]
      (-> file-config
          (config-env/apply-env-config getenv)
          (finalize-data-paths global-dir)
