@@ -86,7 +86,8 @@
     (let [content (if stream?
                     (let [ch (llm-core/stream (:llm-provider system)
                                               messages
-                                              {:model (config/active-model (get-in system [:config :llm]))})]
+                                              {:model (config/active-model (get-in system [:config :llm]))
+                                               :session-id session-id})]
                       (consume-llm-stream-with! ch emit-delta))
                     (telemetry/complete-with-telemetry! (:telemetry system)
                                                         (:llm-provider system)
@@ -108,10 +109,11 @@
        :initial-type (some-> error ex-data :type)})))
 
 (defn- summarize-context!
-  [system prompt]
+  [system prompt session-id]
   (let [response (llm-core/invoke
                   (:llm-provider system)
                   {:model (config/active-model (get-in system [:config :llm]))
+                   :session-id session-id
                    :messages [{:role "system"
                                :content "Summarize compacted conversation context for the next LLM call."}
                               {:role "user"
@@ -132,7 +134,7 @@
        (assoc ctx
               :config cfg
               :summarizer-fn (fn [{:keys [prompt]}]
-                               (summarize-context! system prompt)))))))
+                               (summarize-context! system prompt (:session-id ctx))))))))
 
 (defn run-turn!
   "Run a chat turn for `session-id`. Public wrapper keeps persistence, transport

@@ -10,3 +10,5 @@ misc
 restate-data
 data
 .nrepl-port
+.claude
+.codex

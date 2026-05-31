@@ -494,10 +494,11 @@
          (mapv #(select-keys % [:subject :predicate :object :scope :confidence])))))
 
 (defn extract-facts
-  [provider {:keys [user-message assistant-message model]}]
+  [provider {:keys [user-message assistant-message model session-id]}]
   (let [response (llm/invoke
                   provider
                   {:model model
+                   :session-id session-id
                    :temperature 0.0
                    :structured-output {:name "memory_facts"
                                        :strict? true
@@ -517,7 +518,9 @@
       []
       (try
         (let [model (or (:model extractor) (:model opts))
-              facts (extract-facts provider (assoc exchange :model model))]
+              facts (extract-facts provider (assoc exchange
+                                                   :model model
+                                                   :session-id (:session-id opts)))]
           (mapv (fn [fact]
                   (let [scope-type (or (:scope fact)
                                        (name (or (get-in memory-service [:config :facts :default-scope])

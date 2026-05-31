@@ -301,7 +301,12 @@
           cached (or (:cached-tokens usage)
                      (:cached_tokens usage)
                      (get-in usage [:prompt-tokens-details :cached-tokens])
-                     (get-in usage [:prompt_tokens_details :cached_tokens]))]
+                     (get-in usage [:prompt_tokens_details :cached_tokens])
+                     (get-in usage [:input_tokens_details :cached_tokens])
+                     (get-in usage [:cache_tokens_details :cached_tokens])
+                     (:cache_read_input_tokens usage)
+                     (:prompt_cache_read_tokens usage)
+                     (:prompt_cache_hit_tokens usage))]
       (cond-> {}
         prompt (assoc :prompt-tokens prompt)
         completion (assoc :completion-tokens completion)

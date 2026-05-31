@@ -40,17 +40,27 @@
        (= session-id (:entity-id event))
        (= "agent-end" (:event-type event))))
 
-(defn- openai-style-completion [system session-id content]
+(defn- openai-style-usage [usage]
+  (when (map? usage)
+    (let [prompt (long (or (:prompt-tokens usage) 0))
+          completion (long (or (:completion-tokens usage) 0))]
+      {:prompt_tokens prompt
+       :completion_tokens completion
+       :total_tokens (long (or (:tokens usage) (+ prompt completion)))
+       :prompt_tokens_details {:cached_tokens (long (or (:cached-tokens usage) 0))}})))
+
+(defn- openai-style-completion [system session-id content usage]
   (let [llm (config/active-provider-config (get-in system [:config :llm]))]
-    {:id (str "chatcmpl-" (System/currentTimeMillis))
-     :object "chat.completion"
-     :session_id session-id
-     :provider (name (:provider llm))
-     :model (:model llm)
-     :choices [{:index 0
-                :finish_reason "stop"
-                :message {:role "assistant"
-                          :content content}}]}))
+    (cond-> {:id (str "chatcmpl-" (System/currentTimeMillis))
+             :object "chat.completion"
+             :session_id session-id
+             :provider (name (:provider llm))
+             :model (:model llm)
+             :choices [{:index 0
+                        :finish_reason "stop"
+                        :message {:role "assistant"
+                                  :content content}}]}
+      (map? usage) (assoc :usage (openai-style-usage usage)))))
 
 (defn- stream-response
   [system request messages session-id]
@@ -83,15 +93,18 @@
         finish! (fn [ctx result-value]
                   (when (:error? (:result result-value))
                     (send-delta! ctx (get-in result-value [:result :content])))
-                  (streaming/send-sse-chunk! ctx
-                                             {:id stream-id
-                                              :object "chat.completion.chunk"
-                                              :session_id session-id
-                                              :provider provider
-                                              :model model
-                                              :choices [{:index 0
-                                                         :delta {}
-                                                         :finish_reason "stop"}]})
+                  (streaming/send-sse-chunk!
+                   ctx
+                   (cond-> {:id stream-id
+                            :object "chat.completion.chunk"
+                            :session_id session-id
+                            :provider provider
+                            :model model
+                            :choices [{:index 0
+                                       :delta {}
+                                       :finish_reason "stop"}]}
+                     (map? (get-in result-value [:result :usage]))
+                     (assoc :usage (openai-style-usage (get-in result-value [:result :usage])))))
                   (streaming/send-sse-done! ctx))]
     (streaming/managed-response
      request
@@ -155,7 +168,10 @@
       (stream-response system request messages session-id)
       (let [result (complete! system messages {:session-id session-id})]
         (responses/json-response 200
-                                 (openai-style-completion system session-id (:content result)))))))
+                                 (openai-style-completion system
+                                                          session-id
+                                                          (:content result)
+                                                          (:usage result)))))))
 
 (defn stop-response
   [system request]

@@ -85,6 +85,31 @@
         (is (= "session-1" (:user (first @bodies*))))
         (is (= "explicit-user" (:user (second @bodies*))))))))
 
+(deftest openai-compatible-keeps-configured-user-test
+  (let [body* (atom nil)]
+    (with-redefs [http/post (fn [_ request]
+                              (reset! body* (json/parse-string (:body request) true))
+                              {:status 200
+                               :headers {"Content-Type" "application/json"}
+                               :body {:choices [{:message {:content "ok"}}]}})]
+      (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"
+                                                             :user "sticky-user"})]
+        (llm-core/invoke llm {:messages [{:role "user" :content "hi"}]})
+        (is (= "sticky-user" (:user @body*)))))))
+
+(deftest openai-compatible-usage-accepts-provider-cache-variants-test
+  (with-redefs [http/post (fn [_ _]
+                            {:status 200
+                             :headers {"Content-Type" "application/json"}
+                             :body {:choices [{:message {:content "ok"}}]
+                                    :usage {:prompt_tokens 20
+                                            :completion_tokens 3
+                                            :total_tokens 23
+                                            :cache_read_input_tokens 11}}})]
+    (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})
+          response (llm-core/invoke llm {:messages [{:role "user" :content "hi"}]})]
+      (is (= 11 (get-in response [:usage :cached-tokens]))))))
+
 (deftest openai-compatible-provider-resolves-api-key-per-call-test
   (let [headers* (atom [])
         token (atom "k1")]

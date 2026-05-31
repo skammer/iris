@@ -210,12 +210,18 @@
   [metadata]
   (some-> (:usage metadata) :tokens long))
 
+(defn- usage-cached-tokens
+  [metadata]
+  (some-> (:usage metadata) :cached-tokens long))
+
 (defn- message-meta-suffix
   "Per-message stats badge text: token count for the turn + tool-call count."
   [metadata tool-calls]
   (let [tok (usage-tokens metadata)
+        cached (usage-cached-tokens metadata)
         n-tools (count tool-calls)]
     (str (when (and tok (pos? tok)) (str " | " (format-tokens tok) " tok"))
+         (when (and cached (pos? cached)) (str " | " (format-tokens cached) " cache"))
          (when (pos? n-tools) (str " | " n-tools " tool" (when (> n-tools 1) "s"))))))
 
 (defn message

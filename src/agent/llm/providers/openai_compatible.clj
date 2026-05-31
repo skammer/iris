@@ -214,12 +214,22 @@
       (when-not (= "[DONE]" payload)
         (json/parse-string payload true)))))
 
+(defn- cached-tokens [usage]
+  (or (get-in usage [:prompt_tokens_details :cached_tokens])
+      (get-in usage [:input_tokens_details :cached_tokens])
+      (get-in usage [:cache_tokens_details :cached_tokens])
+      (:cached_tokens usage)
+      (:cache_read_input_tokens usage)
+      (:prompt_cache_read_tokens usage)
+      (:prompt_cache_hit_tokens usage)
+      0))
+
 (defn- usage->estimate [response]
   (let [usage (:usage response)]
     {:tokens (or (:total_tokens usage) 0)
      :prompt-tokens (or (:prompt_tokens usage) 0)
      :completion-tokens (or (:completion_tokens usage) 0)
-     :cached-tokens (or (get-in usage [:prompt_tokens_details :cached_tokens]) 0)
+     :cached-tokens (cached-tokens usage)
      :cost-usd nil}))
 
 (defn- responses-usage->estimate [response]
@@ -227,7 +237,7 @@
     {:tokens (or (:total_tokens usage) 0)
      :prompt-tokens (or (:input_tokens usage) 0)
      :completion-tokens (or (:output_tokens usage) 0)
-     :cached-tokens (or (get-in usage [:input_tokens_details :cached_tokens]) 0)
+     :cached-tokens (cached-tokens usage)
      :cost-usd nil}))
 
 (defn- retryable-http-error [response]
@@ -814,6 +824,7 @@
                                                    :max_tokens
                                                    :top-p
                                                    :top_p
+                                                   :user
                                                    :extra-body])
                                      config)
                               api-key-resolver))
@@ -837,6 +848,7 @@
                         :max_tokens
                         :top-p
                         :top_p
+                        :user
                         :extra-body])
           {:base-url base-url
            :api-key api-key

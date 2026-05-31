@@ -3,6 +3,7 @@
    [agent.llm.core :as llm]
    [agent.planner :as planner]
    [agent.prompts :as prompts]
+   [agent.telemetry :as telemetry]
    [clojure.string :as str]
    [clojure.test :refer :all]))
 
@@ -92,3 +93,30 @@
     (planner/plan-step! provider {:messages [{:role "user" :content "hi"}]
                                   :session-id "session-1"})
     (is (= "session-1" (:session-id @captured)))))
+
+(deftest planner-llm-call-event-includes-cached-tokens-test
+  (let [events (atom [])
+        observer (reify telemetry/IObserver
+                   (record-event! [_ event] (swap! events conj event))
+                   (record-metric! [_ _metric] nil)
+                   (flush! [_] nil)
+                   (observer-name [_] "test"))
+        provider (reify llm/ILLMProviderInvoke
+                   (invoke [_ _request]
+                     {:role "assistant"
+                      :content "ok"
+                      :tool-calls []
+                      :usage {:tokens 30
+                              :prompt-tokens 20
+                              :completion-tokens 10
+                              :cached-tokens 7}
+                      :raw nil})
+                   (generate [this messages opts]
+                     (llm/invoke this (assoc opts :messages messages))))]
+    (planner/plan-step! provider {:messages [{:role "user" :content "hi"}]
+                                  :observer observer})
+    (is (= 7 (->> @events
+                  (filter #(= :llm/call (:event-type %)))
+                  first
+                  :payload
+                  :cached-tokens)))))

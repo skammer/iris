@@ -265,13 +265,14 @@
         (sqlite/append-message! store (:id session) "assistant" ""
                                 {:tool-calls [{:id "c1" :function {:name "read" :arguments "{}"}}]
                                  :metadata {:usage {:tokens 1234 :prompt-tokens 1000
-                                                    :completion-tokens 234 :cached-tokens 0}}})
+                                                    :completion-tokens 234 :cached-tokens 321}}})
         (sqlite/append-message! store (:id session) "assistant" "done"
                                 {:metadata {:usage {:tokens 5678 :prompt-tokens 5000
                                                     :completion-tokens 678 :cached-tokens 0}}})
         (let [html (ui/session-messages-fragment {:store store} (:id session))]
           ;; per-message badge: token count + tool count in the .meta footer
           (is (str/includes? html "1.2k tok"))
+          (is (str/includes? html "321 cache"))
           (is (str/includes? html "1 tool"))
           (is (str/includes? html "5.7k tok"))
           ;; per-thread aggregate bar

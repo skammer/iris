@@ -73,7 +73,8 @@
                                               :success? true
                                               :tokens (get-in response [:usage :tokens])
                                               :prompt-tokens (get-in response [:usage :prompt-tokens])
-                                              :completion-tokens (get-in response [:usage :completion-tokens])}}))
+                                              :completion-tokens (get-in response [:usage :completion-tokens])
+                                              :cached-tokens (get-in response [:usage :cached-tokens])}}))
         (runtime-trace/record-event! trace
                                      {:event-type :llm.call
                                       :turn-id request-id
