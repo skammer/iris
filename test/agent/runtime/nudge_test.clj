@@ -32,38 +32,39 @@
                  (nudge/new-state)
                  {:step step
                   :llm-response {:content "Stopped: guardrail retry budget exhausted."}
-                  :allowed-tools #{:fs :telegram_send_document}})]
+                  :allowed-tools #{:fs_list :telegram_send_document}})]
     (is (= :retry (:action verdict)))
     (is (= :premature-final (:reason verdict)))))
 
 (deftest repeated-tool-call-fingerprint-test
   (let [step {:directives [{:type :tool-call
-                            :payload {:tool-name :fs
-                                      :input {:action :list :path "."}}}]}
+                            :payload {:tool-name :fs_list
+                                      :input {:path "."}}}]}
         state (nudge/record-execution (nudge/new-state) step [{:status :ok
-                                                               :tool-name :fs
-                                                               :input {:action :list :path "."}}])
+                                                               :tool-name :fs_list
+                                                               :input {:path "."}}])
         verdict (nudge/check-before-exec profile state {:step step
                                                         :llm-response {:tool-calls []}
-                                                        :allowed-tools #{:fs}})]
+                                                        :allowed-tools #{:fs_list}})]
     (is (= :retry (:action verdict)))
     (is (= :repeated-tool-call (:reason verdict)))
-    (is (= {:tool-name :fs :input {:action :list :path "."}} (:fingerprint verdict)))))
+    (is (= {:tool-name :fs_list :input {:path "."}} (:fingerprint verdict)))))
 
 (deftest fs-prereq-test
   (let [step {:directives [{:type :tool-call
-                            :payload {:tool-name :fs
-                                      :input {:action :replace
-                                              :path "src/a.clj"}}}]}
+                            :payload {:tool-name :fs_replace
+                                      :input {:path "src/a.clj"
+                                              :old-string "old"
+                                              :new-string "new"}}}]}
         blocked (nudge/check-before-exec profile (nudge/new-state)
-                                         {:step step :llm-response {} :allowed-tools #{:fs}})
+                                         {:step step :llm-response {} :allowed-tools #{:fs_replace}})
         state (nudge/record-execution (nudge/new-state)
                                       {:directives []}
                                       [{:status :ok
-                                        :tool-name :fs
-                                        :input {:action :list :path "src"}}])
+                                        :tool-name :fs_list
+                                        :input {:path "src"}}])
         allowed (nudge/check-before-exec profile state
-                                         {:step step :llm-response {} :allowed-tools #{:fs}})]
+                                         {:step step :llm-response {} :allowed-tools #{:fs_replace}})]
     (is (= :retry (:action blocked)))
     (is (= :missing-prerequisite (:reason blocked)))
     (is (= :execute (:action allowed)))))

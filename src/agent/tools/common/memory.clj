@@ -11,27 +11,16 @@
 (def ^:private max-vault-chars 8000)
 (def ^:private max-message-chars 800)
 
-(def ^:private allowed-actions
-  #{:search :save-fact :remove-fact :save-graph-fact :remove-graph-fact
-    :datalog :read-vault :write-vault})
-
-(defn- normalize-action [action]
-  (cond
-    (keyword? action) action
-    (string? action) (keyword (str/lower-case action))
-    :else nil))
+(def ^:private scope-schema
+  [:map {:closed true}
+   [:type [:or
+           [:enum :global :session :agent]
+           [:enum "global" "session" "agent"]]]
+   [:id {:optional true} [:maybe :string]]])
 
 (defn- ensure-permission! [context permission]
   (when-not (contains? (:permissions context) permission)
     (throw (tools/permission-error #{permission} (:permissions context)))))
-
-(defn- validate-input [input]
-  (let [action (normalize-action (:action input))]
-    (when-not (allowed-actions action)
-      (throw (tools/validation-error
-              "action must be one of search/save-fact/remove-fact/save-graph-fact/remove-graph-fact/datalog/read-vault/write-vault"
-              {:action (:action input)})))
-    (assoc input :action action)))
 
 (defn- validate-message-search-input [input]
   (when (str/blank? (or (:query input) ""))
@@ -277,139 +266,233 @@
    :source-message-ids source-message-ids
    :source-request-id (or source-request-id (:request-id context))})
 
-(defn create-memory-tool [memory-service]
+(defn create-memory-search-tool [memory-service]
   (tools/create-tool
    {:description
     (tools/create-tool-description
-     :memory
-     "Durable memory over facts, graph facts, configured prompt files, vault reads/writes, and graph Datalog."
+     :memory_search
+     "Search durable memory facts, graph facts, and configured prompt files. Returns compact text snippets."
      :category :memory
      :input-schema [:map {:closed true}
-                    [:action [:or
-                              [:enum :search :save-fact :remove-fact :save-graph-fact :remove-graph-fact
-                               :datalog :read-vault :write-vault]
-                              [:enum "search" "save-fact" "remove-fact" "save-graph-fact" "remove-graph-fact"
-                               "datalog" "read-vault" "write-vault"]]]
-                    [:query {:optional true} [:maybe :string]]
-                    [:args {:optional true} [:maybe :any]]
+                    [:query :string]
                     [:limit {:optional true} [:maybe :int]]
-                    [:scope {:optional true} [:maybe [:map {:closed true}
-                                                [:type [:or
-                                                        [:enum :global :session :agent]
-                                                        [:enum "global" "session" "agent"]]]
-                                                [:id {:optional true} [:maybe :string]]]]]
-                    [:id {:optional true} [:maybe :string]]
-                    [:subject {:optional true} [:maybe :string]]
-                    [:predicate {:optional true} [:maybe :string]]
-                    [:object {:optional true} [:maybe :string]]
-                    [:confidence {:optional true} [:maybe number?]]
-                    [:source-session-id {:optional true} [:maybe :string]]
-                    [:source-message-ids {:optional true} [:maybe [:vector :string]]]
-                    [:source-request-id {:optional true} [:maybe :string]]
-                    [:mode {:optional true} [:maybe :string]]
-                    [:entity {:optional true} [:maybe :string]]
-                    [:depth {:optional true} [:maybe :int]]
-                    [:from {:optional true} [:maybe :string]]
-                    [:to {:optional true} [:maybe :string]]
-                    [:max-depth {:optional true} [:maybe :int]]
-                    [:max_depth {:optional true} [:maybe :int]]
-                    [:as-of {:optional true} [:maybe :string]]
-                    [:as_of {:optional true} [:maybe :string]]
-                    [:include-historical? {:optional true} [:maybe :boolean]]
-                    [:include_historical {:optional true} [:maybe :boolean]]
-                    [:valid-from {:optional true} [:maybe :string]]
-                    [:valid_from {:optional true} [:maybe :string]]
-                    [:valid-to {:optional true} [:maybe :string]]
-                    [:valid_to {:optional true} [:maybe :string]]
-                    [:observed-at {:optional true} [:maybe :string]]
-                    [:observed_at {:optional true} [:maybe :string]]
-                    [:invalidated-by {:optional true} [:maybe :string]]
-                    [:invalidated_by {:optional true} [:maybe :string]]
-                    [:tags {:optional true} [:maybe [:vector :string]]]
-                    [:path {:optional true} [:maybe :string]]
+                    [:scope {:optional true} [:maybe scope-schema]]]
+     :operation :read
+     :parallel-safe? true
+     :source :builtin)
+    :execute-fn
+    (fn [{:keys [query limit scope]} context]
+      (ensure-permission! context :memory-read)
+      (if (str/blank? (or query ""))
+        (search-results-text query nil)
+        (search-results-text
+         query
+         (memory-search-candidates memory-service
+                                   query
+                                   (cond-> {:limit limit}
+                                     scope (assoc :scope scope)
+                                     (:session-id context) (assoc :session-id (:session-id context))
+                                     (:agent-id context) (assoc :agent-id (:agent-id context)))))))}))
+
+(def ^:private fact-save-schema
+  [:map {:closed true}
+   [:id {:optional true} [:maybe :string]]
+   [:subject {:optional true} [:maybe :string]]
+   [:predicate {:optional true} [:maybe :string]]
+   [:object {:optional true} [:maybe :string]]
+   [:confidence {:optional true} [:maybe number?]]
+   [:scope {:optional true} [:maybe scope-schema]]
+   [:source-session-id {:optional true} [:maybe :string]]
+   [:source-message-ids {:optional true} [:maybe [:vector :string]]]
+   [:source-request-id {:optional true} [:maybe :string]]
+   [:valid-from {:optional true} [:maybe :string]]
+   [:valid-to {:optional true} [:maybe :string]]
+   [:observed-at {:optional true} [:maybe :string]]
+   [:invalidated-by {:optional true} [:maybe :string]]
+   [:tags {:optional true} [:maybe [:vector :string]]]])
+
+(def ^:private fact-remove-schema
+  [:map {:closed true}
+   [:id {:optional true} [:maybe :string]]
+   [:subject {:optional true} [:maybe :string]]
+   [:predicate {:optional true} [:maybe :string]]
+   [:object {:optional true} [:maybe :string]]
+   [:scope {:optional true} [:maybe scope-schema]]
+   [:source-session-id {:optional true} [:maybe :string]]
+   [:source-request-id {:optional true} [:maybe :string]]])
+
+(def ^:private graph-fact-save-schema
+  [:map {:closed true}
+   [:id {:optional true} [:maybe :string]]
+   [:subject {:optional true} [:maybe :string]]
+   [:predicate {:optional true} [:maybe :string]]
+   [:object {:optional true} [:maybe :string]]
+   [:confidence {:optional true} [:maybe number?]]
+   [:source-session-id {:optional true} [:maybe :string]]
+   [:source-request-id {:optional true} [:maybe :string]]
+   [:valid-from {:optional true} [:maybe :string]]
+   [:valid-to {:optional true} [:maybe :string]]
+   [:observed-at {:optional true} [:maybe :string]]
+   [:invalidated-by {:optional true} [:maybe :string]]
+   [:tags {:optional true} [:maybe [:vector :string]]]])
+
+(def ^:private graph-fact-remove-schema
+  [:map {:closed true}
+   [:id {:optional true} [:maybe :string]]
+   [:subject {:optional true} [:maybe :string]]
+   [:predicate {:optional true} [:maybe :string]]
+   [:object {:optional true} [:maybe :string]]])
+
+(defn create-memory-save-fact-tool [memory-service]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :memory_save_fact
+     "Save a durable SQLite memory fact. Provide explicit subject, predicate, and object."
+     :category :memory
+     :input-schema fact-save-schema
+     :operation :act
+     :approval-sensitive? false
+     :source :builtin)
+    :execute-fn
+    (fn [input context]
+      (ensure-permission! context :memory-write)
+      (require-fact-fields! input)
+      (save-fact-text
+       (memory/save-memory-fact! memory-service
+                                 (fact-map input)
+                                 (fact-opts input context))))}))
+
+(defn create-memory-remove-fact-tool [memory-service]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :memory_remove_fact
+     "Remove a SQLite memory fact by id or exact subject, predicate, and object."
+     :category :memory
+     :input-schema fact-remove-schema
+     :operation :act
+     :approval-sensitive? false
+     :source :builtin)
+    :execute-fn
+    (fn [input context]
+      (ensure-permission! context :memory-write)
+      (require-fact-selector! input)
+      (remove-fact-text
+       (memory/remove-memory-fact! memory-service
+                                   (select-keys input [:id :subject :predicate :object])
+                                   (fact-opts input context))))}))
+
+(defn create-memory-save-graph-fact-tool [memory-service]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :memory_save_graph_fact
+     "Save a graph memory fact."
+     :category :memory
+     :input-schema graph-fact-save-schema
+     :operation :act
+     :approval-sensitive? false
+     :source :builtin)
+    :execute-fn
+    (fn [input context]
+      (ensure-permission! context :memory-write)
+      (require-fact-fields! input)
+      (save-graph-fact-text
+       (memory/save-graph-fact! memory-service
+                                (merge (fact-map input)
+                                       {:source-request-id (or (:source-request-id input)
+                                                               (:request-id context))
+                                        :session-id (or (:source-session-id input)
+                                                        (:session-id context))}))))}))
+
+(defn create-memory-remove-graph-fact-tool [memory-service]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :memory_remove_graph_fact
+     "Remove a graph memory fact by id or exact subject, predicate, and object."
+     :category :memory
+     :input-schema graph-fact-remove-schema
+     :operation :act
+     :approval-sensitive? false
+     :source :builtin)
+    :execute-fn
+    (fn [input context]
+      (ensure-permission! context :memory-write)
+      (require-fact-selector! input)
+      (remove-graph-fact-text
+       (memory/remove-graph-fact! memory-service
+                                  (select-keys input [:id :subject :predicate :object]))))}))
+
+(defn create-memory-datalog-tool [memory-service]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :memory_datalog
+     "Run read-only Datalog queries against graph memory."
+     :category :memory
+     :input-schema [:map {:closed true}
+                    [:query :string]
+                    [:args {:optional true} [:maybe :any]]
+                    [:limit {:optional true} [:maybe :int]]]
+     :operation :read
+     :parallel-safe? true
+     :source :builtin)
+    :execute-fn
+    (fn [{:keys [query args limit]} context]
+      (ensure-permission! context :memory-read)
+      (datalog-text
+       (memory/query-datalog-memory memory-service
+                                    query
+                                    (cond-> {}
+                                      args (assoc :args args)
+                                      limit (assoc :limit limit)))))}))
+
+(defn create-memory-read-vault-tool [memory-service]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :memory_read_vault
+     "Read a configured memory vault file."
+     :category :memory
+     :input-schema [:map {:closed true}
+                    [:path [:maybe :string]]]
+     :operation :read
+     :parallel-safe? true
+     :source :builtin)
+    :execute-fn
+    (fn [{:keys [path]} context]
+      (ensure-permission! context :memory-read)
+      (read-vault-text path (memory/read-vault-file memory-service path)))}))
+
+(defn create-memory-write-vault-tool [memory-service]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :memory_write_vault
+     "Write a configured memory vault file."
+     :category :memory
+     :input-schema [:map {:closed true}
+                    [:path [:maybe :string]]
                     [:content {:optional true} [:maybe :string]]]
      :operation :act
      :approval-sensitive? false
-     :action-key :action
-     :read-only-actions #{:search :datalog :read-vault}
-     :parallel-safe-actions #{:search :datalog :read-vault}
      :source :builtin)
-    :validate-fn validate-input
     :execute-fn
-    (fn [{:keys [action query limit scope path content args] :as input} context]
-      (case action
-        :search
-        (do
-          (ensure-permission! context :memory-read)
-          (if (str/blank? (or query ""))
-            (search-results-text query nil)
-            (search-results-text
-             query
-             (memory-search-candidates memory-service
-                                       query
-                                       (merge (graph-opts input)
-                                              (cond-> {:limit limit}
-                                                scope (assoc :scope scope)
-                                                (:session-id context) (assoc :session-id (:session-id context))
-                                                (:agent-id context) (assoc :agent-id (:agent-id context))))))))
+    (fn [{:keys [path content]} context]
+      (ensure-permission! context :memory-write)
+      (write-vault-text path (memory/write-vault-file! memory-service path content)))}))
 
-        :save-fact
-        (do
-          (ensure-permission! context :memory-write)
-          (require-fact-fields! input)
-          (save-fact-text
-           (memory/save-memory-fact! memory-service
-                                     (fact-map input)
-                                     (fact-opts input context))))
-
-        :remove-fact
-        (do
-          (ensure-permission! context :memory-write)
-          (require-fact-selector! input)
-          (remove-fact-text
-           (memory/remove-memory-fact! memory-service
-                                       (select-keys input [:id :subject :predicate :object])
-                                       (fact-opts input context))))
-
-        :save-graph-fact
-        (do
-          (ensure-permission! context :memory-write)
-          (require-fact-fields! input)
-          (save-graph-fact-text
-           (memory/save-graph-fact! memory-service
-                                    (merge (fact-map input)
-                                           {:source-request-id (or (:source-request-id input)
-                                                                   (:request-id context))
-                                            :session-id (or (:source-session-id input)
-                                                            (:session-id context))}))))
-
-        :remove-graph-fact
-        (do
-          (ensure-permission! context :memory-write)
-          (require-fact-selector! input)
-          (remove-graph-fact-text
-           (memory/remove-graph-fact! memory-service
-                                      (select-keys input [:id :subject :predicate :object]))))
-
-        :datalog
-        (do
-          (ensure-permission! context :memory-read)
-          (datalog-text
-           (memory/query-datalog-memory memory-service
-                                        query
-                                        (cond-> {}
-                                          args (assoc :args args)
-                                          limit (assoc :limit limit)))))
-
-        :read-vault
-        (do
-          (ensure-permission! context :memory-read)
-          (read-vault-text path (memory/read-vault-file memory-service path)))
-
-        :write-vault
-        (do
-          (ensure-permission! context :memory-write)
-          (write-vault-text path (memory/write-vault-file! memory-service path content)))))}))
+(defn create-memory-tools [memory-service]
+  [(create-memory-search-tool memory-service)
+   (create-memory-save-fact-tool memory-service)
+   (create-memory-remove-fact-tool memory-service)
+   (create-memory-save-graph-fact-tool memory-service)
+   (create-memory-remove-graph-fact-tool memory-service)
+   (create-memory-datalog-tool memory-service)
+   (create-memory-read-vault-tool memory-service)
+   (create-memory-write-vault-tool memory-service)])
 
 (defn- message-search-text [query rows]
   (if (empty? rows)

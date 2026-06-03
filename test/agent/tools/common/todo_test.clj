@@ -10,8 +10,9 @@
   (.getAbsolutePath (java.io.File/createTempFile "iris-todo-tool-" ".db")))
 
 (defn- registry [store]
-  (-> (tools/create-registry)
-      (tools/register-tool (todo-tool/create-todo-tool store))))
+  (reduce tools/register-tool
+          (tools/create-registry)
+          (todo-tool/create-todo-tools store)))
 
 (defn- item
   ([content description]
@@ -28,22 +29,20 @@
         registry* (registry store)]
     (try
       (let [written (tools/execute-tool registry*
-                                        :todo
-                                        {:action :write
-                                         :description "Current thread work"
+                                        :todo_write
+                                        {:description "Current thread work"
                                          :todos [(item "Wire todo tool" "Searchable implementation note" :in_progress :high)]
                                          :metadata {:kind "plan"}}
                                         {:permissions #{:todo-write}
                                          :session-id "thread-1"})
             read-back (tools/execute-tool registry*
-                                          :todo
-                                          {:action "get"}
+                                          :todo_get
+                                          {}
                                           {:permissions #{:todo-read}
                                            :session-id "thread-1"})
             search-result (tools/execute-tool registry*
-                                              :todo
-                                              {:action "search"
-                                               :query "implementation note"}
+                                              :todo_search
+                                              {:query "implementation note"}
                                               {:permissions #{:todo-read}
                                                :session-id "thread-1"})]
         (is (:created? written))
@@ -62,33 +61,29 @@
         registry* (registry store)]
     (try
       (let [first-write (tools/execute-tool registry*
-                                            :todo
-                                            {:action "write"
-                                             :todos [(item "First" "")]}
+                                            :todo_write
+                                            {:todos [(item "First" "")]}
                                             {:permissions #{:todo-write}
                                              :session-id "thread-1"})
             _ (Thread/sleep 2)
             second-write (tools/execute-tool registry*
-                                             :todo
-                                             {:action "write"
-                                              :todos [(item "First updated" "same row")]}
+                                             :todo_write
+                                             {:todos [(item "First updated" "same row")]}
                                              {:permissions #{:todo-write}
                                               :session-id "thread-1"})
             _ (tools/execute-tool registry*
-                                  :todo
-                                  {:action "write"
-                                   :todos [(item "Second" "other thread")]}
+                                  :todo_write
+                                  {:todos [(item "Second" "other thread")]}
                                   {:permissions #{:todo-write}
                                    :session-id "thread-2"})
             current-lists (tools/execute-tool registry*
-                                              :todo
-                                              {:action "list"}
+                                              :todo_list
+                                              {}
                                               {:permissions #{:todo-read}
                                                :session-id "thread-1"})
             all-lists (tools/execute-tool registry*
-                                          :todo
-                                          {:action "list"
-                                           :all-threads? true}
+                                          :todo_list
+                                          {:all-threads? true}
                                           {:permissions #{:todo-read}})]
         (is (= (:id first-write) (:id second-write)))
         (is (not= (:updated-at first-write) (:updated-at second-write)))
@@ -101,33 +96,35 @@
 (deftest todo-tool-permissions-schema-and-metadata-test
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})
-        tool (todo-tool/create-todo-tool store)
-        registry* (-> (tools/create-registry) (tools/register-tool tool))
-        description (tools/describe tool)]
+        write-tool (todo-tool/create-todo-write-tool store)
+        search-tool (todo-tool/create-todo-search-tool store)
+        registry* (reduce tools/register-tool
+                          (tools/create-registry)
+                          (todo-tool/create-todo-tools store))
+        write-description (tools/describe write-tool)
+        search-description (tools/describe search-tool)]
     (try
-      (is (tools/read-only-call? description {:action "search"}))
-      (is (not (tools/read-only-call? description {:action "write"})))
+      (is (tools/read-only-call? search-description {:query "x"}))
+      (is (not (tools/read-only-call? write-description {:todos []})))
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"Insufficient permissions"
                             (tools/execute-tool registry*
-                                                :todo
-                                                {:action "write"
-                                                 :todos [(item "Denied" "")]}
+                                                :todo_write
+                                                {:todos [(item "Denied" "")]}
                                                 {:permissions #{:todo-read}
                                                  :session-id "thread-1"})))
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"input failed schema validation"
                             (tools/execute-tool registry*
-                                                :todo
-                                                {:action "write"
-                                                 :todos [{:content "Missing description"}]}
+                                                :todo_write
+                                                {:todos [{:content "Missing description"}]}
                                                 {:permissions #{:todo-write}
                                                  :session-id "thread-1"})))
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"thread-id is required"
                             (tools/execute-tool registry*
-                                                :todo
-                                                {:action "list"}
+                                                :todo_list
+                                                {}
                                                 {:permissions #{:todo-read}})))
       (finally
         (sqlite/close-store! store)

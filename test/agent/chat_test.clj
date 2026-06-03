@@ -365,7 +365,7 @@
 
 (deftest chat-loop-executes-safe-tool-via-native-tool-call-test
   (let [path (temp-db-path)
-        responses (atom [(tool-call-response :fs {:action "list" :path "."})
+        responses (atom [(tool-call-response :fs_list {:path "."})
                          "listed"])
         requests (atom [])
         provider (->PlannerProvider responses requests)
@@ -378,7 +378,7 @@
             first-request (:request (first @requests))
             native-tool-names (set (map #(get-in % [:function :name]) (:tools first-request)))]
         (is (= "listed" (:content result)))
-        (is (contains? native-tool-names "fs"))
+        (is (contains? native-tool-names "fs_list"))
         (is (some #{"tool-execution-end"} (map :event-type events)))
         (is (some (fn [{:keys [request]}]
                     (some #(= "tool" (:role %)) (:messages request)))
@@ -487,8 +487,8 @@
   (let [path (temp-db-path)
         responses (atom [{:tool-calls [{:id "call_fs"
                                         :type "function"
-                                        :function {:name "fs"
-                                                   :arguments (json/generate-string {:action "list" :path "."})}}
+                                        :function {:name "fs_list"
+                                                   :arguments (json/generate-string {:path "."})}}
                                        {:id "call_respond"
                                         :type "function"
                                         :function {:name "respond"
@@ -514,13 +514,13 @@
                                       :messages [{:role "user" :content "list files"}]
                                       :on-tool-call #(swap! tool-events conj %)})]
         (is (= "listed" (:content result)))
-        (is (= ["fs"] (mapv #(some-> (get-in % [:receipt :tool-name]) name) @tool-events))))
+        (is (= ["fs_list"] (mapv #(some-> (get-in % [:receipt :tool-name]) name) @tool-events))))
       (finally
         (io/delete-file path true)))))
 
 (deftest chat-loop-uses-configured-max-steps-test
   (let [path (temp-db-path)
-        responses (atom [(tool-call-response :fs {:action "list" :path "."})
+        responses (atom [(tool-call-response :fs_list {:path "."})
                          "listed"])
         requests (atom [])
         provider (->PlannerProvider responses requests)
@@ -642,7 +642,7 @@
   (let [path (temp-db-path)
         release-tool (promise)
         tool-started (promise)
-        responses (atom [(tool-call-response :fs {:action "list" :path "."})
+        responses (atom [(tool-call-response :fs_list {:path "."})
                          "first done"
                          "second done"])
         requests (atom [])
@@ -662,9 +662,9 @@
                                                             :result (get-in directive [:payload :result])}
                                                  :tool-call {:directive :tool-call
                                                              :status :ok
-                                                             :tool-name :fs
+                                                             :tool-name :fs_list
                                                              :tool-call-id "call_fs"
-                                                             :input {:action "list"}
+                                                             :input {:path "."}
                                                              :result "listed"}))
                                              (:directives step))))]
         (let [first-f (future
@@ -722,7 +722,14 @@
                          "next answer"])
         requests (atom [])
         provider (->PlannerProvider responses requests)
-        system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
+        system (test-system path provider
+                            (fn [cfg]
+                              (let [provider-key (get-in cfg [:llm :active-provider])
+                                    model (get-in cfg [:llm :providers provider-key :model])]
+                                (-> cfg
+                                    (assoc-in [:memory :facts :extractor :enabled] false)
+                                    (assoc-in [:llm :providers provider-key :models model :chat-profile]
+                                              {:small-model? false})))))
         session (sessions/create-session! system "truncation")]
     (try
       (let [first-result (chat/run! system {:session-id (:id session)
@@ -754,8 +761,8 @@
       (sqlite/append-message! (:store system) (:id session) "assistant" ""
                               {:tool-calls [{:id "call_missing"
                                              :type "function"
-                                             :function {:name "fs"
-                                                        :arguments "{\"action\":\"list\"}"}}]})
+                                             :function {:name "fs_list"
+                                                        :arguments "{\"path\":\".\"}"}}]})
       (is (= "recovered"
              (:content (chat/run! system {:session-id (:id session)
                                           :messages [{:role "user" :content "continue"}]}))))
@@ -796,7 +803,7 @@
 
 (deftest chat-loop-persists-tool-turns-to-messages-table-test
   (let [path (temp-db-path)
-        responses (atom [(tool-call-response "call_fs_1" :fs {:action "list" :path "."})
+        responses (atom [(tool-call-response "call_fs_1" :fs_list {:path "."})
                          "listed"])
         requests (atom [])
         provider (->PlannerProvider responses requests)
@@ -810,7 +817,7 @@
             assistant-tool-call (some #(when (seq (:tool-calls %)) %) messages)
             tool-msg (some #(when (= "tool" (:role %)) %) messages)]
         (is (= ["user" "assistant" "tool" "assistant"] roles))
-        (is (= "fs" (:name (first (:tool-calls assistant-tool-call)))))
+        (is (= "fs_list" (:name (first (:tool-calls assistant-tool-call)))))
         (is (= "call_fs_1" (get-in (first (:tool-calls assistant-tool-call)) [:id])))
         (is (= "call_fs_1" (:tool-call-id tool-msg)))
         (is (= "listed" (:content (last messages)))))
@@ -829,8 +836,8 @@
       (sqlite/append-message! (:store system) (:id session) "assistant" ""
                               {:tool-calls [{:id "call_fs_9"
                                              :type "function"
-                                             :function {:name "fs"
-                                                        :arguments "{\"action\":\"list\"}"}}]})
+                                             :function {:name "fs_list"
+                                                        :arguments "{\"path\":\".\"}"}}]})
       (sqlite/append-message! (:store system) (:id session) "tool"
                               "{\"status\":\"ok\"}"
                               {:tool-call-id "call_fs_9"})
@@ -865,8 +872,8 @@
       (sqlite/append-message! (:store system) (:id session) "assistant" ""
                               {:tool-calls [{:id "call_big"
                                              :type "function"
-                                             :function {:name "fs"
-                                                        :arguments "{\"action\":\"read\"}"}}]})
+                                             :function {:name "fs_list"
+                                                        :arguments "{\"path\":\".\"}"}}]})
       (sqlite/append-message! (:store system) (:id session) "tool" large-content
                               {:tool-call-id "call_big"})
       (chat/run! system {:session-id (:id session)
@@ -924,9 +931,9 @@
 (deftest tool-output-content-truncates-large-results-test
   (let [large-result (apply str (repeat 9000 "x"))
         content (runtime-loop/tool-output-content {:status :completed
-                                                   :tool-name :memory
+                                                   :tool-name :memory_search
                                                    :result large-result
-                                                   :input {:action "search"}})]
+                                                   :input {:query "x"}})]
     (is (str/includes? content "[truncated "))
     (is (not (str/includes? content "\"result\"")))
     (is (< (count content) (count large-result)))
@@ -936,8 +943,8 @@
   (let [path (temp-db-path)
         responses (atom [{:tool-calls [{:id "call_fs_1"
                                         :type "function"
-                                        :function {:name "fs"
-                                                   :arguments "{\"action\":\"list\",\"path\":\".\"}"}}]}
+                                        :function {:name "fs_list"
+                                                   :arguments "{\"path\":\".\"}"}}]}
                          "listed"])
         requests (atom [])
         provider (->PlannerProvider responses requests)
@@ -1043,13 +1050,13 @@
 
 (deftest chat-loop-denies-blocked-tool-and-continues-test
   (let [path (temp-db-path)
-        responses (atom [(tool-call-response :fs {:action "list" :path "."})
+        responses (atom [(tool-call-response :fs_list {:path "."})
                          "cannot use fs"])
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path
                             provider
-                            #(assoc-in % [:tools :policy :blocklist] [:fs]))
+                            #(assoc-in % [:tools :policy :blocklist] [:fs_list]))
         session (sessions/create-session! system "blocked-tool")]
     (try
       (let [result (chat/run! system {:session-id (:id session)

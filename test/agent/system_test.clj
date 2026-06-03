@@ -61,7 +61,13 @@
         adapters (channel-adapters/list-adapters (:channel-adapter-registry system))
         runner-keys (-> system :runner-registry keys set)
         system-health (system-health/health-check system)]
-    (is (every? tool-names [:fs :http :memory :message_search :shell :system_reload :todo]))
+    (is (every? tool-names [:fs_read :fs_write :fs_create :fs_replace :fs_list
+                            :fs_delete :fs_mkdir :http
+                            :memory_search :memory_save_fact :memory_remove_fact
+                            :memory_save_graph_fact :memory_remove_graph_fact
+                            :memory_datalog :memory_read_vault :memory_write_vault
+                            :message_search :shell :system_reload
+                            :todo_write :todo_get :todo_list :todo_search]))
     (is (= ["Discord" "Slack" "Telegram"] (mapv :display-name adapters)))
     (is (contains? runner-keys :local-unsandboxed))
     (is (contains? runner-keys :bubblewrap))
@@ -123,8 +129,8 @@
                             #"startup policy"
                             (tool-service/execute-tool {:tool-registry blocked-registry
                                                   :config {:tools (:tools config/default-config)}}
-                                                 :fs
-                                                 {:action "list" :path "."}
+                                                 :fs_list
+                                                 {:path "."}
                                                  {:permissions #{:filesystem-read}})))
       (is (= "hi"
              (:stdout (tool-service/execute-tool {:tool-registry yolo-registry
@@ -168,9 +174,8 @@
                             (tool-service/execute-agent-tool!
                              system
                              (:id agent)
-                             :fs
-                             {:action "write"
-                              :path target
+                             :fs_write
+                             {:path target
                               :content "blocked"}
                              {:permissions #{:filesystem-write}
                               :yolo? true})))
@@ -196,31 +201,30 @@
                             #"Tool scope missing"
                             (tool-service/execute-tool {:tool-registry scoped-registry
                                                   :config {:tools scoped-tools}}
-                                                 :fs
-                                                 {:action "list" :path "."}
+                                                 :fs_list
+                                                 {:path "."}
                                                  {:permissions #{:filesystem-read}})))
       (is (vector?
            (:entries (tool-service/execute-tool {:tool-registry scoped-registry
                                            :config {:tools scoped-tools}}
-                                          :fs
-                                          {:action "list" :path "."}
+                                          :fs_list
+                                          {:path "."}
                                           {:permissions #{:filesystem-read}
                                            :tool-scopes [:workspace]}))))
-      (doseq [input [{:action "write" :path target :content "blocked"}
-                     {:action "create" :path target :content "blocked"}
-                     {:action "replace" :path target :old-string "old" :new-string "new"}]]
+      (doseq [[tool-name input] [[:fs_write {:path target :content "blocked"}]
+                                 [:fs_create {:path target :content "blocked"}]
+                                 [:fs_replace {:path target :old-string "old" :new-string "new"}]]]
         (is (thrown-with-msg? clojure.lang.ExceptionInfo
                               #"approved request"
                               (tool-service/execute-tool {:tool-registry write-registry
                                                     :config {:tools (:tools config/default-config)}}
-                                                   :fs
+                                                   tool-name
                                                    input
                                                    {:permissions #{:filesystem-write}}))))
       (is (:written (tool-service/execute-tool {:tool-registry write-registry
                                           :config {:tools (assoc (:tools config/default-config) :yolo? true)}}
-                                         :fs
-                                         {:action "write"
-                                          :path target
+                                         :fs_write
+                                         {:path target
                                           :content "allowed"}
                                          {:permissions #{:filesystem-write}})))
       (is (= "allowed" (slurp target)))

@@ -47,12 +47,11 @@
       (is (= "ok" (get-in step [:directives 0 :payload :result]))))))
 
 (deftest planner-passes-native-tool-defs-and-converts-tool-calls-test
-  (let [tool {:name :fs
+  (let [tool {:name :fs_list
               :description "Filesystem"
               :input-schema {:type "object"
-                             :properties {:action {:type "string"}
-                                          :path {:type "string"}}
-                             :required ["action" "path"]
+                             :properties {:path {:type "string"}}
+                             :required ["path"]
                              :additionalProperties false}}
         captured (atom nil)
         provider (reify llm/ILLMProviderInvoke
@@ -62,8 +61,8 @@
                       :content nil
                       :tool-calls [{:id "call_1"
                                     :type "function"
-                                    :function {:name "fs"
-                                               :arguments "{\"action\":\"list\",\"path\":\".\"}"}}]
+                                    :function {:name "fs_list"
+                                               :arguments "{\"path\":\".\"}"}}]
                       :usage nil
                       :raw nil})
                    (generate [this messages opts]
@@ -71,11 +70,11 @@
         step (planner/plan-step! provider {:messages [{:role "user" :content "list files"}]
                                            :tools [tool]})]
     (is (= "function" (get-in @captured [:tools 0 :type])))
-    (is (= "fs" (get-in @captured [:tools 0 :function :name])))
+    (is (= "fs_list" (get-in @captured [:tools 0 :function :name])))
     (is (nil? (:structured-output @captured)))
     (is (= :tool-call (get-in step [:directives 0 :type])))
-    (is (= "fs" (get-in step [:directives 0 :payload :tool-name])))
-    (is (= {:action "list" :path "."} (get-in step [:directives 0 :payload :input])))
+    (is (= "fs_list" (get-in step [:directives 0 :payload :tool-name])))
+    (is (= {:path "."} (get-in step [:directives 0 :payload :input])))
     (is (= "call_1" (get-in step [:directives 0 :payload :context :provider-tool-call-id])))))
 
 (deftest planner-passes-session-id-test

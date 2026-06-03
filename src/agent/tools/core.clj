@@ -227,7 +227,7 @@
      :parallel-safe? (boolean parallel-safe?)
      :approval-sensitive? approval-sensitive?*
      :activates-tools? (boolean activates-tools?)
-     :action-key (or action-key :action)
+     :action-key action-key
      :read-only-actions (action-set read-only-actions)
      :parallel-safe-actions (action-set parallel-safe-actions)
      :sensitive sensitive?

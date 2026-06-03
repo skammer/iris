@@ -313,6 +313,17 @@
     (not (str/blank? (str path))) (assoc :path path)
     (contains? body :content) (assoc :content content)))
 
+(defn- memory-tool-target [{:keys [action] :as input}]
+  (case (keyword (str/lower-case (str action)))
+    :search [:memory_search (dissoc input :action)]
+    :save-fact [:memory_save_fact (dissoc input :action)]
+    :remove-fact [:memory_remove_fact (dissoc input :action)]
+    :save-graph-fact [:memory_save_graph_fact (dissoc input :action)]
+    :remove-graph-fact [:memory_remove_graph_fact (dissoc input :action)]
+    :datalog [:memory_datalog (dissoc input :action)]
+    :read-vault [:memory_read_vault (dissoc input :action)]
+    :write-vault [:memory_write_vault (dissoc input :action)]))
+
 (defn- memory-search-source-json [system {:keys [action query limit scope]}]
   (when (and (= :search (keyword (str/lower-case (str action))))
              (not (str/blank? (str query))))
@@ -326,11 +337,12 @@
   (try
     (let [body (h/read-form-body request)
           input (memory-tool-input body)
+          [tool-name tool-input] (memory-tool-target input)
           result (tools/execute-tool (:tool-registry system)
-                                     :memory
-                                     input
+                                     tool-name
+                                     tool-input
                                      (assoc
-                                      (tools-h/execution-context system :ui :memory input
+                                      (tools-h/execution-context system :ui tool-name tool-input
                                                                  {:user "ui-memory"})
                                       :permissions #{:memory-read :memory-write}))]
       (responses/html-response

@@ -22,8 +22,20 @@
     (string? tool) (keyword tool)
     :else tool))
 
+(def ^:private tool-family-aliases
+  {:fs #{:fs_read :fs_write :fs_create :fs_replace :fs_list :fs_delete :fs_mkdir}
+   :memory #{:memory_search :memory_save_fact :memory_remove_fact
+             :memory_save_graph_fact :memory_remove_graph_fact
+             :memory_datalog :memory_read_vault :memory_write_vault
+             :message_search}
+   :todo #{:todo_write :todo_get :todo_list :todo_search}})
+
+(defn- expand-tool-name [tool]
+  (let [tool* (normalize-tool-name tool)]
+    (or (tool-family-aliases tool*) #{tool*})))
+
 (defn- tool-name-set [tools]
-  (set (map normalize-tool-name tools)))
+  (set (mapcat expand-tool-name tools)))
 
 (defn create-tool-policy-hook
   [cfg]
@@ -31,8 +43,10 @@
         allowlist (tool-name-set (:allowlist policy))
         blocklist (tool-name-set (:blocklist policy))
         tool-scopes (into {}
-                          (map (fn [[tool scopes]]
-                                 [(normalize-tool-name tool) (set (map keyword scopes))]))
+                          (mapcat (fn [[tool scopes]]
+                                    (map (fn [tool-name]
+                                           [tool-name (set (map keyword scopes))])
+                                         (expand-tool-name tool))))
                           (:tool-scopes policy))]
     (fn [{:keys [tool context]}]
       (let [tool-name (:name tool)
@@ -137,14 +151,23 @@
        (tools/register-tool (http-tool/create-http-tool http-cfg))
 
        (not= false (:enabled fs-cfg))
-       (tools/register-tool (fs-tool/create-fs-tool fs-cfg))
+       (as-> registry*
+             (reduce tools/register-tool
+                     registry*
+                     (fs-tool/create-fs-tools fs-cfg)))
 
        memory-service
-       (-> (tools/register-tool (memory-tool/create-memory-tool memory-service))
-           (tools/register-tool (memory-tool/create-message-search-tool memory-service)))
+       (as-> registry*
+             (reduce tools/register-tool
+                     registry*
+                     (conj (memory-tool/create-memory-tools memory-service)
+                           (memory-tool/create-message-search-tool memory-service))))
 
        (and store (not= false (:enabled todo-cfg)))
-       (tools/register-tool (todo-tool/create-todo-tool store))
+       (as-> registry*
+             (reduce tools/register-tool
+                     registry*
+                     (todo-tool/create-todo-tools store)))
 
        (not= false (:enabled shell-cfg))
        (tools/register-tool (shell-tool/create-shell-tool shell-cfg))
@@ -179,7 +202,7 @@
          {:permissions (tool-permissions system :agent)
           :yolo? (true? (get-in system [:config :tools :yolo?]))
           :user (or (:user context) agent-id)
-          :allowed-tools (set (:tool-access agent))}))
+          :allowed-tools (tool-name-set (:tool-access agent))}))
 
 (defn execute-agent-tool!
   ([system agent-id tool-name input]

@@ -33,12 +33,28 @@
 (defn classify-tool [tool]
   (case (tool-name tool)
     :respond #{:respond}
-    :fs #{:read :write}
+    :fs_read #{:read}
+    :fs_list #{:read :search}
+    :fs_write #{:write}
+    :fs_create #{:write}
+    :fs_replace #{:write}
+    :fs_delete #{:write}
+    :fs_mkdir #{:write}
     :shell #{:run}
     :http #{:web :read}
-    :memory #{:search :read}
+    :memory_search #{:search :read}
+    :memory_save_fact #{:write}
+    :memory_remove_fact #{:write}
+    :memory_save_graph_fact #{:write}
+    :memory_remove_graph_fact #{:write}
+    :memory_datalog #{:search :read}
+    :memory_read_vault #{:read}
+    :memory_write_vault #{:write}
     :message_search #{:search :read}
-    :todo #{:read :write :search :plan}
+    :todo_write #{:write :plan}
+    :todo_get #{:read :plan}
+    :todo_list #{:read :search :plan}
+    :todo_search #{:read :search :plan}
     :telegram_send_photo #{:messaging}
     :telegram_send_document #{:messaging}
     :system_reload #{:run}
@@ -46,7 +62,7 @@
       :respond #{:respond}
       :system #{:run}
       :messaging #{:messaging}
-      :memory #{:search :read}
+      :memory #{:search :read :write}
       #{:read})))
 
 (defn infer-categories [messages]

@@ -13,23 +13,15 @@
   [tool-name input]
   (case tool-name
     :shell true
-    :fs (contains? #{:write :create :replace :delete :mkdir}
-                   (cond
-                     (keyword? (:action input)) (:action input)
-                     (string? (:action input)) (keyword (str/lower-case (:action input)))
-                     :else nil))
+    (:fs_write :fs_create :fs_replace :fs_delete :fs_mkdir) true
     false))
 
 (defn granted-permissions
   [tool-name input]
   (case tool-name
     :shell #{:shell-exec}
-    :fs (case (cond
-                (keyword? (:action input)) (:action input)
-                (string? (:action input)) (keyword (str/lower-case (:action input)))
-                :else nil)
-          (:write :create :replace :delete :mkdir) #{:filesystem-write}
-          #{:filesystem-read})
+    (:fs_write :fs_create :fs_replace :fs_delete :fs_mkdir) #{:filesystem-write}
+    (:fs_read :fs_list) #{:filesystem-read}
     #{}))
 
 (defn- sha256-hex [value]

@@ -8,37 +8,37 @@
    (java.util.regex Pattern)))
 
 (def default-rules
-  [{:argv ["pwd"] :action :allow}
-   {:argv ["printf" "**"] :action :allow}
-   {:argv ["echo" "**"] :action :allow}
-   {:argv ["which" "**"] :action :allow}
-   {:argv ["type" "**"] :action :allow}
-   {:argv ["ls" "**"] :action :allow}
-   {:argv ["cat" "**"] :action :allow}
-   {:argv ["head" "**"] :action :allow}
-   {:argv ["tail" "**"] :action :allow}
-   {:argv ["wc" "**"] :action :allow}
-   {:argv ["df" "**"] :action :allow}
-   {:argv ["uname" "**"] :action :allow}
-   {:argv ["sort" "**"] :action :allow}
-   {:argv ["uniq" "**"] :action :allow}
-   {:argv ["cut" "**"] :action :allow}
-   {:argv ["diff" "**"] :action :allow}
-   {:argv ["rg" "**"] :action :allow}
-   {:argv ["grep" "**"] :action :allow}
-   {:argv ["find" "**"] :action :allow}
-   {:argv ["git" "status" "**"] :action :allow}
-   {:argv ["git" "log" "**"] :action :allow}
-   {:argv ["git" "diff" "**"] :action :allow}
-   {:argv ["git" "show" "**"] :action :allow}
-   {:argv ["git" "branch" "**"] :action :allow}
-   {:argv ["cargo" "fmt" "**"] :action :allow}
-   {:argv ["rm" "-rf" "/*"] :action :deny}
-   {:argv ["sudo" "rm" "-rf" "/*"] :action :deny}
-   {:argv ["dd" "**"] :action :deny}
-   {:argv ["mkfs" "**"] :action :deny}
-   {:argv ["fdisk" "**"] :action :deny}
-   {:argv ["mkswap" "**"] :action :deny}])
+  [{:argv ["pwd"] :decision :allow}
+   {:argv ["printf" "**"] :decision :allow}
+   {:argv ["echo" "**"] :decision :allow}
+   {:argv ["which" "**"] :decision :allow}
+   {:argv ["type" "**"] :decision :allow}
+   {:argv ["ls" "**"] :decision :allow}
+   {:argv ["cat" "**"] :decision :allow}
+   {:argv ["head" "**"] :decision :allow}
+   {:argv ["tail" "**"] :decision :allow}
+   {:argv ["wc" "**"] :decision :allow}
+   {:argv ["df" "**"] :decision :allow}
+   {:argv ["uname" "**"] :decision :allow}
+   {:argv ["sort" "**"] :decision :allow}
+   {:argv ["uniq" "**"] :decision :allow}
+   {:argv ["cut" "**"] :decision :allow}
+   {:argv ["diff" "**"] :decision :allow}
+   {:argv ["rg" "**"] :decision :allow}
+   {:argv ["grep" "**"] :decision :allow}
+   {:argv ["find" "**"] :decision :allow}
+   {:argv ["git" "status" "**"] :decision :allow}
+   {:argv ["git" "log" "**"] :decision :allow}
+   {:argv ["git" "diff" "**"] :decision :allow}
+   {:argv ["git" "show" "**"] :decision :allow}
+   {:argv ["git" "branch" "**"] :decision :allow}
+   {:argv ["cargo" "fmt" "**"] :decision :allow}
+   {:argv ["rm" "-rf" "/*"] :decision :deny}
+   {:argv ["sudo" "rm" "-rf" "/*"] :decision :deny}
+   {:argv ["dd" "**"] :decision :deny}
+   {:argv ["mkfs" "**"] :decision :deny}
+   {:argv ["fdisk" "**"] :decision :deny}
+   {:argv ["mkswap" "**"] :decision :deny}])
 
 (defn- canonical-path [path]
   (.getCanonicalPath (io/file path)))
@@ -94,24 +94,24 @@
 
       (and (= "rm" binary)
            (rm-recursive-force? args))
-      {:action :deny
+      {:decision :deny
        :reason "Command denied by authoritative shell safety rule"
        :details {:binary binary
                  :argv argv}}
 
       (contains? always-denied-binaries binary)
-      {:action :deny
+      {:decision :deny
        :reason "Command denied by authoritative shell safety rule"
        :details {:binary binary
                  :argv argv}}
 
       :else nil)))
 
-(defn- normalize-action [action]
+(defn- normalize-decision [decision]
   (cond
-    (keyword? action) action
-    (string? action) (keyword (str/lower-case action))
-    :else action))
+    (keyword? decision) decision
+    (string? decision) (keyword (str/lower-case decision))
+    :else decision))
 
 (defn- legacy-policy-config? [config]
   (and (map? config)
@@ -129,7 +129,7 @@
 (defn- normalize-rule [rule]
   (when (map? rule)
     {:argv (normalize-rule-pattern rule)
-     :action (normalize-action (:action rule))}))
+     :decision (normalize-decision (or (:decision rule) (:action rule)))}))
 
 (defn- glob-token-matches? [pattern value]
   (if (= "*" pattern)
@@ -149,38 +149,39 @@
               :else false))]
     (matches? pattern argv)))
 
-(defn- legacy-policy-action [config argv]
+(defn- legacy-policy-decision [config argv]
   (let [allowed (set (:allowed-commands config))
         blocked (set (:blocked-commands config))
         binary (binary-basename (first argv))]
     (cond
-      (contains? blocked binary) {:action :deny
+      (contains? blocked binary) {:decision :deny
                                   :reason "Command is in shell blocklist"
                                   :details {:command binary
                                             :blocked-commands (vec (:blocked-commands config))}}
       (and (:deny-by-default? config)
-           (not (contains? allowed binary))) {:action :deny
+           (not (contains? allowed binary))) {:decision :deny
                                               :reason "Command is not in shell allowlist"
                                               :details {:command binary
                                                         :allowed-commands (vec (:allowed-commands config))}}
-      :else {:action :allow})))
+      :else {:decision :allow})))
 
-(defn- rule-policy-action [config argv]
+(defn- rule-policy-decision [config argv]
   (let [rules (keep normalize-rule (:rules config))
         argv* (policy-argv argv)
         matches (filter #(argv-pattern-matches? (:argv %) argv*) rules)
         rule (last matches)]
-    {:action (or (:action rule)
-                 (normalize-action (:default-action config))
-                 :ask)
+    {:decision (or (:decision rule)
+                   (normalize-decision (or (:default-decision config)
+                                           (:default-action config)))
+                   :ask)
      :rule rule}))
 
-(defn- shell-policy-action [config argv]
+(defn- shell-policy-decision [config argv]
   (if-let [deny (authoritative-deny argv)]
     deny
     (if (legacy-policy-config? config)
-      (legacy-policy-action config argv)
-      (rule-policy-action config argv))))
+      (legacy-policy-decision config argv)
+      (rule-policy-decision config argv))))
 
 (defn- validate-input [input]
   (let [argv (or (:argv input)
@@ -196,8 +197,8 @@
   (.waitFor process timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS))
 
 (defn- ensure-not-denied! [config argv]
-  (let [{:keys [action reason details rule]} (shell-policy-action config argv)]
-    (when (= :deny action)
+  (let [{:keys [decision reason details rule]} (shell-policy-decision config argv)]
+    (when (= :deny decision)
       (throw (tools/tool-error :command-not-allowed
                                (or reason "Command denied by shell rule")
                                (merge {:argv argv
@@ -228,7 +229,7 @@
                         {:deny-by-default? true
                          :allowed-commands ["printf" "pwd" "ls" "echo" "cat" "rg" "git" "df"]
                          :blocked-commands []}
-                        {:default-action :ask
+                        {:default-decision :ask
                          :rules default-rules})
                       opts)
         roots (mapv canonical-path (:roots config))]
@@ -248,14 +249,14 @@
        :operation :act
        :approval-sensitive? true
        :sensitive (fn [input]
-                    (= :ask (:action (shell-policy-action config (:argv input)))))
+                    (= :ask (:decision (shell-policy-decision config (:argv input)))))
        :source :builtin)
       :validate-fn validate-input
       :health-fn (fn []
                    {:healthy true
                     :details {:roots roots
                               :working-dir (canonical-path (:working-dir config))
-                              :default-action (:default-action config)
+                              :default-decision (:default-decision config)
                               :rules (:rules config)
                               :max-timeout-ms (:max-timeout-ms config)}})
       :execute-fn

@@ -4,7 +4,9 @@
    [clojure.test :refer :all]))
 
 (def tools
-  [{:name :fs :category :system}
+  [{:name :fs_read :category :system}
+   {:name :fs_list :category :system}
+   {:name :fs_write :category :system}
    {:name :shell :category :system}
    {:name :http :category :system}
    {:name :telegram_send_document :category :messaging}])
@@ -15,7 +17,7 @@
                  :profile {:respond-tool? true
                            :tool-routing? true}
                  :messages [{:role "user" :content "read file"}]})]
-    (is (= #{:fs :http :respond} (:allowed-tools routed)))))
+    (is (= #{:fs_read :fs_list :http :respond} (:allowed-tools routed)))))
 
 (deftest route-tools-keeps-telegram-document-for-russian-send-request-test
   (let [routed (tool-router/route-tools
@@ -33,7 +35,7 @@
                            :tool-routing? true}
                  :messages [{:role "user"
                              :content "попробуем ещё раз. А отправь мне какой-нибудь документ. Ну типа найди в ~ и отправь"}]})]
-    (is (= #{:fs :http :telegram_send_document :respond} (:allowed-tools routed)))))
+    (is (= #{:fs_read :fs_list :http :telegram_send_document :respond} (:allowed-tools routed)))))
 
 (deftest route-tools-fallback-all-test
   (let [routed (tool-router/route-tools
@@ -41,4 +43,4 @@
                  :profile {:respond-tool? true
                            :tool-routing? false}
                  :messages []})]
-    (is (= #{:fs :shell :http :telegram_send_document :respond} (:allowed-tools routed)))))
+    (is (= #{:fs_read :fs_list :fs_write :shell :http :telegram_send_document :respond} (:allowed-tools routed)))))

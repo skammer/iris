@@ -92,9 +92,8 @@
 
 (defn- fs-mutation? [directive]
   (and (tool-call-directive? directive)
-       (= :fs (keyword (get-in directive [:payload :tool-name])))
-       (contains? #{:write :create :replace :delete :mkdir}
-                  (keyword (get-in directive [:payload :input :action])))))
+       (contains? #{:fs_write :fs_create :fs_replace :fs_delete :fs_mkdir}
+                  (keyword (get-in directive [:payload :tool-name])))))
 
 (defn- fs-prereq-ok? [state path]
   (let [path* (str path)
@@ -158,8 +157,7 @@
                              %)
                           directives)]
         {:reason :missing-prerequisite
-         :fingerprint {:tool-name :fs
-                       :action (keyword (get-in blocked [:payload :input :action]))
+         :fingerprint {:tool-name (keyword (get-in blocked [:payload :tool-name]))
                        :path (get-in blocked [:payload :input :path])}})
 
       (and (:respond-tool? profile*) (seq tool-calls) (some respond-call? directives) (> (count tool-calls) 1))
@@ -197,7 +195,8 @@
         {:reason :repeated-same-error
          :fingerprint fp})
       (some (fn [receipt]
-              (when (and (= :fs (keyword (:tool-name receipt)))
+              (when (and (contains? #{:fs_write :fs_create :fs_replace :fs_delete :fs_mkdir}
+                                    (keyword (:tool-name receipt)))
                          (contains? #{:error :denied} (keyword (:status receipt)))
                          (contains? #{:not-found :not-directory :path-not-allowed :validation-failed}
                                     (keyword (:error-type receipt))))
@@ -272,7 +271,7 @@
                    :input (get-in tool-directive [:payload :input])})
         error-fp (some error-fingerprint
                        (filter #(contains? #{:error :denied :blocked} (keyword (:status %))) receipts))
-        fs-successes (filter #(and (= :fs (keyword (:tool-name %)))
+        fs-successes (filter #(and (contains? #{:fs_read :fs_list} (keyword (:tool-name %)))
                                    (contains? #{:ok :completed} (keyword (:status %))))
                              receipts)]
     (cond-> state
@@ -281,11 +280,11 @@
       (seq fs-successes)
       (as-> s
           (reduce (fn [acc receipt]
-                    (let [action (keyword (get-in receipt [:input :action]))
+                    (let [tool-name (keyword (:tool-name receipt))
                           path (str (get-in receipt [:input :path]))]
-                      (case action
-                        :read (update acc :fs-read-paths conj path)
-                        :list (update acc :fs-listed-paths conj path)
+                      (case tool-name
+                        :fs_read (update acc :fs-read-paths conj path)
+                        :fs_list (update acc :fs-listed-paths conj path)
                         acc)))
                   s
                   fs-successes)))))

@@ -625,16 +625,15 @@
       [:div.meta (str "available: " (str/join ", " (map (comp name :name) tool-list)))]
       [:form#fs-tool-form
        [:h3 "Filesystem"]
-       [:input {:type "hidden" :name "tool" :value "fs"}]
        [:div.dual
-        [:select {:name "action"}
-         [:option {:value "list"} "list"]
-         [:option {:value "read"} "read"]
-         [:option {:value "write"} "write"]
-         [:option {:value "mkdir"} "mkdir"]
-         [:option {:value "delete"} "delete"]]
+        [:select {:name "tool"}
+         [:option {:value "fs_list"} "list"]
+         [:option {:value "fs_read"} "read"]
+         [:option {:value "fs_write"} "write"]
+         [:option {:value "fs_mkdir"} "mkdir"]
+         [:option {:value "fs_delete"} "delete"]]
         [:input {:type "text" :name "path" :value "." :placeholder "path"}]]
-       [:textarea {:name "content" :placeholder "content for write action"}]
+       [:textarea {:name "content" :placeholder "content for write"}]
        [:input {:type "text" :name "reason" :placeholder "why this action is needed"}]
        [:div.actions
         [:button {:type "button"

@@ -20,9 +20,10 @@
    store))
 
 (defn- registry [service]
-  (-> (tools/create-registry)
-      (tools/register-tool (memory-tool/create-memory-tool service))
-      (tools/register-tool (memory-tool/create-message-search-tool service))))
+  (reduce tools/register-tool
+          (tools/create-registry)
+          (conj (memory-tool/create-memory-tools service)
+                (memory-tool/create-message-search-tool service))))
 
 (deftest memory-tool-search-uses-facts-graph-and-prompt-files-test
   (let [path (temp-db-path)
@@ -54,9 +55,8 @@
                                 {:scope {:type :global}
                                  :source-session-id (:id session)})
       (let [result (tools/execute-tool registry*
-                                       :memory
-                                       {:action :search
-                                        :query "Kimi"
+                                       :memory_search
+                                       {:query "Kimi"
                                         :limit 3}
                                        {:permissions #{:memory-read}
                                         :session-id (:id session)})]
@@ -70,9 +70,8 @@
         (is (not (str/includes? result "\"messages\"")))
         (is (not (str/includes? result "\"ranked\""))))
       (let [blank-result (tools/execute-tool registry*
-                                             :memory
-                                             {:action :search
-                                              :query ""}
+                                             :memory_search
+                                             {:query ""}
                                              {:permissions #{:memory-read}
                                               :session-id (:id session)})]
         (is (= "Memory search skipped: query is blank. Provide a focused query."
@@ -102,9 +101,8 @@
                                   {:scope {:type :global}
                                    :source-session-id (:id session)}))
       (let [result (tools/execute-tool registry*
-                                       :memory
-                                       {:action :search
-                                        :query "Kimi"
+                                       :memory_search
+                                       {:query "Kimi"
                                         :limit 99}
                                        {:permissions #{:memory-read}
                                         :session-id (:id session)})
@@ -169,18 +167,16 @@
         registry* (registry service)]
     (try
       (tools/execute-tool registry*
-                          :memory
-                          {:action :save-fact
-                           :subject "Kimi"
+                          :memory_save_fact
+                          {:subject "Kimi"
                            :predicate "stores"
                            :object "facts"
                            :scope {:type :global}}
                           {:permissions #{:memory-write}})
       (is (= 1 (count (memory/search-facts service "Kimi" {:all-scopes? true}))))
       (tools/execute-tool registry*
-                          :memory
-                          {:action :remove-fact
-                           :subject "Kimi"
+                          :memory_remove_fact
+                          {:subject "Kimi"
                            :predicate "stores"
                            :object "facts"
                            :scope {:type :global}}
@@ -208,9 +204,8 @@
         registry* (registry service)]
     (try
       (tools/execute-tool registry*
-                          :memory
-                          {:action :save-graph-fact
-                           :id "graph-kimi-fact"
+                          :memory_save_graph_fact
+                          {:id "graph-kimi-fact"
                            :subject "Kimi"
                            :predicate "powers"
                            :object "graph memory"}
@@ -219,16 +214,14 @@
              (mapv :object (memory/query-graph-memory service "Kimi" {:mode :facts}))))
       (is (str/includes?
            (tools/execute-tool registry*
-                               :memory
-                               {:action :datalog
-                                :query "[:find ?label :where [?e :entity/label ?label]]"
+                               :memory_datalog
+                               {:query "[:find ?label :where [?e :entity/label ?label]]"
                                 :limit 10}
                                {:permissions #{:memory-read}})
            "Kimi"))
       (tools/execute-tool registry*
-                          :memory
-                          {:action :remove-graph-fact
-                           :id "graph-kimi-fact"}
+                          :memory_remove_graph_fact
+                          {:id "graph-kimi-fact"}
                           {:permissions #{:memory-write}})
       (is (empty? (memory/query-graph-memory service "Kimi" {:mode :facts})))
       (finally

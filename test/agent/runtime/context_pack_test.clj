@@ -35,8 +35,8 @@
               {:messages [{:role "assistant"
                            :content [{:type :tool-call
                                       :id "old-call"
-                                      :name "fs"
-                                      :arguments {:action "read"}}]}
+                                      :name "fs_read"
+                                      :arguments {:path "."}}]}
                           {:role "tool"
                            :content [{:type :tool-result
                                       :tool-call-id "old-call"
@@ -45,8 +45,8 @@
                           {:role "assistant"
                            :content [{:type :tool-call
                                       :id "new-call"
-                                      :name "fs"
-                                      :arguments {:action "list"}}]}
+                                      :name "fs_list"
+                                      :arguments {:path "."}}]}
                           {:role "tool"
                            :content [{:type :tool-result
                                       :tool-call-id "new-call"
@@ -67,8 +67,8 @@
                           {:role "assistant"
                            :content [{:type :tool-call
                                       :id "call_keep"
-                                      :name "fs"
-                                      :arguments {:action "list"}}]}
+                                      :name "fs_list"
+                                      :arguments {:path "."}}]}
                           {:role "tool"
                            :content [{:type :tool-result
                                       :tool-call-id "call_keep"
@@ -102,8 +102,8 @@
   (let [base-message {:role "assistant"
                       :content [{:type :tool-call
                                  :id "call_1"
-                                 :name "fs"
-                                 :arguments {:action "list"}}]}
+                                 :name "fs_list"
+                                 :arguments {:path "."}}]}
         bloated-message (assoc-in base-message [:content 0 :raw]
                                   {:provider-object (big "x" 8000)})
         pack (fn [message]

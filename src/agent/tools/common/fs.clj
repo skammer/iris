@@ -9,15 +9,6 @@
    [java.nio.file Files LinkOption OpenOption StandardOpenOption]
    [java.nio.file.attribute BasicFileAttributes]))
 
-(def ^:private allowed-actions
-  #{:read :write :create :replace :list :delete :mkdir})
-
-(defn- normalize-action [action]
-  (cond
-    (keyword? action) action
-    (string? action) (keyword (str/lower-case action))
-    :else nil))
-
 (defn- expand-home [path]
   (let [path (if (instance? java.io.File path) (.getPath path) (str path))
         home (System/getProperty "user.home")]
@@ -99,9 +90,6 @@
                                         StandardOpenOption/TRUNCATE_EXISTING
                                         StandardOpenOption/WRITE))))
 
-(defn- sensitive-action? [input]
-  (contains? #{:write :create :replace :delete :mkdir} (:action input)))
-
 (defn- ensure-permission! [context action]
   (let [permissions (:permissions context)]
     (case action
@@ -113,149 +101,226 @@
                                                  (throw (tools/permission-error #{:filesystem-write} permissions)))
       nil)))
 
-(defn- validate-input [input]
-    (let [action (normalize-action (:action input))]
-    (when-not (allowed-actions action)
-      (throw (tools/validation-error "action must be one of read/write/create/replace/list/delete/mkdir"
-                                     {:action (:action input)})))
-    (when (= :replace action)
-      (when-not (string? (:old-string input))
-        (throw (tools/validation-error "old-string must be a string" {:old-string (:old-string input)})))
-      (when-not (string? (:new-string input))
-        (throw (tools/validation-error "new-string must be a string" {:new-string (:new-string input)}))))
-    (assoc input :action action)))
-
-(defn create-fs-tool
+(defn create-fs-tools
   [opts]
   (let [config (merge {:roots ["."]
                        :max-read-bytes 1048576
                        :max-write-bytes 1048576}
                       opts)
-        roots (mapv canonical-path (:roots config))]
-    (tools/create-tool
-     {:description
-      (tools/create-tool-description
-       :fs
-       "Filesystem tool"
-       :category :system
-       :input-schema [:map {:closed true}
-                      [:action [:or
-                                [:enum :read :write :create :replace :list :delete :mkdir]
-                                [:enum "read" "write" "create" "replace" "list" "delete" "mkdir"]]]
-                      [:path :string]
-                      [:content {:optional true} [:maybe :string]]
-                      [:old-string {:optional true} [:maybe :string]]
-                      [:new-string {:optional true} [:maybe :string]]
-                      [:replace-all? {:optional true} [:maybe :boolean]]]
-       :prerequisites {:mutations [:read-same-path :list-parent-or-same-path]}
-       :sensitive sensitive-action?
-       :operation :act
-       :approval-sensitive? false
-       :action-key :action
-       :read-only-actions #{:read :list}
-       :parallel-safe-actions #{:read :list}
-       :source :builtin)
-      :validate-fn validate-input
-      :health-fn (fn []
-                   {:healthy true
-                    :details {:roots roots
-                              :max-read-bytes (:max-read-bytes config)
-                              :max-write-bytes (:max-write-bytes config)}})
-      :execute-fn
-      (fn [input context]
-        (let [action (:action input)
-              path-info (resolve-allowed-path! roots (:path input))
-              path (:path path-info)]
-          (ensure-permission! context action)
-          (case action
-            :read (let [attrs (regular-file-attrs! path-info)
-                        size (.size attrs)]
-                    (when (> size (:max-read-bytes config))
-                      (throw (tools/tool-error :file-too-large "File exceeds max-read-bytes"
-                                               {:path path
-                                                :size size
-                                                :max-read-bytes (:max-read-bytes config)})))
-                     {:path path
-                      :content (read-file-content! path-info)})
-            :write (do
-                     (let [content (or (:content input) "")
-                           size (alength (.getBytes content "UTF-8"))]
-                       (when (> size (:max-write-bytes config))
-                         (throw (tools/tool-error :file-too-large "Content exceeds max-write-bytes"
-                                                  {:path path
-                                                   :size size
-                                                   :max-write-bytes (:max-write-bytes config)})))
-                       (write-file-content! path-info content false))
-                     {:path path
-                      :written true})
-            :create (do
-                      (let [content (or (:content input) "")
-                            size (alength (.getBytes content "UTF-8"))]
-                        (when (Files/exists (:nio-path path-info) (nofollow-link-options))
-                          (throw (tools/tool-error :already-exists "Path already exists" {:path path})))
+        roots (mapv canonical-path (:roots config))
+        health (fn []
+                 {:healthy true
+                  :details {:roots roots
+                            :max-read-bytes (:max-read-bytes config)
+                            :max-write-bytes (:max-write-bytes config)}})
+        path-info (fn [input]
+                    (resolve-allowed-path! roots (:path input)))
+        write-size! (fn [path content]
+                      (let [size (alength (.getBytes (or content "") "UTF-8"))]
                         (when (> size (:max-write-bytes config))
                           (throw (tools/tool-error :file-too-large "Content exceeds max-write-bytes"
                                                    {:path path
                                                     :size size
-                                                    :max-write-bytes (:max-write-bytes config)})))
-                        (write-file-content! path-info content true))
-                      {:path path
-                       :created true})
-            :replace (let [old (:old-string input)
-                           new (:new-string input)
-                           replace-all? (true? (:replace-all? input))]
-                       (regular-file-attrs! path-info)
-                       (let [content (read-file-content! path-info)
-                             matches (count (re-seq (java.util.regex.Pattern/compile
-                                                     (java.util.regex.Pattern/quote old))
-                                                    content))]
-                         (cond
-                           (zero? matches)
-                           (throw (tools/tool-error :not-found "old-string not found" {:path path}))
+                                                    :max-write-bytes (:max-write-bytes config)})))))]
+    [(tools/create-tool
+      {:description
+       (tools/create-tool-description
+        :fs_read
+        "Read one file under configured filesystem roots."
+        :category :system
+        :input-schema [:map {:closed true}
+                       [:path :string]]
+        :prerequisites {:mutations [:read-same-path :list-parent-or-same-path]}
+        :operation :read
+        :parallel-safe? true
+        :source :builtin)
+       :health-fn health
+       :execute-fn
+       (fn [input context]
+         (ensure-permission! context :read)
+         (let [{:keys [path] :as info} (path-info input)
+               attrs (regular-file-attrs! info)
+               size (.size attrs)]
+           (when (> size (:max-read-bytes config))
+             (throw (tools/tool-error :file-too-large "File exceeds max-read-bytes"
+                                      {:path path
+                                       :size size
+                                       :max-read-bytes (:max-read-bytes config)})))
+           {:path path
+            :content (read-file-content! info)}))})
+     (tools/create-tool
+      {:description
+       (tools/create-tool-description
+        :fs_write
+        "Overwrite or create one file under configured filesystem roots."
+        :category :system
+        :input-schema [:map {:closed true}
+                       [:path :string]
+                       [:content {:optional true} [:maybe :string]]]
+        :prerequisites {:mutations [:read-same-path :list-parent-or-same-path]}
+        :sensitive true
+        :operation :act
+        :approval-sensitive? false
+        :source :builtin)
+       :health-fn health
+       :execute-fn
+       (fn [input context]
+         (ensure-permission! context :write)
+         (let [{:keys [path] :as info} (path-info input)
+               content (or (:content input) "")]
+           (write-size! path content)
+           (write-file-content! info content false)
+           {:path path
+            :written true}))})
+     (tools/create-tool
+      {:description
+       (tools/create-tool-description
+        :fs_create
+        "Create one new file under configured filesystem roots. Fails if path exists."
+        :category :system
+        :input-schema [:map {:closed true}
+                       [:path :string]
+                       [:content {:optional true} [:maybe :string]]]
+        :prerequisites {:mutations [:read-same-path :list-parent-or-same-path]}
+        :sensitive true
+        :operation :act
+        :approval-sensitive? false
+        :source :builtin)
+       :health-fn health
+       :execute-fn
+       (fn [input context]
+         (ensure-permission! context :create)
+         (let [{:keys [path nio-path] :as info} (path-info input)
+               content (or (:content input) "")]
+           (when (Files/exists nio-path (nofollow-link-options))
+             (throw (tools/tool-error :already-exists "Path already exists" {:path path})))
+           (write-size! path content)
+           (write-file-content! info content true)
+           {:path path
+            :created true}))})
+     (tools/create-tool
+      {:description
+       (tools/create-tool-description
+        :fs_replace
+        "Replace text in one file under configured filesystem roots."
+        :category :system
+        :input-schema [:map {:closed true}
+                       [:path :string]
+                       [:old-string :string]
+                       [:new-string :string]
+                       [:replace-all? {:optional true} [:maybe :boolean]]]
+        :prerequisites {:mutations [:read-same-path :list-parent-or-same-path]}
+        :sensitive true
+        :operation :act
+        :approval-sensitive? false
+        :source :builtin)
+       :health-fn health
+       :execute-fn
+       (fn [input context]
+         (ensure-permission! context :replace)
+         (let [{:keys [path] :as info} (path-info input)
+               old (:old-string input)
+               new (:new-string input)
+               replace-all? (true? (:replace-all? input))]
+           (regular-file-attrs! info)
+           (let [content (read-file-content! info)
+                 matches (count (re-seq (java.util.regex.Pattern/compile
+                                         (java.util.regex.Pattern/quote old))
+                                        content))]
+             (cond
+               (zero? matches)
+               (throw (tools/tool-error :not-found "old-string not found" {:path path}))
 
-                           (and (> matches 1) (not replace-all?))
-                           (throw (tools/tool-error :ambiguous-replace
-                                                    "old-string is not unique"
-                                                    {:path path
-                                                     :matches matches})))
-                         (let [content* (if replace-all?
-                                          (str/replace content old new)
-                                          (str/replace-first content
-                                                             (java.util.regex.Pattern/compile
-                                                              (java.util.regex.Pattern/quote old))
-                                                             (java.util.regex.Matcher/quoteReplacement new)))
-                               size (alength (.getBytes content* "UTF-8"))]
-                           (when (> size (:max-write-bytes config))
-                             (throw (tools/tool-error :file-too-large "Content exceeds max-write-bytes"
-                                                      {:path path
-                                                       :size size
-                                                       :max-write-bytes (:max-write-bytes config)})))
-                           (write-file-content! path-info content* false)
-                           {:path path
-                            :replaced true
-                            :matches matches})))
-            :list (let [file (io/file path)]
-                    (ensure-no-symlink-segments! path-info)
-                    (when-not (Files/isDirectory (:nio-path path-info) (nofollow-link-options))
-                      (throw (tools/tool-error :not-directory "Path is not a directory" {:path path})))
-                    {:path path
-                     :entries (->> (.listFiles file)
-                                   (map (fn [entry]
-                                          {:name (.getName entry)
-                                           :path (.getCanonicalPath entry)
-                                           :type (if (.isDirectory entry) "directory" "file")}))
-                                   (sort-by :name)
-                                   vec)})
-            :delete (let [file (io/file path)]
-                      (ensure-no-symlink-segments! path-info)
-                      (when-not (.exists file)
-                        (throw (tools/tool-error :not-found "Path not found" {:path path})))
-                      (io/delete-file file true)
-                      {:path path
-                       :deleted true})
-            :mkdir (do
-                     (ensure-no-symlink-segments! path-info)
-                     (Files/createDirectories (:nio-path path-info)
-                                              (make-array java.nio.file.attribute.FileAttribute 0))
-                     {:path path
-                      :created true}))))})))
+               (and (> matches 1) (not replace-all?))
+               (throw (tools/tool-error :ambiguous-replace
+                                        "old-string is not unique"
+                                        {:path path
+                                         :matches matches})))
+             (let [content* (if replace-all?
+                              (str/replace content old new)
+                              (str/replace-first content
+                                                 (java.util.regex.Pattern/compile
+                                                  (java.util.regex.Pattern/quote old))
+                                                 (java.util.regex.Matcher/quoteReplacement new)))]
+               (write-size! path content*)
+               (write-file-content! info content* false)
+               {:path path
+                :replaced true
+                :matches matches}))))})
+     (tools/create-tool
+      {:description
+       (tools/create-tool-description
+        :fs_list
+        "List a directory under configured filesystem roots."
+        :category :system
+        :input-schema [:map {:closed true}
+                       [:path :string]]
+        :prerequisites {:mutations [:read-same-path :list-parent-or-same-path]}
+        :operation :read
+        :parallel-safe? true
+        :source :builtin)
+       :health-fn health
+       :execute-fn
+       (fn [input context]
+         (ensure-permission! context :list)
+         (let [{:keys [path nio-path] :as info} (path-info input)
+               file (io/file path)]
+           (ensure-no-symlink-segments! info)
+           (when-not (Files/isDirectory nio-path (nofollow-link-options))
+             (throw (tools/tool-error :not-directory "Path is not a directory" {:path path})))
+           {:path path
+            :entries (->> (.listFiles file)
+                          (map (fn [entry]
+                                 {:name (.getName entry)
+                                  :path (.getCanonicalPath entry)
+                                  :type (if (.isDirectory entry) "directory" "file")}))
+                          (sort-by :name)
+                          vec)}))})
+     (tools/create-tool
+      {:description
+       (tools/create-tool-description
+        :fs_delete
+        "Delete one file or empty directory under configured filesystem roots."
+        :category :system
+        :input-schema [:map {:closed true}
+                       [:path :string]]
+        :prerequisites {:mutations [:read-same-path :list-parent-or-same-path]}
+        :sensitive true
+        :operation :act
+        :approval-sensitive? false
+        :source :builtin)
+       :health-fn health
+       :execute-fn
+       (fn [input context]
+         (ensure-permission! context :delete)
+         (let [{:keys [path] :as info} (path-info input)
+               file (io/file path)]
+           (ensure-no-symlink-segments! info)
+           (when-not (.exists file)
+             (throw (tools/tool-error :not-found "Path not found" {:path path})))
+           (io/delete-file file true)
+           {:path path
+            :deleted true}))})
+     (tools/create-tool
+      {:description
+       (tools/create-tool-description
+        :fs_mkdir
+        "Create directories under configured filesystem roots."
+        :category :system
+        :input-schema [:map {:closed true}
+                       [:path :string]]
+        :prerequisites {:mutations [:read-same-path :list-parent-or-same-path]}
+        :sensitive true
+        :operation :act
+        :approval-sensitive? false
+        :source :builtin)
+       :health-fn health
+       :execute-fn
+       (fn [input context]
+         (ensure-permission! context :mkdir)
+         (let [{:keys [path nio-path] :as info} (path-info input)]
+           (ensure-no-symlink-segments! info)
+           (Files/createDirectories nio-path
+                                    (make-array java.nio.file.attribute.FileAttribute 0))
+           {:path path
+            :created true}))})]))

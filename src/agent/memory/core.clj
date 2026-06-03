@@ -473,12 +473,17 @@
    :properties {:facts {:type "array"
                         :items {:type "object"
                                 :additionalProperties false
-                                :properties {:subject {:type "string"}
-                                             :predicate {:type "string"}
-                                             :object {:type "string"}
+                                :properties {:subject {:type "string"
+                                                       :description "Stable entity the fact is about, for example user, team, current session, or a named project."}
+                                             :predicate {:type "string"
+                                                         :description "Short relationship or preference phrase, for example prefers, uses, decided, works on, requires."}
+                                             :object {:type "string"
+                                                      :description "Durable value of the fact. Do not include secrets, credentials, transient chat details, or unsupported guesses."}
                                              :scope {:type "string"
-                                                     :enum ["global" "session" "agent"]}
-                                             :confidence {:type "number"}}
+                                                     :enum ["global" "session" "agent"]
+                                                     :description "global for durable cross-session user/team facts, session for temporary session context, agent for agent-specific behavior."}
+                                             :confidence {:type "number"
+                                                          :description "Confidence from 0.0 to 1.0 that this is a durable supported memory fact."}}
                                 :required ["subject" "predicate" "object"]}}}
    :required ["facts"]})
 

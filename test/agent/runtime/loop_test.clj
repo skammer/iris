@@ -16,7 +16,7 @@
                   :usage {:tokens 1}}})
 
 (defn- tool-step
-  ([] (tool-step "call_1" :fs {:action "list"}))
+  ([] (tool-step "call_1" :fs_list {:path "."}))
   ([call-id tool-name input]
   {:schema-version kernel-schema/current-step-schema-version
    :state {}
@@ -137,9 +137,9 @@
 
 (deftest doom-loop-guard-blocks-third-identical-tool-call-test
   (let [execute-count (atom 0)
-        steps (atom [(tool-step "call_1" :fs {:path "." :action "list"})
-                     (tool-step "call_2" :fs {:action "list" :path "."})
-                     (tool-step "call_3" :fs {:path "." :action "list"})])
+        steps (atom [(tool-step "call_1" :fs_list {:path "."})
+                     (tool-step "call_2" :fs_list {:path "."})
+                     (tool-step "call_3" :fs_list {:path "."})])
         {:keys [result events]}
         (run-loop {:max-steps 4
                    :planner-fn (fn [_ _]
@@ -157,9 +157,9 @@
 
 (deftest doom-loop-guard-allows-different-input-or-tool-test
   (let [execute-count (atom 0)
-        steps (atom [(tool-step "call_1" :fs {:action "list"})
-                     (tool-step "call_2" :fs {:action "read"})
-                     (tool-step "call_3" :shell {:action "list"})
+        steps (atom [(tool-step "call_1" :fs_list {:path "."})
+                     (tool-step "call_2" :fs_list {:path "."})
+                     (tool-step "call_3" :shell {:argv ["pwd"]})
                      (complete-step "done")])
         {:keys [result]}
         (run-loop {:max-steps 4
@@ -176,9 +176,9 @@
 
 (deftest doom-loop-guard-disabled-bypasses-repeat-check-test
   (let [execute-count (atom 0)
-        steps (atom [(tool-step "call_1" :fs {:action "list"})
-                     (tool-step "call_2" :fs {:action "list"})
-                     (tool-step "call_3" :fs {:action "list"})
+        steps (atom [(tool-step "call_1" :fs_list {:path "."})
+                     (tool-step "call_2" :fs_list {:path "."})
+                     (tool-step "call_3" :fs_list {:path "."})
                      (complete-step "done")])
         {:keys [result]}
         (run-loop {:max-steps 4
@@ -227,8 +227,8 @@
          [{:role "assistant"
            :content [{:type :tool-call
                       :id "call_1"
-                      :name "fs"
-                      :arguments {:action "list"}}]}
+                      :name "fs_list"
+                      :arguments {:path "."}}]}
           {:role "user" :content "next"}])]
     (is (= 1 (:inserted-tool-results repairs)))
     (is (= ["assistant" "tool" "user"] (mapv :role messages)))
@@ -249,8 +249,8 @@
   (let [input [{:role "assistant"
                 :content [{:type :tool-call
                            :id "call_1"
-                           :name "fs"
-                           :arguments {:action "list"}}]}
+                           :name "fs_list"
+                           :arguments {:path "."}}]}
                {:role "tool"
                 :content [{:type :tool-result
                            :tool-call-id "call_1"
@@ -328,7 +328,7 @@
 (deftest max-token-with-tool-calls-executes-instead-of-dead-ending-test
   ;; finish_reason="length" with a valid tool_calls array must NOT discard the
   ;; turn: the model emitted a real call before hitting the output cap.
-  (let [steps (atom [(-> (tool-step "call_1" :fs {:action "list"})
+  (let [steps (atom [(-> (tool-step "call_1" :fs_list {:path "."})
                          (assoc-in [:llm-response :stop-reason] "length"))
                      (complete-step "done")])
         {:keys [result events]}

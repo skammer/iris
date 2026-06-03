@@ -56,7 +56,7 @@
 (defn tool-output-content
   ([receipt] (tool-output-content receipt defaults/tool-output-max-chars))
   ([receipt tool-output-max-chars]
-   (if (= "memory" (some-> (:tool-name receipt) name))
+   (if (str/starts-with? (or (some-> (:tool-name receipt) name) "") "memory")
      (memory-tool-output-content receipt tool-output-max-chars)
      (let [payload (select-keys receipt
                                 [:status :tool-name :result :reason :error-type :input])

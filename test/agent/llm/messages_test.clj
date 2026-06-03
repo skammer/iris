@@ -13,8 +13,8 @@
            :content "calling"
            :tool_calls [{:id "call-1"
                          :type "function"
-                         :function {:name "fs"
-                                    :arguments "{\"action\":\"list\",\"path\":\".\"}"}}]}
+                         :function {:name "fs_list"
+                                    :arguments "{\"path\":\".\"}"}}]}
           {:role "tool"
            :tool_call_id "call-1"
            :content "{\"status\":\"ok\"}"}]
@@ -30,8 +30,8 @@
             :content [{:type :text :text "calling"}
                       {:type :tool-call
                        :id "call-1"
-                       :name :fs
-                       :arguments {:action "list" :path "."}}]}
+                       :name :fs_list
+                       :arguments {:path "."}}]}
            {:role :tool
             :content [{:type :tool-result
                        :tool-call-id "call-1"
@@ -55,10 +55,10 @@
            :content "describe"
            :images ["aGVsbG8="]}
           {:role "assistant"
-           :content ""
-           :tool_calls [{:id "call-2"
+          :content ""
+          :tool_calls [{:id "call-2"
                          :type "function"
-                         :function {:name "memory"
+                         :function {:name "memory_search"
                                     :arguments "{\"query\":\"iris\"}"}}]}]
          (llm-messages/internal->ollama
           [{:role :user
@@ -70,7 +70,7 @@
            {:role :assistant
             :content [{:type :tool-call
                        :id "call-2"
-                       :name "memory"
+                       :name "memory_search"
                        :arguments {:query "iris"}}]}]))))
 
 (deftest converts-audio-video-and-files-to-openai-compatible-parts-test
@@ -114,7 +114,7 @@
                :reasoning_content "thinking"
                :tool-calls [{:id "call-1"
                              :type "function"
-                             :function {:name "fs"
+                             :function {:name "fs_list"
                                         :arguments "{\"path\":\".\"}"}}]
                :usage {:prompt-tokens 12
                        :completion-tokens 5
@@ -134,7 +134,7 @@
 (deftest round-trips-tool-call-and-tool-result-test
   (let [provider-tool-call {:id "call-1"
                             :type "function"
-                            :function {:name "fs"
+                            :function {:name "fs_list"
                                        :arguments "{\"path\":\".\"}"}}
         internal-call (llm-messages/provider-tool-call->internal provider-tool-call)
         provider-result {:role "tool"
@@ -143,7 +143,7 @@
         internal-result (llm-messages/provider-tool-result->internal provider-result)]
     (is (= {:type :tool-call
             :id "call-1"
-            :name "fs"
+            :name "fs_list"
             :arguments {:path "."}
             :raw provider-tool-call}
            internal-call))

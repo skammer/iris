@@ -12,24 +12,22 @@
             "iris-fs-"
             (make-array java.nio.file.attribute.FileAttribute 0))))
 
-(defn approved-registry [tool]
-  (-> (tools/create-registry {:approval-check (fn [_] {:allow true})})
-      (tools/register-tool tool)))
+(defn approved-registry [tools*]
+  (reduce tools/register-tool
+          (tools/create-registry {:approval-check (fn [_] {:allow true})})
+          tools*))
 
 (deftest fs-tool-read-write-list-test
   (let [root (temp-dir)
-        tool (fs-tool/create-fs-tool {:roots [(.getAbsolutePath root)]})
-        registry (approved-registry tool)
+        tools* (fs-tool/create-fs-tools {:roots [(.getAbsolutePath root)]})
+        registry (approved-registry tools*)
         file-path (.getAbsolutePath (io/file root "note.txt"))
-        _ (tools/execute-tool registry :fs {:action :write
-                                            :path file-path
+        _ (tools/execute-tool registry :fs_write {:path file-path
                                             :content "hello"}
                               {:permissions #{:filesystem-write}})
-        read-result (tools/execute-tool registry :fs {:action :read
-                                                      :path file-path}
+        read-result (tools/execute-tool registry :fs_read {:path file-path}
                                         {:permissions #{:filesystem-read}})
-        list-result (tools/execute-tool registry :fs {:action :list
-                                                      :path (.getAbsolutePath root)}
+        list-result (tools/execute-tool registry :fs_list {:path (.getAbsolutePath root)}
                                         {:permissions #{:filesystem-read}})]
     (is (= "hello" (:content read-result)))
     (is (= ["note.txt"] (mapv :name (:entries list-result))))
@@ -37,42 +35,39 @@
     (.delete root)))
 
 (deftest fs-tool-expands-home-root-and-path-test
-  (let [tool (fs-tool/create-fs-tool {:roots ["~"]})
-        registry (approved-registry tool)
+  (let [tools* (fs-tool/create-fs-tools {:roots ["~"]})
+        registry (approved-registry tools*)
         home (.getCanonicalPath (io/file (System/getProperty "user.home")))
-        health (tools/health-check tool)
-        result (tools/execute-tool registry :fs {:action :list :path "~"}
+        health (tools/health-check (first tools*))
+        result (tools/execute-tool registry :fs_list {:path "~"}
                                    {:permissions #{:filesystem-read}})]
     (is (= [home] (get-in health [:details :roots])))
     (is (= home (:path result)))))
 
 (deftest fs-tool-enforces-write-quota-test
   (let [root (temp-dir)
-        tool (fs-tool/create-fs-tool {:roots [(.getAbsolutePath root)]
+        tools* (fs-tool/create-fs-tools {:roots [(.getAbsolutePath root)]
                                       :max-write-bytes 4})
-        registry (approved-registry tool)
+        registry (approved-registry tools*)
         file-path (.getAbsolutePath (io/file root "note.txt"))]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"max-write-bytes"
-                          (tools/execute-tool registry :fs {:action :write
-                                                            :path file-path
+                          (tools/execute-tool registry :fs_write {:path file-path
                                                             :content "hello"}
                                               {:permissions #{:filesystem-write}})))
     (.delete root)))
 
 (deftest fs-tool-create-refuses-existing-path-test
   (let [root (temp-dir)
-        tool (fs-tool/create-fs-tool {:roots [(.getAbsolutePath root)]})
-        registry (approved-registry tool)
+        tools* (fs-tool/create-fs-tools {:roots [(.getAbsolutePath root)]})
+        registry (approved-registry tools*)
         file-path (.getAbsolutePath (io/file root "note.txt"))]
-    (tools/execute-tool registry :fs {:action :create
-                                      :path file-path
+    (tools/execute-tool registry :fs_create {:path file-path
                                       :content "hello"}
                         {:permissions #{:filesystem-write}})
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"Path already exists"
-                          (tools/execute-tool registry :fs {:action :create
-                                                            :path file-path
+                          (tools/execute-tool registry :fs_create {:path file-path
                                                             :content "again"}
                                               {:permissions #{:filesystem-write}})))
     (io/delete-file file-path true)
@@ -82,8 +77,8 @@
   (let [root (temp-dir)
         target (io/file root "target.txt")
         link (io/file root "link.txt")
-        tool (fs-tool/create-fs-tool {:roots [(.getAbsolutePath root)]})
-        registry (approved-registry tool)]
+        tools* (fs-tool/create-fs-tools {:roots [(.getAbsolutePath root)]})
+        registry (approved-registry tools*)]
     (spit target "safe")
     (try
       (Files/createSymbolicLink (.toPath link)
@@ -91,13 +86,11 @@
                                 (make-array java.nio.file.attribute.FileAttribute 0))
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"symlink"
-                            (tools/execute-tool registry :fs {:action :read
-                                                              :path (.getAbsolutePath link)}
+                            (tools/execute-tool registry :fs_read {:path (.getAbsolutePath link)}
                                                 {:permissions #{:filesystem-read}})))
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"symlink"
-                            (tools/execute-tool registry :fs {:action :write
-                                                              :path (.getAbsolutePath link)
+                            (tools/execute-tool registry :fs_write {:path (.getAbsolutePath link)
                                                               :content "blocked"}
                                                 {:permissions #{:filesystem-write}})))
       (is (= "safe" (slurp target)))
@@ -110,19 +103,17 @@
 
 (deftest fs-tool-replace-requires-unique-old-string-test
   (let [root (temp-dir)
-        tool (fs-tool/create-fs-tool {:roots [(.getAbsolutePath root)]})
-        registry (approved-registry tool)
+        tools* (fs-tool/create-fs-tools {:roots [(.getAbsolutePath root)]})
+        registry (approved-registry tools*)
         file-path (.getAbsolutePath (io/file root "note.txt"))]
     (spit file-path "one two one")
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"old-string is not unique"
-                          (tools/execute-tool registry :fs {:action :replace
-                                                            :path file-path
+                          (tools/execute-tool registry :fs_replace {:path file-path
                                                             :old-string "one"
                                                             :new-string "three"}
                                               {:permissions #{:filesystem-write}})))
-    (tools/execute-tool registry :fs {:action :replace
-                                      :path file-path
+    (tools/execute-tool registry :fs_replace {:path file-path
                                       :old-string "two"
                                       :new-string "four"}
                         {:permissions #{:filesystem-write}})

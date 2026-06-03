@@ -157,37 +157,37 @@
                    :working-dir "."
                    :timeout-ms 30000
                    :max-timeout-ms 30000
-                   :default-action :ask
-                   :rules [{:argv ["pwd"] :action :allow}
-                           {:argv ["printf" "**"] :action :allow}
-                           {:argv ["echo" "**"] :action :allow}
-                           {:argv ["which" "**"] :action :allow}
-                           {:argv ["type" "**"] :action :allow}
-                           {:argv ["ls" "**"] :action :allow}
-                           {:argv ["cat" "**"] :action :allow}
-                           {:argv ["head" "**"] :action :allow}
-                           {:argv ["tail" "**"] :action :allow}
-                           {:argv ["wc" "**"] :action :allow}
-                           {:argv ["df" "**"] :action :allow}
-                           {:argv ["sort" "**"] :action :allow}
-                           {:argv ["uniq" "**"] :action :allow}
-                           {:argv ["cut" "**"] :action :allow}
-                           {:argv ["diff" "**"] :action :allow}
-                           {:argv ["rg" "**"] :action :allow}
-                           {:argv ["grep" "**"] :action :allow}
-                           {:argv ["find" "**"] :action :allow}
-                           {:argv ["git" "status" "**"] :action :allow}
-                           {:argv ["git" "log" "**"] :action :allow}
-                           {:argv ["git" "diff" "**"] :action :allow}
-                           {:argv ["git" "show" "**"] :action :allow}
-                           {:argv ["git" "branch" "**"] :action :allow}
-                           {:argv ["cargo" "fmt" "**"] :action :allow}
-                           {:argv ["rm" "-rf" "/*"] :action :deny}
-                           {:argv ["sudo" "rm" "-rf" "/*"] :action :deny}
-                           {:argv ["dd" "**"] :action :deny}
-                           {:argv ["mkfs" "**"] :action :deny}
-                           {:argv ["fdisk" "**"] :action :deny}
-                           {:argv ["mkswap" "**"] :action :deny}]
+                   :default-decision :ask
+                   :rules [{:argv ["pwd"] :decision :allow}
+                           {:argv ["printf" "**"] :decision :allow}
+                           {:argv ["echo" "**"] :decision :allow}
+                           {:argv ["which" "**"] :decision :allow}
+                           {:argv ["type" "**"] :decision :allow}
+                           {:argv ["ls" "**"] :decision :allow}
+                           {:argv ["cat" "**"] :decision :allow}
+                           {:argv ["head" "**"] :decision :allow}
+                           {:argv ["tail" "**"] :decision :allow}
+                           {:argv ["wc" "**"] :decision :allow}
+                           {:argv ["df" "**"] :decision :allow}
+                           {:argv ["sort" "**"] :decision :allow}
+                           {:argv ["uniq" "**"] :decision :allow}
+                           {:argv ["cut" "**"] :decision :allow}
+                           {:argv ["diff" "**"] :decision :allow}
+                           {:argv ["rg" "**"] :decision :allow}
+                           {:argv ["grep" "**"] :decision :allow}
+                           {:argv ["find" "**"] :decision :allow}
+                           {:argv ["git" "status" "**"] :decision :allow}
+                           {:argv ["git" "log" "**"] :decision :allow}
+                           {:argv ["git" "diff" "**"] :decision :allow}
+                           {:argv ["git" "show" "**"] :decision :allow}
+                           {:argv ["git" "branch" "**"] :decision :allow}
+                           {:argv ["cargo" "fmt" "**"] :decision :allow}
+                           {:argv ["rm" "-rf" "/*"] :decision :deny}
+                           {:argv ["sudo" "rm" "-rf" "/*"] :decision :deny}
+                           {:argv ["dd" "**"] :decision :deny}
+                           {:argv ["mkfs" "**"] :decision :deny}
+                           {:argv ["fdisk" "**"] :decision :deny}
+                           {:argv ["mkswap" "**"] :decision :deny}]
                    :max-output-bytes 65536}
            :display {:web {:show-tool-calls? true
                            :collapsed? true

@@ -21,9 +21,13 @@
 
 (defn tool-input-from-map [tool-name body]
   (case tool-name
-    :fs (cond-> {:action (:action body)
-                 :path (:path body)}
-          (contains? body :content) (assoc :content (:content body)))
+    (:fs_read :fs_list :fs_delete :fs_mkdir) {:path (:path body)}
+    (:fs_write :fs_create) (cond-> {:path (:path body)}
+                             (contains? body :content) (assoc :content (:content body)))
+    :fs_replace (cond-> {:path (:path body)
+                         :old-string (:old_string body)
+                         :new-string (:new_string body)}
+                  (contains? body :replace_all) (assoc :replace-all? true))
     :shell (cond-> {:argv (or (:argv body)
                               (split-command-plain (:command body)))}
              (not (str/blank? (:working_dir body))) (assoc :working-dir (:working_dir body)))

@@ -10,7 +10,7 @@
                  {:type :audio :source {:type :base64 :media-type "audio/wav" :value "UklGRg=="} :filename "a.wav"}
                  {:type :video :source {:type :base64 :media-type "video/mp4" :value "AAAA"} :filename "a.mp4"}
                  {:type :file :source {:type :base64 :media-type "application/pdf" :value "JVBERi0="} :filename "a.pdf"}
-                 {:type :tool-call :id "call-1" :name "fs" :arguments {:action "list"}}
+                 {:type :tool-call :id "call-1" :name "fs_list" :arguments {:path "."}}
                  {:type :tool-result :tool-call-id "call-1" :status :ok :content {:ok true}}
                  {:type :custom :kind :notice :data {:text "x"}}]]
     (is (= block (runtime-schema/validate-message-block! block)))))
@@ -18,12 +18,12 @@
 (deftest normalizes-provider-style-blocks-test
   (is (= [{:type :tool-call
            :id "call-1"
-           :name "fs"
+           :name "fs_list"
            :arguments {:path "."}}]
          (runtime-schema/normalize-content
           [{:type "toolCall"
             :id "call-1"
-            :tool-name "fs"
+            :tool-name "fs_list"
             :input {:path "."}}]))))
 
 (deftest validates-canonical-assistant-turn-test

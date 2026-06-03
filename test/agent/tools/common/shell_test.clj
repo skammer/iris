@@ -121,9 +121,9 @@
         tool (shell-tool/create-shell-tool {:roots [(.getAbsolutePath root)]
                                             :working-dir (.getAbsolutePath root)
                                             :timeout-ms 5000
-                                            :default-action :ask
-                                            :rules [{:argv ["printf" "**"] :action :ask}
-                                                    {:argv ["printf" "ok"] :action :allow}]})
+                                            :default-decision :ask
+                                            :rules [{:argv ["printf" "**"] :decision :ask}
+                                                    {:argv ["printf" "ok"] :decision :allow}]})
         registry (-> (tools/create-registry)
                      (tools/register-tool tool))
         result (tools/execute-tool registry :shell {:argv ["printf" "ok"]}
