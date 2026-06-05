@@ -617,7 +617,7 @@ textarea {
   overscroll-behavior: contain;
   flex-direction: column;
   gap: 10px;
-  padding: 16px 18px;
+  padding: 0 18px 16px;
   scrollbar-gutter: stable;
 }
 
@@ -638,7 +638,7 @@ textarea {
   flex-wrap: wrap;
   align-items: center;
   gap: 14px;
-  margin: -16px -18px 4px;
+  margin: 0 -18px 4px;
   padding: 7px 18px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
