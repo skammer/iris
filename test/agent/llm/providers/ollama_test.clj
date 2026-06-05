@@ -110,6 +110,47 @@
         (is (= "hello world" (:content response)))
         (is (= 5 (get-in response [:usage :tokens])))))))
 
+(deftest ollama-invoke-streams-thinking-via-on-thinking-delta-callback-test
+  (let [body* (atom nil)
+        as* (atom nil)
+        thinking (atom [])]
+    (with-redefs [http/post (fn [_ request]
+                              (reset! body* (json/parse-string (:body request) true))
+                              (reset! as* (:as request))
+                              {:status 200
+                               :headers {"Content-Type" "application/x-ndjson"}
+                               :body (byte-stream
+                                      (str "{\"message\":{\"thinking\":\"think \"},\"done\":false}\n"
+                                           "{\"message\":{\"thinking\":\"hard\",\"content\":\"ok\"},\"done\":true,\"prompt_eval_count\":3,\"eval_count\":2}\n"))})]
+      (let [llm (provider/create-ollama-provider {})
+            response (llm-core/invoke
+                      llm
+                      {:messages [{:role "user" :content "hi"}]
+                       :on-thinking-delta #(swap! thinking conj %)})]
+        (is (= :stream @as*))
+        (is (true? (:stream @body*)))
+        (is (= ["think " "hard"] @thinking))
+        (is (= "ok" (:content response)))
+        (is (= {:type :thinking :text "think hard"}
+               (first (:content-blocks response))))))))
+
+(deftest ollama-invoke-nonstream-preserves-thinking-content-block-test
+  (with-redefs [http/post (fn [_ _]
+                            {:status 200
+                             :headers {"Content-Type" "application/json"}
+                             :body {:message {:content "ok"
+                                              :thinking "think hard"}
+                                    :done true
+                                    :prompt_eval_count 3
+                                    :eval_count 2}})]
+    (let [llm (provider/create-ollama-provider {})
+          response (llm-core/invoke
+                    llm
+                    {:messages [{:role "user" :content "hi"}]})]
+      (is (= "ok" (:content response)))
+      (is (= {:type :thinking :text "think hard"}
+             (first (:content-blocks response)))))))
+
 (deftest ollama-invoke-suppresses-streamed-tool-call-tags-test
   (let [deltas (atom [])]
     (with-redefs [http/post (fn [_ _]

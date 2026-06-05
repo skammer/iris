@@ -223,7 +223,7 @@
                  :response-format :cache-control :cache_control :modalities
                  :metadata :extra-body :user :session-id :session_id
                  :stream? :stream :stream-structured-output?
-                 :on-content-delta])))
+                 :on-content-delta :on-thinking-delta])))
 
 (defn normalize-llm-response
   [response opts]

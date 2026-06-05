@@ -101,9 +101,9 @@
   (let [harness (h/start!)
         session-id (h/create-session! harness "tool")]
     (try
-      (h/send-chat! harness session-id "tool: fs {\"action\":\"list\",\"path\":\".\"}")
+      (h/send-chat! harness session-id "tool: fs_list {\"path\":\".\"}")
       (let [event (h/wait-tool-event harness session-id)]
-        (is (= "fs" (get-in event [:payload :tool-name])))
+        (is (= "fs_list" (get-in event [:payload :tool-name])))
         (is (= "ok" (get-in event [:payload :status]))))
       (finally
         (h/stop! harness)))))

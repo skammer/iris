@@ -50,7 +50,11 @@
         (when-let [chunks (:stream-chunks response*)]
           (doseq [chunk chunks]
             (on-content-delta chunk))))
-      (dissoc response* :stream-chunks)))
+      (when-let [on-thinking-delta (:on-thinking-delta request)]
+        (when-let [chunks (:thinking-chunks response*)]
+          (doseq [chunk chunks]
+            (on-thinking-delta chunk))))
+      (dissoc response* :stream-chunks :thinking-chunks)))
   (generate [this messages opts]
     (llm-core/invoke this (assoc opts :messages messages))))
 
@@ -1143,6 +1147,31 @@
         (is (= "Hello world" (:content result)))
         (is invoked-with-callback?)
         (is (= ["Hello world"] @deltas)))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest chat-loop-emits-thinking-deltas-during-plan-step-test
+  (let [path (temp-db-path)
+        responses (atom [{:content "Hello"
+                          :thinking-chunks ["think " "hard"]}])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider identity)
+        session (sessions/create-session! system "stream-thinking")
+        thinking (atom [])]
+    (try
+      (let [result (chat/run! system {:session-id (:id session)
+                                      :messages [{:role "user" :content "hi"}]
+                                      :on-thinking-delta #(swap! thinking conj %)})
+            invoked-with-callback? (some? (get-in (first @requests) [:request :on-thinking-delta]))
+            events (sqlite/list-events (:store system) {:entity-type :session
+                                                        :entity-id (:id session)
+                                                        :limit 50})]
+        (is (= "Hello" (:content result)))
+        (is invoked-with-callback?)
+        (is (= ["think " "hard"] @thinking))
+        (is (= {"think " 1 "hard" 1}
+               (frequencies (keep #(get-in % [:payload :thinking-delta]) events)))))
       (finally
         (io/delete-file path true)))))
 

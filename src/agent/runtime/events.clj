@@ -27,6 +27,16 @@
             :delta delta
             :append? true})))
 
+(defn emit-thinking-delta!
+  [sink base delta]
+  (when (and (string? delta) (not= "" delta))
+    (emit! sink
+           :message-update
+           base
+           {:role "assistant"
+            :thinking-delta delta
+            :append? true})))
+
 (defn emit-terminal-message!
   [sink base content final-payload]
   (when-not (str/blank? (or content ""))

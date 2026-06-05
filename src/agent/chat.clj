@@ -35,6 +35,9 @@
 (defn streaming-content [system session-id]
   (service/streaming-content system session-id))
 
+(defn streaming-thinking [system session-id]
+  (service/streaming-thinking system session-id))
+
 (defn loop-command! [system session-id text]
   (loop-control/loop-command! system session-id text queue/run!))
 

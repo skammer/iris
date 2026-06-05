@@ -6,7 +6,7 @@
    [agent.chat.util :as chat-util]
    [agent.util :as util])
   (:import
-   (java.util.concurrent TimeUnit)))
+   (java.util.concurrent RejectedExecutionException ScheduledExecutorService TimeUnit)))
 
 (def stream-flush-interval-ms 50)
 
@@ -20,6 +20,23 @@
   (-> event
       (assoc :payload (assoc (chat-util/event-payload event) :delta text))
       (assoc :timestamp (util/now-str))))
+
+(defn- fallback-schedule! [flush!]
+  (future
+    (Thread/sleep stream-flush-interval-ms)
+    (flush!)))
+
+(defn- schedule-flush! [scheduler flush!]
+  (if (and scheduler
+           (not (.isShutdown ^ScheduledExecutorService scheduler)))
+    (try
+      (.schedule ^ScheduledExecutorService scheduler
+                 ^Runnable flush!
+                 (long stream-flush-interval-ms)
+                 TimeUnit/MILLISECONDS)
+      (catch RejectedExecutionException _
+        (fallback-schedule! flush!)))
+    (fallback-schedule! flush!)))
 
 (defn stream-delta-flusher
   "Returns {:flush! fn :emit! fn}. :emit! coalesces consecutive text deltas and
@@ -59,14 +76,7 @@
                                                           schedule? (update :timer-id inc))))
                                                [schedule? (:timer-id @state)]))]
                   (when schedule?
-                    (if scheduler
-                      (.schedule scheduler
-                                 ^Runnable #(flush! timer-id)
-                                 (long stream-flush-interval-ms)
-                                 TimeUnit/MILLISECONDS)
-                      (future
-                        (Thread/sleep stream-flush-interval-ms)
-                        (flush! timer-id)))))
+                    (schedule-flush! scheduler #(flush! timer-id))))
                 (do
                   (flush! nil)
                   (emit-event! event))))})))

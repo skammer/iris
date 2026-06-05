@@ -98,11 +98,12 @@
        (= session-id (:entity-id event))
        (= "agent-end" (:event-type event))))
 
-(defn- message-delta-event? [event session-id]
+(defn- message-stream-update-event? [event session-id]
   (and (= "session" (:entity-type event))
        (= session-id (:entity-id event))
        (= "message-update" (:event-type event))
-       (string? (get-in event [:payload :delta]))))
+       (or (string? (get-in event [:payload :delta]))
+           (string? (get-in event [:payload :thinking-delta])))))
 
 (defn- stream-ending-message-event? [event session-id]
   (and (= "session" (:entity-type event))
@@ -156,7 +157,7 @@
                                                  :buffer-strategy :sliding
                                                  :slow-client :drop-new})
              ch (:channel subscription)
-             streaming-text (atom nil)
+             streaming-state (atom {})
              push! (fn
                      ([]
                       (streaming/send-datastar-patch!
@@ -170,16 +171,20 @@
                                                      {:streaming streaming}))))
              push-delta! (fn [delta]
                            (when-not (str/blank? (str delta))
-                             (push! (swap! streaming-text
-                                           (fnil str "")
-                                           delta))))
+                             (push! (swap! streaming-state
+                                           update :content (fnil str "") delta))))
+             push-thinking! (fn [delta]
+                              (when-not (str/blank? (str delta))
+                                (push! (swap! streaming-state
+                                              update :thinking (fnil str "") delta))))
              result-ch (streaming/run-task!
                         ctx
                         #(chat/run! system
                                     {:messages [{:role "user" :content prompt}]
                                      :session-id session_id
                                      :stream? true
-                                     :on-delta push-delta!}))]
+                                     :on-delta push-delta!
+                                     :on-thinking-delta push-thinking!}))]
          (push!)
          (loop [done? false
                 terminal? false]
@@ -196,12 +201,12 @@
                  (= port ch)
                  (when-let [event (:payload value)]
                    (cond
-                     (message-delta-event? event session_id)
+                     (message-stream-update-event? event session_id)
                      nil
 
                      (stream-ending-message-event? event session_id)
                      (do
-                       (reset! streaming-text nil)
+                       (reset! streaming-state {})
                        (push! nil))
 
                      (relevant-session-event? event session_id)

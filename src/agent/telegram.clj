@@ -31,6 +31,19 @@
 (def ^:private typing-refresh-ms 4000)
 (def ^:private default-max-download-bytes (* 20 1024 1024))
 
+(defn- escape-html [s]
+  (-> (str s)
+      (str/replace "&" "&amp;")
+      (str/replace "<" "&lt;")
+      (str/replace ">" "&gt;")))
+
+(defn- thinking-quote-html [text]
+  (let [source (str text)
+        clipped (if (> (count source) max-source-chars)
+                  (str (subs source 0 max-source-chars) "\n\n[truncated]")
+                  source)]
+    (str "<blockquote expandable>thinking\n\n" (escape-html clipped) "</blockquote>")))
+
 (defn- parse-body [body]
   (cond
     (map? body) body
@@ -558,11 +571,14 @@
     (let [token (:bot-token config)
           draft-id (atom (next-draft-id))
           accumulator (atom "")
+          thinking-accumulator (atom "")
           last-flush (atom 0)
           send-draft! (or (:send-message-draft-fn opts)
                           (fn [cid did text] (send-message-draft! token cid did text)))
           send-msg! (or (:send-message-fn opts)
                         (fn [cid text] (send-message! token cid text)))
+          send-html! (or (:send-html-message-fn opts)
+                         (fn [cid text] (send-html-message! token cid text)))
           flush! (fn []
                    (let [now (System/currentTimeMillis)
                          text @accumulator]
@@ -571,17 +587,27 @@
                        (reset! last-flush now)
                        (safe-telegram! system chat-id :draft-update
                                        #(send-draft! chat-id @draft-id text)))))
+          finalize-thinking! (fn []
+                               (let [text @thinking-accumulator]
+                                 (reset! thinking-accumulator "")
+                                 (when-not (str/blank? text)
+                                   (safe-telegram! system chat-id :thinking-summary
+                                                   #(send-html! chat-id (thinking-quote-html text))))))
           finalize! (fn []
                       (let [text @accumulator]
                         (reset! accumulator "")
                         (reset! last-flush 0)
                         (swap! draft-id rotate-draft-id)
+                        (finalize-thinking!)
                         (when-not (str/blank? text)
                           (safe-telegram! system chat-id :draft-finalize
                                           #(send-msg! chat-id text)))))]
       {:on-delta (fn [delta]
                    (swap! accumulator str delta)
                    (flush!))
+       :on-thinking-delta (fn [delta]
+                            (swap! thinking-accumulator str delta))
+       :finalize-thinking! finalize-thinking!
        :finalize! finalize!})))
 
 (defn- build-on-tool-call
@@ -638,6 +664,7 @@
             :messages [{:role "user" :content user-text}]
             :context {:telegram-chat-id chat-id}}
      (:on-delta stream-controls) (assoc :on-delta (:on-delta stream-controls))
+     (:on-thinking-delta stream-controls) (assoc :on-thinking-delta (:on-thinking-delta stream-controls))
      on-tool-call (assoc :on-tool-call on-tool-call))))
 
 (defn- run-chat-events!
@@ -682,6 +709,11 @@
                   (reset! saw-delta? true)
                   (when-let [on-delta (:on-delta stream-controls)]
                     (on-delta (:delta payload))))
+                (when (and event
+                           (session-event? event session-id "message-update")
+                           (string? (:thinking-delta payload)))
+                  (when-let [on-thinking-delta (:on-thinking-delta stream-controls)]
+                    (on-thinking-delta (:thinking-delta payload))))
                 (when (and event
                            (session-event? event session-id "message-end")
                            (:tool-turn? payload)
@@ -730,6 +762,9 @@
         final (or (:content result) "")]
     (when (or callback-path?
               (nil? (:finalize! stream-controls)))
+      (when callback-path?
+        (when-let [finalize-thinking! (:finalize-thinking! stream-controls)]
+          (finalize-thinking!)))
       (send! chat-id (if (str/blank? final) "(no response)" final)))
     final))
 

@@ -139,7 +139,7 @@
 (defn run-turn!
   "Run a chat turn for `session-id`. Public wrapper keeps persistence, transport
    callbacks, and runtime events around the evented runtime loop."
-  [system {:keys [messages session-id max-steps context on-delta on-tool-call stream?
+  [system {:keys [messages session-id max-steps context on-delta on-thinking-delta on-tool-call stream?
                   cancellation-token persist-user? user-message]
            :or {persist-user? true}
            :as opts}]
@@ -167,7 +167,7 @@
                             :active-mode)
         mode-messages (prompts/apply-mode [] active-mode)
         skill-message (skill-context-message system prompt)
-        stream-content? (and (or stream? on-delta)
+        stream-content? (and (or stream? on-delta on-thinking-delta)
                              (not (false? (get-in system [:config :llm :stream-content?] true))))
         persisted (atom {})
         subscribers [{:operation :persistence
@@ -220,6 +220,7 @@
                      :doom-loop-config (get-in system [:config :chat :guardrails :doom-loop])
                      :cancellation-token cancelled?
                      :event-sink event-sink
+                     :on-thinking-delta on-thinking-delta
                      :execute-step-fn (fn [executable-step]
                                         (kernel-runtime/execute-step!
                                          ops

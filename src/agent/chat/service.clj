@@ -135,7 +135,16 @@
   "Returns in-progress assistant text accumulated for `session-id`, or nil."
   [system session-id]
   (when session-id
-    (some-> system :chat-service :streaming-state deref (get session-id))))
+    (let [value (some-> system :chat-service :streaming-state deref (get session-id))]
+      (if (map? value) (:content value) value))))
+
+(defn streaming-thinking
+  "Returns in-progress assistant thinking text accumulated for `session-id`, or nil."
+  [system session-id]
+  (when session-id
+    (let [value (some-> system :chat-service :streaming-state deref (get session-id))]
+      (when (map? value)
+        (:thinking value)))))
 
 (defn clear-streaming! [system session-id]
   (when session-id

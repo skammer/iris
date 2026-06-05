@@ -42,6 +42,29 @@
   ;; Markdown intentionally disabled; Hiccup escapes LLM/user text here.
   [:div.code (str content)])
 
+(defn thinking-content [content]
+  (when-not (str/blank? (str content))
+    [:details.message-thinking
+     [:summary "thinking"]
+     [:div.code (str content)]]))
+
+(defn- content-block-thinking [content-blocks]
+  (not-empty
+   (apply str
+          (keep (fn [block]
+                  (when (= "thinking" (some-> (:type block) name))
+                    (:text block)))
+                content-blocks))))
+
+(def ^:private think-tag-re #"(?is)<think>\s*(.*?)\s*</think>")
+
+(defn- tagged-thinking [content]
+  (not-empty
+   (str/join "\n\n" (map second (re-seq think-tag-re (str content))))))
+
+(defn- strip-think-tags [content]
+  (str/trim (str/replace (str content) think-tag-re "")))
+
 (def ^:private slash-chip-re #"(^|[\t ])\/([A-Za-z0-9][A-Za-z0-9_-]*)")
 
 (defn- user-message-content [content]
@@ -226,11 +249,17 @@
 
 (defn message
   ([msg] (message nil msg))
-  ([system {:keys [role content created-at tool-calls metadata excluded-from-context?] :as msg}]
+  ([system {:keys [role content created-at content-blocks tool-calls metadata excluded-from-context?] :as msg}]
    (let [meta-text (str created-at
                         (when (:queued metadata) " | queued")
                         (when excluded-from-context? " | out-of-context")
-                        (message-meta-suffix metadata tool-calls))]
+                        (message-meta-suffix metadata tool-calls))
+         thinking (or (:thinking metadata)
+                      (content-block-thinking content-blocks)
+                      (tagged-thinking content))
+         content* (if (and (= "assistant" role) thinking)
+                    (strip-think-tags content)
+                    content)]
      (cond
        (= role "tool")
        (tool-message system msg)
@@ -245,9 +274,11 @@
        :else
        [:article.message
         [:div.message-role {:class role} role]
+        (when (= "assistant" role)
+          (thinking-content thinking))
         (if (= "user" role)
-          (user-message-content content)
-          (message-content content))
+          (user-message-content content*)
+          (message-content content*))
         [:div.meta meta-text]]))))
 
 (defn thread-stats

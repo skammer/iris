@@ -265,7 +265,7 @@ class ChatStream extends HTMLElement {
     this.addEventListener("scroll", this, { passive: true });
     this.#streaming = this.isStreaming();
     this.#observer.observe(this, { childList: true, subtree: true, characterData: true });
-    requestAnimationFrame(() => this.scrollToBottom(true));
+    requestAnimationFrame(() => this.scrollToAnchor());
   }
 
   disconnectedCallback() {
@@ -283,18 +283,19 @@ class ChatStream extends HTMLElement {
 
   afterChange() {
     const streaming = this.isStreaming();
+    const started = !this.#streaming && streaming;
     const completed = this.#streaming && !streaming;
     this.#streaming = streaming;
-    if (completed) {
-      requestAnimationFrame(() => this.scrollToBottom(true));
-      return;
+    if (this.#stick && (started || completed)) {
+      requestAnimationFrame(() => this.scrollToAnchor());
     }
-    if (this.#stick) requestAnimationFrame(() => this.scrollToBottom(false));
   }
 
-  scrollToBottom(force) {
-    if (!force && !this.#stick) return;
-    this.scrollTop = this.scrollHeight;
+  scrollToAnchor() {
+    const anchor = this.querySelector(".chat-stream__bottom-anchor");
+    if (anchor instanceof HTMLElement) {
+      anchor.scrollIntoView({ block: "end" });
+    }
   }
 }
 

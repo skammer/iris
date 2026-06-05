@@ -524,11 +524,23 @@
             [:span.chat-spinner {:aria-hidden true}]
             [:span.chat-status__text status-text]]]])))))
 
-(defn- streaming-message [content]
+(defn- streaming-message [{:keys [content thinking]}]
   [:article.message.message--streaming
    [:div.message-role {:class "assistant"} "assistant"]
-   (ui-render/message-content content)
+   (ui-render/thinking-content thinking)
+   (when-not (str/blank? (str content))
+     (ui-render/message-content content))
    [:div.meta "streaming…"]])
+
+(defn- streaming-state [system session-id opts]
+  (let [provided? (contains? opts :streaming)
+        value (if provided?
+                (:streaming opts)
+                {:content (chat/streaming-content system session-id)
+                 :thinking (chat/streaming-thinking system session-id)})]
+    (if (map? value)
+      value
+      {:content value})))
 
 (defn session-messages-fragment
   ([system session-id]
@@ -536,14 +548,16 @@
   ([system session-id opts]
    (let [messages (sqlite/list-messages (:store system) session-id)
          state (chat/session-state system session-id)
-         streaming (if (contains? opts :streaming)
-                     (:streaming opts)
-                     (chat/streaming-content system session-id))
-         streaming* (when-not (str/blank? (str streaming))
-                      (str streaming))]
+         streaming (streaming-state system session-id opts)
+         streaming* (cond-> {}
+                      (not (str/blank? (str (:content streaming))))
+                      (assoc :content (str (:content streaming)))
+                      (not (str/blank? (str (:thinking streaming))))
+                      (assoc :thinking (str (:thinking streaming))))
+         streaming? (seq streaming*)]
      (ui-render/render
       [:chat-stream#session-messages-panel
-       (if (or (seq messages) streaming* (:working? state))
+       (if (or (seq messages) streaming? (:working? state))
          (list*
           (ui-render/thread-stats-bar messages)
           [:div.chat-stream__filler]
@@ -551,9 +565,10 @@
            (for [message messages]
              (ui-render/message system message))
            (cond
-             streaming* [(streaming-message streaming*)]
+             streaming? [(streaming-message streaming*)]
              :else nil)))
-         [:div.empty "No messages yet."])]))))
+         [:div.empty "No messages yet."])
+       [:div#chat-bottom-anchor.chat-stream__bottom-anchor {:aria-hidden true}]]))))
 
 (defn events-fragment [system]
   (ui-render/render

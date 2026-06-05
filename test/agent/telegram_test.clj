@@ -331,6 +331,37 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest telegram-sends-thinking-as-expandable-html-quote
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        sent (atom [])
+        html-sent (atom [])
+        system {:store store
+                :event-sink (fn [_] nil)}
+        config {:bot-token "token"
+                :allowlist {:allow-all? true}}
+        opts {:send-message-fn (fn [chat-id text]
+                                 (swap! sent conj {:chat-id chat-id :text text}))
+              :send-message-draft-fn (fn [_ _ _] nil)
+              :send-html-message-fn (fn [chat-id text]
+                                      (swap! html-sent conj {:chat-id chat-id :text text}))
+              :chat-fn (fn [_ {:keys [session-id on-delta on-thinking-delta]}]
+                         (on-thinking-delta "think <x>")
+                         (on-delta "answer")
+                         {:content "answer"
+                          :session-id session-id
+                          :stream? true})}]
+    (try
+      (is (= :processed
+             (telegram/process-update! system config opts (update-for 1 100 7 "hi"))))
+      (is (= [{:chat-id 100 :text "answer"}] @sent))
+      (is (= [{:chat-id 100
+               :text "<blockquote expandable>thinking\n\nthink &lt;x&gt;</blockquote>"}]
+             @html-sent))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest telegram-records-draft-send-failures
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path :evict-on-close? true})

@@ -74,10 +74,10 @@
      :usage {:tokens 7}}
 
     (= text "multi-tool")
-    {:content ""
-     :tool-calls [(tool-call "call_predictable_fs"
-                             "fs"
-                             {:action "list" :path "."})
+     {:content ""
+      :tool-calls [(tool-call "call_predictable_fs"
+                             "fs_list"
+                             {:path "."})
                   (tool-call "call_predictable_http"
                              "http"
                              {:url "http://127.0.0.1/"})]}

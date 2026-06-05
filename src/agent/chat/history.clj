@@ -120,7 +120,7 @@
    (persist-completion! system session-id prompt content request-id extra)))
 
 (defn message-extra [payload]
-  (select-keys payload [:tool-calls :tool-call-id :metadata :excluded-from-context?]))
+  (select-keys payload [:content-blocks :tool-calls :tool-call-id :metadata :excluded-from-context?]))
 
 (defn queued-user-metadata [request-id]
   {queued-message-metadata-key true

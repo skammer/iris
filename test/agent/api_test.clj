@@ -331,8 +331,8 @@
                           port
                           #(assoc-in % [:tools :permissions :api] []))]
     (try
-      (let [denied (http-post (str base-url "/v1/tools/fs/execute")
-                              {:input {:action "list" :path "."}
+      (let [denied (http-post (str base-url "/v1/tools/fs_list/execute")
+                              {:input {:path "."}
                                :permissions ["filesystem-read"]})]
         (is (= 403 (:status denied))))
       (finally
@@ -371,9 +371,8 @@
                                (assoc-in [:tools :permissions :api] [:filesystem-read :filesystem-write])
                                (assoc-in [:tools :policy :blocklist] [])))]
     (try
-      (let [write-denied (http-post (str base-url "/v1/tools/fs/execute")
-                                    {:input {:action "write"
-                                             :path "target/api-tool-policy-test.txt"
+      (let [write-denied (http-post (str base-url "/v1/tools/fs_write/execute")
+                                    {:input {:path "target/api-tool-policy-test.txt"
                                              :content "blocked"}})
             write-denied-body (json/parse-string (:body write-denied) true)]
         (is (= 403 (:status write-denied)))
@@ -509,8 +508,8 @@
             health-body (json/parse-string (:body health) true)
             tools (http-get (str base-url "/v1/tools"))
             tools-body (json/parse-string (:body tools) true)
-            tool-exec (http-post (str base-url "/v1/tools/fs/execute")
-                                 {:input {:action "list" :path "."}
+            tool-exec (http-post (str base-url "/v1/tools/fs_list/execute")
+                                 {:input {:path "."}
                                   :permissions ["filesystem-read"]})
             tool-exec-body (json/parse-string (:body tool-exec) true)
             shell-exec-blocked (http-post (str base-url "/v1/tools/shell/execute")
@@ -647,8 +646,8 @@
             agent-tool-exec (http-post (str base-url "/v1/agents/" agent-id "/tools/http/execute")
                                        {:input {:url (str base-url "/health")}
                                         :permissions ["http-request"]})
-            agent-tool-exec-blocked (http-post (str base-url "/v1/agents/" agent-id "/tools/fs/execute")
-                                               {:input {:action "list" :path "."}
+            agent-tool-exec-blocked (http-post (str base-url "/v1/agents/" agent-id "/tools/fs_list/execute")
+                                               {:input {:path "."}
                                                 :permissions ["filesystem-read"]})
             orchestrator-spawn-worker (http-post (str base-url "/v1/agents/" orchestrator-id "/spawn-worker")
                                                  {:name "Delegated Worker"
@@ -768,7 +767,7 @@
         (is (str/includes? (:body ui-operator-board) "Interop activity"))
         (is (str/includes? (:body ui-operator-board) "Kernel receipts"))
         (is (= 200 (:status health)))
-        (is (= 4 (get-in health-body [:tools :count])))
+        (is (= 13 (get-in health-body [:tools :count])))
         (is (= true (get-in health-body [:memory :healthy])))
         (is (= 3 (get-in health-body [:channel-adapters :count])))
         (is (= 0 (get-in health-body [:orchestrator :agent-count])))
@@ -779,7 +778,9 @@
         (is (map? (get-in health-body [:sse :metrics])))
         (is (integer? (get-in health-body [:sse :metrics :opened])))
         (is (= 200 (:status tools)))
-        (is (= ["fs" "http" "shell" "todo"] (mapv :name (:data tools-body))))
+        (is (= ["fs_create" "fs_delete" "fs_list" "fs_mkdir" "fs_read" "fs_replace" "fs_write"
+                "http" "shell" "todo_get" "todo_list" "todo_search" "todo_write"]
+               (mapv :name (:data tools-body))))
         (is (= "builtin" (get-in tools-body [:data 0 :source])))
         (is (= 200 (:status tool-exec)))
         (is (vector? (get-in tool-exec-body [:data :entries])))

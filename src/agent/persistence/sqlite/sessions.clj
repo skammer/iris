@@ -205,12 +205,37 @@
     metadata_json (assoc :metadata (common/parse-json-string metadata_json))
     (pos? (int (or excluded_from_context 0))) (assoc :excluded-from-context? true)))
 
+(defn- message-entry-overrides [conn session-id]
+  (into {}
+        (keep (fn [row]
+                (let [{:keys [type payload]} (row->entry row)]
+                  (when (and (= :message type) (:message-id payload))
+                    [(:message-id payload)
+                     (select-keys payload [:content-blocks
+                                           :tool-calls
+                                           :tool-call-id
+                                           :metadata
+                                           :excluded-from-context?])]))))
+        (common/select-many conn
+                            (list-session-entries-sqlvec {:session_id session-id})
+                            identity)))
+
+(defn- merge-entry-overrides [message overrides]
+  (if-let [entry (get overrides (:id message))]
+    (let [metadata (merge (:metadata entry) (:metadata message))]
+      (cond-> (merge entry message)
+        (seq metadata) (assoc :metadata metadata)))
+    message))
+
 (defn list-messages [store session-id]
   (common/with-connection
     store
     (fn [conn]
-      (mapv row->message
-            (common/select-many conn (list-messages-sqlvec {:session_id session-id}) identity)))))
+      (let [overrides (message-entry-overrides conn session-id)]
+        (mapv #(merge-entry-overrides (row->message %) overrides)
+              (common/select-many conn
+                                  (list-messages-sqlvec {:session_id session-id})
+                                  identity))))))
 
 (defn update-message-runtime-flags!
   [store message-id {:keys [metadata excluded-from-context? session-id reparent-to-current-leaf? select-leaf?]}]

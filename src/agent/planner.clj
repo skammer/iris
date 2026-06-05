@@ -28,7 +28,7 @@
                                (or messages [])))]
     (cond-> (merge
              (select-keys request [:temperature :max-tokens :top-p :cache-control
-                                   :tool-choice :on-content-delta
+                                   :tool-choice :on-content-delta :on-thinking-delta
                                    :session-id])
              {:model model
               :messages messages*

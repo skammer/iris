@@ -613,11 +613,16 @@ textarea {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overflow-anchor: auto;
   overscroll-behavior: contain;
   flex-direction: column;
   gap: 10px;
   padding: 16px 18px;
   scrollbar-gutter: stable;
+}
+
+#session-messages-panel > * {
+  overflow-anchor: none;
 }
 
 #session-messages-panel .empty {
@@ -679,8 +684,35 @@ textarea {
   min-height: 0;
 }
 
+.chat-stream__bottom-anchor {
+  flex: 0 0 1px;
+  min-height: 1px;
+  overflow-anchor: auto;
+}
+
 #session-messages-panel .message {
   flex: 0 0 auto;
+}
+
+.message-thinking {
+  margin: 0 0 8px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--warning);
+  background: rgba(212, 168, 67, 0.06);
+}
+
+.message-thinking summary {
+  cursor: pointer;
+  padding: 6px 8px;
+  color: var(--warning);
+  font: 500 11px/1.2 "IoskeleyMono", "Space Mono", "JetBrains Mono", "SF Mono", monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.message-thinking .code {
+  padding: 0 8px 8px;
+  color: var(--text-secondary);
 }
 
 #chat-form {

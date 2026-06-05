@@ -88,6 +88,61 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest session-messages-render-thinking-and-bottom-anchor
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [session (sqlite/create-session! store "thinking")]
+        (sqlite/append-message! store
+                                (:id session)
+                                "assistant"
+                                "answer"
+                                {:metadata {:thinking "hidden reasoning"}})
+        (let [html (ui/session-messages-fragment {:store store} (:id session))]
+          (is (str/includes? html "message-thinking"))
+          (is (str/includes? html "hidden reasoning"))
+          (is (str/includes? html "chat-stream__bottom-anchor"))
+          (is (str/includes? html "id=\"chat-bottom-anchor\""))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest session-messages-render-thinking-from-content-blocks
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [session (sqlite/create-session! store "thinking-block")]
+        (sqlite/append-message! store
+                                (:id session)
+                                "assistant"
+                                "answer"
+                                {:content-blocks [{:type :thinking :text "block reasoning"}
+                                                  {:type :text :text "answer"}]})
+        (let [html (ui/session-messages-fragment {:store store} (:id session))]
+          (is (str/includes? html "message-thinking"))
+          (is (str/includes? html "block reasoning"))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest session-messages-render-thinking-from-think-tags
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [session (sqlite/create-session! store "think-tags")]
+        (sqlite/append-message! store
+                                (:id session)
+                                "assistant"
+                                "<think>old reasoning</think>\nanswer")
+        (let [html (ui/session-messages-fragment {:store store} (:id session))]
+          (is (str/includes? html "message-thinking"))
+          (is (str/includes? html "old reasoning"))
+          (is (str/includes? html "answer"))
+          (is (not (str/includes? html "&lt;think&gt;")))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest memory-search-message-content-is-escaped
   (let [payload "<img src=\"x\" onerror=\"alert(1)\"> [link](javascript:alert(1))"
         html (ui/memory-search-results-fragment

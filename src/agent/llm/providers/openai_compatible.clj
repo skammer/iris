@@ -275,6 +275,16 @@
                                         :content-chars (count (or content ""))
                                         :tool-call-count (count tool-calls)))))))
 
+(defn- reasoning-delta [delta]
+  (or (:reasoning_content delta)
+      (:reasoning-content delta)
+      (:reasoning delta)
+      (:thinking delta)))
+
+(defn- emit-thinking-delta! [on-thinking-delta chunk]
+  (when (and on-thinking-delta (string? chunk) (not= "" chunk))
+    (on-thinking-delta chunk)))
+
 (defn- post-json [url request]
   (provider-common/post-json url request retryable-http-error))
 
@@ -373,9 +383,11 @@
 
 (defn- stream->turn
   ([body-stream] (stream->turn body-stream nil))
-  ([body-stream on-content-delta]
+  ([body-stream on-content-delta] (stream->turn body-stream on-content-delta nil))
+  ([body-stream on-content-delta on-thinking-delta]
    (with-open [reader (io/reader body-stream)]
      (loop [content []
+            reasoning []
             tool-calls (sorted-map)
             usage nil
             raw []
@@ -387,11 +399,12 @@
            (let [delta (-> event :choices first :delta)
                  choice (-> event :choices first)
                  chunk (:content delta)
-                 reasoning-chunk (:reasoning_content delta)]
+                 reasoning-chunk (reasoning-delta delta)]
              (when (and on-content-delta (string? chunk) (not= "" chunk))
                (on-content-delta chunk))
-             (recur (cond-> content
-                      chunk (conj chunk))
+             (emit-thinking-delta! on-thinking-delta reasoning-chunk)
+             (recur (cond-> content chunk (conj chunk))
+                    (cond-> reasoning reasoning-chunk (conj reasoning-chunk))
                     (if-let [tc-deltas (:tool_calls delta)]
                       (merge-tool-call-deltas tool-calls tc-deltas)
                       tool-calls)
@@ -400,13 +413,14 @@
                     (or (:finish_reason choice) finish-reason)
                     (+ reasoning-chars (count (or reasoning-chunk "")))
                     (inc event-count)))
-           (recur content tool-calls usage raw finish-reason reasoning-chars event-count))
+           (recur content reasoning tool-calls usage raw finish-reason reasoning-chars event-count))
          (let [turn (dsml/recover-tool-calls
-                     {:role "assistant"
-                      :content (apply str content)
-                      :tool-calls (vec (vals tool-calls))
-                      :usage (usage->estimate {:usage usage})
-                      :raw raw})]
+                     (cond-> {:role "assistant"
+                              :content (apply str content)
+                              :tool-calls (vec (vals tool-calls))
+                              :usage (usage->estimate {:usage usage})
+                              :raw raw}
+                       (seq reasoning) (assoc :reasoning-content (apply str reasoning))))]
            (throw-empty-content! (:content turn)
                                  (:tool-calls turn)
                                  {:finish-reason finish-reason
@@ -418,9 +432,11 @@
 
 (defn- responses-stream->turn
   ([body-stream] (responses-stream->turn body-stream nil))
-  ([body-stream on-content-delta]
+  ([body-stream on-content-delta] (responses-stream->turn body-stream on-content-delta nil))
+  ([body-stream on-content-delta on-thinking-delta]
    (with-open [reader (io/reader body-stream)]
      (loop [content []
+            reasoning []
             output-items (sorted-map)
             final-response nil
             failed-response nil
@@ -432,10 +448,16 @@
                  chunk (case event-type
                          "response.output_text.delta" (:delta event)
                          "response.refusal.delta" (:delta event)
-                         nil)]
+                         nil)
+                 reasoning-chunk (when (and (string? event-type)
+                                            (str/includes? event-type "reasoning")
+                                            (string? (:delta event)))
+                                   (:delta event))]
              (when (and on-content-delta (string? chunk) (not= "" chunk))
                (on-content-delta chunk))
+             (emit-thinking-delta! on-thinking-delta reasoning-chunk)
              (recur (cond-> content chunk (conj chunk))
+                    (cond-> reasoning reasoning-chunk (conj reasoning-chunk))
                     (if (= "response.output_item.done" event-type)
                       (assoc output-items (:output_index event) (:item event))
                       output-items)
@@ -448,7 +470,7 @@
                       failed-response)
                     (conj raw event)
                     (inc event-count)))
-           (recur content output-items final-response failed-response raw event-count))
+           (recur content reasoning output-items final-response failed-response raw event-count))
          (let [body (cond
                       final-response final-response
                       failed-response failed-response
@@ -473,22 +495,29 @@
                                                :role "assistant"
                                                :content [{:type "output_text"
                                                           :text (apply str content)}]}]))
-                 turn (responses->turn body*)]
+                 turn (cond-> (responses->turn body*)
+                        (seq reasoning) (assoc :reasoning-content (apply str reasoning)))]
              (assoc turn :stream-events raw))))))))
 
 (defn- post-stream-turn
   ([url request] (post-stream-turn url request nil))
   ([url request on-content-delta]
+   (post-stream-turn url request on-content-delta nil))
+  ([url request on-content-delta on-thinking-delta]
    (stream->turn
     (:body (post-stream url request))
-    on-content-delta)))
+    on-content-delta
+    on-thinking-delta)))
 
 (defn- post-responses-stream-turn
   ([url request] (post-responses-stream-turn url request nil))
   ([url request on-content-delta]
+   (post-responses-stream-turn url request on-content-delta nil))
+  ([url request on-content-delta on-thinking-delta]
    (responses-stream->turn
     (:body (post-stream url request))
-    on-content-delta)))
+    on-content-delta
+    on-thinking-delta)))
 
 (defn- current-api-key [provider]
   (or (when-let [resolver (:api-key-resolver provider)]
@@ -676,12 +705,14 @@
 (extend-type OpenAICompatibleProvider
   llm-core/ILLMProviderInvoke
   (invoke [this request]
-    (let [opts (llm-core/request->completion-opts request)
-          stream-with-delta? (some? (:on-content-delta opts))
+      (let [opts (llm-core/request->completion-opts request)
+          stream-with-delta? (or (some? (:on-content-delta opts))
+                                 (some? (:on-thinking-delta opts)))
           stream-request? (or (request-stream? (:config this) opts)
                               (stream-structured-output? (:config this) opts))
           on-content-delta (dsml/guard-content-delta (:on-content-delta opts)
                                                      (:tools opts))
+          on-thinking-delta (:on-thinking-delta opts)
           responses? (responses-api? (:config this) opts)
           request* {:headers (provider-headers this)}
           response (cond
@@ -693,9 +724,10 @@
                                     (responses-stream-body (:base-url this)
                                                            (:default-model this)
                                                            (:config this)
-                                                           (:messages request)
-                                                           opts)))
-                      on-content-delta)
+                                                                   (:messages request)
+                                                                   opts)))
+                      on-content-delta
+                      on-thinking-delta)
 
                      responses?
                      (let [response* (post-json
@@ -720,7 +752,8 @@
                                                  (:config this)
                                                  (:messages request)
                                                  opts)))
-                      on-content-delta)
+                      on-content-delta
+                      on-thinking-delta)
 
                      :else
                      (let [response* (post-json

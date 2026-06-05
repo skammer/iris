@@ -238,6 +238,30 @@
         (is (= "Hello world" (:content response)))
         (is (empty? (:tool-calls response)))))))
 
+(deftest invoke-streams-reasoning-via-on-thinking-delta-callback-test
+  (let [body* (atom nil)]
+    (with-redefs [http/post (fn [_ request]
+                              (reset! body* (json/parse-string (:body request) true))
+                              {:status 200
+                               :headers {"Content-Type" "text/event-stream"}
+                               :body (byte-stream
+                                      (str "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think \"}}]}\n\n"
+                                           "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"hard\"}}]}\n\n"
+                                           "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\n"
+                                           "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+                                           "data: [DONE]\n\n"))})]
+      (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})
+            thinking (atom [])
+            response (llm-core/invoke
+                      llm
+                      {:messages [{:role "user" :content "hi"}]
+                       :on-thinking-delta #(swap! thinking conj %)})]
+        (is (true? (:stream @body*)))
+        (is (= ["think " "hard"] @thinking))
+        (is (= {:type :thinking :text "think hard"}
+               (first (:content-blocks response))))
+        (is (= "OK" (:content response)))))))
+
 (deftest invoke-honors-configured-stream-flag-test
   (let [body* (atom nil)
         as* (atom nil)]

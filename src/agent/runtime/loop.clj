@@ -27,6 +27,7 @@
 
 (def ^:private event! runtime-events/emit!)
 (def ^:private emit-message-delta! runtime-events/emit-message-delta!)
+(def ^:private emit-thinking-delta! runtime-events/emit-thinking-delta!)
 (def ^:private emit-terminal-message! runtime-events/emit-terminal-message!)
 (def ^:private max-token-stop-reason? runtime-events/max-token-stop-reason?)
 (def ^:private emit-max-token-truncation! runtime-events/emit-max-token-truncation!)
@@ -159,7 +160,7 @@
   [{:keys [messages context-injectors system-prompt tools model provider-config
            telemetry observer planner-fn context-pack-fn execute-step-fn approval-fn fallback-fn event-sink
            cancellation-token request-id session-id agent-id max-steps stream?
-           tool-output-max-chars doom-loop-config chat-profile]
+           tool-output-max-chars doom-loop-config chat-profile on-thinking-delta]
     :or {planner-fn planner/plan-step!
          context-pack-fn identity
          max-steps defaults/chat-max-steps
@@ -178,6 +179,11 @@
                       (when (and (string? chunk) (not= "" chunk))
                         (reset! delta-emitted? true)
                         (emit-message-delta! event-sink base chunk)))
+        emit-thinking! (fn [chunk]
+                         (when (and (string? chunk) (not= "" chunk))
+                           (emit-thinking-delta! event-sink base chunk)
+                           (when on-thinking-delta
+                             (on-thinking-delta chunk))))
         flush-pending-deltas! (fn []
                                 (doseq [chunk @pending-deltas]
                                   (emit-delta! chunk))
@@ -264,7 +270,8 @@
                                   :context-pack context-pack
                                   :tool-choice (when (and (:force-tool-choice? chat-profile*) (seq routed-tools))
                                                  "required")
-                                  :on-content-delta on-content-delta})
+                                  :on-content-delta on-content-delta
+                                  :on-thinking-delta (when stream?* emit-thinking!)})
                 _ (throw-if-cancelled! cancellation-token)
                 llm-response0 (:llm-response step)
                 step* (-> step

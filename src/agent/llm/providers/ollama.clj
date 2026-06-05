@@ -21,6 +21,8 @@
            :options (cond-> {}
                       (:temperature opts) (assoc :temperature (:temperature opts))
                       (:max-tokens opts) (assoc :num_predict (:max-tokens opts)))}
+    (contains? opts :think) (assoc :think (:think opts))
+    (contains? opts :thinking) (assoc :think (:thinking opts))
     (:tools opts) (assoc :tools (:tools opts))))
 
 (defn- structured-chat-body [default-model keep-alive messages opts stream?]
@@ -41,36 +43,51 @@
 (defn- post-stream [url request]
   (provider-common/post-stream url request ollama-http-error))
 
+(defn- thinking-chunk [message]
+  (or (:thinking message)
+      (:reasoning message)
+      (:reasoning_content message)
+      (:reasoning-content message)))
+
 (defn- stream-response->turn
-  ([body-stream] (stream-response->turn body-stream nil))
-  ([body-stream on-content-delta]
+  ([body-stream] (stream-response->turn body-stream nil nil))
+  ([body-stream on-content-delta] (stream-response->turn body-stream on-content-delta nil))
+  ([body-stream on-content-delta on-thinking-delta]
    (with-open [reader (io/reader body-stream)]
      (loop [content []
+            thinking []
             tool-calls []
             prompt-tokens 0
             completion-tokens 0
             raw []]
        (if-let [line (.readLine reader)]
          (if (str/blank? line)
-           (recur content tool-calls prompt-tokens completion-tokens raw)
+           (recur content thinking tool-calls prompt-tokens completion-tokens raw)
            (let [event (json/parse-string line true)
                  message (:message event)
                  chunk (:content message)
+                 thinking* (thinking-chunk message)
                  tool-calls* (or (:tool_calls message)
                                  (:tool-calls message))]
              (when (and on-content-delta (string? chunk) (not= "" chunk))
                (on-content-delta chunk))
+             (when (and on-thinking-delta (string? thinking*) (not= "" thinking*))
+               (on-thinking-delta thinking*))
              (recur (cond-> content
                       (string? chunk) (conj chunk))
+                    (cond-> thinking
+                      (string? thinking*) (conj thinking*))
                     (cond-> tool-calls
                       (seq tool-calls*) (into tool-calls*))
                     (or (:prompt_eval_count event) prompt-tokens)
                     (or (:eval_count event) completion-tokens)
                     (conj raw event))))
-         {:role "assistant"
-          :content (apply str content)
-          :tool-calls tool-calls
-          :usage {:prompt-tokens prompt-tokens
+        {:role "assistant"
+         :content (apply str content)
+         :reasoning-content (when (seq thinking)
+                              (apply str thinking))
+         :tool-calls tool-calls
+         :usage {:prompt-tokens prompt-tokens
                   :completion-tokens completion-tokens
                   :cached-tokens 0
                   :tokens (+ prompt-tokens completion-tokens)
@@ -156,6 +173,7 @@
           message (-> response :body :message)]
       {:role (:role message "assistant")
        :content (:content message)
+       :reasoning-content (thinking-chunk message)
        :tool-calls (vec (or (:tool_calls message) []))
        :usage {:prompt-tokens 0
                :completion-tokens 0
@@ -169,6 +187,7 @@
   (invoke [this request]
     (let [opts (llm-core/request->completion-opts request)
           stream? (or (some? (:on-content-delta opts))
+                      (some? (:on-thinking-delta opts))
                       (stream-structured-output? (:config this) opts))
           request* {:body (json/generate-string
                            (structured-chat-body (:default-model this)
@@ -184,16 +203,18 @@
           (llm-core/normalize-llm-response
            (stream-response->turn (:body response)
                                   (dsml/guard-content-delta (:on-content-delta opts)
-                                                            (:tools opts)))
+                                                            (:tools opts))
+                                  (:on-thinking-delta opts))
            {}))
         (let [response (post-json (endpoint (:base-url this) "/api/chat")
                                   (assoc request* :as :json))
               body (:body response)
               message (:message body)]
           (llm-core/normalize-llm-response
-           {:role (:role message "assistant")
-            :content (:content message)
-            :tool-calls (vec (or (:tool_calls message) []))
+          {:role (:role message "assistant")
+           :content (:content message)
+           :reasoning-content (thinking-chunk message)
+           :tool-calls (vec (or (:tool_calls message) []))
             :usage {:prompt-tokens (or (:prompt_eval_count body) 0)
                     :completion-tokens (or (:eval_count body) 0)
                     :cached-tokens 0

@@ -27,3 +27,15 @@
       (is (= "ab" (get-in @events [0 :payload :delta])))
       (finally
         (.shutdownNow scheduler)))))
+
+(deftest stream-delta-flusher-falls-back-when-scheduler-stopped-test
+  (let [events (atom [])
+        scheduler (Executors/newSingleThreadScheduledExecutor)
+        flusher (streaming/stream-delta-flusher #(swap! events conj %) scheduler)
+        event {:event-type :message-update
+               :payload {:delta "a"}}]
+    (.shutdownNow scheduler)
+    ((:emit! flusher) event)
+    ((:emit! flusher) (assoc-in event [:payload :delta] "b"))
+    (is (eventually #(= 1 (count @events))))
+    (is (= "ab" (get-in @events [0 :payload :delta])))))
