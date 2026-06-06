@@ -42,6 +42,77 @@
   ;; Markdown intentionally disabled; Hiccup escapes LLM/user text here.
   [:div.code (str content)])
 
+(defn- source-url [{:keys [type value media-type]}]
+  (case (keyword type)
+    :url value
+    :base64 (str "data:" (or media-type "application/octet-stream") ";base64," value)
+    nil))
+
+(defn- safe-media-url [url media-prefix]
+  (let [url* (str url)
+        lower (str/lower-case url*)]
+    (when (or (str/starts-with? lower "https://")
+              (str/starts-with? lower "http://")
+              (str/starts-with? lower (str "data:" media-prefix "/")))
+      url*)))
+
+(defn- media-caption [block fallback]
+  (or (:alt block) (:filename block) fallback))
+
+(declare user-message-content)
+
+(defn- media-block [block]
+  (let [type (keyword (:type block))
+        url (source-url (:source block))]
+    (case type
+      :image
+      (if-let [src (safe-media-url url "image")]
+        [:figure.message-media
+         [:img.message-media__image {:src src
+                                     :alt (media-caption block "image")
+                                     :loading "lazy"}]
+         (when-let [caption (media-caption block nil)]
+           [:figcaption caption])]
+        (message-content (media-caption block "[image]")))
+
+      :audio
+      (if-let [src (safe-media-url url "audio")]
+        [:figure.message-media
+         [:audio.message-media__audio {:src src :controls true :preload "metadata"}]
+         (when-let [caption (media-caption block nil)]
+           [:figcaption caption])]
+        (message-content (media-caption block "[audio]")))
+
+      :video
+      (if-let [src (safe-media-url url "video")]
+        [:figure.message-media
+         [:video.message-media__video {:src src :controls true :preload "metadata"}]
+         (when-let [caption (media-caption block nil)]
+           [:figcaption caption])]
+        (message-content (media-caption block "[video]")))
+
+      :file
+      (message-content (media-caption block "[file]"))
+
+      nil)))
+
+(defn- rich-message-content [role content content-blocks]
+  (let [blocks (seq content-blocks)]
+    (if-not blocks
+      (if (= "user" role)
+        (user-message-content content)
+        (message-content content))
+      (into [:div.message-rich-content]
+            (keep (fn [block]
+                    (case (keyword (:type block))
+                      :text (if (= "user" role)
+                              (user-message-content (:text block))
+                              (message-content (:text block)))
+                      :thinking nil
+                      (:image :audio :video :file) (media-block block)
+                      nil))
+                  blocks)))))
+
 (defn thinking-content [content]
   (when-not (str/blank? (str content))
     [:details.message-thinking
@@ -276,9 +347,7 @@
         [:div.message-role {:class role} role]
         (when (= "assistant" role)
           (thinking-content thinking))
-        (if (= "user" role)
-          (user-message-content content*)
-          (message-content content*))
+        (rich-message-content role content* content-blocks)
         [:div.meta meta-text]]))))
 
 (defn thread-stats

@@ -19,7 +19,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]])
   (:import
-   (java.io BufferedReader InputStreamReader)
+   (java.io BufferedReader ByteArrayOutputStream InputStreamReader)
    (java.net URI)
    (java.net URL)
    (java.net.http HttpClient HttpRequest HttpResponse$BodyHandlers)))
@@ -139,6 +139,30 @@
         response (.send (http-client) request (HttpResponse$BodyHandlers/ofString))]
     {:status (.statusCode response)
      :body (.body response)}))
+
+(defn http-post-multipart [url parts]
+  (let [boundary (str "iris-boundary-" (System/nanoTime))
+        out (ByteArrayOutputStream.)]
+    (doseq [{:keys [name value filename content-type bytes]} parts]
+      (.write out (.getBytes (str "--" boundary "\r\n") "UTF-8"))
+      (.write out (.getBytes (str "Content-Disposition: form-data; name=\"" name "\""
+                                  (when filename (str "; filename=\"" filename "\""))
+                                  "\r\n")
+                              "UTF-8"))
+      (when content-type
+        (.write out (.getBytes (str "Content-Type: " content-type "\r\n") "UTF-8")))
+      (.write out (.getBytes "\r\n" "UTF-8"))
+      (.write out (if bytes bytes (.getBytes (str value) "UTF-8")))
+      (.write out (.getBytes "\r\n" "UTF-8")))
+    (.write out (.getBytes (str "--" boundary "--\r\n") "UTF-8"))
+    (let [request (-> (HttpRequest/newBuilder (URI/create url))
+                      (.header "Content-Type" (str "multipart/form-data; boundary=" boundary))
+                      (.POST (java.net.http.HttpRequest$BodyPublishers/ofByteArray
+                              (.toByteArray out)))
+                      .build)
+          response (.send (http-client) request (HttpResponse$BodyHandlers/ofString))]
+      {:status (.statusCode response)
+       :body (.body response)})))
 
 (defn sse-data-lines [body]
   (->> (str/split-lines body)
@@ -297,6 +321,40 @@
         (api/stop-server! server)
         (io/delete-file path true)))))
 
+(deftest chat-completions-accepts-rich-media-content-test
+  (let [path (temp-db-path)
+        port (free-port)
+        base-url (str "http://127.0.0.1:" port)
+        {:keys [system server]} (started-test-system path port identity)]
+    (try
+      (let [response (http-post (str base-url "/v1/chat/completions")
+                                {:messages [{:role "user"
+                                             :content [{:type "text"
+                                                        :text "inspect"}
+                                                       {:type "image_url"
+                                                        :image_url {:url "data:image/png;base64,aGVsbG8="}}
+                                                       {:type "file"
+                                                        :file {:file_data "AAAA"
+                                                               :media-type "video/mp4"
+                                                               :filename "clip.mp4"}}]}]})
+            user-message (last (filter #(= "user" (:role %))
+                                       @(:messages* (:llm-provider system))))]
+        (is (= 200 (:status response)))
+        (is (= [{:type :text :text "inspect"}
+                {:type :image
+                 :source {:type :base64
+                          :value "aGVsbG8="
+                          :media-type "image/png"}}
+                {:type :video
+                 :source {:type :base64
+                          :value "AAAA"
+                          :media-type "video/mp4"}
+                 :filename "clip.mp4"}]
+               (:content user-message))))
+      (finally
+        (api/stop-server! server)
+        (io/delete-file path true)))))
+
 (deftest slash-commands-api-lists-skill-catalog-test
   (let [path (temp-db-path)
         port (free-port)
@@ -356,6 +414,39 @@
         (is (some? stream-idx))
         (is (some? final-idx))
         (is (< stream-idx final-idx)))
+      (finally
+        (api/stop-server! server)
+        (io/delete-file path true)))))
+
+(deftest ui-chat-accepts-image-upload-test
+  (let [path (temp-db-path)
+        port (free-port)
+        base-url (str "http://127.0.0.1:" port)
+        {:keys [system server]} (started-test-system path port identity)]
+    (try
+      (let [created (http-post (str base-url "/v1/sessions") {:title "upload"})
+            session-id (:id (json/parse-string (:body created) true))
+            image-bytes (.getBytes "image-bytes" "UTF-8")
+            response (http-post-multipart
+                      (str base-url "/ui/chat")
+                      [{:name "session_id" :value session-id}
+                       {:name "prompt" :value "inspect"}
+                       {:name "image"
+                        :filename "photo.png"
+                        :content-type "image/png"
+                        :bytes image-bytes}])
+            user-message (last (filter #(= "user" (:role %))
+                                       @(:messages* (:llm-provider system))))]
+        (is (= 200 (:status response)))
+        (is (= [{:type :text :text "inspect"}
+                {:type :image
+                 :source {:type :base64
+                          :media-type "image/png"
+                          :value (.encodeToString (java.util.Base64/getEncoder)
+                                                  image-bytes)}
+                 :filename "photo.png"
+                 :alt "photo.png"}]
+               (:content user-message))))
       (finally
         (api/stop-server! server)
         (io/delete-file path true)))))

@@ -34,7 +34,8 @@
    [reitit.ring :as ring]
    [reitit.ring.coercion :as ring-coercion]
    [reitit.ring.middleware.muuntaja :as muuntaja]
-   [reitit.ring.middleware.parameters :as parameters]))
+   [reitit.ring.middleware.parameters :as parameters]
+   [ring.middleware.multipart-params :refer [wrap-multipart-params]]))
 
 (defn- path-param [request k]
   (get-in request [:path-params k]))
@@ -247,6 +248,7 @@
                   :data {:muuntaja m/instance
                          :coercion malli-coercion/coercion
                          :middleware [parameters/parameters-middleware
+                                      wrap-multipart-params
                                       muuntaja/format-negotiate-middleware
                                       muuntaja/format-request-middleware
                                       ring-coercion/coerce-request-middleware]}})

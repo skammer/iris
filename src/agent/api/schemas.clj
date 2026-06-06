@@ -32,10 +32,26 @@
 (def ChatRole
   [:enum "system" "user" "assistant" "tool"])
 
+(def ChatContentBlock
+  [:map
+   [:type NonBlankString]
+   [:text {:optional true} :string]
+   [:source {:optional true} :map]
+   [:image_url {:optional true} :map]
+   [:input_audio {:optional true} :map]
+   [:file {:optional true} :map]
+   [:alt {:optional true} [:maybe :string]]
+   [:detail {:optional true} :any]
+   [:filename {:optional true} [:maybe :string]]])
+
+(def ChatContent
+  [:or NonBlankString
+   [:vector {:min 1} ChatContentBlock]])
+
 (def ChatMessage
   [:map
    [:role ChatRole]
-   [:content NonBlankString]])
+   [:content ChatContent]])
 
 (def Directive
   [:map

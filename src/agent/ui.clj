@@ -500,17 +500,25 @@
            {"data-on:submit" "@post('/ui/chat', {contentType: 'form'})"
             "data-indicator" "chatLoading"
             "data-class:is-loading" "$chatLoading"
-            "data-skill-autocomplete" "true"}
+            "data-skill-autocomplete" "true"
+            "data-on:datastar-fetch" "evt.detail.type === 'finished' && evt.currentTarget.reset()"
+            :enctype "multipart/form-data"}
            [:input {:id (str "chat-session-id-" (:id session))
                     :type "hidden"
                     :name "session_id"
                     :value (:id session)}]
-           [:auto-grow-textarea {:submit-on-enter true}
+          [:auto-grow-textarea {:submit-on-enter true}
             [:textarea.chat-input {:name "prompt"
                                    :data-skill-input "true"
                                    :rows 1
                                    :placeholder "Ask model something concrete"}]]
-           [:button {:type "button"
+          [:label.chat-file-input
+           [:span "Image"]
+           [:input {:type "file"
+                    :name "image"
+                    :accept "image/*"
+                    :multiple true}]]
+          [:button {:type "button"
                      "data-on:click" "@post('/ui/chat/stop', {contentType: 'form', selector: '#chat-form'})"}
             "Stop"]
            [:button {:type "submit"

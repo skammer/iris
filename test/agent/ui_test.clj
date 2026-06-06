@@ -70,6 +70,45 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest session-message-renders-image-content-block
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [session (sqlite/create-session! store "image")
+            data "aW1hZ2UtYnl0ZXM="]
+        (sqlite/append-message! store
+                                (:id session)
+                                "user"
+                                "photo.png"
+                                {:content-blocks [{:type :image
+                                                   :source {:type :base64
+                                                            :media-type "image/png"
+                                                            :value data}
+                                                   :filename "photo.png"
+                                                   :alt "photo.png"}]})
+        (let [html (ui/session-messages-fragment {:store store} (:id session))]
+          (is (str/includes? html "<img"))
+          (is (str/includes? html "message-media__image"))
+          (is (str/includes? html (str "data:image/png;base64," data)))
+          (is (str/includes? html "photo.png"))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest chat-form-accepts-image-upload
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [session (sqlite/create-session! store "form")
+            html (ui/session-detail-fragment {:store store} (:id session))]
+        (is (str/includes? html "enctype=\"multipart/form-data\""))
+        (is (str/includes? html "type=\"file\""))
+        (is (str/includes? html "accept=\"image/*\""))
+        (is (str/includes? html "name=\"image\"")))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest working-session-uses-status-spinner-not-thinking-message
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})]

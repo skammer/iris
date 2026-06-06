@@ -37,6 +37,14 @@
     :tool-call :tool-call
     :tool-result :tool-result
     :toolresult :tool-result
+    :image-url :image-url
+    :image_url :image-url
+    :input-image :input-image
+    :input_image :input-image
+    :input-audio :input-audio
+    :input_audio :input-audio
+    :input-file :input-file
+    :input_file :input-file
     :text :text
     :thinking :thinking
     :image :image
@@ -176,12 +184,91 @@
 (defn validate-runtime-event! [event]
   (validate! runtime-event-schema event :runtime-event))
 
+(defn- data-uri-source [value fallback-media-type]
+  (let [value* (str (or value ""))]
+    (if-let [[_ media-type data] (re-matches #"(?is)^data:([^;,]+)?(?:;base64)?,(.*)$" value*)]
+      (cond-> {:type :base64
+               :value data}
+        (not (str/blank? media-type)) (assoc :media-type media-type))
+      (cond-> {:type :url
+               :value value*}
+        (not (str/blank? fallback-media-type)) (assoc :media-type fallback-media-type)))))
+
+(defn- base64-source [value media-type]
+  (let [value* (str (or value ""))]
+    (if (str/starts-with? (str/lower-case value*) "data:")
+      (data-uri-source value* media-type)
+      (cond-> {:type :base64
+               :value value*}
+        (not (str/blank? media-type)) (assoc :media-type media-type)))))
+
+(defn- audio-media-type [format]
+  (case (some-> format str/lower-case)
+    "wav" "audio/wav"
+    "mp3" "audio/mpeg"
+    "flac" "audio/flac"
+    "ogg" "audio/ogg"
+    "opus" "audio/opus"
+    nil))
+
+(defn- filename-extension [filename]
+  (some-> (re-find #"(?i)\.([a-z0-9]+)$" (or filename ""))
+          second
+          str/lower-case))
+
+(defn- data-uri-media-type [value]
+  (some-> (re-matches #"(?is)^data:([^;,]+)?(?:;base64)?,.*$" (str (or value "")))
+          second
+          str/lower-case))
+
+(defn- video-file? [file-data media-type filename]
+  (or (some-> media-type str/lower-case (str/starts-with? "video/"))
+      (some-> (data-uri-media-type file-data) (str/starts-with? "video/"))
+      (contains? #{"mp4" "webm" "mov" "m4v" "mpeg" "mpg"} (filename-extension filename))))
+
+(defn- provider-content-part [block]
+  (case (:type block)
+    :image-url
+    (let [image-url (:image_url block)]
+      (cond-> {:type :image
+               :source (data-uri-source (:url image-url) nil)}
+        (:detail image-url) (assoc :detail (:detail image-url))
+        (:detail block) (assoc :detail (:detail block))))
+
+    :input-image
+    (cond-> {:type :image
+             :source (data-uri-source (:image_url block) nil)}
+      (:detail block) (assoc :detail (:detail block)))
+
+    :input-audio
+    (let [input-audio (:input_audio block)
+          media-type (audio-media-type (:format input-audio))]
+      (cond-> {:type :audio
+               :source (base64-source (:data input-audio) media-type)}
+        (:filename block) (assoc :filename (:filename block))))
+
+    (:file :input-file)
+    (if (and (= :file (:type block)) (:source block))
+      block
+      (let [file (or (:file block) block)
+            file-data (or (:file_data file) (:file_data block))
+            filename (or (:filename file) (:filename block))
+            media-type (or (:media-type file) (:media_type file)
+                           (:media-type block) (:media_type block))
+            type* (if (video-file? file-data media-type filename) :video :file)]
+        (cond-> {:type type*
+                 :source (base64-source file-data media-type)}
+          filename (assoc :filename filename))))
+
+    block))
+
 (defn normalize-block
   [block]
-  (let [block* (cond
-                 (string? block) {:type :text :text block}
-                 (map? block) (update block :type normalize-block-type)
-                 :else {:type :custom :kind :value :data block})]
+  (let [block* (provider-content-part
+                (cond
+                  (string? block) {:type :text :text block}
+                  (map? block) (update block :type normalize-block-type)
+                  :else {:type :custom :kind :value :data block}))]
     (case (:type block*)
       :text (-> {:type :text
                  :text (str (or (:text block*) (:content block*) ""))}

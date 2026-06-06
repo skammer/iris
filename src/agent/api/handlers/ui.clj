@@ -18,13 +18,55 @@
    [agent.tools.core :as tools]
    [agent.ui :as ui]
    [clojure.core.async :as async]
-   [clojure.string :as str]))
+   [clojure.string :as str])
+  (:import
+   (java.nio.file Files)
+   (java.util Base64)))
 
 (defn- form-bool [value]
   (contains? #{"1" "true" "yes" "on"} (str/lower-case (str value))))
 
 (defn- ui-tool-input [body]
   (tools-h/tool-input-from-map (keyword (:tool body)) body))
+
+(def ^:private max-chat-image-bytes (* 10 1024 1024))
+
+(defn- uploaded-files [value]
+  (cond
+    (nil? value) []
+    (vector? value) value
+    (sequential? value) (vec value)
+    :else [value]))
+
+(defn- image-upload->block [{:keys [filename content-type tempfile size] :as upload}]
+  (when (and (map? upload)
+             (not (str/blank? (or filename "")))
+             tempfile)
+    (let [media-type (or content-type "application/octet-stream")
+          size* (long (or size (.length tempfile)))]
+      (when-not (str/starts-with? (str/lower-case media-type) "image/")
+        (throw (errors/api-error 400 "bad_request" "Only image uploads are supported.")))
+      (when (> size* max-chat-image-bytes)
+        (throw (errors/api-error 400 "bad_request" "Image upload exceeds 10MB.")))
+      {:type :image
+       :source {:type :base64
+                :media-type media-type
+                :value (.encodeToString (Base64/getEncoder)
+                                        (Files/readAllBytes (.toPath tempfile)))}
+       :filename filename
+       :alt filename})))
+
+(defn- chat-content [prompt image]
+  (let [prompt* (str/trim (or prompt ""))
+        image-blocks (keep image-upload->block (uploaded-files image))
+        blocks (cond-> []
+                 (not (str/blank? prompt*)) (conj {:type :text :text prompt*})
+                 (seq image-blocks) (into image-blocks))]
+    (when (empty? blocks)
+      (throw (errors/api-error 400 "bad_request" "Expected prompt or image.")))
+    (if (seq image-blocks)
+      blocks
+      prompt*)))
 
 (defn shell [system request]
   (responses/html-response 200
@@ -139,7 +181,8 @@
             (recur))))))))
 
 (defn chat-action [system request]
-  (let [{:keys [session_id prompt]} (h/read-form-body request)]
+  (let [{:keys [session_id prompt image]} (h/read-form-body request)
+        content (chat-content prompt image)]
     (v/ensure-session-exists! system session_id)
     (streaming/managed-response
      request
@@ -180,7 +223,7 @@
              result-ch (streaming/run-task!
                         ctx
                         #(chat/run! system
-                                    {:messages [{:role "user" :content prompt}]
+                                    {:messages [{:role "user" :content content}]
                                      :session-id session_id
                                      :stream? true
                                      :on-delta push-delta!

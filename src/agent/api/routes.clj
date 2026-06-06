@@ -249,11 +249,6 @@
 (def ^:private ui-create-session-form
   [:map [:title {:optional true} :string]])
 
-(def ^:private ui-chat-form
-  [:map
-   [:session_id schemas/NonBlankString]
-   [:prompt schemas/NonBlankString]])
-
 (def ^:private ui-memory-search-form
   [:map [:query schemas/NonBlankString]])
 
@@ -391,8 +386,7 @@
                                   :parameters {:query session-id-query}}}]
    ["/ui/session/live" {:get {:handler/id :ui-session-live
                               :parameters {:query session-id-query}}}]
-   ["/ui/chat" {:post {:handler/id :ui-chat
-                       :parameters {:form ui-chat-form}}}]
+   ["/ui/chat" {:post {:handler/id :ui-chat}}]
    ["/ui/chat/stop" {:post {:handler/id :ui-chat-stop
                             :parameters {:form [:map [:session_id schemas/NonBlankString]]}}}]
    ["/ui/events" {:get {:handler/id :ui-events}}]

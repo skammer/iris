@@ -64,7 +64,8 @@
    back to slurping/parsing the raw body when middleware isn't in front. Always
    returns a keyword-keyed map."
   [request]
-  (if-let [form-params (:form-params request)]
+  (if-let [form-params (or (not-empty (:multipart-params request))
+                           (:form-params request))]
     (reduce-kv (fn [acc k v] (assoc acc (keyword k) v)) {} form-params)
     (parse-urlencoded (body-string request))))
 

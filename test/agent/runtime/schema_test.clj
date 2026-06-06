@@ -26,6 +26,26 @@
             :tool-name "fs_list"
             :input {:path "."}}]))))
 
+(deftest normalizes-openai-media-content-parts-test
+  (is (= [{:type :text :text "inspect"}
+          {:type :image
+           :source {:type :base64
+                    :value "aGVsbG8="
+                    :media-type "image/png"}}
+          {:type :video
+           :source {:type :base64
+                    :value "AAAA"
+                    :media-type "video/mp4"}
+           :filename "clip.mp4"}]
+         (runtime-schema/normalize-content
+          [{:type "text" :text "inspect"}
+           {:type "image_url"
+            :image_url {:url "data:image/png;base64,aGVsbG8="}}
+           {:type "file"
+            :file {:file_data "AAAA"
+                   :media-type "video/mp4"
+                   :filename "clip.mp4"}}]))))
+
 (deftest validates-canonical-assistant-turn-test
   (let [turn {:provider :openrouter
               :model "anthropic/claude"
