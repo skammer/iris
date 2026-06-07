@@ -205,54 +205,37 @@
         html (ui-render/render [:div (ui-render/trusted-fragment safe)])]
     (is (str/includes? html "<span>safe</span>"))))
 
-(deftest memory-workspace-exposes-tool-and-datalog-lab
+(deftest memory-workspace-exposes-tool-and-search-lab
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})
         memory-service (memory/create-memory-service
                         {:prompt {:paths []}
-                         :search {:default-limit 10}
-                         :graph {:enabled false}}
+                         :search {:default-limit 10}}
                         store)]
     (try
       (let [html (ui/memory-workspace-fragment {:store store
                                                 :memory-service memory-service})]
         (is (str/includes? html "Memory Tool"))
         (is (str/includes? html "/ui/memory/tool"))
-        (is (str/includes? html "Reset facts"))
-        (is (str/includes? html "/ui/memory/facts/reset"))
-        (is (str/includes? html "Reset graph"))
-        (is (str/includes? html "/ui/memory/graph/reset"))
-        (is (str/includes? html "Datalog DB"))
-        (is (str/includes? html "/ui/memory/datalog"))
-        (is (str/includes? html "workspace-grid memory-workspace")))
+	        (is (str/includes? html "Reset facts"))
+	        (is (str/includes? html "/ui/memory/facts/reset"))
+	        (is (str/includes? html "Memory Search"))
+	        (is (str/includes? html "workspace-grid memory-workspace")))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
 (deftest memory-tool-result-shows-text-and-source-json
   (let [html (ui/memory-tool-result-fragment
-              {:ok? true
-               :input {:action :search :query "tags"}
-               :result "Memory results for: tags\n- graph score=0.500: x"
-               :source-json {:ranked [{:surface :graph
-                                        :item {:fact/tags ["project"]
-                                               :edge/tags ["memory"]}}]}})]
-    (is (str/includes? html "Memory results for: tags"))
-    (is (str/includes? html "source json"))
-    (is (str/includes? html "fact/tags"))
-    (is (str/includes? html "edge/tags"))))
-
-(deftest memory-datalog-result-preserves-namespaced-keywords
-  (let [html (ui/memory-datalog-result-fragment
-              {:ok? true
-               :result {:query "[:find ?e]"
-                        :args []
-                        :limit 10
-                        :row-count 1
-                        :rows [[{:fact/tags ["tag-a"]
-                                  :edge/tags ["tag-b"]}]]}})]
-    (is (str/includes? html "fact/tags"))
-    (is (str/includes? html "edge/tags"))))
+	              {:ok? true
+	               :input {:action :search :query "tags"}
+	               :result "Memory results for: tags\n- fact score=0.500: x"
+	               :source-json {:ranked [{:surface :fact
+	                                        :item {:subject "fact/tags"
+	                                               :object "project"}}]}})]
+	    (is (str/includes? html "Memory results for: tags"))
+	    (is (str/includes? html "source json"))
+	    (is (str/includes? html "fact/tags"))))
 
 (deftest logs-fragment-shows-events-and-trace-state
   (let [path (temp-db-path)

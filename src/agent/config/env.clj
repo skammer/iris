@@ -130,8 +130,6 @@
    {:names "AGENT_FACT_EXTRACTOR_PROVIDER" :parse parse-keyword* :apply (assoc-path [:memory :facts :extractor :provider])}
    {:names "AGENT_FACT_EXTRACTOR_MODEL" :apply (assoc-path [:memory :facts :extractor :model])}
    {:names "AGENT_FACT_DEDUP_SIMILARITY_THRESHOLD" :parse parse-double* :apply (assoc-path [:memory :facts :dedup :similarity-threshold])}
-   {:names "AGENT_MEMORY_GRAPH_ENABLED" :parse parse-bool :apply (assoc-path [:memory :graph :enabled])}
-   {:names "AGENT_MEMORY_GRAPH_PATH" :apply (assoc-path [:memory :graph :datahike :path])}
    {:names "AGENT_TELEGRAM_ENABLED" :parse parse-bool :apply (assoc-path [:channel-adapters :telegram :enabled])}
    {:names "AGENT_TELEGRAM_BOT_TOKEN" :apply (assoc-path [:channel-adapters :telegram :bot-token])}
    {:names "AGENT_TELEGRAM_ALLOW_ALL" :parse parse-bool :apply (assoc-path [:channel-adapters :telegram :allowlist :allow-all?])}

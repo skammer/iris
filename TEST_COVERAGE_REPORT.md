@@ -43,7 +43,6 @@
 - `agent.kernel.ops`
 - `agent.kernel.runtime`
 - `agent.kernel.schema`
-- `agent.memory.datahike`
 - `agent.nrepl`
 - `agent.persistence.sqlite.common`
 - `agent.persistence.sqlite.events`
@@ -82,7 +81,6 @@
 - `agent.runners.core`, `agent.runners.options`, `agent.runners.policy`: runner config/selection/feature-policy behavior.
 - `agent.nrepl`: enablement + lifecycle + error handling.
 - `agent.tools.approvals`, `agent.tools.display`: high-impact external tool behaviors.
-- `agent.memory.datahike`: alternate persistence path behavior.
 - `agent.prompts`: prompt composition and interpolation invariants.
 
 3. Low

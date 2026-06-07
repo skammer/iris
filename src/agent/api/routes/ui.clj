@@ -21,25 +21,6 @@
    [:path {:optional true} :string]
    [:content {:optional true} :string]])
 
-(def ^:private ui-memory-graph-query-form
-  [:map
-   [:mode {:optional true} :string]
-   [:query {:optional true} :string]
-   [:limit {:optional true} :string]
-   [:entity {:optional true} :string]
-   [:depth {:optional true} :string]
-   [:from {:optional true} :string]
-   [:to {:optional true} :string]
-   [:max_depth {:optional true} :string]
-   [:as_of {:optional true} :string]
-   [:include_historical {:optional true} :string]])
-
-(def ^:private ui-memory-datalog-query-form
-  [:map
-   [:query schemas/NonBlankString]
-   [:args {:optional true} :string]
-   [:limit {:optional true} :string]])
-
 (def ^:private ui-create-run-form
   [:map
    [:agent_id {:optional true} :string]
@@ -108,11 +89,6 @@
    ["/ui/memory/tool" {:post {:handler/id :ui-memory-tool
                               :parameters {:form ui-memory-tool-form}}}]
    ["/ui/memory/facts/reset" {:post {:handler/id :ui-memory-facts-reset}}]
-   ["/ui/memory/graph" {:post {:handler/id :ui-memory-graph
-                               :parameters {:form ui-memory-graph-query-form}}}]
-   ["/ui/memory/graph/reset" {:post {:handler/id :ui-memory-graph-reset}}]
-   ["/ui/memory/datalog" {:post {:handler/id :ui-memory-datalog
-                                 :parameters {:form ui-memory-datalog-query-form}}}]
    ["/ui/runs" {:get {:handler/id :ui-runs}
                 :post {:handler/id :ui-create-run
                        :parameters {:form ui-create-run-form}}}]

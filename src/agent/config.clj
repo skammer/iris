@@ -213,12 +213,7 @@
                                 :provider nil
                                 :model nil}
                     :default-scope :session
-                    :dedup {:similarity-threshold nil}}
-            :graph {:enabled false
-                    :backend :datahike
-                    :datahike {:path "data/memory-graph"
-                               :scope "iris"
-                               :keep-history? true}}}
+                    :dedup {:similarity-threshold nil}}}
    :channel-adapters {:telegram {:enabled false
                                   :bot-token nil
                                   :poll-timeout-seconds 30
@@ -733,8 +728,7 @@
   (let [data-dir* (data-dir global-dir)]
     (-> cfg
         (assoc-in [:iris :data-dir] (.getPath data-dir*))
-        (update-in [:storage :sqlite :path] resolve-data-path data-dir* "agent.db")
-        (update-in [:memory :graph :datahike :path] resolve-data-path data-dir* "memory-graph"))))
+        (update-in [:storage :sqlite :path] resolve-data-path data-dir* "agent.db"))))
 
 (defn- finalize-skill-dirs
   [cfg global-dir]

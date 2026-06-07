@@ -14,10 +14,9 @@
 
 (def empty-recall
   {:prompt {:documents []}
-   :search {:messages []
-            :events []
-            :facts []
-            :graph []}})
+	   :search {:messages []
+	            :events []
+	            :facts []}})
 
 (defn- compact-memory-json
   "Serializes recalled memory to JSON, capped at memory-max-chars to keep

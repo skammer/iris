@@ -967,9 +967,7 @@ textarea {
 #tool-approvals-panel h3,
 #memory-prompt-panel h3,
 #memory-search-results-panel h3,
-#memory-tool-output h3,
-#memory-graph-results-panel h3,
-#memory-datalog-results-panel h3 {
+#memory-tool-output h3 {
   margin-bottom: var(--space-sm);
 }
 
@@ -982,8 +980,7 @@ textarea {
 }
 
 .memory-overview,
-.memory-lab,
-.memory-graph {
+.memory-lab {
   display: grid;
   align-content: start;
   gap: 10px;
@@ -1060,8 +1057,6 @@ textarea {
 
 .memory-result-list pre,
 #memory-tool-output pre,
-#memory-graph-results-panel pre,
-#memory-datalog-results-panel pre,
 .memory-docs pre {
   max-height: 260px;
   margin: 0;

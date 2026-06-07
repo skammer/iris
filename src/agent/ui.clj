@@ -26,13 +26,11 @@
          session-messages-fragment
          events-fragment
          logs-fragment
-         memory-workspace-fragment
-         memory-prompt-fragment
-         memory-search-results-fragment
-         memory-tool-result-fragment
-         memory-graph-result-fragment
-         memory-datalog-result-fragment
-         tools-fragment
+	         memory-workspace-fragment
+	         memory-prompt-fragment
+	         memory-search-results-fragment
+	         memory-tool-result-fragment
+	         tools-fragment
          tool-approvals-fragment
          runs-fragment
          run-detail-body
@@ -49,8 +47,6 @@
 (def memory-prompt-fragment ui-memory/memory-prompt-fragment)
 (def memory-search-results-fragment ui-memory/memory-search-results-fragment)
 (def memory-tool-result-fragment ui-memory/memory-tool-result-fragment)
-(def memory-graph-result-fragment ui-memory/memory-graph-result-fragment)
-(def memory-datalog-result-fragment ui-memory/memory-datalog-result-fragment)
 (def memory-workspace-fragment ui-memory/memory-workspace-fragment)
 
 (defn- normalize-tab [value]
@@ -225,8 +221,7 @@
        [:div.stat [:span.label "tools"] [:span.value (:count tools-health)]]
        [:div.stat [:span.label "agents"] [:span.value (:agent-count agent-health)]]]
       [:p.meta
-       (str "memory graph enabled: "
-            (if (true? (get-in memory-health [:graph :details :enabled])) "yes" "no")
+       (str "memory facts: " (get-in memory-health [:facts :count] 0)
             " | channel adapters: " (:count adapter-health)
             " | federated peers: " (count federated-peers)
             " | sqlite schema: " (get-in storage [:details :schema-version] "?")

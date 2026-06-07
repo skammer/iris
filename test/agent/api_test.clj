@@ -209,8 +209,7 @@
         config (-> (:config base-system)
                    (assoc :llm (:llm cfg/default-config)
                           :chat (:chat cfg/default-config))
-                   (assoc-in [:orchestrator :enabled] false)
-                   (assoc-in [:memory :graph :enabled] false)
+	                   (assoc-in [:orchestrator :enabled] false)
                    (assoc :api {:host "127.0.0.1" :port port}
                           :storage {:sqlite {:path path}})
                    config-fn)
@@ -756,8 +755,7 @@
         config (-> (:config base-system)
                    (assoc :llm (:llm cfg/default-config)
                           :chat (:chat cfg/default-config))
-                   (assoc-in [:memory :facts :extractor :enabled] false)
-                   (assoc-in [:memory :graph :enabled] false)
+	                   (assoc-in [:memory :facts :extractor :enabled] false)
                    (assoc-in [:orchestrator :enabled] true)
                    ;; Sign outgoing federation requests so the self-loop inbox
                    ;; (now fail-closed) can verify them.
@@ -910,14 +908,10 @@
             fact-search (http-post (str base-url "/v1/memory/facts/search")
                                    {:query "alice"
                                     :scope {:type "global"}})
-            fact-search-body (json/parse-string (:body fact-search) true)
-            ui-memory-search (http-post-form (str base-url "/ui/memory/search")
-                                             "query=hello")
-            graph-save (http-post (str base-url "/v1/memory/graph/facts")
-                                  {:subject "alice"
-                                   :predicate "likes"
-                                   :object "clojure"})
-            channel-adapters (http-get (str base-url "/v1/channel-adapters"))
+	            fact-search-body (json/parse-string (:body fact-search) true)
+	            ui-memory-search (http-post-form (str base-url "/ui/memory/search")
+	                                             "query=hello")
+	            channel-adapters (http-get (str base-url "/v1/channel-adapters"))
             channel-adapters-body (json/parse-string (:body channel-adapters) true)
             created-agent (http-post (str base-url "/v1/agents")
                                      {:name "Worker"
@@ -1160,7 +1154,7 @@
         (is (= 200 (:status skills)))
         (is (= [] (:data skills-body)))
         (is (= 200 (:status memory-surfaces)))
-        (is (= ["prompt" "search" "facts" "graph" "vault"] (mapv :name (:data memory-surfaces-body))))
+	        (is (= ["prompt" "search" "facts" "vault"] (mapv :name (:data memory-surfaces-body))))
         (is (= 200 (:status prompt-memory)))
         (is (string? (:combined prompt-memory-body)))
         (is (= 200 (:status ui-prompt-memory)))
@@ -1172,8 +1166,7 @@
         (is (= 200 (:status fact-search)))
         (is (= 1 (count (:data fact-search-body))))
         (is (= 200 (:status ui-memory-search)))
-        (is (str/includes? (:body ui-memory-search) "Search Results"))
-        (is (= 409 (:status graph-save)))
+	        (is (str/includes? (:body ui-memory-search) "Search Results"))
         (is (= 200 (:status channel-adapters)))
         (is (= ["telegram"] (mapv :name (:data channel-adapters-body))))
         (is (= 201 (:status created-agent)))

@@ -71,42 +71,6 @@
            [:pre.code (ui-render/pretty-json source-json)]])]]
       (error-result "Memory Tool Result" payload))]))
 
-(defn memory-graph-result-fragment [{:keys [ok? query opts result] :as payload}]
-  (ui-render/render
-   [:div#memory-graph-results-panel
-    (if ok?
-      [:div
-       [:h3 "Graph Query Result"]
-       [:p.meta (str "query: " (or query "")
-                     " | count: " (count result)
-                     " | opts: " (ui-render/pretty-json opts))]
-       (if (seq result)
-         [:div.memory-result-list
-          (for [item result]
-            [:article.result
-             [:strong (or (:type item) "fact")]
-             [:pre.code (ui-render/pretty-json item)]])]
-         [:div.empty "No graph rows."])]
-      (error-result "Graph Query Result" payload))]))
-
-(defn memory-datalog-result-fragment [{:keys [ok? result] :as payload}]
-  (ui-render/render
-   [:div#memory-datalog-results-panel
-    (if ok?
-      [:div
-       [:h3 "Datalog Result"]
-       [:p.meta (str "rows: " (:row-count result) " | shown: " (count (:rows result)))]
-       [:div.result
-        [:strong "query"]
-        [:pre.code (ui-render/pretty-json (select-keys result [:query :args :limit]))]]
-       (if (seq (:rows result))
-         [:div.memory-result-list
-          (for [row (:rows result)]
-            [:article.result
-             [:pre.code (ui-render/pretty-json row)]])]
-         [:div.empty "No datalog rows."])]
-      (error-result "Datalog Result" payload))]))
-
 (defn- memory-reset-result [{:keys [ok? surface result error details]}]
   (if (nil? ok?)
     [:div#memory-reset-output.empty "No reset output."]
@@ -122,16 +86,14 @@
    [:div#memory-search-results-panel
     [:h3 "Search Results"]
     [:p.meta (str "query: " (:query results)
-                  " | ranked: " (count (:ranked results))
-                  " | messages: " (count (:messages results))
-                  " | events: " (count (:events results))
-                  " | facts: " (count (:facts results))
-                  " | graph: " (count (:graph results)))]
+	                  " | ranked: " (count (:ranked results))
+	                  " | messages: " (count (:messages results))
+	                  " | events: " (count (:events results))
+	                  " | facts: " (count (:facts results)))]
     (if (or (seq (:ranked results))
             (seq (:messages results))
             (seq (:events results))
-            (seq (:facts results))
-            (seq (:graph results)))
+            (seq (:facts results)))
       [:div.memory-result-list
        (concat
         (for [{:keys [surface score item]} (:ranked results)]
@@ -141,14 +103,10 @@
            [:pre.code (ui-render/pretty-json item)]])
         (for [{:keys [subject predicate object scope updated-at]} (:facts results)]
           [:article.result
-           [:strong "fact"]
-           [:div.meta.code (str (get scope :type) "/" (or (get scope :id) "-"))]
-           [:div.code (str subject " " predicate " " object)]
-           [:div.meta updated-at]])
-        (for [item (:graph results)]
-          [:article.result
-           [:strong "graph"]
-           [:pre.code (ui-render/pretty-json item)]])
+	           [:strong "fact"]
+	           [:div.meta.code (str (get scope :type) "/" (or (get scope :id) "-"))]
+	           [:div.code (str subject " " predicate " " object)]
+	           [:div.meta updated-at]])
         (for [{:keys [session-id role content created-at]} (:messages results)]
           [:article.result
            [:strong "message"]
@@ -165,31 +123,25 @@
 
 (defn memory-workspace-fragment
   ([system] (memory-workspace-fragment system nil))
-  ([system reset-result]
-   (let [memory-service (:memory-service system)
-         health (memory/health-check memory-service)
-         surfaces (memory/list-surfaces memory-service)
-         graph-enabled? (some #(and (= :graph (:name %)) (:enabled %)) surfaces)
-         prompt (memory/read-prompt-memory memory-service)]
+	   ([system reset-result]
+	    (let [memory-service (:memory-service system)
+	         health (memory/health-check memory-service)
+	         surfaces (memory/list-surfaces memory-service)
+	         prompt (memory/read-prompt-memory memory-service)]
      (ui-render/render
       [:section#memory-workspace.workspace-grid.memory-workspace
        [:section.panel.memory-overview
         [:h2 "Memory"]
         [:div.memory-stats
-         (memory-health-stat "prompt" (get-in health [:prompt :document-count] 0))
-         (memory-health-stat "facts" (get-in health [:facts :count] 0))
-         (memory-health-stat "graph" (if graph-enabled? "on" "off"))
-         (memory-health-stat "limit" (str (get-in health [:search :default-limit])
+	         (memory-health-stat "prompt" (get-in health [:prompt :document-count] 0))
+	         (memory-health-stat "facts" (get-in health [:facts :count] 0))
+	         (memory-health-stat "limit" (str (get-in health [:search :default-limit])
                                           "/"
                                           (get-in health [:search :max-limit])))]
-        [:div.actions
-         [:button {:type "button"
-                   "data-on:click" "@post('/ui/memory/facts/reset')"}
-          "Reset facts"]
-         [:button {:type "button"
-                   :disabled (not graph-enabled?)
-                   "data-on:click" "@post('/ui/memory/graph/reset')"}
-          "Reset graph"]]
+	         [:div.actions
+	          [:button {:type "button"
+	                    "data-on:click" "@post('/ui/memory/facts/reset')"}
+	           "Reset facts"]]
         (memory-reset-result reset-result)
         [:table.memory-table
          [:thead
@@ -242,48 +194,11 @@
                     "data-on:click" "@post('/ui/memory/tool', {contentType: 'form', selector: '#memory-tool-form'})"}
            "Run"]]]
         [:div#memory-tool-output.empty "No memory tool output."]
-        [:form#memory-search-form.memory-tool-form
-         [:h3 "Hybrid Search"]
-         [:div.compact-form-row
-          [:input {:type "text" :name "query" :placeholder "search messages, events, facts, graph"}]
-          [:button {:type "button"
-                    "data-on:click" "@post('/ui/memory/search', {contentType: 'form', selector: '#memory-search-form'})"}
-           "Search"]]]
-        [:div#memory-search-results-panel.empty "No search output."]]
-
-       [:section.panel.memory-graph
-        [:h2 "Datalog DB"]
-        [:form#memory-graph-form.memory-tool-form
-         [:h3 "Graph Explorer"]
-         [:div.memory-form-grid
-          [:select {:name "mode"}
-           [:option {:value "facts"} "facts"]
-           [:option {:value "neighbors"} "neighbors"]
-           [:option {:value "paths"} "paths"]]
-          [:input {:type "text" :name "query" :placeholder "text query"}]
-          [:input {:type "text" :name "limit" :value "20" :placeholder "limit"}]
-          [:input {:type "text" :name "entity" :placeholder "entity"}]
-          [:input {:type "text" :name "depth" :value "1" :placeholder "depth"}]
-          [:input {:type "text" :name "from" :placeholder "from"}]
-          [:input {:type "text" :name "to" :placeholder "to"}]
-          [:input {:type "text" :name "max_depth" :value "4" :placeholder "max depth"}]
-          [:input {:type "text" :name "as_of" :placeholder "as-of instant"}]]
-         [:label.meta.memory-check
-          [:input {:type "checkbox" :name "include_historical"}]
-          " include historical"]
-         [:div.actions
-          [:button {:type "button"
-                    "data-on:click" "@post('/ui/memory/graph', {contentType: 'form', selector: '#memory-graph-form'})"}
-           "Query graph"]]]
-        [:div#memory-graph-results-panel.empty "No graph output."]
-        [:form#memory-datalog-form.memory-tool-form
-         [:h3 "Raw Datalog"]
-         [:textarea {:name "query" :rows 5}
-          "[:find ?ident\n :where\n [?e :db/ident ?ident]]"]
-         [:input {:type "text" :name "args" :value "[]" :placeholder "args EDN vector"}]
-         [:input {:type "text" :name "limit" :value "100" :placeholder "limit"}]
-         [:div.actions
-          [:button {:type "button"
-                    "data-on:click" "@post('/ui/memory/datalog', {contentType: 'form', selector: '#memory-datalog-form'})"}
-           "Run Datalog"]]]
-        [:div#memory-datalog-results-panel.empty "No datalog output."]]]))))
+	         [:form#memory-search-form.memory-tool-form
+	         [:h3 "Memory Search"]
+	         [:div.compact-form-row
+	          [:input {:type "text" :name "query" :placeholder "search messages, events, facts"}]
+	          [:button {:type "button"
+	                    "data-on:click" "@post('/ui/memory/search', {contentType: 'form', selector: '#memory-search-form'})"}
+	           "Search"]]]
+	        [:div#memory-search-results-panel.empty "No search output."]]]))))

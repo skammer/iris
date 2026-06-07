@@ -186,11 +186,9 @@
   (with-isolated-config [root {}]
     (let [cfg (config/load-config)
           data-dir (str (io/file root "home" ".config" "iris" "data"))]
-      (is (= data-dir (get-in cfg [:iris :data-dir])))
-      (is (= (str (io/file data-dir "agent.db"))
-             (get-in cfg [:storage :sqlite :path])))
-      (is (= (str (io/file data-dir "memory-graph"))
-             (get-in cfg [:memory :graph :datahike :path]))))))
+	      (is (= data-dir (get-in cfg [:iris :data-dir])))
+	      (is (= (str (io/file data-dir "agent.db"))
+	             (get-in cfg [:storage :sqlite :path]))))))
 
 (deftest relative-skill-dirs-resolve-config-dir-then-cwd-test
   (with-isolated-config [root {}]
@@ -214,20 +212,15 @@
   (with-isolated-config [root {"IRIS_DATA_DIR" "~/iris-data"}]
     (let [cfg (config/load-config)
           data-dir (str (io/file root "home" "iris-data"))]
-      (is (= data-dir (get-in cfg [:iris :data-dir])))
-      (is (= (str (io/file data-dir "agent.db"))
-             (get-in cfg [:storage :sqlite :path])))
-      (is (= (str (io/file data-dir "memory-graph"))
-             (get-in cfg [:memory :graph :datahike :path]))))))
+	      (is (= data-dir (get-in cfg [:iris :data-dir])))
+	      (is (= (str (io/file data-dir "agent.db"))
+	             (get-in cfg [:storage :sqlite :path]))))))
 
 (deftest explicit-data-paths-are-preserved-test
-  (with-isolated-config [root {"AGENT_SQLITE_PATH" "~/db/agent.sqlite"
-                               "AGENT_MEMORY_GRAPH_PATH" "/tmp/iris-graph"}]
+  (with-isolated-config [root {"AGENT_SQLITE_PATH" "~/db/agent.sqlite"}]
     (let [cfg (config/load-config)]
       (is (= (str (io/file root "home" "db" "agent.sqlite"))
-             (get-in cfg [:storage :sqlite :path])))
-      (is (= "/tmp/iris-graph"
-             (get-in cfg [:memory :graph :datahike :path]))))))
+             (get-in cfg [:storage :sqlite :path]))))))
 
 (deftest load-config-explicit-file-test
   (with-isolated-config [root {}]

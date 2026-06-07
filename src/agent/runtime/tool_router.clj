@@ -45,9 +45,6 @@
     :memory_search #{:search :read}
     :memory_save_fact #{:write}
     :memory_remove_fact #{:write}
-    :memory_save_graph_fact #{:write}
-    :memory_remove_graph_fact #{:write}
-    :memory_datalog #{:search :read}
     :memory_read_vault #{:read}
     :memory_write_vault #{:write}
     :message_search #{:search :read}

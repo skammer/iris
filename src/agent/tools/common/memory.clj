@@ -91,14 +91,6 @@
 (defn- fact-text [item]
   (compact-whitespace (str (:subject item) " " (:predicate item) " " (:object item))))
 
-(defn- graph-text [item]
-  (if (= "path" (:type item))
-    (compact-whitespace
-     (str (str/join " " (map :label (:nodes item)))
-          " "
-          (str/join " " (map :predicate (:edges item)))))
-    (fact-text item)))
-
 (defn- prompt-candidates [query documents]
   (->> documents
        (mapcat (fn [{:keys [path content]}]
@@ -128,11 +120,6 @@
   (let [limit (memory-tool-limit memory-service (:limit opts))
         opts* (assoc opts :limit limit)
         facts (memory/search-facts memory-service query opts*)
-        graph (try
-                (memory/query-graph-memory memory-service query
-                                           (select-keys opts* [:limit :mode :entity :depth :from :to
-                                                             :max-depth :as-of :include-historical?]))
-                (catch Exception _ []))
         prompts (prompt-candidates query (:documents (memory/read-prompt-memory memory-service)))]
     (->> (concat
           (map (fn [fact]
@@ -143,14 +130,6 @@
                               0.7)
                   :item fact})
                facts)
-          (map (fn [item]
-                 {:surface :graph
-                  :id (or (:id item) (:source-fact-id item))
-                  :text (graph-text item)
-                  :score (max (text-score query (graph-text item))
-                              0.65)
-                  :item item})
-               graph)
           prompts)
          (sort-by :score >)
          (take limit)
@@ -192,21 +171,6 @@
        (when-let [id (:id removed)] (str " #" id))
        ": " (:removed-count removed) " row(s)"))
 
-(defn- save-graph-fact-text [saved]
-  (str "Saved graph fact: "
-       (:subject saved) " " (:predicate saved) " " (:object saved)))
-
-(defn- remove-graph-fact-text [removed]
-  (str "Removed graph fact"
-       (when-let [id (:id removed)] (str " #" id))
-       ": " (:removed-count removed) " edge(s)"))
-
-(defn- datalog-text [{:keys [row-count rows]}]
-  (str "Datalog rows: " row-count "\n"
-       (str/join "\n"
-                 (map #(str "- " (truncate-text (pr-str %) max-line-chars))
-                      rows))))
-
 (defn- read-vault-text [path result]
   (str "Memory vault file: " path "\n"
        (truncate-text (or (:content result) result) max-vault-chars)))
@@ -232,30 +196,12 @@
                                     :predicate predicate
                                     :object object}))))
 
-(defn- graph-opts [{:keys [mode entity depth from to max-depth max_depth as-of as_of
-                           include-historical? include_historical]}]
-  (cond-> {}
-    mode (assoc :mode (keyword mode))
-    entity (assoc :entity entity)
-    depth (assoc :depth depth)
-    from (assoc :from from)
-    to (assoc :to to)
-    (or max-depth max_depth) (assoc :max-depth (or max-depth max_depth))
-    (or as-of as_of) (assoc :as-of (or as-of as_of))
-    (or include-historical? include_historical) (assoc :include-historical? true)))
-
-(defn- fact-map [{:keys [id subject predicate object confidence valid-from valid_from valid-to valid_to
-                         observed-at observed_at invalidated-by invalidated_by tags]}]
+(defn- fact-map [{:keys [id subject predicate object confidence]}]
   (cond-> {:subject subject
            :predicate predicate
            :object object}
     id (assoc :id id)
-    confidence (assoc :confidence confidence)
-    (or valid-from valid_from) (assoc :valid-from (or valid-from valid_from))
-    (or valid-to valid_to) (assoc :valid-to (or valid-to valid_to))
-    (or observed-at observed_at) (assoc :observed-at (or observed-at observed_at))
-    (or invalidated-by invalidated_by) (assoc :invalidated-by (or invalidated-by invalidated_by))
-    tags (assoc :tags (vec tags))))
+    confidence (assoc :confidence confidence)))
 
 (defn- fact-opts [{:keys [scope source-session-id source-message-ids source-request-id]}
                   context]
@@ -271,7 +217,7 @@
    {:description
     (tools/create-tool-description
      :memory_search
-     "Search durable memory facts, graph facts, and configured prompt files. Returns compact text snippets."
+     "Search durable memory facts and configured prompt files. Returns compact text snippets."
      :category :memory
      :input-schema [:map {:closed true}
                     [:query :string]
@@ -304,12 +250,7 @@
    [:scope {:optional true} [:maybe scope-schema]]
    [:source-session-id {:optional true} [:maybe :string]]
    [:source-message-ids {:optional true} [:maybe [:vector :string]]]
-   [:source-request-id {:optional true} [:maybe :string]]
-   [:valid-from {:optional true} [:maybe :string]]
-   [:valid-to {:optional true} [:maybe :string]]
-   [:observed-at {:optional true} [:maybe :string]]
-   [:invalidated-by {:optional true} [:maybe :string]]
-   [:tags {:optional true} [:maybe [:vector :string]]]])
+   [:source-request-id {:optional true} [:maybe :string]]])
 
 (def ^:private fact-remove-schema
   [:map {:closed true}
@@ -320,28 +261,6 @@
    [:scope {:optional true} [:maybe scope-schema]]
    [:source-session-id {:optional true} [:maybe :string]]
    [:source-request-id {:optional true} [:maybe :string]]])
-
-(def ^:private graph-fact-save-schema
-  [:map {:closed true}
-   [:id {:optional true} [:maybe :string]]
-   [:subject {:optional true} [:maybe :string]]
-   [:predicate {:optional true} [:maybe :string]]
-   [:object {:optional true} [:maybe :string]]
-   [:confidence {:optional true} [:maybe number?]]
-   [:source-session-id {:optional true} [:maybe :string]]
-   [:source-request-id {:optional true} [:maybe :string]]
-   [:valid-from {:optional true} [:maybe :string]]
-   [:valid-to {:optional true} [:maybe :string]]
-   [:observed-at {:optional true} [:maybe :string]]
-   [:invalidated-by {:optional true} [:maybe :string]]
-   [:tags {:optional true} [:maybe [:vector :string]]]])
-
-(def ^:private graph-fact-remove-schema
-  [:map {:closed true}
-   [:id {:optional true} [:maybe :string]]
-   [:subject {:optional true} [:maybe :string]]
-   [:predicate {:optional true} [:maybe :string]]
-   [:object {:optional true} [:maybe :string]]])
 
 (defn create-memory-save-fact-tool [memory-service]
   (tools/create-tool
@@ -383,72 +302,6 @@
                                    (select-keys input [:id :subject :predicate :object])
                                    (fact-opts input context))))}))
 
-(defn create-memory-save-graph-fact-tool [memory-service]
-  (tools/create-tool
-   {:description
-    (tools/create-tool-description
-     :memory_save_graph_fact
-     "Save a graph memory fact."
-     :category :memory
-     :input-schema graph-fact-save-schema
-     :operation :act
-     :approval-sensitive? false
-     :source :builtin)
-    :execute-fn
-    (fn [input context]
-      (ensure-permission! context :memory-write)
-      (require-fact-fields! input)
-      (save-graph-fact-text
-       (memory/save-graph-fact! memory-service
-                                (merge (fact-map input)
-                                       {:source-request-id (or (:source-request-id input)
-                                                               (:request-id context))
-                                        :session-id (or (:source-session-id input)
-                                                        (:session-id context))}))))}))
-
-(defn create-memory-remove-graph-fact-tool [memory-service]
-  (tools/create-tool
-   {:description
-    (tools/create-tool-description
-     :memory_remove_graph_fact
-     "Remove a graph memory fact by id or exact subject, predicate, and object."
-     :category :memory
-     :input-schema graph-fact-remove-schema
-     :operation :act
-     :approval-sensitive? false
-     :source :builtin)
-    :execute-fn
-    (fn [input context]
-      (ensure-permission! context :memory-write)
-      (require-fact-selector! input)
-      (remove-graph-fact-text
-       (memory/remove-graph-fact! memory-service
-                                  (select-keys input [:id :subject :predicate :object]))))}))
-
-(defn create-memory-datalog-tool [memory-service]
-  (tools/create-tool
-   {:description
-    (tools/create-tool-description
-     :memory_datalog
-     "Run read-only Datalog queries against graph memory."
-     :category :memory
-     :input-schema [:map {:closed true}
-                    [:query :string]
-                    [:args {:optional true} [:maybe :any]]
-                    [:limit {:optional true} [:maybe :int]]]
-     :operation :read
-     :parallel-safe? true
-     :source :builtin)
-    :execute-fn
-    (fn [{:keys [query args limit]} context]
-      (ensure-permission! context :memory-read)
-      (datalog-text
-       (memory/query-datalog-memory memory-service
-                                    query
-                                    (cond-> {}
-                                      args (assoc :args args)
-                                      limit (assoc :limit limit)))))}))
-
 (defn create-memory-read-vault-tool [memory-service]
   (tools/create-tool
    {:description
@@ -488,9 +341,6 @@
   [(create-memory-search-tool memory-service)
    (create-memory-save-fact-tool memory-service)
    (create-memory-remove-fact-tool memory-service)
-   (create-memory-save-graph-fact-tool memory-service)
-   (create-memory-remove-graph-fact-tool memory-service)
-   (create-memory-datalog-tool memory-service)
    (create-memory-read-vault-tool memory-service)
    (create-memory-write-vault-tool memory-service)])
 

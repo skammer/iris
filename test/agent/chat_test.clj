@@ -921,7 +921,6 @@
                                                (assoc-in [:memory :facts :extractor :enabled] false)
                                                (assoc-in [:memory :prompt :paths] [])
                                                (assoc-in [:memory :search :max-limit] 0)
-                                               (assoc-in [:memory :graph :enabled] false)
                                                (assoc-in [:chat :compaction :max-context-tokens] 10000)
                                                (assoc-in [:chat :compaction :reserve-output-tokens] 0)
                                                (assoc-in [:chat :compaction :destructive-threshold] 0.1)

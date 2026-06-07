@@ -95,22 +95,6 @@
   ([fact opts]
    (memory/remove-memory-fact! (memory-service) fact opts)))
 
-(defn graph-search
-  ([query] (graph-search query {:limit 10}))
-  ([query opts] (memory/query-graph-memory (memory-service) query opts)))
-
-(defn save-graph-fact!
-  [fact]
-  (memory/save-graph-fact! (memory-service) fact))
-
-(defn remove-graph-fact!
-  [fact]
-  (memory/remove-graph-fact! (memory-service) fact))
-
-(defn datalog
-  ([query] (datalog query {}))
-  ([query opts] (memory/query-datalog-memory (memory-service) query opts)))
-
 (defn tool-context
   ([] (tool-context {}))
   ([opts]
@@ -162,22 +146,15 @@
                                   :source-request-id "dev/user.clj"})
         global-fact (save-fact! {:subject "IRIS memory"
                                  :predicate "stores"
-                                 :object "messages events facts and optional graph facts"}
+                                 :object "messages events and facts"}
                                 {:scope {:type :global}
                                  :source-session-id session-id
                                  :source-message-ids [(:id assistant-message)]
-                                 :source-request-id "dev/user.clj"})
-        graph-fact (save-graph-fact! {:id "dev-user-alice-clojure"
-                                      :subject "Alice"
-                                      :predicate "likes"
-                                      :object "Clojure"
-                                      :source-session-id session-id
-                                      :source-request-id "dev/user.clj"})]
+                                 :source-request-id "dev/user.clj"})]
     {:session session
      :messages [user-message assistant-message]
      :event event
      :facts [session-fact global-fact]
-     :graph-fact graph-fact
      :hybrid (hybrid-search "Alice Clojure"
                             {:session-id session-id
                              :scope {:type :session
@@ -206,11 +183,10 @@
 
   ;; Memory surfaces.
   ;; prompt: files from :memory :prompt :paths, read separately.
-  ;; search: core/API hybrid search over messages/events/facts/graph.
-  ;; memory tool search: facts + graph + prompt files only.
+  ;; search: core/API hybrid search over messages/events/facts.
+  ;; memory tool search: facts + prompt files only.
   ;; message_search tool: messages only, text chunks only.
   ;; facts: SQLite memory_facts, scope-aware.
-  ;; graph: Datahike backend only when :memory :graph :enabled true.
   ;; vault: explicit file read/write; not searched by hybrid-search.
   (pp (memory-surfaces))
   (pp (prompt-memory))
@@ -219,7 +195,6 @@
   ;; messages -> SQLite messages table; append-message! also writes session_entries.
   ;; events -> SQLite agent_events via system-events/log-event!.
   ;; facts -> SQLite memory_facts via save-fact!, logs memory.fact.saved event.
-  ;; graph -> optional Datahike write from save-fact! when graph enabled.
   (def demo (create-demo!))
   (def sid (get-in demo [:session :id]))
   (pp demo)
@@ -254,13 +229,13 @@
   ;; Store/remove SQLite facts.
   (def fact (save-fact! {:subject "Bob"
                          :predicate "likes"
-                         :object "Datalog"}
+                         :object "Clojure"}
                         {:scope {:type :global}
                          :source-request-id "dev/user.clj"}))
   (pp fact)
   (pp (remove-fact! {:id (:id fact)}))
 
-  ;; Hybrid search returns {:messages [] :events [] :facts [] :graph [] :ranked []}.
+  ;; Hybrid search returns {:messages [] :events [] :facts [] :ranked []}.
   ;; It does not full-text search prompt/vault files.
   (pp (hybrid-search "Alice Clojure"
                      {:session-id sid
@@ -269,9 +244,6 @@
                       :entity-type :session
                       :entity-id sid
                       :limit 10}))
-
-  ;; Optional graph query. Default config has graph disabled, so this returns [].
-  (pp (graph-search nil {:limit 10}))
 
   ;; Tools.
   ;; :memory search excludes messages/events.
@@ -296,60 +268,9 @@
                          :object "IRIS"
                          :scope {:type :global}}))
 
-  ;; :memory graph actions and Datalog.
-  (println (memory-tool {:action :save-graph-fact
-                         :id "dev-tool-graph-fact"
-                         :subject "IRIS"
-                         :predicate "stores"
-                         :object "graph facts"}))
-  (println (memory-tool {:action :datalog
-                         :query "[:find ?label :where [?e :entity/label ?label]]"
-                         :limit 20}))
-  (println (memory-tool {:action :remove-graph-fact
-                         :id "dev-tool-graph-fact"}))
-
   ;; API equivalents.
   ;; curl -s http://127.0.0.1:8080/v1/memory/surfaces
   ;; curl -s -X POST http://127.0.0.1:8080/v1/memory/search -H 'content-type: application/json' -d '{"query":"Alice Clojure","limit":10}'
   ;; curl -s -X POST http://127.0.0.1:8080/v1/memory/facts/search -H 'content-type: application/json' -d '{"query":"Alice","all_scopes":true,"limit":10}'
-
-
-
-
-
-;; all current graph facts
-  (user/pp (user/graph-search nil {:mode :facts :limit 20}))
-
-  ;; text filter over subject/predicate/object/tags
-  (user/pp (user/graph-search "clojure" {:mode :facts :limit 10}))
-
-  ;; facts connected to entity
-  (user/pp (user/graph-search nil {:mode :neighbors :entity "user" :depth 1 :limit 10}))
-  (user/pp (user/graph-search nil {:mode :neighbors :entity "alice" :depth 1 :limit 10}))
-
-  ;; path between entities
-  (user/pp (user/graph-search nil {:mode :paths :from "alice" :to "clojure" :max-depth 3}))
-
-  ;; historical/as-of
-  (user/pp (user/graph-search "prefers" {:mode :facts :include-historical? true :limit 20}))
-  (user/pp (user/graph-search "prefers" {:mode :facts :as-of "2026-05-20T12:00:00Z"}))
-
-  ;; raw Datalog
-  (user/pp (user/datalog "[:find ?label :where [?e :entity/label ?label]]"
-                         {:limit 20}))
-
-  ;; Your current graph has only useful unique triples:
-
-  ["user" "prefers" "concise answers"] ; 27 copies
-  ["alice" "likes" "clojure"]          ; 18 copies
-
-  ;; So best current queries:
-
-  (user/graph-search "concise answers" {:mode :facts})
-  (user/graph-search "clojure" {:mode :facts})
-  (user/graph-search nil {:mode :neighbors :entity "user"})
-  (user/graph-search nil {:mode :neighbors :entity "alice"})
-
-
 
   )

@@ -33,38 +33,6 @@
    [:path schemas/NonBlankString]
    [:content schemas/NonBlankString]])
 
-(def ^:private memory-graph-save-body
-  [:map
-   [:subject schemas/NonBlankString]
-   [:predicate schemas/NonBlankString]
-   [:object schemas/NonBlankString]
-   [:id {:optional true} :string]
-   [:type {:optional true} :string]
-   [:source {:optional true} :string]
-   [:session_id {:optional true} :string]
-   [:source_request_id {:optional true} :string]
-   [:episode_id {:optional true} :string]
-   [:episode_content {:optional true} :string]
-   [:confidence {:optional true} number?]
-   [:valid_from {:optional true} :string]
-   [:valid_to {:optional true} :string]
-   [:observed_at {:optional true} :string]
-   [:invalidated_by {:optional true} :string]
-   [:tags {:optional true} schemas/StringVec]])
-
-(def ^:private memory-graph-query-body
-  [:map
-   [:mode {:optional true} :string]
-   [:query {:optional true} :string]
-   [:limit {:optional true} :int]
-   [:entity {:optional true} :string]
-   [:depth {:optional true} :int]
-   [:from {:optional true} :string]
-   [:to {:optional true} :string]
-   [:max_depth {:optional true} :int]
-   [:as_of {:optional true} :string]
-   [:include_historical {:optional true} :boolean]])
-
 (def routes
   [["/v1/memory/surfaces" {:get {:handler/id :memory-surfaces}}]
    ["/v1/memory/prompt" {:get {:handler/id :memory-prompt}}]
@@ -77,8 +45,4 @@
    ["/v1/memory/vault/read" {:post {:handler/id :memory-vault-read
                                     :parameters {:body memory-vault-read-body}}}]
    ["/v1/memory/vault/write" {:post {:handler/id :memory-vault-write
-                                     :parameters {:body memory-vault-write-body}}}]
-   ["/v1/memory/graph/facts" {:post {:handler/id :memory-graph-save
-                                     :parameters {:body memory-graph-save-body}}}]
-   ["/v1/memory/graph/query" {:post {:handler/id :memory-graph-query
-                                     :parameters {:body memory-graph-query-body}}}]])
+                                     :parameters {:body memory-vault-write-body}}}]])

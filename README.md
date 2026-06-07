@@ -200,8 +200,6 @@ docker run --rm \
   -e AGENT_TELEGRAM_ALLOWED_USER_IDS= \
   -e AGENT_TELEGRAM_ALLOWED_CHAT_IDS= \
   -e AGENT_MEMORY_PROMPT_PATHS=/app/data/MEMORY.md \
-  -e AGENT_MEMORY_GRAPH_ENABLED=false \
-  -e AGENT_MEMORY_GRAPH_PATH=/app/data/memory-graph \
   iris:0.1
 ```
 

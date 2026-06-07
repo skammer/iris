@@ -159,7 +159,7 @@ Evidence:
 
 Action:
 - Add coverage tooling and publish HTML/LCOV in CI.
-- Add direct tests first for `agent.api.handlers.*`, `agent.persistence.sqlite.*`, `agent.runners.options`, `agent.kernel.runtime`, `agent.memory.datahike`.
+- Add direct tests first for `agent.api.handlers.*`, `agent.persistence.sqlite.*`, `agent.runners.options`, `agent.kernel.runtime`, `agent.memory.core`.
 - Promote release smoke/Docker smoke into CI where supported.
 
 Confidence: **0.9**
@@ -184,7 +184,7 @@ Action:
   - orchestrator: agents, interop, channels, federation
   - telegram: polling, drafts, media, chat bridge
   - ui: shell/router, sessions, runs, tools, telemetry panels
-  - memory: prompt docs, search/ranking, fact extraction, graph reconciliation
+  - memory: prompt docs, search/ranking, fact extraction
   - OpenAI provider: payloads, streaming parser, response normalization
 
 Confidence: **0.87**
@@ -204,14 +204,11 @@ Action:
 
 Confidence: **0.78**
 
-#### 9. Make memory graph/extraction operationally explicit
+#### 9. Make memory extraction operationally explicit
 
-Impact: SQLite facts are reliable; graph memory and post-turn extraction still need clearer production policy.
+Impact: SQLite facts are reliable; post-turn extraction still needs clearer production policy.
 
 Evidence:
-- Graph is disabled by default and derived from SQLite.
-- Graph save/remove failures are recorded but non-fatal.
-- Reconciliation exists but is manual.
 - Fact extraction is enabled by default and runs after turns, adding latency/cost when provider is configured.
 
 Action:

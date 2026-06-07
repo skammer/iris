@@ -5,7 +5,6 @@
    [agent.config :as cfg]
    [agent.loop :as loop]
    [agent.logging :as logging]
-   [agent.memory.core :as memory]
    [agent.sessions.service :as sessions]
    [agent.skills :as skills]
    [agent.nrepl :as nrepl]
@@ -34,7 +33,6 @@
     "  clojure -M -m agent.core --no-session \"ephemeral prompt\""
     "  clojure -M -m agent.core config init"
     "  clojure -M -m agent.core config migrate path/to/config.edn"
-    "  clojure -M -m agent.core memory reconcile [--repair]"
     "  clojure -M -m agent.core skills [prefix]"
     "  clojure -M -m agent.core loop --prompt \"task\" --plan LOOP_PLAN.md --max 10"
     "  clojure -M -m agent.core serve"
@@ -103,7 +101,7 @@
           "--no-session"
           (recur (next remaining) (assoc parsed :no-session? true))
 
-          (if (and (contains? #{"serve" "loop" "skills" "config" "memory"} arg)
+          (if (and (contains? #{"serve" "loop" "skills" "config"} arg)
                    (empty? (:prompt-parts parsed))
                    (nil? (:command parsed)))
             (recur (next remaining) (assoc parsed :command arg))
@@ -228,23 +226,6 @@
                       {:type :invalid-cli-args
                        :subcommand subcommand})))))
 
-(defn- run-memory-command! [system prompt]
-  (let [[subcommand & args] (config-args prompt)
-        args* (set args)]
-    (case subcommand
-      "reconcile"
-      (do
-        (when-not (every? #{"--repair"} args)
-          (throw (ex-info "memory reconcile only accepts --repair"
-                          {:type :invalid-cli-args
-                           :args args})))
-        (print-edn! (memory/reconcile-graph-memory (:memory-service system)
-                                                   {:repair? (contains? args* "--repair")})))
-
-      (throw (ex-info "memory command must be reconcile"
-                      {:type :invalid-cli-args
-                       :subcommand subcommand})))))
-
 (defn- create-system!
   [config-path]
   (cfg/init-config!)
@@ -343,9 +324,6 @@
 
       (= "skills" command)
       (with-system! config-path #(print-skills! % prompt))
-
-      (= "memory" command)
-      (with-system! config-path #(run-memory-command! % prompt))
 
       (= "loop" command)
       (with-system! config-path #(run-loop! % parsed))

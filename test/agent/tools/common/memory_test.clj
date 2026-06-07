@@ -13,11 +13,10 @@
 
 (defn- memory-service [store]
   (memory/create-memory-service
-   {:prompt {:paths []}
-    :search {:default-limit 10}
-    :facts {:extractor {:enabled false}}
-    :graph {:enabled false}}
-   store))
+	   {:prompt {:paths []}
+	    :search {:default-limit 10}
+	    :facts {:extractor {:enabled false}}}
+	   store))
 
 (defn- registry [service]
   (reduce tools/register-tool
@@ -25,25 +24,20 @@
           (conj (memory-tool/create-memory-tools service)
                 (memory-tool/create-message-search-tool service))))
 
-(deftest memory-tool-search-uses-facts-graph-and-prompt-files-test
+(deftest memory-tool-search-uses-facts-and-prompt-files-test
   (let [path (temp-db-path)
         root (doto (java.nio.file.Files/createTempDirectory "iris-memory-tool" (make-array java.nio.file.attribute.FileAttribute 0))
                (.toFile))
         root-file (.toFile root)
-        prompt-file (io/file root-file "MEMORY.md")
-        graph-path (.getAbsolutePath (io/file root-file "graph-store"))
+	        prompt-file (io/file root-file "MEMORY.md")
         store (sqlite/create-store {:path path})
         session (sqlite/create-session! store "memory-tool")
         _ (spit prompt-file (str "Kimi prompt marker " (apply str (repeat 1200 "x"))))
         service (memory/create-memory-service
-                 {:prompt {:paths [(.getAbsolutePath prompt-file)]}
-                  :search {:default-limit 10}
-                  :facts {:extractor {:enabled false}}
-                  :graph {:enabled true
-                          :backend :datahike
-                          :datahike {:path graph-path
-                                     :keep-history? true}}}
-                 store)
+	                 {:prompt {:paths [(.getAbsolutePath prompt-file)]}
+	                  :search {:default-limit 10}
+	                  :facts {:extractor {:enabled false}}}
+	                 store)
         registry* (registry service)]
     (try
       (sqlite/append-message! store (:id session) "assistant"
@@ -61,10 +55,9 @@
                                        {:permissions #{:memory-read}
                                         :session-id (:id session)})]
         (is (string? result))
-        (is (str/includes? result "Memory results for: Kimi"))
-        (is (str/includes? result "fact #"))
-        (is (str/includes? result "graph #"))
-        (is (str/includes? result "prompt #MEMORY.md"))
+	        (is (str/includes? result "Memory results for: Kimi"))
+	        (is (str/includes? result "fact #"))
+	        (is (str/includes? result "prompt #MEMORY.md"))
         (is (str/includes? result "[truncated "))
         (is (not (str/includes? result "message #")))
         (is (not (str/includes? result "\"messages\"")))
@@ -85,12 +78,11 @@
         store (sqlite/create-store {:path path})
         session (sqlite/create-session! store "memory-tool-limit")
         service (memory/create-memory-service
-                 {:prompt {:paths []}
-                  :search {:default-limit 2
-                           :max-limit 2}
-                  :facts {:extractor {:enabled false}}
-                  :graph {:enabled false}}
-                 store)
+	                 {:prompt {:paths []}
+	                  :search {:default-limit 2
+	                           :max-limit 2}
+	                  :facts {:extractor {:enabled false}}}
+	                 store)
         registry* (registry service)]
     (try
       (doseq [idx (range 6)]
@@ -184,46 +176,3 @@
       (is (empty? (memory/search-facts service "Kimi" {:all-scopes? true})))
       (finally
         (io/delete-file path true)))))
-
-(deftest memory-tool-stores-removes-graph-facts-and-runs-datalog-test
-  (let [path (temp-db-path)
-        root (doto (java.nio.file.Files/createTempDirectory "iris-memory-graph-tool" (make-array java.nio.file.attribute.FileAttribute 0))
-               (.toFile))
-        root-file (.toFile root)
-        graph-path (.getAbsolutePath (io/file root-file "graph-store"))
-        store (sqlite/create-store {:path path})
-        service (memory/create-memory-service
-                 {:prompt {:paths []}
-                  :search {:default-limit 10}
-                  :facts {:extractor {:enabled false}}
-                  :graph {:enabled true
-                          :backend :datahike
-                          :datahike {:path graph-path
-                                     :keep-history? true}}}
-                 store)
-        registry* (registry service)]
-    (try
-      (tools/execute-tool registry*
-                          :memory_save_graph_fact
-                          {:id "graph-kimi-fact"
-                           :subject "Kimi"
-                           :predicate "powers"
-                           :object "graph memory"}
-                          {:permissions #{:memory-write}})
-      (is (= ["graph memory"]
-             (mapv :object (memory/query-graph-memory service "Kimi" {:mode :facts}))))
-      (is (str/includes?
-           (tools/execute-tool registry*
-                               :memory_datalog
-                               {:query "[:find ?label :where [?e :entity/label ?label]]"
-                                :limit 10}
-                               {:permissions #{:memory-read}})
-           "Kimi"))
-      (tools/execute-tool registry*
-                          :memory_remove_graph_fact
-                          {:id "graph-kimi-fact"}
-                          {:permissions #{:memory-write}})
-      (is (empty? (memory/query-graph-memory service "Kimi" {:mode :facts})))
-      (finally
-        (io/delete-file path true)
-        (io/delete-file root-file true)))))

@@ -44,7 +44,7 @@ Remaining support cost is architectural:
 
 - `agent.ui`, `agent.config`, `agent.orchestrator`, `agent.telegram`, memory core, and migrations are still too large
 - config still concentrates defaults, migration, validation, and path finalization in one namespace
-- memory graph remains experimental/off by default, but SQLite-vs-graph reconciliation and Datahike log noise are fixed
+- memory now has one durable structured-fact surface; post-turn extraction still needs cost/latency policy
 
 Weighted confidence: 0.88.
 
@@ -173,22 +173,19 @@ Config loading now has a narrower contract. Disk initialization is an explicit C
 
 Confidence: 0.9.
 
-### 7. Memory graph remains experimental but now has reconciliation
+### 7. Memory graph removed
 
 Status: fixed.
 
 Evidence:
 
-- `src/agent/memory/core.clj` now treats SQLite facts as source of truth and exposes `reconcile-graph-memory`.
-- `src/agent/cli.clj` adds `memory reconcile [--repair]`.
-- Reconciliation reports missing, diverged, stale, and graph-only active graph edges, with dry-run default and repair mode.
-- `src/agent/memory/datahike.clj` lists active graph facts for audit and suppresses noisy Datahike DEBUG/INFO logs.
-- `test/agent/memory/core_test.clj` covers dry-run detection and repair.
-- `test/agent/cli_test.clj` covers CLI dispatch.
+- SQLite facts are now the only structured fact store.
+- Derived graph storage, reconciliation CLI, and raw query tooling were removed.
+- `test/agent/memory/core_test.clj` covers fact storage, search, validation, extraction, and hard reset.
 
 Reasoning:
 
-Graph memory remains a derived experimental surface, but drift is now observable and repairable. Graph-only facts are preserved by default to avoid deleting manually authored graph data.
+The graph layer added operational drift and little product value. One durable fact surface is easier to reason about and test.
 
 Confidence: 0.88.
 

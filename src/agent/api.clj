@@ -107,9 +107,6 @@
    :ui-memory-search (fn [r] (ui/memory-search (sys) r))
    :ui-memory-tool (fn [r] (ui/memory-tool-run (sys) r))
    :ui-memory-facts-reset (fn [r] (ui/memory-facts-reset (sys) r))
-   :ui-memory-graph (fn [r] (ui/memory-graph-query (sys) r))
-   :ui-memory-graph-reset (fn [r] (ui/memory-graph-reset (sys) r))
-   :ui-memory-datalog (fn [r] (ui/memory-datalog-query (sys) r))
    :ui-tools (fn [r] (ui/list-tools (sys) r))
    :ui-system-reload (fn [r] (ui/system-reload (sys) r))
    :ui-tool-approvals (fn [r] (ui/list-tool-approvals (sys) r))
@@ -181,8 +178,6 @@
    :memory-fact-search (fn [r] (memory/fact-search (sys) r))
    :memory-vault-read (fn [r] (memory/vault-read (sys) r))
    :memory-vault-write (fn [r] (memory/vault-write (sys) r))
-   :memory-graph-save (fn [r] (memory/graph-save (sys) r))
-   :memory-graph-query (fn [r] (memory/graph-query (sys) r))
 
    :list-agents (fn [r] (agents/list-agents (sys) r))
    :create-agent (fn [r] (agents/create (sys) r))

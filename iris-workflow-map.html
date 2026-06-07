@@ -118,7 +118,7 @@ const NODES = {
   kerneldown:{l:'receipts → loop',t:'control',f:'kernel/runtime.clj',s:11,d:'Tool receipts flow back; the loop emits the assistant tool-call message + per-tool results, appends protocol messages, and recurs.'},
   eventsink:{l:'system event-sink',t:'persistence',f:'system/events.clj',s:12,d:'Each runtime event is persisted (log-event!) AND published to the broker. Central event write path.'},
   persist:{l:'persistence.sqlite',t:'persistence',f:'persistence/sqlite/*.clj',s:12,d:'Sessions/messages/entries/completions/events/runs. Parameterized SQL, transactional writes under a tx-lock, idempotent inserts, FTS5 mirrors. Each assistant turn\'s provider :usage is now stored in messages.metadata_json (feeds the web-UI stats).'},
-  factmem:{l:'memory fact extraction',t:'memory',f:'memory/core.clj',s:12,d:'After the turn, mines subject/predicate/object facts via a structured-output LLM call and saves to SQLite (+ optional datahike graph). Non-fatal on failure.'},
+  factmem:{l:'memory fact extraction',t:'memory',f:'memory/core.clj',s:12,d:'After the turn, mines subject/predicate/object facts via a structured-output LLM call and saves to SQLite. Non-fatal on failure.'},
   output:{l:'Response / SSE / Telegram',t:'output',f:'api/handlers/chat.clj',s:13,d:'Non-stream → OpenAI chat.completion; stream → chat.completion.chunk + [DONE]; Telegram → finalize draft to a real message.'},
 };
 const EDGES = [
@@ -166,7 +166,7 @@ const FIND = {
   loop:[],
   ctxpack:[],
   prompts:[],
-  memrecall:[['med','P2 graph memory is derived/off by default; drift reconciliation is manual and not in health']],
+  memrecall:[],
   compaction:[['med','P1 coverage gate missing for compaction/retrieval quality; no LCOV/cloverage baseline']],
   router:[],
   planner:[],

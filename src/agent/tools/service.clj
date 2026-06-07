@@ -25,9 +25,7 @@
 (def ^:private tool-family-aliases
   {:fs #{:fs_read :fs_write :fs_create :fs_replace :fs_list :fs_delete :fs_mkdir}
    :memory #{:memory_search :memory_save_fact :memory_remove_fact
-             :memory_save_graph_fact :memory_remove_graph_fact
-             :memory_datalog :memory_read_vault :memory_write_vault
-             :message_search}
+             :memory_read_vault :memory_write_vault :message_search}
    :todo #{:todo_write :todo_get :todo_list :todo_search}})
 
 (defn- expand-tool-name [tool]

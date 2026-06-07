@@ -381,14 +381,11 @@
 
 (defn- memory-tool-target [{:keys [action] :as input}]
   (case (keyword (str/lower-case (str action)))
-    :search [:memory_search (dissoc input :action)]
-    :save-fact [:memory_save_fact (dissoc input :action)]
-    :remove-fact [:memory_remove_fact (dissoc input :action)]
-    :save-graph-fact [:memory_save_graph_fact (dissoc input :action)]
-    :remove-graph-fact [:memory_remove_graph_fact (dissoc input :action)]
-    :datalog [:memory_datalog (dissoc input :action)]
-    :read-vault [:memory_read_vault (dissoc input :action)]
-    :write-vault [:memory_write_vault (dissoc input :action)]))
+	    :search [:memory_search (dissoc input :action)]
+	    :save-fact [:memory_save_fact (dissoc input :action)]
+	    :remove-fact [:memory_remove_fact (dissoc input :action)]
+	    :read-vault [:memory_read_vault (dissoc input :action)]
+	    :write-vault [:memory_write_vault (dissoc input :action)]))
 
 (defn- memory-search-source-json [system {:keys [action query limit scope]}]
   (when (and (= :search (keyword (str/lower-case (str action))))
@@ -446,64 +443,7 @@
 (defn memory-facts-reset [system _request]
   (memory-reset-response system
                          "Facts"
-                         #(memory/remove-all-memory-facts! (:memory-service system))))
-
-(defn memory-graph-reset [system _request]
-  (memory-reset-response system
-                         "Graph"
-                         #(memory/remove-all-graph-facts! (:memory-service system))))
-
-(defn- graph-query-opts [{:keys [mode entity from to as_of include_historical] :as body}]
-  (cond-> {}
-    (not (str/blank? (str mode))) (assoc :mode (keyword mode))
-    (parse-int-form (:limit body)) (assoc :limit (parse-int-form (:limit body)))
-    (not (str/blank? (str entity))) (assoc :entity entity)
-    (parse-int-form (:depth body)) (assoc :depth (parse-int-form (:depth body)))
-    (not (str/blank? (str from))) (assoc :from from)
-    (not (str/blank? (str to))) (assoc :to to)
-    (parse-int-form (:max_depth body)) (assoc :max-depth (parse-int-form (:max_depth body)))
-    (not (str/blank? (str as_of))) (assoc :as-of as_of)
-    (form-bool include_historical) (assoc :include-historical? true)))
-
-(defn memory-graph-query [system request]
-  (try
-    (let [{:keys [query] :as body} (h/read-form-body request)
-          opts (graph-query-opts body)]
-      (responses/html-response
-       200
-       (ui/memory-graph-result-fragment
-        {:ok? true
-         :query query
-         :opts opts
-         :result (memory/query-graph-memory (:memory-service system)
-                                            (not-empty query)
-                                            opts)})))
-    (catch Exception e
-      (responses/html-response
-       200
-       (ui/memory-graph-result-fragment
-        {:ok? false
-         :error (.getMessage e)
-         :details (ex-data e)})))))
-
-(defn memory-datalog-query [system request]
-  (try
-    (let [{:keys [query args] :as body} (h/read-form-body request)
-          opts (cond-> {}
-                 (parse-int-form (:limit body)) (assoc :limit (parse-int-form (:limit body)))
-                 (contains? body :args) (assoc :args args))]
-      (responses/html-response
-       200
-       (ui/memory-datalog-result-fragment
-        {:ok? true
-         :result (memory/query-datalog-memory (:memory-service system) query opts)})))
-    (catch Exception e
-      (responses/html-response
-       200
-       (ui/memory-datalog-result-fragment
-        {:ok? false
-         :error (.getMessage e)
-         :details (ex-data e)})))))
+                         #(memory/reset-facts! (:memory-service system))))
 
 (defn list-runs [system _request]
   (responses/html-response 200 (ui/runs-fragment system)))

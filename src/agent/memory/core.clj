@@ -1,78 +1,18 @@
 (ns agent.memory.core
-  "Explicit memory-surface model for rewritten runtime."
+  "Memory service facade. SQLite facts are the durable store; prompt and vault
+   files are bounded filesystem surfaces."
   (:require
    [agent.llm.core :as llm]
+   [agent.memory.schema :as memory-schema]
    [agent.persistence.sqlite :as sqlite]
    [agent.prompts :as prompts]
-   [agent.util :as util]
    [cheshire.core :as json]
-   [clojure.edn :as edn]
    [clojure.java.io :as io]
-   [clojure.set]
+   [clojure.set :as set]
    [clojure.string :as str]))
 
-(defprotocol IGraphMemoryBackend
-  (save-fact! [this fact])
-  (remove-fact! [this fact])
-  (remove-all-facts! [this])
-  (merge-entities! [this canonical aliases])
-  (query-facts [this query opts])
-  (graph-facts [this opts])
-  (backend-health-check [this]))
-
-(defprotocol IDatalogExplorer
-  (datalog-query* [this query opts]))
-
-(declare save-graph-fact! remove-graph-fact! merge-graph-entities! query-graph-memory)
-
-(defrecord NullGraphMemoryBackend []
-  IGraphMemoryBackend
-  (save-fact! [_ _]
-    (throw (ex-info "Graph memory backend is disabled" {:type :graph-memory-disabled})))
-  (remove-fact! [_ _]
-    (throw (ex-info "Graph memory backend is disabled" {:type :graph-memory-disabled})))
-  (remove-all-facts! [_]
-    (throw (ex-info "Graph memory backend is disabled" {:type :graph-memory-disabled})))
-  (merge-entities! [_ _ _]
-    (throw (ex-info "Graph memory backend is disabled" {:type :graph-memory-disabled})))
-  (query-facts [_ _ _] [])
-  (graph-facts [_ _] [])
-  (backend-health-check [_]
-    {:healthy true
-     :details {:enabled false}})
-  IDatalogExplorer
-  (datalog-query* [_ _ _]
-    (throw (ex-info "Graph memory backend is disabled" {:type :graph-memory-disabled}))))
-
-(defn- parse-edn-value [value field fallback]
-  (cond
-    (nil? value) fallback
-    (and (string? value) (str/blank? value)) fallback
-    (string? value)
-    (try
-      (edn/read-string value)
-      (catch Exception e
-        (throw (ex-info (str field " must be EDN")
-                        {:type :invalid-edn
-                         :field field
-                         :message (.getMessage e)}))))
-    :else value))
-
-(defn- parse-datalog-query [query]
-  (let [query* (parse-edn-value query "query" nil)]
-    (when-not (or (vector? query*) (seq? query*))
-      (throw (ex-info "query must be a Datalog EDN vector or list"
-                      {:type :invalid-datalog-query
-                       :query query*})))
-    query*))
-
-(defn- parse-datalog-args [args]
-  (let [args* (parse-edn-value args "args" [])]
-    (when-not (sequential? args*)
-      (throw (ex-info "args must be an EDN vector or list"
-                      {:type :invalid-datalog-args
-                       :args args*})))
-    (vec args*)))
+(def default-search-limit 10)
+(def default-min-search-score 0.3)
 
 (defn- existing-file [path]
   (let [file (io/file path)]
@@ -118,21 +58,6 @@
                        :roots fs-roots})))
     target))
 
-(defn- create-graph-backend [{:keys [enabled backend datahike]}]
-  (if (not enabled)
-    (->NullGraphMemoryBackend)
-    (case backend
-      :datahike
-      ((requiring-resolve 'agent.memory.datahike/create-backend)
-       (merge {:store {:backend :file
-                       :path (:path datahike)
-                       :scope (or (:scope datahike) "iris")}}
-              (select-keys datahike [:allow-unsafe-config])
-              (select-keys datahike [:store])
-              {:keep-history? (not= false (:keep-history? datahike))
-               :schema-flexibility :write}))
-      (throw (ex-info "Unsupported graph memory backend" {:backend backend})))))
-
 (defn- token-set [value]
   (->> (str/split (str/lower-case (or value "")) #"\W+")
        (remove str/blank?)
@@ -141,18 +66,13 @@
 (defn- jaccard [left right]
   (let [a (token-set left)
         b (token-set right)
-        union-count (count (clojure.set/union a b))]
+        union-count (count (set/union a b))]
     (if (zero? union-count)
       0.0
-      (/ (double (count (clojure.set/intersection a b))) union-count))))
+      (/ (double (count (set/intersection a b))) union-count))))
 
 (defn- fact-text [fact]
   (str (:subject fact) " " (:predicate fact) " " (:object fact)))
-
-(defn- graph-path-text [path]
-  (str (str/join " " (map :label (:nodes path)))
-       " "
-       (str/join " " (map :predicate (:edges path)))))
 
 (defn- contains-query-score [query text]
   (let [query* (str/lower-case (str/trim (or query "")))
@@ -172,9 +92,6 @@
     :message (:content item)
     :event (json/generate-string (:payload item))
     :fact (fact-text item)
-    :graph (if (= "path" (:type item))
-             (graph-path-text item)
-             (fact-text item))
     ""))
 
 (defn- score-memory-item [query surface item]
@@ -183,7 +100,6 @@
         exact (contains-query-score query text)
         confidence (confidence-score (:confidence item))
         surface-weight (case surface
-                         :graph 1.15
                          :fact 1.1
                          :message 1.0
                          :event 0.8
@@ -204,7 +120,7 @@
   (second
    (reduce (fn [[seen results] {:keys [surface item] :as scored}]
              (let [value (-> (item-text surface item)
-                             (str/lower-case)
+                             str/lower-case
                              (str/replace #"\s+" " ")
                              str/trim)
                    key (if (str/blank? value)
@@ -216,7 +132,7 @@
            [#{} []]
            ranked)))
 
-(defn rank-memory-results
+(defn- rank-memory-results
   [query results opts]
   (let [limit (or (:limit opts) 20)
         min-score (or (:min-score opts) 0.0)
@@ -224,16 +140,12 @@
     (->> (concat
           (map #(score-memory-item query :message %) (:messages results))
           (map #(score-memory-item query :event %) (:events results))
-          (map #(score-memory-item query :fact %) (:facts results))
-          (map #(score-memory-item query :graph %) (:graph results)))
+          (map #(score-memory-item query :fact %) (:facts results)))
          (sort-by :score >)
          (filter #(and (pos? (:score %)) (>= (:score %) min-score)))
          (#(if dedupe? (dedupe-ranked-results %) %))
          (take limit)
          vec)))
-
-(def default-search-limit 10)
-(def default-min-search-score 0.3)
 
 (defn- positive-limit [value fallback]
   (if (and (integer? value) (pos? value))
@@ -258,9 +170,12 @@
 
 (defn- similar-duplicate [memory-service fact opts]
   (when-let [threshold (get-in memory-service [:config :facts :dedup :similarity-threshold])]
-    (let [candidates (sqlite/search-memory-facts (:store memory-service)
+    (let [scope (memory-schema/normalize-scope-option opts)
+          candidates (sqlite/search-memory-facts (:store memory-service)
                                                  nil
-                                                 (assoc opts :limit 1000 :include-global? false))
+                                                 {:limit 1000
+                                                  :scope scope
+                                                  :include-global? false})
           fact* (fact-text fact)]
       (some (fn [candidate]
               (when (>= (jaccard fact* (fact-text candidate)) threshold)
@@ -268,7 +183,7 @@
             candidates))))
 
 (defn create-memory-service
-  [{:keys [prompt search graph vault fs-roots] :as cfg} store]
+  [{:keys [prompt search vault fs-roots] :as cfg} store]
   (let [{:keys [default-limit max-limit]} (search-limit-config search)]
     {:config cfg
      :prompt-paths (vec (get prompt :paths ["MEMORY.md"]))
@@ -278,32 +193,7 @@
      :vault-roots (canonical-roots (get vault :paths []))
      :vault-writable? (true? (:writable? vault))
      :fs-roots (canonical-roots (or fs-roots []))
-     :graph-backend (create-graph-backend graph)
-     :graph-failures (atom {:count 0 :recent []})
      :store store}))
-
-(defn- graph-failure-entry
-  [op e]
-  {:op op
-   :type (:type (ex-data e))
-   :message (.getMessage e)
-   :at (util/now-str)})
-
-(defn- record-graph-failure!
-  [memory-service op e]
-  (let [entry (graph-failure-entry op e)]
-    (swap! (:graph-failures memory-service)
-           (fn [{:keys [count recent]}]
-             {:count (inc (long (or count 0)))
-              :recent (vec (take-last 10 (conj (or recent []) entry)))}))
-    (try
-      (sqlite/log-event! (:store memory-service)
-                         {:event-type :memory.graph.failed
-                          :entity-type :memory
-                          :entity-id "graph"
-                          :payload (update entry :op name)})
-      (catch Exception _ nil))
-    entry))
 
 (defn list-surfaces
   [memory-service]
@@ -322,14 +212,10 @@
     :writable true
     :default-limit (:search-default-limit memory-service)
     :max-limit (:search-max-limit memory-service)}
-   {:name :graph
-    :type (get-in memory-service [:config :graph :backend] :none)
-    :writable true
-    :enabled (true? (get-in memory-service [:config :graph :enabled]))}
    {:name :vault
     :type :file
     :writable (:vault-writable? memory-service)
-    :enabled (seq (:vault-roots memory-service))
+    :enabled (boolean (seq (:vault-roots memory-service)))
     :paths (:vault-roots memory-service)}])
 
 (defn read-prompt-memory
@@ -355,22 +241,10 @@
          facts (sqlite/search-memory-facts (:store memory-service)
                                            query
                                            (merge {:limit limit} opts))
-         graph-limit (max limit (* 4 limit))
-         graph (try
-                 (->> (query-graph-memory memory-service nil {:limit graph-limit})
-                      (map #(assoc % :score (:score (score-memory-item query :graph %))))
-                      (filter #(>= (or (:score %) 0.0) min-score))
-                      (sort-by :score >)
-                      (take limit)
-                      vec)
-                 (catch Exception e
-                   (record-graph-failure! memory-service :query e)
-                   []))
          results {:query query
                   :messages messages
                   :events events
-                  :facts facts
-                  :graph graph}]
+                  :facts facts}]
      (assoc results :ranked (rank-memory-results query results {:limit limit
                                                                 :min-score min-score
                                                                 :dedupe? (:dedupe? opts)})))))
@@ -378,19 +252,11 @@
 (defn save-memory-fact!
   ([memory-service fact] (save-memory-fact! memory-service fact {}))
   ([memory-service fact opts]
+   (memory-schema/validate-fact! fact)
    (let [fact* (merge opts fact)
          saved (if-let [duplicate (similar-duplicate memory-service fact opts)]
                  (sqlite/merge-memory-fact-source! (:store memory-service) duplicate fact*)
                  (sqlite/save-memory-fact! (:store memory-service) fact*))]
-     (when (true? (get-in memory-service [:config :graph :enabled]))
-       (try
-         (save-graph-fact! memory-service
-                           (merge fact*
-                                  {:id (:id saved)
-                                   :session-id (:source-session-id saved)}))
-         (catch Exception e
-           (record-graph-failure! memory-service :save e)
-           nil)))
      (sqlite/log-event! (:store memory-service)
                         {:event-type :memory.fact.saved
                          :entity-type :memory
@@ -407,15 +273,9 @@
 (defn remove-memory-fact!
   ([memory-service fact] (remove-memory-fact! memory-service fact {}))
   ([memory-service fact opts]
+   (memory-schema/validate-fact-selector! fact)
    (let [fact* (merge opts fact)
          removed (sqlite/remove-memory-fact! (:store memory-service) fact*)]
-     (when (and (:removed? removed)
-                (true? (get-in memory-service [:config :graph :enabled])))
-       (try
-         (remove-graph-fact! memory-service fact*)
-         (catch Exception e
-           (record-graph-failure! memory-service :remove e)
-           nil)))
      (sqlite/log-event! (:store memory-service)
                         {:event-type :memory.fact.removed
                          :entity-type :memory
@@ -430,8 +290,14 @@
                                    :object (:object fact*)}})
      removed)))
 
-(defn remove-all-memory-facts! [memory-service]
-  (sqlite/remove-all-memory-facts! (:store memory-service)))
+(defn reset-facts! [memory-service]
+  (let [result (sqlite/reset-memory-facts! (:store memory-service))]
+    (sqlite/log-event! (:store memory-service)
+                       {:event-type :memory.facts.reset
+                        :entity-type :memory
+                        :entity-id "facts"
+                        :payload result})
+    result))
 
 (defn search-facts
   ([memory-service query] (search-facts memory-service query {}))
@@ -454,16 +320,17 @@
   (when-not (:vault-writable? memory-service)
     (throw (ex-info "Vault memory is read-only" {:type :vault-read-only})))
   (let [path* (ensure-vault-path! memory-service path)
-        file (io/file path*)]
+        file (io/file path*)
+        content* (or content "")]
     (when-let [parent (.getParentFile file)]
       (.mkdirs parent))
-    (spit file (or content ""))
+    (spit file content*)
     (sqlite/log-event! (:store memory-service)
                        {:event-type :memory.vault.written
                         :entity-type :memory
                         :entity-id path*
                         :payload {:path path*
-                                  :bytes (alength (.getBytes (or content "") "UTF-8"))}})
+                                  :bytes (alength (.getBytes content* "UTF-8"))}})
     {:path path*
      :written true}))
 
@@ -529,16 +396,18 @@
           (mapv (fn [fact]
                   (let [scope-type (or (:scope fact)
                                        (name (or (get-in memory-service [:config :facts :default-scope])
-                                                 :session)))]
+                                                 :session)))
+                        scope (memory-schema/normalize-scope
+                               {:type scope-type
+                                :id (case scope-type
+                                      "session" (:session-id opts)
+                                      "agent" (:agent-id opts)
+                                      nil)})]
                     (save-memory-fact! memory-service
                                        (dissoc fact :scope)
                                        (merge opts
-                                              {:episode-content (json/generate-string exchange)}
-                                              {:scope {:type scope-type
-                                                       :id (case scope-type
-                                                             "session" (:session-id opts)
-                                                             "agent" (:agent-id opts)
-                                                             nil)}}))))
+                                              {:episode-content (json/generate-string exchange)
+                                               :scope scope}))))
                 facts))
         (catch Exception e
           (sqlite/log-event! (:store memory-service)
@@ -549,287 +418,10 @@
                               :payload {:message (.getMessage e)}})
           [])))))
 
-(defn save-graph-fact!
-  [memory-service fact]
-  (save-fact! (:graph-backend memory-service) fact))
-
-(defn remove-graph-fact!
-  [memory-service fact]
-  (remove-fact! (:graph-backend memory-service) fact))
-
-(defn remove-all-graph-facts! [memory-service]
-  (remove-all-facts! (:graph-backend memory-service)))
-
-(defn merge-graph-entities!
-  [memory-service canonical aliases]
-  (merge-entities! (:graph-backend memory-service) canonical aliases))
-
-(defn query-graph-memory
-  ([memory-service query] (query-graph-memory memory-service query {}))
-  ([memory-service query opts]
-   (query-facts (:graph-backend memory-service) query opts)))
-
-(defn query-datalog-memory
-  ([memory-service query] (query-datalog-memory memory-service query {}))
-  ([memory-service query opts]
-   (datalog-query* (:graph-backend memory-service)
-                   (parse-datalog-query query)
-                   (update opts :args parse-datalog-args))))
-
-(def ^:private now-str util/now-str)
-
-(defn- fact-summary
-  [fact]
-  (select-keys fact [:id :scope :subject :predicate :object :confidence :status]))
-
-(defn- graph-summary
-  [fact]
-  (select-keys fact [:id :source-fact-id :subject :predicate :object :confidence :valid-from :valid-to]))
-
-(defn- sqlite-fact->graph-fact
-  [fact]
-  (cond-> {:id (:id fact)
-           :subject (:subject fact)
-           :predicate (:predicate fact)
-           :object (:object fact)}
-    (:confidence fact) (assoc :confidence (:confidence fact))
-    (:source-session-id fact) (assoc :session-id (:source-session-id fact))
-    (:source-request-id fact) (assoc :source-request-id (:source-request-id fact))
-    (:created-at fact) (assoc :created-at (:created-at fact)
-                              :observed-at (:updated-at fact))))
-
-(defn- fact-diffs
-  [sqlite-fact graph-fact]
-  (->> [:subject :predicate :object :confidence]
-       (keep (fn [k]
-               (let [left (get sqlite-fact k)
-                     right (get graph-fact k)]
-                 (when (not= left right)
-                   [k {:sqlite left :graph right}]))))
-       (into {})))
-
-(defn- sample-issues
-  [issues sample-limit]
-  (mapv identity (take sample-limit issues)))
-
-(defn- repair-issue!
-  [memory-service {:keys [kind sqlite graph]}]
-  (try
-    (case kind
-      :missing
-      {:kind kind
-       :id (:id sqlite)
-       :result (graph-summary (save-graph-fact! memory-service (sqlite-fact->graph-fact sqlite)))}
-
-      :diverged
-      (do
-        (when (and (:id graph) (not= (:id graph) (:id sqlite)))
-          (remove-graph-fact! memory-service {:id (:id graph)}))
-        {:kind kind
-         :id (:id sqlite)
-         :result (graph-summary (save-graph-fact! memory-service (sqlite-fact->graph-fact sqlite)))})
-
-      :stale
-      {:kind kind
-       :id (:source-fact-id graph)
-       :result (remove-graph-fact! memory-service {:id (:id graph)})})
-    (catch Exception e
-      {:kind kind
-       :id (or (:id sqlite) (:source-fact-id graph) (:id graph))
-       :error (.getMessage e)
-       :type (:type (ex-data e))})))
-
-(defn reconcile-graph-memory
-  ([memory-service] (reconcile-graph-memory memory-service {}))
-  ([memory-service opts]
-   (let [repair? (true? (:repair? opts))
-         sample-limit (positive-limit (:sample-limit opts) 20)
-         active-sqlite (sqlite/list-memory-facts (:store memory-service) {:status "active"})
-         graph-enabled? (true? (get-in memory-service [:config :graph :enabled]))]
-     (if-not graph-enabled?
-       {:checked-at (now-str)
-        :enabled false
-        :repair? repair?
-        :counts {:sqlite-active (count active-sqlite)
-                 :graph-active 0
-                 :missing 0
-                 :diverged 0
-                 :stale 0
-                 :graph-only 0
-                 :repair-errors 0}
-        :missing []
-        :diverged []
-        :stale []
-        :graph-only []
-        :message "Graph memory backend is disabled"}
-       (let [all-sqlite (sqlite/list-memory-facts (:store memory-service))
-             sqlite-by-id (into {} (map (juxt :id identity) all-sqlite))
-             active-graph (graph-facts (:graph-backend memory-service) {:include-historical? false})
-             graph-by-source-id (->> active-graph
-                                     (filter :source-fact-id)
-                                     (group-by :source-fact-id))
-             missing (->> active-sqlite
-                          (remove #(contains? graph-by-source-id (:id %)))
-                          (mapv (fn [fact]
-                                  {:kind :missing
-                                   :id (:id fact)
-                                   :sqlite (fact-summary fact)})))
-             diverged (->> active-sqlite
-                           (keep (fn [fact]
-                                   (when-let [graph (first (get graph-by-source-id (:id fact)))]
-                                     (let [diffs (fact-diffs fact graph)]
-                                       (when (seq diffs)
-                                         {:kind :diverged
-                                          :id (:id fact)
-                                          :diffs diffs
-                                          :sqlite (fact-summary fact)
-                                          :graph (graph-summary graph)})))))
-                           vec)
-             stale (->> active-graph
-                        (filter (fn [fact]
-                                  (when-let [source-id (:source-fact-id fact)]
-                                    (= "removed" (:status (get sqlite-by-id source-id))))))
-                        (mapv (fn [fact]
-                                {:kind :stale
-                                 :id (:source-fact-id fact)
-                                 :graph-id (:id fact)
-                                 :graph (graph-summary fact)})))
-             graph-only (->> active-graph
-                             (filter (fn [fact]
-                                       (let [source-id (:source-fact-id fact)]
-                                         (or (str/blank? (or source-id ""))
-                                             (not (contains? sqlite-by-id source-id))))))
-                             (mapv (fn [fact]
-                                     {:kind :graph-only
-                                      :id (:source-fact-id fact)
-                                      :graph-id (:id fact)
-                                      :graph (graph-summary fact)})))
-             repair-targets (concat missing diverged stale)
-             repaired (when repair?
-                        (mapv #(repair-issue! memory-service %) repair-targets))]
-         {:checked-at (now-str)
-          :enabled true
-          :repair? repair?
-          :counts {:sqlite-active (count active-sqlite)
-                   :graph-active (count active-graph)
-                   :missing (count missing)
-                   :diverged (count diverged)
-                   :stale (count stale)
-                   :graph-only (count graph-only)
-                   :repair-errors (count (filter :error repaired))}
-          :missing (sample-issues missing sample-limit)
-          :diverged (sample-issues diverged sample-limit)
-          :stale (sample-issues stale sample-limit)
-          :graph-only (sample-issues graph-only sample-limit)
-          :repaired (or repaired [])})))))
-
-(defn- expected-match? [expected ranked]
-  (let [item (:item ranked)]
-    (and (or (nil? (:surface expected))
-             (= (:surface expected) (:surface ranked)))
-         (or (nil? (:type expected))
-             (= (:type expected) (:type item)))
-         (or (nil? (:path-labels expected))
-             (= (:path-labels expected)
-                (mapv :label (:nodes item))))
-         (or (nil? (:path-predicates expected))
-             (= (:path-predicates expected)
-                (mapv :predicate (:edges item))))
-         (every? (fn [[k v]] (= v (get item k)))
-                 (dissoc expected :surface :type :path-labels :path-predicates)))))
-
-(defn- first-rank
-  [expected ranked]
-  (some (fn [[idx item]]
-          (when (expected-match? expected item)
-            (inc idx)))
-        (map-indexed vector ranked)))
-
-(defn- graph-ranked-results
-  [memory-service case* limit]
-  (->> (query-graph-memory memory-service
-                           (:query case*)
-                           (merge {:limit limit}
-                                  (:graph-opts case*)))
-       (mapv (fn [item]
-               {:surface :graph
-                :score (:score (score-memory-item (:query case*) :graph item))
-                :item item}))))
-
-(defn- case-ranked-results
-  [memory-service case* limit]
-  (if (:graph-opts case*)
-    (graph-ranked-results memory-service case* limit)
-    (:ranked (search-memory memory-service
-                            (:query case*)
-                            (merge {:limit limit}
-                                   {:dedupe? false}
-                                   (:search-opts case*))))))
-
-(defn evaluate-retrieval
-  [memory-service cases opts]
-  (let [limit (or (:limit opts) 5)
-        evaluated (mapv
-                   (fn [{:keys [query expected] :as case*}]
-                     (let [case* (if (contains? case* :query)
-                                   case*
-                                   (assoc case* :query query))
-                           ranked (case-ranked-results memory-service case* limit)
-                           ranks (mapv #(first-rank % ranked) expected)
-                           hits (mapv some? ranks)
-                           reciprocal-ranks (mapv #(if % (/ 1.0 %) 0.0) ranks)
-                           expected-count (count expected)
-                           hit-count (count (filter true? hits))]
-                       {:query query
-                        :expected expected
-                        :hit-count hit-count
-                        :expected-count expected-count
-                        :recall-at-k (if (zero? expected-count)
-                                       1.0
-                                       (/ (double hit-count) expected-count))
-                        :ranks ranks
-                        :mean-rank (when (seq (keep identity ranks))
-                                     (/ (double (reduce + (keep identity ranks)))
-                                        (count (keep identity ranks))))
-                        :mrr (if (zero? expected-count)
-                               1.0
-                               (/ (double (reduce + reciprocal-ranks))
-                                  expected-count))
-                        :passed? (every? true? hits)
-                        :ranked ranked}))
-                   cases)
-        total-expected (reduce + (map :expected-count evaluated))
-        total-hits (reduce + (map :hit-count evaluated))
-        reciprocal-ranks (mapcat (fn [{:keys [ranks]}]
-                                   (map #(if % (/ 1.0 %) 0.0) ranks))
-                                 evaluated)
-        hit-ranks (keep identity (mapcat :ranks evaluated))]
-    {:cases evaluated
-     :case-count (count evaluated)
-     :passed-count (count (filter :passed? evaluated))
-     :recall-at-k (if (zero? total-expected)
-                    1.0
-                    (/ (double total-hits) total-expected))
-     :recall (if (zero? total-expected)
-               1.0
-               (/ (double total-hits) total-expected))
-     :mrr (if (zero? total-expected)
-            1.0
-            (/ (double (reduce + reciprocal-ranks)) total-expected))
-     :mean-rank (when (seq hit-ranks)
-                  (/ (double (reduce + hit-ranks)) (count hit-ranks)))}))
-
 (defn health-check
   [memory-service]
-  (let [prompt (prompt-documents (:prompt-paths memory-service))
-        graph-health (backend-health-check (:graph-backend memory-service))
-        graph-failures (or (some-> memory-service :graph-failures deref)
-                           {:count 0 :recent []})
-        graph-failed? (pos? (:count graph-failures))
-        graph-health* (cond-> graph-health
-                        graph-failed? (assoc :healthy false
-                                             :failures graph-failures))]
-    {:healthy (not graph-failed?)
+  (let [prompt (prompt-documents (:prompt-paths memory-service))]
+    {:healthy true
      :prompt {:document-count (count prompt)
               :paths (mapv :path prompt)}
      :search {:healthy true
@@ -839,5 +431,4 @@
              :count (sqlite/count-memory-facts (:store memory-service))}
      :vault {:healthy true
              :paths (:vault-roots memory-service)
-             :writable (:vault-writable? memory-service)}
-     :graph graph-health*}))
+             :writable (:vault-writable? memory-service)}}))
