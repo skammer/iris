@@ -6,7 +6,7 @@
    [agent.system.events :as events]
    [clojure.java.io :as io]
    [clojure.java.shell :as sh]
-   [clojure.test :refer :all])
+   [clojure.test :refer [deftest is]])
   (:import
    (java.net ServerSocket)))
 

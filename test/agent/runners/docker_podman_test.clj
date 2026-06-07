@@ -2,8 +2,14 @@
   (:require
    [agent.runners.core :as runners]
    [agent.runners.docker-podman :as docker-podman]
+   [clojure.java.io :as io]
    [clojure.string :as str]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
+
+(defn- temp-dir []
+  (.toFile (java.nio.file.Files/createTempDirectory
+            "iris-container-mount-"
+            (make-array java.nio.file.attribute.FileAttribute 0))))
 
 (deftest build-docker-argv-test
   (let [argv (docker-podman/build-container-argv
@@ -12,7 +18,7 @@
                :image "iris:test"
                :working-dir "/workspace"
                :mounts [{:source "/tmp/work" :target "/workspace" :mode :rw}
-                        {:source "/tmp/cache" :target "/cache" :mode :ro}]
+                        {:source "/tmp/cache" :target "/cache" :mode "ro"}]
                :env {"A" "1" "B" "two"}
                :user "1000:1000"
                :command ["clojure" "-M" "-m" "agent.runs.child"]})]
@@ -24,6 +30,7 @@
     (is (some #{"1000:1000"} argv))
     (is (some #{"iris:test"} argv))
     (is (some #{"-v"} argv))
+    (is (some #{"/tmp/cache:/cache:ro"} argv))
     (is (some #{"A=1"} argv))
     (is (= ["clojure" "-M" "-m" "agent.runs.child"] (subvec argv (- (count argv) 4))))))
 
@@ -42,16 +49,18 @@
 
 (deftest docker-runner-rejects-root-user-test
   (let [runner (docker-podman/create-docker-podman-runner)
-        run-spec (runners/create-run-spec
-                  {:run-id "run-root"
-                   :agent-id "agent-root"
-                   :substrate :docker
-                   :runner-options {:image "agent:test"
-                                    :user "0:0"
-                                    :command ["printf" "hello"]}})]
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"must not be root"
-                          (runners/launch runner run-spec)))))
+        root-users ["0" "00" "0:0" "0:1000" "root" "root:1000"]]
+    (doseq [root-user root-users]
+      (let [run-spec (runners/create-run-spec
+                      {:run-id (str "run-root-" root-user)
+                       :agent-id "agent-root"
+                       :substrate :docker
+                       :runner-options {:image "agent:test"
+                                        :user root-user
+                                        :command ["printf" "hello"]}})]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                              #"must not be root"
+                              (runners/launch runner run-spec)))))))
 
 (deftest docker-runner-forwards-bootstrap-env-test
   (let [captured (atom nil)
@@ -65,10 +74,10 @@
         runner (docker-podman/create-docker-podman-runner {:delegate delegate
                                                            :engine-binary "docker"})
         run-spec (runners/create-run-spec
-	                  {:run-id "run-1"
-	                   :agent-id "agent-1"
-	                   :substrate :docker
-	                   :bootstrap-token "token-1"
+                  {:run-id "run-1"
+                   :agent-id "agent-1"
+                   :substrate :docker
+                   :bootstrap-token "token-1"
                    :bootstrap-spec {:run-id "run-1"}
                    :runner-options {:image "iris:test"
                                     :command ["clojure" "-M" "-m" "agent.runs.child"]}})]
@@ -78,3 +87,31 @@
       (is (some #{"AGENT_AGENT_ID=agent-1"} argv))
       (is (some #{"AGENT_BOOTSTRAP_TOKEN=token-1"} argv))
       (is (some #(str/includes? % "AGENT_BOOTSTRAP_SPEC={:run-id \"run-1\"}") argv)))))
+
+(deftest docker-runner-normalizes-string-mount-mode-test
+  (let [mount-dir (temp-dir)]
+    (try
+      (let [captured (atom nil)
+            delegate (reify runners/IRunner
+                       (launch [_ run-spec]
+                         (reset! captured run-spec)
+                         {:ok true})
+                       (signal [_ _ _] nil)
+                       (status [_ _] nil)
+                       (stop [_ _] nil))
+            runner (docker-podman/create-docker-podman-runner {:delegate delegate
+                                                               :engine-binary "docker"})
+            run-spec (runners/create-run-spec
+                      {:run-id "run-mount-mode"
+                       :agent-id "agent-mount-mode"
+                       :substrate :docker
+                       :runner-options {:image "iris:test"
+                                        :mounts [{:source (.getAbsolutePath mount-dir)
+                                                  :target "/cache"
+                                                  :mode "ro"}]
+                                        :command ["printf" "hello"]}})]
+        (runners/launch runner run-spec)
+        (is (some #{(str (.getAbsolutePath mount-dir) ":/cache:ro")}
+                  (get-in @captured [:runner-options :command]))))
+      (finally
+        (io/delete-file mount-dir true)))))

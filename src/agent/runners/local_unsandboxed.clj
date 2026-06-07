@@ -7,17 +7,9 @@
    [clojure.java.io :as io]
    [clojure.string :as str])
   (:import
-   (java.io BufferedReader InputStreamReader)))
+   (java.io BufferedReader IOException InputStreamReader)))
 
 (def ^:private now util/now-str)
-
-(defn- normalize-command [runner-options]
-  (let [command (:command runner-options)]
-    (when-not (and (vector? command) (seq command) (every? string? command))
-      (throw (ex-info "runner-options.command must be a non-empty vector of strings"
-                      {:type :validation-failed
-                       :runner-options runner-options})))
-    command))
 
 (defn- process-pid [^Process process]
   (.pid (.toHandle process)))
@@ -25,33 +17,47 @@
 (defn- process-status [entry]
   (when entry
     (let [^Process process (:process entry)
-          alive? (.isAlive process)]
+          alive? (and process (.isAlive process))]
       {:run-id (:run-id entry)
+       :known true
        :pid (:pid entry)
        :command (:command entry)
        :working-dir (:working-dir entry)
        :started-at (:started-at entry)
+       :finished-at (:finished-at entry)
        :alive alive?
-       :exit-code (when-not alive? (.exitValue process))})))
+       :state (if alive? :running :exited)
+       :exit-code (cond
+                    (:exit-code entry) (:exit-code entry)
+                    (and process (not alive?)) (.exitValue process))})))
+
+(defn- safe-callback [callback & args]
+  (when callback
+    (try
+      (apply callback args)
+      (catch Exception _ nil))))
 
 (defn- consume-lines
   [run-id stream-name input-stream on-output]
   (future
-    (with-open [reader (BufferedReader. (InputStreamReader. input-stream))]
-      (loop []
-        (when-let [line (.readLine reader)]
-          (when on-output
-            (on-output run-id {:stream stream-name
-                               :line line
-                               :captured-at (now)}))
-          (recur))))))
+    (try
+      (with-open [reader (BufferedReader. (InputStreamReader. input-stream))]
+        (loop []
+          (when-let [line (.readLine reader)]
+            (safe-callback on-output
+                           run-id
+                           {:stream stream-name
+                            :line line
+                            :captured-at (now)})
+            (recur))))
+      (catch IOException _ nil))))
 
 (defrecord LocalUnsandboxedRunner [processes on-exit on-output]
   runners/IRunner
   (launch [_ run-spec]
     (let [run-spec (policy/validate-launch-spec run-spec)
           runner-options (:runner-options run-spec)
-          command (normalize-command runner-options)
+          command (:command runner-options)
           working-dir (or (:working-dir runner-options) ".")
           env-extra (or (:env runner-options) {})
           process-builder (ProcessBuilder. command)
@@ -76,14 +82,19 @@
         (swap! processes assoc (:run-id run-spec) entry)
         (future
           (try
-            (.waitFor process*)
-            (swap! processes dissoc (:run-id run-spec))
-            (when on-exit
-              (on-exit (:run-id run-spec)
-                       {:exit-code (.exitValue process*)
-                        :finished-at (now)}))
+            (let [exit-code (.waitFor process*)
+                  finished-at (now)]
+              (swap! processes update (:run-id run-spec)
+                     merge
+                     {:alive false
+                      :exit-code exit-code
+                      :finished-at finished-at})
+              (safe-callback on-exit
+                             (:run-id run-spec)
+                             {:exit-code exit-code
+                              :finished-at finished-at}))
             (finally
-              (swap! processes dissoc (:run-id run-spec)))))
+              nil)))
         (process-status entry))))
   (signal [_ run-id command]
     (if-let [entry (get @processes run-id)]
@@ -107,7 +118,8 @@
   (stop [_ run-id]
     (if-let [entry (get @processes run-id)]
       (let [^Process process (:process entry)]
-        (.destroy process)
+        (when (and process (.isAlive process))
+          (.destroy process))
         {:run-id run-id
          :stopped true})
       {:run-id run-id

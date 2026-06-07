@@ -773,7 +773,8 @@
         recovery (when run
                    (runtime/recovery-plan (:runtime-service system) (:id run)))
         container-contract (when (and run (#{"docker" "podman"} (:substrate run)))
-                             (docker-podman/image-contract (:runner-options run)))
+                             (docker-podman/image-contract
+                              (runner-options/prepare-runner-options system run)))
         output-events (when run
                         (->> (sqlite/list-events (:store system)
                                                 {:entity-type :agent_run

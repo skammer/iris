@@ -3,8 +3,15 @@
   (:require
    [agent.runners.core :as runners]
    [agent.runners.local-unsandboxed :as local-unsandboxed]
-   [agent.runners.policy :as policy]
-   [clojure.string :as str]))
+   [agent.runners.policy :as policy]))
+
+(defn- normalize-mode [mode]
+  (case mode
+    (:ro "ro") :ro
+    (:rw "rw" nil) :rw
+    (throw (ex-info "bubblewrap bind mode must be :ro or :rw"
+                    {:type :validation-failed
+                     :mode mode}))))
 
 (defn build-bwrap-argv
   [{:keys [bwrap-binary binds share-network? working-dir command env]
@@ -19,15 +26,25 @@
                      :command command})))
   (vec
    (concat
-    [bwrap-binary "--die-with-parent" "--new-session" "--proc" "/proc" "--dev" "/dev"]
+    [bwrap-binary
+     "--die-with-parent"
+     "--new-session"
+     "--unshare-user"
+     "--unshare-ipc"
+     "--unshare-pid"
+     "--unshare-uts"
+     "--unshare-cgroup-try"
+     "--proc" "/proc"
+     "--dev" "/dev"
+     "--tmpfs" "/tmp"
+     "--clearenv"]
     (when-not share-network? ["--unshare-net"])
     (mapcat (fn [[k v]] ["--setenv" (name k) (str v)]) env)
     ["--chdir" working-dir]
     (mapcat (fn [{:keys [source target mode]}]
-              (case mode
+              (case (normalize-mode mode)
                 :rw ["--bind" source target]
-                :ro ["--ro-bind" source target]
-                ["--ro-bind" source target]))
+                :ro ["--ro-bind" source target]))
             binds)
     ["--"]
     command)))

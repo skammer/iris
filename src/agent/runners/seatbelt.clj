@@ -75,14 +75,11 @@
         ["(deny network*)"])))))
 
 (defn build-seatbelt-argv
-  [{:keys [sandbox-exec-binary profile-string profile-file profile-name command]
+  [{:keys [sandbox-exec-binary profile-string command]
     :or {sandbox-exec-binary "/usr/bin/sandbox-exec"}}]
   (let [command* (normalize-command command)
-        profile-args (cond
-                       profile-file ["-f" profile-file]
-                       profile-name ["-n" profile-name]
-                       :else ["-p" profile-string])]
-    (when-not (seq (second profile-args))
+        profile-args ["-p" profile-string]]
+    (when-not (seq profile-string)
       (throw (ex-info "seatbelt profile must be provided"
                       {:type :validation-failed})))
     (vec (concat [sandbox-exec-binary] profile-args command*))))
@@ -91,7 +88,7 @@
   runners/IRunner
   (launch [_ run-spec]
     (let [run-spec (policy/validate-launch-spec run-spec)
-        runner-options (:runner-options run-spec)
+          runner-options (:runner-options run-spec)
           host-working-dir (canonical-path (or (:host-working-dir runner-options)
                                                (:working-dir runner-options)
                                                "."))
@@ -104,8 +101,6 @@
                 {:sandbox-exec-binary (or (:sandbox-exec-binary runner-options)
                                           sandbox-exec-binary)
                  :profile-string profile-string
-                 :profile-file (:profile-file runner-options)
-                 :profile-name (:profile-name runner-options)
                  :command (:command runner-options)})]
       (runners/launch delegate
                       (assoc run-spec

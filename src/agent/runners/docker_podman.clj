@@ -28,8 +28,19 @@
     (keyword? value) (name value)
     :else (str value)))
 
+(defn- engine-name [engine-binary]
+  (last (str/split (str engine-binary) #"/")))
+
+(defn- normalize-mode [mode]
+  (case mode
+    (:ro "ro") :ro
+    (:rw "rw" nil) :rw
+    (throw (ex-info "container mount mode must be :ro or :rw"
+                    {:type :validation-failed
+                     :mode mode}))))
+
 (defn- mount-args [{:keys [source target mode]}]
-  (let [suffix (if (= mode :ro) ":ro" "")]
+  (let [suffix (if (= :ro (normalize-mode mode)) ":ro" "")]
     ["-v" (str source ":" target suffix)]))
 
 (defn- env-args [env-map]
@@ -62,9 +73,14 @@
         image* (normalize-image image)]
     (vec
      (concat
-      [engine-binary "run" "--rm" "--name" (container-name (keyword engine-binary) run-id)]
+      [engine-binary "run" "--rm" "--name" (container-name (keyword (engine-name engine-binary)) run-id)]
       (when (some? pull-policy) ["--pull" (normalize-name pull-policy)])
       (when-not share-network? ["--network" "none"])
+      ["--cap-drop" "ALL"
+       "--security-opt" "no-new-privileges"
+       "--pids-limit" "256"
+       "--read-only"
+       "--tmpfs" "/tmp:rw,nosuid,size=512m"]
       ["--user" (or user default-container-user)]
       ["-w" working-dir]
       (mapcat mount-args mounts)

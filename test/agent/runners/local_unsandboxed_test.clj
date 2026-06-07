@@ -2,7 +2,7 @@
   (:require
    [agent.runners.core :as runners]
    [agent.runners.local-unsandboxed :as local-unsandboxed]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (deftest local-unsandboxed-runner-launch-status-stop-test
   (let [exits (promise)
@@ -26,9 +26,10 @@
     (is (number? (:pid launch-result)))
     (is (true? (:alive status-before)))
     (is (some? exit-result))
-    (is (= {:run-id "run-local-test"
-            :known false}
-           status-after))))
+    (is (= "run-local-test" (:run-id status-after)))
+    (is (true? (:known status-after)))
+    (is (false? (:alive status-after)))
+    (is (some? (:exit-code status-after)))))
 
 (deftest local-unsandboxed-runner-captures-stdout-and-stderr-test
   (let [events* (atom [])

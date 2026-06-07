@@ -78,5 +78,5 @@
                    :runner-options {:read-only-paths ["/path/that/does/not/exist"]
                                     :command ["/usr/bin/printf" "hello"]}})]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"seatbelt path must exist"
+                          #"runner host path must exist"
                           (runners/launch runner run-spec)))))
