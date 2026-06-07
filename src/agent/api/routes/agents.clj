@@ -44,10 +44,10 @@
 (def ^:private agent-step-execute-body
   [:map
    [:directives {:optional true} [:vector schemas/Directive]]
-   [:schema-version {:optional true} :any]
-   [:schema_version {:optional true} :any]
+   [:schema-version {:optional true} :string]
+   [:schema_version {:optional true} :string]
    [:state {:optional true} :map]
-   [:receipts {:optional true} [:vector :any]]
+   [:receipts {:optional true} [:vector :map]]
    [:yolo {:optional true} :boolean]
    [:yolo? {:optional true} :boolean]])
 

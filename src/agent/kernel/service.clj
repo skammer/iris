@@ -13,8 +13,8 @@
   kernel-ops/KernelCapabilities
   (supported-directives [_]
     (if (orchestrator/enabled? (:orchestrator system))
-      #{:spawn-worker :tool-call :send-message :state-patch :complete}
-      #{:tool-call}))
+      #{:spawn-worker :tool-call :send-message :state-patch :complete :await}
+      #{:tool-call :await}))
 
   kernel-ops/KernelOps
   (spawn-task-worker! [_ spec]
@@ -28,7 +28,8 @@
   (set-agent-status! [_ agent-id status]
     (orchestrator/set-agent-status! (:orchestrator system) agent-id status))
   (emit-kernel-event! [_ event]
-    ((:event-sink system) event))
+    (when-let [sink (:event-sink system)]
+      (sink event)))
 
   kernel-ops/KernelToolBatchOps
   (execute-agent-tool-batch! [_ agent-id calls context opts]
@@ -38,13 +39,21 @@
   [system]
   (->SystemKernelOps system))
 
-(defn get-agent
+(defn- get-agent!
   [system agent-id]
-  (orchestrator/get-agent (:orchestrator system) agent-id))
+  (or (orchestrator/get-agent (:orchestrator system) agent-id)
+      (throw (ex-info "Agent not found"
+                      {:type :agent-not-found
+                       :agent-id agent-id}))))
 
-(defn spawn-agent!
-  [system spec]
-  (orchestrator/spawn-agent! (:orchestrator system) spec))
+(defn- ensure-orchestrator!
+  [system agent-id]
+  (let [agent (get-agent! system agent-id)]
+    (when-not (= "orchestrator" (:kind agent))
+      (throw (ex-info "Agent is not an orchestrator"
+                      {:type :validation-failed
+                       :agent-id agent-id})))
+    agent))
 
 (defn execute-agent-tool!
   ([system agent-id tool-name input]
@@ -91,143 +100,36 @@
                                                      :budgets budgets
                                                      :system-prompt system-prompt})
         spawn (-> step :directives first :payload)]
-    (spawn-agent! system {:name (:name spawn)
-                          :kind "worker"
-                          :role (:role spawn)
-                          :parent-id parent-id
-                          :system-prompt (:system-prompt spawn)
-                          :capabilities (vec (or (:capabilities capability-bundle) []))
-                          :tool-access (vec (or (:tool-access capability-bundle) []))
-                          :memory-scopes (vec memory-scopes)
-                          :budgets budgets
-                          :task task})))
+    (orchestrator/spawn-agent! (:orchestrator system)
+                               {:name (:name spawn)
+                                :kind "worker"
+                                :role (:role spawn)
+                                :parent-id parent-id
+                                :system-prompt (:system-prompt spawn)
+                                :capabilities (vec (or (:capabilities capability-bundle) []))
+                                :tool-access (vec (or (:tool-access capability-bundle) []))
+                                :memory-scopes (vec memory-scopes)
+                                :budgets budgets
+                                :task task})))
 
 (defn orchestrator-spawn-worker!
   [system orchestrator-agent-id worker-spec]
-  (let [agent (or (get-agent system orchestrator-agent-id)
-                  (throw (ex-info "Agent not found"
-                                  {:type :agent-not-found
-                                   :agent-id orchestrator-agent-id})))]
-    (when-not (= "orchestrator" (:kind agent))
-      (throw (ex-info "Agent is not an orchestrator"
-                      {:type :validation-failed
-                       :agent-id orchestrator-agent-id})))
-    (let [step (kernel/orchestrator-spawn-worker-step
-                {:task (:task worker-spec)
-                 :worker-name (or (:name worker-spec) "Task Worker")
-                 :worker-role (or (:role worker-spec) "worker")
-                 :capability-bundle {:capabilities (or (:capabilities worker-spec) [])
-                                     :tool-access (or (:tool-access worker-spec) [])}
-                 :memory-scopes (or (:memory-scopes worker-spec) [])
-                 :budgets (or (:budgets worker-spec) {})
-                 :system-prompt (:system-prompt worker-spec)})]
-      (execute-step! system orchestrator-agent-id step))))
-
-(defn orchestrator-spawn-worker-direct!
-  [system orchestrator-agent-id worker-spec]
-  (let [agent (or (get-agent system orchestrator-agent-id)
-                  (throw (ex-info "Agent not found"
-                                  {:type :agent-not-found
-                                   :agent-id orchestrator-agent-id})))]
-    (when-not (= "orchestrator" (:kind agent))
-      (throw (ex-info "Agent is not an orchestrator"
-                      {:type :validation-failed
-                       :agent-id orchestrator-agent-id})))
-    (let [step (kernel/orchestrator-spawn-worker-step
-                {:task (:task worker-spec)
-                 :worker-name (or (:name worker-spec) "Task Worker")
-                 :worker-role (or (:role worker-spec) "worker")
-                 :capability-bundle {:capabilities (or (:capabilities worker-spec) [])
-                                     :tool-access (or (:tool-access worker-spec) [])}
-                 :memory-scopes (or (:memory-scopes worker-spec) [])
-                 :budgets (or (:budgets worker-spec) {})
-                 :system-prompt (:system-prompt worker-spec)})
-          spawn (-> step :directives first :payload)
-          worker (spawn-agent! system {:name (:name spawn)
-                                       :kind "worker"
-                                       :role (:role spawn)
-                                       :parent-id orchestrator-agent-id
-                                       :system-prompt (:system-prompt spawn)
-                                       :capabilities (vec (or (:capabilities worker-spec) []))
-                                       :tool-access (vec (or (:tool-access worker-spec) []))
-                                       :memory-scopes (vec (or (:memory-scopes worker-spec) []))
-                                       :budgets (or (:budgets worker-spec) {})
-                                       :task (:task worker-spec)})
-          receipt {:directive :spawn-worker
-                   :status :ok
-                   :worker-id (:id worker)}]
-      ((:event-sink system)
-       {:event-type :agent.kernel.step.executed
-        :entity-type :agent
-        :entity-id orchestrator-agent-id
-        :payload {:directive-count 2
-                  :receipt-count 1
-                  :receipts [receipt]}})
-      {:worker worker
-       :receipts [receipt]})))
-
-(defn list-agents
-  [system]
-  (orchestrator/list-agents (:orchestrator system)))
-
-(defn list-agent-messages
-  [system agent-id]
-  (orchestrator/list-agent-messages (:orchestrator system) agent-id))
+  (ensure-orchestrator! system orchestrator-agent-id)
+  (let [step (kernel/orchestrator-spawn-worker-step
+              {:task (:task worker-spec)
+               :worker-name (or (:name worker-spec) "Task Worker")
+               :worker-role (or (:role worker-spec) "worker")
+               :capability-bundle {:capabilities (or (:capabilities worker-spec) [])
+                                   :tool-access (or (:tool-access worker-spec) [])}
+               :memory-scopes (or (:memory-scopes worker-spec) [])
+               :budgets (or (:budgets worker-spec) {})
+               :system-prompt (:system-prompt worker-spec)})
+        executed (execute-step! system orchestrator-agent-id step)
+        worker-id (some #(when (= :spawn-worker (:directive %)) (:worker-id %))
+                        (:receipts executed))]
+    {:worker (get-agent! system worker-id)
+     :receipts (:receipts executed)}))
 
 (defn send-agent-message!
   [system agent-id message]
   (orchestrator/send-agent-message! (:orchestrator system) (:llm-provider system) agent-id message))
-
-(defn describe-agent-interop
-  [system agent-ref]
-  (orchestrator/describe-agent-interop (:orchestrator system) agent-ref))
-
-(defn register-agent-capabilities!
-  [system agent-ref spec]
-  (orchestrator/register-agent-capabilities! (:orchestrator system) agent-ref spec))
-
-(defn register-federated-peer!
-  [system spec]
-  (orchestrator/register-federated-peer! (:orchestrator system) spec))
-
-(defn list-federated-peers
-  [system]
-  (orchestrator/list-federated-peers (:orchestrator system)))
-
-(defn send-interop-message!
-  [system from-agent-ref to-agent-ref message]
-  (orchestrator/send-interop-message! (:orchestrator system) from-agent-ref to-agent-ref message))
-
-(defn list-interop-messages
-  ([system agent-ref]
-   (orchestrator/list-interop-messages (:orchestrator system) agent-ref))
-  ([system agent-ref opts]
-   (orchestrator/list-interop-messages (:orchestrator system) agent-ref opts)))
-
-(defn acknowledge-interop-message!
-  [system agent-ref message-id opts]
-  (orchestrator/acknowledge-interop-message! (:orchestrator system) agent-ref message-id opts))
-
-(defn retry-interop-message!
-  [system agent-ref message-id]
-  (orchestrator/retry-interop-message! (:orchestrator system) agent-ref message-id))
-
-(defn create-channel!
-  [system spec]
-  (orchestrator/create-channel! (:orchestrator system) spec))
-
-(defn list-channels
-  [system]
-  (orchestrator/list-channels (:orchestrator system)))
-
-(defn list-channel-messages
-  [system channel-id]
-  (orchestrator/list-channel-messages (:orchestrator system) channel-id))
-
-(defn post-channel-message!
-  [system channel-id message]
-  (orchestrator/post-channel-message! (:orchestrator system) channel-id message))
-
-(defn consume-agent-inbox!
-  [system agent-id]
-  (orchestrator/consume-agent-inbox! (:orchestrator system) (:llm-provider system) agent-id))

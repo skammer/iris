@@ -8,6 +8,7 @@
    [agent.llm.core :as llm-core]
    [agent.llm.service :as llm-service]
    [agent.memory.core :as memory]
+   [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
    [agent.runs.service :as runs]
    [agent.runs.registry :as runtime]
@@ -163,11 +164,11 @@
                                           (constantly nil)
                                           store))
                    (assoc-in [:orchestrator :enabled?] true))
-        agent (kernel-service/spawn-agent! system
-                                           {:name "Worker"
-                                            :kind "worker"
-                                            :role "worker"
-                                            :tool-access ["fs"]})]
+        agent (orchestrator/spawn-agent! (:orchestrator system)
+                                         {:name "Worker"
+                                          :kind "worker"
+                                          :role "worker"
+                                          :tool-access ["fs"]})]
     (try
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"approved request"
@@ -276,7 +277,10 @@
 
 (deftest execute-step-produces-receipts
   (let [system (assoc-in (system/create-system) [:orchestrator :enabled?] true)
-        orchestrator (kernel-service/spawn-agent! system {:name "Planner" :kind "orchestrator" :role "orchestrator"})
+        orchestrator (orchestrator/spawn-agent! (:orchestrator system)
+                                                {:name "Planner"
+                                                 :kind "orchestrator"
+                                                 :role "orchestrator"})
         step (agent.kernel/orchestrator-spawn-worker-step
               {:task {:id "task-2"}
                :worker-name "Exec Worker"

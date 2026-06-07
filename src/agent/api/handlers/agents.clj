@@ -6,7 +6,7 @@
    [agent.api.responses :as responses]
    [agent.api.serializers :as ser]
    [agent.api.validation :as v]
-   [agent.kernel :as kernel]
+   [agent.kernel.schema :as kernel-schema]
    [agent.kernel.service :as kernel-service]
    [agent.orchestrator :as orchestrator]
    [clojure.string :as str]))
@@ -115,7 +115,7 @@
         system-prompt (:system_prompt body)]
     (try
       (let [{:keys [worker receipts]}
-            (kernel-service/orchestrator-spawn-worker-direct!
+            (kernel-service/orchestrator-spawn-worker!
              system
              agent-id
              {:task task
@@ -135,29 +135,40 @@
           :validation-failed (throw (errors/api-error 409 "invalid_orchestrator" (.getMessage e)))
           (throw e))))))
 
-(defn- normalize-step-body [body]
-  {:schema-version (or (:schema-version body) (:schema_version body))
-   :state (or (:state body) {})
-   :directives (mapv (fn [directive]
-                       (kernel/directive (keyword (:type directive))
-                                         (or (:payload directive) {})))
-                     (or (:directives body) []))
-   :receipts (vec (or (:receipts body) []))})
+(defn- normalize-step-body
+  [body]
+  (kernel-schema/validate-step!
+   {:schema-version (or (:schema-version body) (:schema_version body))
+    :state (or (:state body) {})
+    :directives (vec (or (:directives body) []))
+    :receipts (vec (or (:receipts body) []))}))
+
+(defn- step-options
+  [system body]
+  (let [explicit-yolo? (or (contains? body :yolo?) (contains? body :yolo))
+        yolo-value (if (contains? body :yolo?)
+                     (:yolo? body)
+                     (:yolo body))]
+    {:yolo? (if explicit-yolo?
+              (true? yolo-value)
+              (true? (get-in system [:config :tools :yolo?])))}))
 
 (defn step-execute [system request agent-id]
   (let [agent (orchestrator/get-agent (:orchestrator system) agent-id)
-        body (h/read-json-body request)
-        step (normalize-step-body body)
-        yolo-override (if (contains? body :yolo?)
-                        (:yolo? body)
-                        (:yolo body))
-        opts {:yolo? (if (or (contains? body :yolo?) (contains? body :yolo))
-                       (true? yolo-override)
-                       (true? (get-in system [:config :tools :yolo?])))}]
+        body (h/read-json-body request)]
     (when-not agent
       (throw (errors/api-error 404 "agent_not_found" "Agent not found")))
-    (responses/json-response 200
-                             {:data (kernel-service/execute-step! system agent-id step opts)})))
+    (try
+      (responses/json-response
+       200
+       {:data (kernel-service/execute-step! system
+                                            agent-id
+                                            (normalize-step-body body)
+                                            (step-options system body))})
+      (catch Exception e
+        (if (= :validation-failed (:type (ex-data e)))
+          (throw (errors/api-error 400 "validation_failed" (.getMessage e) (dissoc (ex-data e) :type)))
+          (throw e))))))
 
 (defn consume-inbox [system _request agent-id]
   (try

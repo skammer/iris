@@ -22,17 +22,20 @@
 
 (deftest directive-schema-validation-test
   (is (= :tool-call
-         (-> {:type "tool-call"
-              :payload {:tool-name "http"
-                        :input {:url "https://example.com"}}}
-             kernel-schema/validate-directive!
-             :type)))
-  (is (map? (kernel-schema/planner-json-schema)))
+	     (-> {:type "tool-call"
+	          :payload {:tool-name "http"
+	                    :input {:url "https://example.com"}}}
+	             kernel-schema/validate-directive!
+	             :type)))
   (is (= kernel-schema/current-step-schema-version
          (:schema-version (kernel-schema/validate-step! {:directives []}))))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo
                         #"directive failed schema validation"
-                        (kernel/directive :tool-call {:input {}}))))
+                        (kernel/directive :tool-call {:input {}})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"directive failed schema validation"
+                        (kernel/directive :spawn-worker {:task {:id "x"}
+                                                         :parent-id "caller-owned"}))))
 
 (deftest tool-call-directives-require-yolo-or-approval-test
   (let [executed (atom [])
@@ -49,7 +52,7 @@
               (set-agent-status! [_ _ _] nil)
               (emit-kernel-event! [_ _] nil)
               kernel-ops/KernelCapabilities
-              (supported-directives [_] #{:tool-call :complete})
+              (supported-directives [_] #{:tool-call :complete :await})
               kernel-ops/KernelToolBatchOps
               (execute-agent-tool-batch! [_ agent-id calls _context _opts]
                 {:results (mapv (fn [idx {:keys [tool-name input id context]}]
@@ -90,7 +93,7 @@
               (set-agent-status! [_ agent-id status] (swap! status-updates conj [agent-id status]))
               (emit-kernel-event! [_ _] nil)
               kernel-ops/KernelCapabilities
-              (supported-directives [_] #{:tool-call}))
+              (supported-directives [_] #{:tool-call :await}))
         receipt (kernel-runtime/execute-directive!
                  ops
                  "agent-1"
@@ -103,3 +106,48 @@
     (is (= :spawn-worker (:directive receipt)))
     (is (= :completed (:status complete)))
     (is (empty? @status-updates))))
+
+(deftest execute-step-emits-redacted-kernel-event-test
+  (let [events (atom [])
+        ops (reify kernel-ops/KernelOps
+              (spawn-task-worker! [_ _] nil)
+              (execute-agent-tool! [_ _ _ _ _] {:secret "result"})
+              (send-agent-message! [_ _ _] nil)
+              (patch-agent-state! [_ _ _] nil)
+              (set-agent-status! [_ _ _] nil)
+              (emit-kernel-event! [_ event] (swap! events conj event))
+              kernel-ops/KernelCapabilities
+              (supported-directives [_] #{:tool-call :complete :await}))
+        step {:schema-version kernel-schema/current-step-schema-version
+              :directives [{:type :tool-call
+                            :payload {:tool-name "http"
+                                      :input {:secret "input"}
+                                      :context {:provider-tool-call-id "call-1"}}}]}]
+    (let [executed (kernel-runtime/execute-step! ops "agent-1" step {:yolo? true})]
+      (is (= {:secret "input"} (get-in executed [:receipts 0 :input])))
+      (is (= {:secret "result"} (get-in executed [:receipts 0 :result]))))
+    (is (= [{:directive :tool-call
+             :status :ok
+             :tool-name "http"
+             :tool-call-id "call-1"}]
+           (get-in (first @events) [:payload :receipts])))))
+
+(deftest tool-batch-result-count-mismatch-fails-test
+  (let [ops (reify kernel-ops/KernelOps
+              (spawn-task-worker! [_ _] nil)
+              (execute-agent-tool! [_ _ _ _ _] nil)
+              (send-agent-message! [_ _ _] nil)
+              (patch-agent-state! [_ _ _] nil)
+              (set-agent-status! [_ _ _] nil)
+              (emit-kernel-event! [_ _] nil)
+              kernel-ops/KernelCapabilities
+              (supported-directives [_] #{:tool-call :await})
+              kernel-ops/KernelToolBatchOps
+              (execute-agent-tool-batch! [_ _ _ _ _]
+                {:results []}))
+        step {:schema-version kernel-schema/current-step-schema-version
+              :directives [{:type :tool-call
+                            :payload {:tool-name "http" :input {:n 1}}}]}]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"Tool batch returned wrong result count"
+                          (kernel-runtime/execute-step! ops "agent-1" step {:yolo? true})))))

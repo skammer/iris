@@ -24,7 +24,7 @@
 (defrecord ChatKernelOps [system session-id request-id extra-context]
   kernel-ops/KernelCapabilities
   (supported-directives [_]
-    #{:tool-call :complete})
+    #{:tool-call :complete :await})
 
   kernel-ops/KernelOps
   (spawn-task-worker! [_ _]

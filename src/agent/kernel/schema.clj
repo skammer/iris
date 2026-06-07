@@ -1,9 +1,8 @@
 (ns agent.kernel.schema
-  "Malli directive contract and planner JSON Schema."
+  "Malli directive contract."
   (:require
    [malli.core :as m]
-   [malli.error :as me]
-   [malli.json-schema :as json-schema]))
+   [malli.error :as me]))
 
 (def directive-types
   #{:spawn-worker :send-message :await :complete :tool-call :state-patch})
@@ -12,14 +11,13 @@
 
 (def spawn-worker-payload-schema
   [:map {:closed true}
-   [:task :any]
+   [:task [:map-of :any :any]]
    [:name {:optional true} [:maybe :string]]
    [:role {:optional true} [:maybe :string]]
-   [:capability-bundle {:optional true} :any]
+   [:capability-bundle {:optional true} [:map-of :any :any]]
    [:memory-scopes {:optional true} [:vector :any]]
-   [:budgets {:optional true} :any]
-   [:system-prompt {:optional true} [:maybe :string]]
-   [:parent-id {:optional true} [:maybe :string]]])
+   [:budgets {:optional true} [:map-of :any :any]]
+   [:system-prompt {:optional true} [:maybe :string]]])
 
 (def await-payload-schema
   [:map {:closed true}
@@ -31,12 +29,12 @@
   [:map {:closed true}
    [:tool-name [:or :string :keyword]]
    [:input :any]
-   [:context {:optional true} :any]])
+   [:context {:optional true} [:map-of :any :any]]])
 
 (def send-message-payload-schema
   [:map {:closed true}
    [:agent-id {:optional true} [:maybe :string]]
-   [:message [:map
+   [:message [:map {:closed true}
               [:content :string]
               [:role {:optional true} [:maybe :string]]]]])
 
@@ -70,9 +68,19 @@
                [:payload complete-payload-schema]]]])
 
 (def receipt-schema
-  [:map
+  [:map {:closed true}
    [:directive [:or :keyword :string]]
-   [:status [:or :keyword :string]]])
+   [:status [:or :keyword :string]]
+   [:reason {:optional true} [:maybe :string]]
+   [:tool-name {:optional true} [:or :keyword :string]]
+   [:tool-call-id {:optional true} [:maybe :string]]
+   [:worker-id {:optional true} [:maybe :string]]
+   [:agent-id {:optional true} [:maybe :string]]
+   [:error-type {:optional true} [:maybe [:or :keyword :string]]]
+   [:input {:optional true} :any]
+   [:result {:optional true} :any]
+   [:response {:optional true} :any]
+   [:state {:optional true} :any]])
 
 (def step-schema
   [:map {:closed true}
@@ -111,9 +119,3 @@
 (defn validate-step!
   [step]
   (validate! step-schema (normalize-step step) :planner-step))
-
-(defn directive-json-schema []
-  (json-schema/transform directive-schema))
-
-(defn planner-json-schema []
-  (json-schema/transform step-schema))

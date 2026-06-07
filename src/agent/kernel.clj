@@ -47,19 +47,3 @@
                              :system-prompt system-prompt})
                  (directive :await
                             {:reason "worker_result"})]}))
-
-(defn normalize-tool-access [tool-access]
-  (cond
-    (nil? tool-access) #{}
-    (set? tool-access) tool-access
-    (vector? tool-access) (set tool-access)
-    :else (throw (ex-info "tool-access must be a vector or set"
-                          {:type :validation-failed
-                           :field :tool-access}))))
-
-(defn allows-tool?
-  [tool-access tool-name]
-  (let [allowed (normalize-tool-access tool-access)]
-    (or (contains? allowed :*)
-        (contains? allowed tool-name)
-        (contains? allowed (keyword tool-name)))))
