@@ -13,10 +13,6 @@
 (def ^:private statuses #{"pending" "in_progress" "completed" "cancelled"})
 (def ^:private priorities #{"high" "medium" "low"})
 
-(defn- bounded-limit [limit]
-  (min max-limit
-       (max 1 (long (if (integer? limit) limit default-limit)))))
-
 (defn- normalized-name [value]
   (cond
     (keyword? value) (name value)
@@ -40,6 +36,11 @@
       (throw (ex-info "Todo item has unsupported keys"
                       {:type :invalid-todo-item
                        :keys (vec unknown)})))
+    (when (str/blank? (or (:content item) ""))
+      (throw (ex-info "Todo item content must be non-blank"
+                      {:type :invalid-todo-item
+                       :field :content
+                       :value (:content item)})))
     (when-not (contains? item :description)
       (throw (ex-info "Todo item description is required"
                       {:type :invalid-todo-item
@@ -49,11 +50,6 @@
                       {:type :invalid-todo-item
                        :field :description
                        :value (:description item)})))
-    (when (str/blank? (or (:content item) ""))
-      (throw (ex-info "Todo item content must be non-blank"
-                      {:type :invalid-todo-item
-                       :field :content
-                       :value (:content item)})))
     {:content (:content item)
      :description (:description item)
      :status (normalize-enum :status statuses "pending" item)
@@ -63,18 +59,27 @@
   (let [slug* (str/trim (or slug ""))]
     (if (str/blank? slug*) "default" slug*)))
 
-(defn- row->todo-list
-  [{:keys [id thread_id slug description todos_json metadata_json created_at updated_at]}]
+(defn- row->todo-item [{:keys [content description status priority]}]
+  {:content content
+   :description description
+   :status status
+   :priority priority})
+
+(defn- list-items* [conn list-id]
+  (mapv row->todo-item
+        (common/select-many conn (list-items-sqlvec {:list_id list-id}) identity)))
+
+(defn- row->todo-list [conn {:keys [id thread_id slug description metadata_json created_at updated_at]}]
   {:id id
    :thread-id thread_id
    :slug slug
    :description (or description "")
-   :todos (mapv normalize-item (or (common/parse-json-string todos_json) []))
+   :todos (list-items* conn id)
    :metadata (or (common/parse-json-string metadata_json) {})
    :created-at created_at
    :updated-at updated_at})
 
-(defn- list-row [{:keys [id thread-id slug description todos metadata created-at]}]
+(defn- list-row [{:keys [id thread-id slug description metadata created-at]}]
   (when (str/blank? (or thread-id ""))
     (throw (ex-info "thread-id is required"
                     {:type :invalid-todo-list
@@ -89,34 +94,49 @@
      :thread_id thread-id
      :slug (normalize-slug slug)
      :description (or description "")
-     :todos_json (common/json-string (mapv normalize-item (or todos [])))
      :metadata_json (common/json-string (or metadata {}))
      :created_at (or created-at now)
      :updated_at now}))
 
-(defn save-list! [store todo-list]
+(defn- item-row [list-id position item now]
+  (merge {:id (common/uuid-str)
+          :list_id list-id
+          :position position
+          :created_at now
+          :updated_at now}
+         (normalize-item item)))
+
+(defn- replace-items! [conn list-id todos now]
+  (common/execute! conn (delete-list-items-sqlvec {:list_id list-id}))
+  (doseq [[position item] (map-indexed vector todos)]
+    (common/execute! conn (insert-list-item-sqlvec (item-row list-id position item now)))))
+
+(defn save-list! [store {:keys [todos] :as todo-list}]
   (let [row (list-row todo-list)]
     (common/with-transaction
       store
       (fn [conn]
-        (if-let [existing (common/select-one conn (get-list-sqlvec row) row->todo-list)]
+        (if-let [existing (common/select-one conn (get-list-sqlvec row) identity)]
           (let [row* (assoc row
                             :id (:id existing)
-                            :created_at (:created-at existing))]
+                            :created_at (:created_at existing))]
             (common/execute! conn (update-list-sqlvec row*))
-            (assoc (row->todo-list row*) :created? false))
+            (replace-items! conn (:id row*) (or todos []) (:updated_at row*))
+            (assoc (row->todo-list conn row*) :created? false))
           (do
             (common/execute! conn (insert-list-sqlvec row))
-            (assoc (row->todo-list row) :created? true)))))))
+            (replace-items! conn (:id row) (or todos []) (:updated_at row))
+            (assoc (row->todo-list conn row) :created? true)))))))
 
 (defn get-list [store {:keys [thread-id slug]}]
   (common/with-connection
     store
     (fn [conn]
-      (common/select-one conn
-                         (get-list-sqlvec {:thread_id thread-id
-                                            :slug (normalize-slug slug)})
-                         row->todo-list))))
+      (some->> (common/select-one conn
+                                  (get-list-sqlvec {:thread_id thread-id
+                                                    :slug (normalize-slug slug)})
+                                  identity)
+               (row->todo-list conn)))))
 
 (defn list-lists
   ([store] (list-lists store {}))
@@ -124,10 +144,11 @@
    (common/with-connection
      store
      (fn [conn]
-       (common/select-many conn
-                           (list-lists-sqlvec {:thread_id thread-id
-                                               :limit (bounded-limit limit)})
-                           row->todo-list)))))
+       (mapv #(row->todo-list conn %)
+             (common/select-many conn
+                                 (list-lists-sqlvec {:thread_id thread-id
+                                                     :limit (common/bounded-limit limit default-limit max-limit)})
+                                 identity))))))
 
 (defn search-lists
   ([store query] (search-lists store query {}))
@@ -138,13 +159,13 @@
          params {:thread_id thread-id
                  :query fts-query
                  :needle needle
-                 :limit (bounded-limit limit)}]
+                 :limit (common/bounded-limit limit default-limit max-limit)}]
      (if (str/blank? (or query ""))
        []
        (common/with-connection
          store
          (fn [conn]
-           (mapv row->todo-list
+           (mapv #(row->todo-list conn %)
                  (common/select-many conn
                                      (if fts-query
                                        (search-lists-fts-sqlvec params)

@@ -37,15 +37,6 @@ set subject = :subject,
     updated_at = :updated_at
 where id = :id
 
--- :name get-fact :? :1
-select id, scope_type, scope_id, subject, predicate, object,
-       normalized_subject, normalized_predicate, normalized_object,
-       source_session_id, source_message_ids_json, source_request_id,
-       confidence, status, metadata_json, created_at, updated_at
-from memory_facts
-where id = :id
-limit 1
-
 -- :name remove-fact-by-id :! :n
 update memory_facts
 set status = 'removed',
@@ -131,12 +122,3 @@ limit :limit
 select count(*) as n
 from memory_facts
 where status = 'active'
-
--- :name list-facts :? :*
-select id, scope_type, scope_id, subject, predicate, object,
-       normalized_subject, normalized_predicate, normalized_object,
-       source_session_id, source_message_ids_json, source_request_id,
-       confidence, status, metadata_json, created_at, updated_at
-from memory_facts
-where (:status is null or status = :status)
-order by updated_at desc

@@ -87,17 +87,47 @@
    :created-at created_at
    :updated-at updated_at})
 
+(def ^:private run-statuses #{"requested" "launched" "running" "completed" "failed" "cancelled" "expired"})
+(def ^:private command-statuses #{"pending" "acknowledged" "completed" "failed" "cancelled"})
+(def ^:private activity-statuses #{"running" "completed" "failed" "cancelled"})
+
+(defn- valid-status! [allowed field status]
+  (let [status* (common/normalize-name status)]
+    (when-not (contains? allowed status*)
+      (throw (ex-info (str "Invalid " (name field))
+                      {:type :invalid-agent-run-state
+                       :field field
+                       :value status
+                       :allowed allowed})))
+    status*))
+
+(defn- maybe-status! [allowed field status]
+  (some->> status (valid-status! allowed field)))
+
+(defn- present-flag [updates k]
+  (if (contains? updates k) 1 0))
+
 (defn- run-update-params [run-id updates]
   (merge {:id run-id
+          :status_set 0
           :status nil
+          :lease_id_set 0
           :lease_id nil
+          :network_identity_json_set 0
           :network_identity_json nil
+          :capabilities_json_set 0
           :capabilities_json nil
+          :bootstrap_spec_json_set 0
           :bootstrap_spec_json nil
+          :runner_metadata_json_set 0
           :runner_metadata_json nil
+          :runner_options_json_set 0
           :runner_options_json nil
+          :last_error_set 0
           :last_error nil
+          :started_at_set 0
           :started_at nil
+          :finished_at_set 0
           :finished_at nil}
          updates))
 
@@ -122,7 +152,7 @@
              :lease_id lease-id
              :name name
              :substrate (common/normalize-name substrate)
-             :status (common/normalize-name status)
+             :status (valid-status! run-statuses :status status)
              :capabilities_json (common/json-string capabilities)
              :network_identity_json (common/json-string network-identity)
              :bootstrap_token bootstrap-token
@@ -166,13 +196,13 @@
      (fn [conn]
        (mapv row->run
              (common/select-many conn
-                                 (list-agent-runs-sqlvec {:status status
+                                 (list-agent-runs-sqlvec {:status (maybe-status! run-statuses :status status)
                                                           :parent_run_id parent-run-id
-                                                          :limit limit})
+                                                          :limit (common/bounded-limit limit)})
                                  identity))))))
 
 (defn update-agent-run! [store run-id updates]
-  (let [status (some-> (:status updates) common/normalize-name)
+  (let [status (maybe-status! run-statuses :status (:status updates))
         started-at (or (:started-at updates)
                        (when (= status "running") (common/now-str)))
         finished-at (or (:finished-at updates)
@@ -185,20 +215,30 @@
                                        (update-agent-run-sqlvec
                                          (run-update-params
                                            run-id
-                                           {:status status
+                                           {:status_set (present-flag updates :status)
+                                            :status status
+                                            :lease_id_set (present-flag updates :lease-id)
                                             :lease_id (:lease-id updates)
+                                            :network_identity_json_set (present-flag updates :network-identity)
                                             :network_identity_json (when (contains? updates :network-identity)
                                                                      (common/json-string (:network-identity updates)))
+                                            :capabilities_json_set (present-flag updates :capabilities)
                                             :capabilities_json (when (contains? updates :capabilities)
                                                                  (common/json-string (:capabilities updates)))
+                                            :bootstrap_spec_json_set (present-flag updates :bootstrap-spec)
                                             :bootstrap_spec_json (when (contains? updates :bootstrap-spec)
                                                                    (common/json-string (:bootstrap-spec updates)))
+                                            :runner_metadata_json_set (present-flag updates :runner-metadata)
                                             :runner_metadata_json (when (contains? updates :runner-metadata)
                                                                     (common/json-string (:runner-metadata updates)))
+                                            :runner_options_json_set (present-flag updates :runner-options)
                                             :runner_options_json (when (contains? updates :runner-options)
                                                                    (common/json-string (:runner-options updates)))
+                                            :last_error_set (present-flag updates :last-error)
                                             :last_error (:last-error updates)
+                                            :started_at_set (if started-at 1 0)
                                             :started_at started-at
+                                            :finished_at_set (if finished-at 1 0)
                                             :finished_at finished-at})))]
           (when (zero? updated)
             (throw (ex-info "Agent run not found" {:type :run-not-found
@@ -217,9 +257,10 @@
      store
      (fn [conn]
        (common/execute! conn (create-agent-run-lease-sqlvec lease))
-        (let [updated (common/execute! conn
+       (let [updated (common/execute! conn
                                       (update-agent-run-sqlvec
-                                        (run-update-params run-id {:lease_id (:id lease)})))]
+                                       (run-update-params run-id {:lease_id_set 1
+                                                                 :lease_id (:id lease)})))]
          (when (zero? updated)
            (throw (ex-info "Agent run not found"
                            {:type :run-not-found
@@ -265,7 +306,7 @@
 (defn record-agent-run-heartbeat! [store {:keys [run-id sequence-no status metrics]}]
   (let [heartbeat {:run_id run-id
                    :sequence_no sequence-no
-                   :status (common/normalize-name status)
+                   :status (maybe-status! run-statuses :status status)
                    :metrics_json (common/json-string metrics)
                    :observed_at (common/now-str)}]
     (common/with-connection
@@ -309,7 +350,7 @@
              (common/select-many conn
                                  (list-agent-run-heartbeats-sqlvec {:run_id run-id
                                                                     :since_sequence since-sequence
-                                                                    :limit limit})
+                                                                    :limit (common/bounded-limit limit)})
                                  identity))))))
 
 (defn enqueue-agent-run-command! [store {:keys [run-id command-type payload request-id]
@@ -347,9 +388,9 @@
        (mapv row->command
              (common/select-many conn
                                  (list-agent-run-commands-sqlvec {:run_id run-id
-                                                                  :status status
+                                                                  :status (maybe-status! command-statuses :status status)
                                                                   :request_id request-id
-                                                                  :limit limit})
+                                                                  :limit (common/bounded-limit limit)})
                                  identity))))))
 
 (defn count-pending-agent-run-commands [store]
@@ -368,7 +409,7 @@
               row->command))))
 
 (defn update-agent-run-command! [store command-id {:keys [status error response]}]
-  (let [status* (some-> status common/normalize-name)
+  (let [status* (maybe-status! command-statuses :status status)
         now* (common/now-str)
         acknowledged-at (when (= status* "acknowledged") now*)
         completed-at (when (contains? #{"completed" "failed" "cancelled"} status*) now*)
@@ -440,7 +481,7 @@
              (common/select-many conn
                                  (list-agent-run-checkpoints-sqlvec {:run_id run-id
                                                                      :since_sequence since-sequence
-                                                                     :limit limit})
+                                                                     :limit (common/bounded-limit limit)})
                                  identity))))))
 
 (defn count-agent-runs [store]
@@ -477,7 +518,7 @@
 
 (defn complete-agent-run-activity!
   [store activity-key {:keys [status result error]}]
-  (let [status* (common/normalize-name status)]
+  (let [status* (valid-status! activity-statuses :status status)]
     (common/with-connection
       store
       (fn [conn]
@@ -493,17 +534,3 @@
             (throw (ex-info "Activity not found" {:type :activity-not-found
                                                   :activity-key activity-key}))))))
     (get-agent-run-activity store activity-key)))
-
-(defn list-agent-run-activities
-  ([store run-id] (list-agent-run-activities store run-id {}))
-  ([store run-id {:keys [command-id limit] :or {limit 100}}]
-   (common/with-connection
-     store
-     (fn [conn]
-       (mapv row->activity
-             (common/select-many conn
-                                 (list-agent-run-activities-sqlvec
-                                  {:run_id run-id
-                                   :command_id command-id
-                                   :limit limit})
-                                 identity))))))

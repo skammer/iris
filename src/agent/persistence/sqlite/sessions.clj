@@ -276,15 +276,15 @@
        store
        (fn [conn]
          (mapv row->search-message
-               (common/select-many conn
-                                   (if fts-query
-                                     (search-messages-fts-sqlvec {:query fts-query
-                                                                   :session_id session-id
-                                                                   :limit limit})
-                                     (search-messages-like-sqlvec {:needle (str "%" (or query "") "%")
-                                                                    :session_id session-id
-                                                                    :limit limit}))
-                                   identity)))))))
+	               (common/select-many conn
+	                                   (if fts-query
+	                                     (search-messages-fts-sqlvec {:query fts-query
+	                                                                   :session_id session-id
+	                                                                   :limit (common/bounded-limit limit 20 100)})
+	                                     (search-messages-like-sqlvec {:needle (str "%" (or query "") "%")
+	                                                                    :session_id session-id
+	                                                                    :limit (common/bounded-limit limit 20 100)}))
+	                                   identity)))))))
 
 (defn log-completion! [store {:keys [session-id provider model prompt response]}]
   (let [completion {:session_id session-id
@@ -444,15 +444,6 @@
                            :update_id (long update-id)})
                          identity))))
 
-(defn migrate-messages-to-entries! [store]
-  (common/with-transaction
-    store
-    (fn [conn]
-      (let [inserted (common/execute! conn (insert-missing-message-entries-sqlvec))
-            leaves (common/execute! conn (upsert-missing-session-leaves-sqlvec))]
-        {:inserted inserted
-         :leaf-selections leaves}))))
-
 (defn append-entry!
   ([store session-id type payload]
    (append-entry! store session-id {:type type :payload payload}))
@@ -506,16 +497,6 @@
             (common/select-many conn
                                 (list-session-entries-sqlvec {:session_id session-id})
                                 identity)))))
-
-(defn get-entry [store session-id entry-id]
-  (common/with-connection
-    store
-    (fn [conn]
-      (some-> (common/select-one conn
-                                 (get-session-entry-sqlvec {:session_id session-id
-                                                            :id entry-id})
-                                 identity)
-              row->entry))))
 
 (defn leaf-entry [store session-id]
   (common/with-connection
@@ -611,11 +592,11 @@
 (defn current-llm-context
   ([store session-id] (current-llm-context store session-id nil))
   ([store session-id {:keys [include-entry-id?]}]
-   (let [entries (branch-path store session-id)
-         compaction-entry (latest-compaction entries)
-         entries* (entries-after-compaction-cut entries compaction-entry)
-         summary-message (compaction-summary-message compaction-entry)]
-     (let [messages (vec (keep #(entry->llm-message % include-entry-id?) entries*))]
-       (if summary-message
-         (vec (cons summary-message messages))
-         messages)))))
+	   (let [entries (branch-path store session-id)
+	         compaction-entry (latest-compaction entries)
+	         entries* (entries-after-compaction-cut entries compaction-entry)
+	         summary-message (compaction-summary-message compaction-entry)
+	         messages (vec (keep #(entry->llm-message % include-entry-id?) entries*))]
+	     (if summary-message
+	       (vec (cons summary-message messages))
+	       messages))))

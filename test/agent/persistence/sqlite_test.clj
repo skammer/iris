@@ -1,7 +1,6 @@
 (ns agent.persistence.sqlite-test
   (:require
    [agent.persistence.sqlite.common :as sqlite-common]
-   [agent.persistence.sqlite.migrations :as migrations]
    [agent.persistence.sqlite :as sqlite]
    [clojure.java.io :as io]
    [clojure.test :refer [deftest is]])
@@ -38,7 +37,7 @@
     (is (= "session.created" (:event-type (first events))))
     (is (= "hello" (:content (first messages))))
     (is (= sqlite/latest-schema-version (sqlite/schema-version store)))
-    (is (= (range 1 (inc sqlite/latest-schema-version)) (mapv :version history)))
+    (is (= [sqlite/latest-schema-version] (mapv :version history)))
     (is (true? (:healthy health)))
     (is (= 1 (get-in health [:details :event-count])))
     (is (= 0 (get-in health [:details :tool-approval-count])))
@@ -100,7 +99,7 @@
       (finally
         (io/delete-file path true)))))
 
-(deftest sqlite-upgrades-unversioned-legacy-db-test
+(deftest sqlite-rejects-unversioned-existing-schema-test
   (let [path (temp-db-path)]
     (Class/forName "org.sqlite.JDBC")
     (with-open [conn (DriverManager/getConnection (sqlite/jdbc-url path))]
@@ -126,15 +125,14 @@
                           response TEXT,
                           created_at TEXT NOT NULL
                         );")))
-      (let [store (sqlite/create-store {:path path})
-          health (sqlite/health-check store)
-          history (sqlite/migration-history store)
-          session (sqlite/create-session! store "migrated")]
-      (is (= sqlite/latest-schema-version (sqlite/schema-version store)))
-      (is (= (range 1 (inc sqlite/latest-schema-version)) (mapv :version history)))
-      (is (true? (:healthy health)))
-      (is (true? (get-in health [:details :up-to-date?])))
-      (is (string? (:id session))))
+    (let [err (try
+                (sqlite/create-store {:path path})
+                nil
+                (catch clojure.lang.ExceptionInfo e
+                  e))]
+      (is (some? err))
+      (is (= :migration-drift (:type (ex-data err))))
+      (is (= :unversioned-schema (:reason (ex-data err)))))
     (io/delete-file path true)))
 
 (deftest sqlite-migration-drift-reports-reset-files-test
@@ -185,50 +183,18 @@
       (sqlite/close-store! store))
     (io/delete-file path true)))
 
-(deftest sqlite-migration-checksum-detects-edited-applied-sql-test
+(deftest sqlite-foreign-keys-are-enforced-test
   (let [path (temp-db-path)
-        descriptors-var #'migrations/migration-descriptors
-        original-descriptors @descriptors-var]
+        store (sqlite/create-store {:path path})]
     (try
-      (let [store (sqlite/create-store {:path path})]
-        (sqlite/close-store! store))
-      (alter-var-root descriptors-var
-                      (fn [descriptors]
-                        (update-in descriptors
-                                   [0 :up]
-                                   conj
-                                   "CREATE TABLE edited_applied_migration_probe (id TEXT);")))
       (let [err (try
-                  (sqlite/create-store {:path path})
+                  (sqlite/append-message! store "missing-session" "user" "hello")
                   nil
-                  (catch clojure.lang.ExceptionInfo e
+                  (catch java.sql.SQLException e
                     e))]
-        (is (some? err))
-        (is (= :migration-drift (:type (ex-data err))))
-        (is (= 1 (:version (ex-data err)))))
+        (is (some? err)))
       (finally
-        (alter-var-root descriptors-var (constantly original-descriptors))
-        (io/delete-file path true)))))
-
-(deftest sqlite-migration-legacy-checksum-backfills-test
-  (let [path (temp-db-path)]
-    (try
-      (let [store (sqlite/create-store {:path path})]
-        (sqlite/close-store! store))
-      (with-open [conn (DriverManager/getConnection (sqlite/jdbc-url path))
-                  stmt (.prepareStatement conn
-                                         "UPDATE schema_migration_meta
-                                          SET checksum = ?
-                                          WHERE version = ?")]
-        (.setString stmt 1 "d846e9929ae182da")
-        (.setInt stmt 2 1)
-        (.executeUpdate stmt))
-      (let [store (sqlite/create-store {:path path})
-            version-one (first (sqlite/migration-history store))]
-        (is (re-matches #"[0-9a-f]{16}" (:checksum version-one)))
-        (is (not= "d846e9929ae182da" (:checksum version-one)))
-        (sqlite/close-store! store))
-      (finally
+        (sqlite/close-store! store)
         (io/delete-file path true)))))
 
 (deftest sqlite-select-value-returns-first-column-test
@@ -299,7 +265,12 @@
         (is (not= before-updated-at (:updated-at updated)))
         (is (= "FTS note retained" (get-in found [:todos 0 :description])))
         (is (= ["default"] (mapv :slug search-results)))
-        (is (= 1 (sqlite/count-todo-lists store))))
+        (is (= 1 (sqlite/count-todo-lists store)))
+        (with-open [conn (DriverManager/getConnection (sqlite/jdbc-url path))
+                    stmt (.createStatement conn)
+                    rs (.executeQuery stmt "SELECT count(*) FROM todo_items")]
+          (.next rs)
+          (is (= 1 (.getInt rs 1)))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))

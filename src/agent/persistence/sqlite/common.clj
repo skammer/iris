@@ -72,19 +72,24 @@
           (recur))
         false))))
 
-(defn get-user-version [^Connection conn]
-  (with-open [stmt (.prepareStatement conn "PRAGMA user_version")
-              rs (.executeQuery stmt)]
-    (.next rs)
-    (.getInt rs 1)))
-
 (defn set-user-version! [^Connection conn version]
   (execute-ddl! conn (str "PRAGMA user_version = " (int version))))
 
+(def default-limit 100)
+(def max-limit 1000)
+
+(defn bounded-limit
+  ([limit] (bounded-limit limit default-limit max-limit))
+  ([limit default maximum]
+   (let [limit* (if (and (integer? limit) (pos? limit))
+                  limit
+                  default)]
+     (long (min maximum (max 1 limit*))))))
+
 (defn create-datasource
   [{:keys [path maximum-pool-size minimum-idle connection-timeout-ms pool-name]
-    :or {maximum-pool-size 8
-         minimum-idle 2
+    :or {maximum-pool-size 2
+         minimum-idle 0
          connection-timeout-ms 30000}}]
   (ensure-parent-dir! path)
   (let [config (doto (HikariConfig.)
@@ -103,6 +108,7 @@
   (execute-ddl! conn (str "PRAGMA busy_timeout=" (or (:busy-timeout-ms store)
                                                      default-busy-timeout-ms)
                           ";"))
+  (execute-ddl! conn "PRAGMA foreign_keys=ON;")
   conn)
 
 (defn- transient-sqlite-error? [^Throwable ex]

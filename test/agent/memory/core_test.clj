@@ -163,7 +163,6 @@
         (is (= 2 (:removed-count reset)))
         (is (= :hard-delete (:mode reset)))
         (is (zero? (sqlite/count-memory-facts store)))
-        (is (empty? (sqlite/list-memory-facts store)))
         (is (empty? (memory/search-facts service "" {:all-scopes? true})))
         (is (= message-count (count (sqlite/list-messages store (:id session)))))
         (is (= (inc before-event-count) (count after-events)))

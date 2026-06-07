@@ -12,6 +12,14 @@
       str/lower-case
       (str/replace #"\s+" " ")))
 
+(defn- nonblank! [field value]
+  (when (str/blank? (or value ""))
+    (throw (ex-info (str "Memory fact " (name field) " must be non-blank")
+                    {:type :invalid-memory-fact
+                     :field field
+                     :value value})))
+  value)
+
 (defn normalize-scope [{:keys [scope scope-type scope-id session-id agent-id]}]
   (let [scope* (or scope
                    (cond
@@ -48,9 +56,9 @@
 (defn- fact-row [fact]
   (let [{:keys [scope-type scope-id]} (normalize-scope fact)
         now (common/now-str)
-        subject (:subject fact)
-        predicate (:predicate fact)
-        object (:object fact)]
+        subject (nonblank! :subject (:subject fact))
+        predicate (nonblank! :predicate (:predicate fact))
+        object (nonblank! :object (:object fact))]
     {:id (or (:id fact) (common/uuid-str))
      :scope_type scope-type
      :scope_id scope-id
@@ -112,16 +120,10 @@
                :created? false
                :similar-duplicate? true)))))
 
-(defn get-fact [store id]
-  (common/with-connection
-    store
-    (fn [conn]
-      (common/select-one conn (get-fact-sqlvec {:id id}) row->fact))))
-
 (defn remove-fact! [store {:keys [id] :as fact}]
-  (let [row (fact-row fact)
+  (let [row (when-not id (fact-row fact))
         now (common/now-str)
-        params (assoc row :updated_at now)
+        params (when row (assoc row :updated_at now))
         removed (common/with-transaction
                   store
                   (fn [conn]
@@ -133,8 +135,9 @@
      :subject (:subject fact)
      :predicate (:predicate fact)
      :object (:object fact)
-     :scope {:type (:scope_type row)
-             :id (:scope_id row)}
+     :scope (when row
+              {:type (:scope_type row)
+               :id (:scope_id row)})
      :removed-count removed
      :removed? (pos? (long removed))
      :updated-at now}))
@@ -157,8 +160,8 @@
          {:keys [scope-type scope-id]} (normalize-scope opts)
          params {:needle (when-not (str/blank? (or query ""))
                            (str "%" query "%"))
-                 :query fts-query
-                 :limit limit
+                :query fts-query
+                :limit (common/bounded-limit limit 20 100)
                  :include_global (if include-global? 1 0)
                  :scope_type scope-type
                  :scope_id scope-id}]
@@ -181,14 +184,3 @@
     store
     (fn [conn]
       (some-> (common/select-one conn (count-facts-sqlvec) identity) :n int))))
-
-(defn list-facts
-  ([store] (list-facts store {}))
-  ([store opts]
-   (common/with-connection
-     store
-     (fn [conn]
-       (mapv row->fact
-             (common/select-many conn
-                                 (list-facts-sqlvec {:status (:status opts)})
-                                 identity))))))

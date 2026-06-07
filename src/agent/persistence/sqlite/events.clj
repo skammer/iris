@@ -1,11 +1,16 @@
 (ns agent.persistence.sqlite.events
   (:require
    [agent.persistence.sqlite.common :as common]
+   [clojure.string :as str]
    [hugsql.core :as hugsql]))
 
 (hugsql/def-sqlvec-fns "agent/persistence/sqlite/events.sql")
 
 (defn log-event! [store {:keys [event-type entity-type entity-id request-id payload created-at]}]
+  (when (str/blank? (common/normalize-name event-type))
+    (throw (ex-info "event-type is required"
+                    {:type :invalid-event
+                     :field :event-type})))
   (let [event {:event_type (common/normalize-name event-type)
                :entity_type (common/normalize-name entity-type)
                :entity_id entity-id
@@ -46,7 +51,7 @@
                                                       :event_type (common/normalize-name event-type)
                                                       :request_id request-id
                                                       :after_id after-id
-                                                      :limit limit})
+                                                      :limit (common/bounded-limit limit)})
                                  identity))))))
 
 (defn search-events
@@ -62,11 +67,11 @@
                                      (search-events-fts-sqlvec {:query fts-query
                                                                  :entity_type (common/normalize-name entity-type)
                                                                  :entity_id entity-id
-                                                                 :limit limit})
+                                                                 :limit (common/bounded-limit limit 20 100)})
                                      (search-events-like-sqlvec {:needle (str "%" (or query "") "%")
                                                                   :entity_type (common/normalize-name entity-type)
                                                                   :entity_id entity-id
-                                                                  :limit limit}))
+                                                                  :limit (common/bounded-limit limit 20 100)}))
                                    identity)))))))
 
 (defn count-events [store]

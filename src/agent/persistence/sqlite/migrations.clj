@@ -1,6 +1,8 @@
 (ns agent.persistence.sqlite.migrations
   (:require
    [agent.persistence.sqlite.common :as common]
+   [clojure.java.io :as io]
+   [clojure.string :as str]
    [ragtime.core :as ragtime]
    [ragtime.protocols :as ragtime-protocols]
    [ragtime.strategy :as ragtime-strategy])
@@ -8,603 +10,96 @@
    (java.nio.charset StandardCharsets)
    (java.security MessageDigest)))
 
-(def latest-schema-version 20)
+(def latest-schema-version 1)
 
 (def ^:private metadata-table "schema_migration_meta")
 
-(def ^:private legacy-descriptor-checksums
-  {1 "d846e9929ae182da"
-   2 "9d6f286ca4525909"
-   3 "bad410b46446a4ff"
-   4 "f6076f1a97ddf2e0"
-   5 "28efe801a91772fd"
-   6 "4f9294070efb6b52"
-   7 "d715b4ea611c879e"
-   8 "11c3e7e33dfb0c2"
-   9 "7bf4270de8c46bd8"
-   10 "366f6a2322665cc9"
-   11 "f5a70d2e197b3f1"
-   12 "8c3e2b2d4a5f1201"
-   13 "b35b0839c3f4b987"
-   14 "d8b29a4f61c83e21"
-   15 "a7c4f9b2e1d83056"
-   16 "4d0bd0466cdb7f19"
-   17 "6d1b71d94f8c2a03"
-   18 "f4d67d91a6c0e2b8"
-   19 "39ef97d9e734fca1"
-   20 "c4b48d06d3b5a820"})
-
-(def ^:private migration-descriptors
+(def migration-descriptors
   [{:version 1
-    :id "1"
-    :name "initial-schema"
-    :irreversible? true
-    :up ["CREATE TABLE IF NOT EXISTS sessions (
-            id TEXT PRIMARY KEY,
-            title TEXT,
-            created_at TEXT NOT NULL
-          );"
-         "CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(session_id) REFERENCES sessions(id)
-          );"
-         "CREATE INDEX IF NOT EXISTS idx_messages_session_created
-          ON messages(session_id, created_at);"
-         "CREATE TABLE IF NOT EXISTS completions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT,
-            provider TEXT NOT NULL,
-            model TEXT,
-            prompt TEXT,
-            response TEXT,
-            created_at TEXT NOT NULL
-          );"]}
-   {:version 2
-    :id "2"
-    :name "completion-created-index"
-    :irreversible? true
-    :up ["CREATE INDEX IF NOT EXISTS idx_completions_created
-          ON completions(created_at);"]}
-   {:version 3
-    :id "3"
-    :name "event-log"
-    :irreversible? true
-    :up ["CREATE TABLE IF NOT EXISTS agent_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_type TEXT NOT NULL,
-            entity_type TEXT,
-            entity_id TEXT,
-            request_id TEXT,
-            payload TEXT,
-            created_at TEXT NOT NULL
-          );"
-         "CREATE INDEX IF NOT EXISTS idx_agent_events_created
-          ON agent_events(created_at DESC);"
-         "CREATE INDEX IF NOT EXISTS idx_agent_events_entity
-          ON agent_events(entity_type, entity_id, created_at DESC);"
-         "CREATE INDEX IF NOT EXISTS idx_agent_events_request
-          ON agent_events(request_id, created_at DESC);"]}
-   {:version 4
-    :id "4"
-    :name "tool-approvals"
-    :irreversible? true
-    :up ["CREATE TABLE IF NOT EXISTS tool_approvals (
-            id TEXT PRIMARY KEY,
-            tool_name TEXT NOT NULL,
-            status TEXT NOT NULL,
-            input_json TEXT NOT NULL,
-            requested_by TEXT,
-            reason TEXT,
-            actor TEXT,
-            decision_reason TEXT,
-            created_at TEXT NOT NULL,
-            decided_at TEXT
-          );"
-         "CREATE INDEX IF NOT EXISTS idx_tool_approvals_status_created
-          ON tool_approvals(status, created_at DESC);"
-         "CREATE INDEX IF NOT EXISTS idx_tool_approvals_tool_created
-          ON tool_approvals(tool_name, created_at DESC);"]}
-   {:version 5
-    :id "5"
-    :name "distributed-run-registry"
-    :irreversible? true
-    :up ["CREATE TABLE IF NOT EXISTS agent_runs (
-            id TEXT PRIMARY KEY,
-            agent_id TEXT NOT NULL,
-            parent_run_id TEXT,
-            lease_id TEXT,
-            name TEXT,
-            substrate TEXT NOT NULL,
-            status TEXT NOT NULL,
-            capabilities_json TEXT,
-            network_identity_json TEXT,
-            bootstrap_token TEXT,
-            bootstrap_spec_json TEXT,
-            runner_metadata_json TEXT,
-            requested_by TEXT,
-            last_error TEXT,
-            created_at TEXT NOT NULL,
-            started_at TEXT,
-            finished_at TEXT
-          );"
-         "CREATE INDEX IF NOT EXISTS idx_agent_runs_status_created
-          ON agent_runs(status, created_at DESC);"
-         "CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_created
-          ON agent_runs(agent_id, created_at DESC);"
-         "CREATE INDEX IF NOT EXISTS idx_agent_runs_parent_created
-          ON agent_runs(parent_run_id, created_at DESC);"
-         "CREATE TABLE IF NOT EXISTS agent_run_leases (
-            id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            holder_id TEXT,
-            status TEXT NOT NULL,
-            acquired_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            released_at TEXT
-          );"
-         "CREATE INDEX IF NOT EXISTS idx_agent_run_leases_run_acquired
-          ON agent_run_leases(run_id, acquired_at DESC);"
-         "CREATE TABLE IF NOT EXISTS agent_run_heartbeats (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            run_id TEXT NOT NULL,
-            sequence_no INTEGER NOT NULL,
-            status TEXT,
-            metrics_json TEXT,
-            observed_at TEXT NOT NULL
-          );"
-         "CREATE INDEX IF NOT EXISTS idx_agent_run_heartbeats_run_observed
-          ON agent_run_heartbeats(run_id, observed_at DESC);"
-         "CREATE TABLE IF NOT EXISTS agent_run_commands (
-            id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            command_type TEXT NOT NULL,
-            payload_json TEXT,
-            status TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            acknowledged_at TEXT,
-            completed_at TEXT,
-            error TEXT
-          );"
-         "CREATE INDEX IF NOT EXISTS idx_agent_run_commands_run_created
-          ON agent_run_commands(run_id, created_at DESC);"
-         "CREATE INDEX IF NOT EXISTS idx_agent_run_commands_run_status_created
-          ON agent_run_commands(run_id, status, created_at DESC);"
-         "CREATE TABLE IF NOT EXISTS agent_run_checkpoints (
-            id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            sequence_no INTEGER NOT NULL,
-            checkpoint_type TEXT NOT NULL,
-            state_json TEXT,
-            created_at TEXT NOT NULL
-          );"
-         "CREATE INDEX IF NOT EXISTS idx_agent_run_checkpoints_run_created
-          ON agent_run_checkpoints(run_id, created_at DESC);"]}
-   {:version 6
-    :id "6"
-    :name "agent-runner-options"
-    :irreversible? true
-    :up ["ALTER TABLE agent_runs ADD COLUMN runner_options_json TEXT;"]}
-   {:version 7
-    :id "7"
-    :name "agent-run-command-request-response"
-    :irreversible? true
-    :up ["ALTER TABLE agent_run_commands ADD COLUMN request_id TEXT;"
-         "ALTER TABLE agent_run_commands ADD COLUMN response_json TEXT;"]}
-   {:version 8
-    :id "8"
-    :name "federation-auth-outbox"
-    :irreversible? true
-    :up ["CREATE TABLE IF NOT EXISTS federation_peer_keys (
-            peer_id TEXT NOT NULL,
-            key_id TEXT NOT NULL,
-            public_key TEXT NOT NULL,
-            status TEXT NOT NULL,
-            valid_from TEXT,
-            valid_until TEXT,
-            created_at TEXT NOT NULL,
-            PRIMARY KEY(peer_id, key_id)
-          );"
-         "CREATE INDEX IF NOT EXISTS idx_federation_peer_keys_status
-          ON federation_peer_keys(peer_id, status);"
-         "CREATE TABLE IF NOT EXISTS federation_nonces (
-            peer_id TEXT NOT NULL,
-            nonce TEXT NOT NULL,
-            seen_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            PRIMARY KEY(peer_id, nonce)
-          );"
-         "CREATE INDEX IF NOT EXISTS idx_federation_nonces_expires
-          ON federation_nonces(expires_at);"
-         "CREATE TABLE IF NOT EXISTS federation_outbox (
-            id TEXT PRIMARY KEY,
-            peer_id TEXT NOT NULL,
-            key_id TEXT,
-            url TEXT,
-            envelope_json TEXT NOT NULL,
-            state TEXT NOT NULL,
-            attempt_count INTEGER NOT NULL DEFAULT 0,
-            next_attempt_at TEXT,
-            last_error TEXT,
-            last_status INTEGER,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-          );"
-         "CREATE INDEX IF NOT EXISTS idx_federation_outbox_state_next
-          ON federation_outbox(state, next_attempt_at);"
-         "CREATE INDEX IF NOT EXISTS idx_federation_outbox_peer_created
-          ON federation_outbox(peer_id, created_at DESC);"]}
-   {:version 9
-    :id "9"
-    :name "workflow-idempotency"
-    :irreversible? true
-    :up ["ALTER TABLE agent_runs ADD COLUMN idempotency_key TEXT;"
-         "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runs_idempotency_key
-          ON agent_runs(idempotency_key)
-          WHERE idempotency_key IS NOT NULL;"
-         "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_run_commands_run_request
-          ON agent_run_commands(run_id, request_id)
-          WHERE request_id IS NOT NULL;"
-         "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_run_heartbeats_run_sequence
-          ON agent_run_heartbeats(run_id, sequence_no)
-          WHERE sequence_no IS NOT NULL;"
-         "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_run_checkpoints_run_sequence_type
-          ON agent_run_checkpoints(run_id, sequence_no, checkpoint_type)
-          WHERE sequence_no IS NOT NULL;"]}
-   {:version 10
-    :id "10"
-    :name "workflow-events-activities"
-    :irreversible? true
-    :up ["CREATE TRIGGER IF NOT EXISTS trg_agent_runs_requested_event
-          AFTER INSERT ON agent_runs
-          BEGIN
-            INSERT INTO agent_events (event_type, entity_type, entity_id, request_id, payload, created_at)
-            VALUES ('agent.run.requested', 'agent_run', NEW.id, NEW.idempotency_key,
-                    json_object('agent-id', NEW.agent_id,
-                                'name', NEW.name,
-                                'parent-run-id', NEW.parent_run_id,
-                                'substrate', NEW.substrate,
-                                'lease-id', NEW.lease_id,
-                                'requested-by', NEW.requested_by,
-                                'capabilities', json(NEW.capabilities_json),
-                                'runner-options', json(NEW.runner_options_json)),
-                    NEW.created_at);
-          END;"
-         "CREATE TRIGGER IF NOT EXISTS trg_agent_runs_status_event
-          AFTER UPDATE OF status ON agent_runs
-          WHEN OLD.status <> NEW.status
-          BEGIN
-            INSERT INTO agent_events (event_type, entity_type, entity_id, request_id, payload, created_at)
-            VALUES (CASE
-                      WHEN NEW.status = 'running' THEN 'agent.run.registered'
-                      ELSE 'agent.run.' || NEW.status
-                    END,
-                    'agent_run', NEW.id, NEW.idempotency_key,
-                    json_object('status', NEW.status,
-                                'last-error', NEW.last_error,
-                                'agent-id', NEW.agent_id,
-                                'network-identity', json(NEW.network_identity_json),
-                                'runner-metadata', json(NEW.runner_metadata_json),
-                                'finished-at', NEW.finished_at),
-                    strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
-          END;"
-         "CREATE TRIGGER IF NOT EXISTS trg_agent_run_heartbeats_event
-          AFTER INSERT ON agent_run_heartbeats
-          BEGIN
-            INSERT INTO agent_events (event_type, entity_type, entity_id, request_id, payload, created_at)
-            VALUES ('agent.run.heartbeat', 'agent_run', NEW.run_id, NULL,
-                    json_object('sequence-no', NEW.sequence_no,
-                                'status', NEW.status),
-                    NEW.observed_at);
-          END;"
-         "CREATE TRIGGER IF NOT EXISTS trg_agent_run_checkpoints_event
-          AFTER INSERT ON agent_run_checkpoints
-          BEGIN
-            INSERT INTO agent_events (event_type, entity_type, entity_id, request_id, payload, created_at)
-            VALUES ('agent.run.checkpointed', 'agent_run', NEW.run_id, NULL,
-                    json_object('sequence-no', NEW.sequence_no,
-                                'checkpoint-type', NEW.checkpoint_type),
-                    NEW.created_at);
-          END;"
-         "CREATE TRIGGER IF NOT EXISTS trg_agent_run_commands_enqueued_event
-          AFTER INSERT ON agent_run_commands
-          BEGIN
-            INSERT INTO agent_events (event_type, entity_type, entity_id, request_id, payload, created_at)
-            VALUES ('agent.run.command.enqueued', 'agent_run', NEW.run_id, NEW.request_id,
-                    json_object('command-id', NEW.id,
-                                'command-type', NEW.command_type,
-                                'request-id', NEW.request_id),
-                    NEW.created_at);
-          END;"
-         "CREATE TRIGGER IF NOT EXISTS trg_agent_run_commands_status_event
-          AFTER UPDATE OF status ON agent_run_commands
-          WHEN OLD.status <> NEW.status
-          BEGIN
-            INSERT INTO agent_events (event_type, entity_type, entity_id, request_id, payload, created_at)
-            VALUES (CASE
-                      WHEN NEW.status = 'acknowledged' THEN 'agent.run.command.acknowledged'
-                      ELSE 'agent.run.command.completed'
-                    END,
-                    'agent_run', NEW.run_id, NEW.request_id,
-                    json_object('command-id', NEW.id,
-                                'request-id', NEW.request_id,
-                                'status', NEW.status,
-                                'error', NEW.error,
-                                'response', json(NEW.response_json)),
-                    coalesce(NEW.completed_at, NEW.acknowledged_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')));
-          END;"
-         "CREATE TABLE IF NOT EXISTS agent_run_activities (
-            activity_key TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            command_id TEXT,
-            activity_name TEXT NOT NULL,
-            status TEXT NOT NULL,
-            input_json TEXT,
-            result_json TEXT,
-            error TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-          );"
-         "CREATE INDEX IF NOT EXISTS idx_agent_run_activities_run_created
-          ON agent_run_activities(run_id, created_at DESC);"
-         "CREATE INDEX IF NOT EXISTS idx_agent_run_activities_command_created
-          ON agent_run_activities(command_id, created_at DESC);"]}
-   {:version 11
-    :id "11"
-    :name "harden-tool-approvals"
-    :irreversible? true
-    :up ["ALTER TABLE tool_approvals ADD COLUMN input_hash TEXT;"
-         "ALTER TABLE tool_approvals ADD COLUMN requested_permissions_json TEXT;"
-         "ALTER TABLE tool_approvals ADD COLUMN expires_at TEXT;"
-         "CREATE INDEX IF NOT EXISTS idx_tool_approvals_expires
-          ON tool_approvals(expires_at);"]}
-   {:version 12
-    :id "12"
-    :name "mandatory-memory-facts"
-    :irreversible? true
-    :up ["CREATE TABLE IF NOT EXISTS memory_facts (
-            id TEXT PRIMARY KEY,
-            scope_type TEXT NOT NULL,
-            scope_id TEXT,
-            subject TEXT NOT NULL,
-            predicate TEXT NOT NULL,
-            object TEXT NOT NULL,
-            normalized_subject TEXT NOT NULL,
-            normalized_predicate TEXT NOT NULL,
-            normalized_object TEXT NOT NULL,
-            source_session_id TEXT,
-            source_message_ids_json TEXT,
-            source_request_id TEXT,
-            confidence REAL,
-            status TEXT NOT NULL,
-            metadata_json TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-          );"
-         "CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_facts_dedup
-          ON memory_facts(scope_type,
-                          coalesce(scope_id, ''),
-                          normalized_subject,
-                          normalized_predicate,
-                          normalized_object);"
-         "CREATE INDEX IF NOT EXISTS idx_memory_facts_scope_updated
-          ON memory_facts(scope_type, scope_id, updated_at DESC);"]}
-   {:version 13
-    :id "13"
-    :name "channel-session-mappings"
-    :irreversible? true
-    :up ["CREATE TABLE IF NOT EXISTS channel_session_mappings (
-            source TEXT NOT NULL,
-            external_chat_id TEXT NOT NULL,
-            session_id TEXT NOT NULL,
-            metadata_json TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY(source, external_chat_id),
-            FOREIGN KEY(session_id) REFERENCES sessions(id)
-          );"
-         "CREATE INDEX IF NOT EXISTS idx_channel_session_mappings_session
-          ON channel_session_mappings(session_id);"]}
-   {:version 14
-    :id "14"
-    :name "channel-inbox-offsets"
-    :irreversible? true
-    :up ["CREATE TABLE IF NOT EXISTS channel_offsets (
-            source TEXT PRIMARY KEY,
-            next_offset INTEGER NOT NULL,
-            updated_at TEXT NOT NULL
-          );"
-         "CREATE TABLE IF NOT EXISTS channel_inbox (
-            source TEXT NOT NULL,
-            update_id INTEGER NOT NULL,
-            status TEXT NOT NULL,
-            raw_json TEXT NOT NULL,
-            attempts INTEGER NOT NULL DEFAULT 0,
-            last_error TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY(source, update_id)
-          );"
-         "CREATE INDEX IF NOT EXISTS idx_channel_inbox_status_updated
-          ON channel_inbox(source, status, updated_at DESC);"]}
-   {:version 15
-    :id "15"
-    :name "messages-tool-calls"
-    :irreversible? true
-    :up ["ALTER TABLE messages ADD COLUMN tool_calls TEXT;"
-         "ALTER TABLE messages ADD COLUMN tool_call_id TEXT;"]}
-   {:version 16
-    :id "16"
-    :name "sqlite-fts-retrieval"
-    :irreversible? true
-    :up ["CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
-          USING fts5(content, content='messages', content_rowid='id');"
-         "INSERT INTO messages_fts(messages_fts) VALUES('rebuild');"
-         "CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
-            INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
-          END;"
-         "CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
-            INSERT INTO messages_fts(messages_fts, rowid, content)
-            VALUES('delete', old.id, old.content);
-          END;"
-         "CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages BEGIN
-            INSERT INTO messages_fts(messages_fts, rowid, content)
-            VALUES('delete', old.id, old.content);
-            INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
-          END;"
-         "CREATE VIRTUAL TABLE IF NOT EXISTS agent_events_fts
-          USING fts5(event_type, entity_id, payload, content='agent_events', content_rowid='id');"
-         "INSERT INTO agent_events_fts(agent_events_fts) VALUES('rebuild');"
-         "CREATE TRIGGER IF NOT EXISTS agent_events_fts_ai AFTER INSERT ON agent_events BEGIN
-            INSERT INTO agent_events_fts(rowid, event_type, entity_id, payload)
-            VALUES (new.id, new.event_type, new.entity_id, new.payload);
-          END;"
-         "CREATE TRIGGER IF NOT EXISTS agent_events_fts_ad AFTER DELETE ON agent_events BEGIN
-            INSERT INTO agent_events_fts(agent_events_fts, rowid, event_type, entity_id, payload)
-            VALUES('delete', old.id, old.event_type, old.entity_id, old.payload);
-          END;"
-         "CREATE TRIGGER IF NOT EXISTS agent_events_fts_au AFTER UPDATE ON agent_events BEGIN
-            INSERT INTO agent_events_fts(agent_events_fts, rowid, event_type, entity_id, payload)
-            VALUES('delete', old.id, old.event_type, old.entity_id, old.payload);
-            INSERT INTO agent_events_fts(rowid, event_type, entity_id, payload)
-            VALUES (new.id, new.event_type, new.entity_id, new.payload);
-          END;"
-         "CREATE VIRTUAL TABLE IF NOT EXISTS memory_facts_fts
-          USING fts5(subject, predicate, object, metadata_json, content='memory_facts');"
-         "INSERT INTO memory_facts_fts(memory_facts_fts) VALUES('rebuild');"
-         "CREATE TRIGGER IF NOT EXISTS memory_facts_fts_ai AFTER INSERT ON memory_facts BEGIN
-            INSERT INTO memory_facts_fts(rowid, subject, predicate, object, metadata_json)
-            VALUES (new.rowid, new.subject, new.predicate, new.object, new.metadata_json);
-          END;"
-         "CREATE TRIGGER IF NOT EXISTS memory_facts_fts_ad AFTER DELETE ON memory_facts BEGIN
-            INSERT INTO memory_facts_fts(memory_facts_fts, rowid, subject, predicate, object, metadata_json)
-            VALUES('delete', old.rowid, old.subject, old.predicate, old.object, old.metadata_json);
-          END;"
-         "CREATE TRIGGER IF NOT EXISTS memory_facts_fts_au AFTER UPDATE ON memory_facts BEGIN
-            INSERT INTO memory_facts_fts(memory_facts_fts, rowid, subject, predicate, object, metadata_json)
-            VALUES('delete', old.rowid, old.subject, old.predicate, old.object, old.metadata_json);
-            INSERT INTO memory_facts_fts(rowid, subject, predicate, object, metadata_json)
-            VALUES (new.rowid, new.subject, new.predicate, new.object, new.metadata_json);
-          END;"]}
-   {:version 17
-    :id "17"
-    :name "session-entry-tree"
-    :irreversible? true
-    :up ["CREATE TABLE IF NOT EXISTS session_entries (
-            id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            parent_id TEXT,
-            type TEXT NOT NULL,
-            payload_json TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(session_id) REFERENCES sessions(id),
-            FOREIGN KEY(parent_id) REFERENCES session_entries(id)
-          );"
-         "CREATE INDEX IF NOT EXISTS idx_session_entries_session_created
-          ON session_entries(session_id, created_at);"
-         "CREATE INDEX IF NOT EXISTS idx_session_entries_parent
-          ON session_entries(parent_id);"
-         "CREATE TABLE IF NOT EXISTS session_leaf_selection (
-            session_id TEXT PRIMARY KEY,
-            leaf_entry_id TEXT,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY(session_id) REFERENCES sessions(id),
-            FOREIGN KEY(leaf_entry_id) REFERENCES session_entries(id)
-          );"
-         "INSERT OR IGNORE INTO session_entries (id, session_id, parent_id, type, payload_json, created_at)
-          SELECT 'message-' || id,
-                 session_id,
-                 CASE
-                   WHEN lag(id) OVER (PARTITION BY session_id ORDER BY id) IS NULL THEN NULL
-                   ELSE 'message-' || lag(id) OVER (PARTITION BY session_id ORDER BY id)
-                 END,
-                 'message',
-                 json_object('message-id', id,
-                             'role', role,
-                             'content', content,
-                             'tool-calls', json(tool_calls),
-                             'tool-call-id', tool_call_id),
-                 created_at
-          FROM messages;"
-         "INSERT OR IGNORE INTO session_leaf_selection (session_id, leaf_entry_id, updated_at)
-          SELECT session_id,
-                 'message-' || max(id),
-                 strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-          FROM messages
-          GROUP BY session_id;"]}
-   {:version 18
-    :id "18"
-    :name "message-runtime-flags"
-    :irreversible? true
-    :up ["ALTER TABLE messages ADD COLUMN metadata_json TEXT;"
-         "ALTER TABLE messages ADD COLUMN excluded_from_context INTEGER NOT NULL DEFAULT 0;"]}
-   {:version 19
-    :id "19"
-    :name "session-active-mode"
-    :irreversible? true
-    :up ["ALTER TABLE sessions ADD COLUMN active_mode TEXT;"]}
-   {:version 20
-    :id "20"
-    :name "todo-lists"
-    :irreversible? true
-    :up ["CREATE TABLE IF NOT EXISTS todo_lists (
-            id TEXT PRIMARY KEY,
-            thread_id TEXT NOT NULL,
-            slug TEXT NOT NULL,
-            description TEXT NOT NULL,
-            todos_json TEXT NOT NULL,
-            metadata_json TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-          );"
-         "CREATE UNIQUE INDEX IF NOT EXISTS idx_todo_lists_thread_slug
-          ON todo_lists(thread_id, slug);"
-         "CREATE INDEX IF NOT EXISTS idx_todo_lists_thread_updated
-          ON todo_lists(thread_id, updated_at DESC);"
-         "CREATE VIRTUAL TABLE IF NOT EXISTS todo_lists_fts
-          USING fts5(description, todos_json, metadata_json, content='todo_lists');"
-         "INSERT INTO todo_lists_fts(todo_lists_fts) VALUES('rebuild');"
-         "CREATE TRIGGER IF NOT EXISTS todo_lists_fts_ai AFTER INSERT ON todo_lists BEGIN
-            INSERT INTO todo_lists_fts(rowid, description, todos_json, metadata_json)
-            VALUES (new.rowid, new.description, new.todos_json, new.metadata_json);
-          END;"
-         "CREATE TRIGGER IF NOT EXISTS todo_lists_fts_ad AFTER DELETE ON todo_lists BEGIN
-            INSERT INTO todo_lists_fts(todo_lists_fts, rowid, description, todos_json, metadata_json)
-            VALUES('delete', old.rowid, old.description, old.todos_json, old.metadata_json);
-          END;"
-         "CREATE TRIGGER IF NOT EXISTS todo_lists_fts_au AFTER UPDATE ON todo_lists BEGIN
-            INSERT INTO todo_lists_fts(todo_lists_fts, rowid, description, todos_json, metadata_json)
-            VALUES('delete', old.rowid, old.description, old.todos_json, old.metadata_json);
-            INSERT INTO todo_lists_fts(rowid, description, todos_json, metadata_json)
-            VALUES (new.rowid, new.description, new.todos_json, new.metadata_json);
-          END;"]}])
+    :id "001-baseline"
+    :name "baseline-schema"
+    :up-resource "agent/persistence/sqlite/migrations/001-baseline.up.sql"
+    :irreversible? true}])
 
 (defn descriptor-by-version [version]
   (some #(when (= version (:version %)) %) migration-descriptors))
+
+(defn- descriptor-by-id [id]
+  (some #(when (= id (:id %)) %) migration-descriptors))
+
+(defn- resource-text! [resource-path]
+  (if-let [resource (io/resource resource-path)]
+    (slurp resource)
+    (throw (ex-info "Migration resource not found"
+                    {:type :migration-resource-not-found
+                     :resource resource-path}))))
+
+(defn- append-line [statement line]
+  (str statement (when-not (str/blank? statement) "\n") line))
+
+(defn- sql-statements [sql]
+  (letfn [(finish [statements statement]
+            (cond-> statements
+              (not (str/blank? statement)) (conj statement)))]
+    (loop [lines (str/split-lines sql)
+           statements []
+           statement ""
+           trigger? false]
+      (if-let [line (first lines)]
+        (let [trimmed (str/trim line)]
+          (cond
+            (or (str/blank? trimmed) (str/starts-with? trimmed "--"))
+            (recur (rest lines) statements statement trigger?)
+
+            (str/blank? statement)
+            (let [trigger-start? (boolean (re-find #"(?i)^CREATE\s+TRIGGER\b" trimmed))
+                  statement* line]
+              (if (and (not trigger-start?) (str/ends-with? trimmed ";"))
+                (recur (rest lines) (conj statements statement*) "" false)
+                (recur (rest lines) statements statement* trigger-start?)))
+
+            :else
+            (let [statement* (append-line statement line)
+                  end? (if trigger?
+                         (boolean (re-find #"(?i)^END;\s*$" trimmed))
+                         (str/ends-with? trimmed ";"))]
+              (if end?
+                (recur (rest lines) (conj statements statement*) "" false)
+                (recur (rest lines) statements statement* trigger?)))))
+        (finish statements statement)))))
+
+(defn- descriptor-up [descriptor]
+  (sql-statements (resource-text! (:up-resource descriptor))))
 
 (defn- sha256-hex [value]
   (let [digest (.digest (MessageDigest/getInstance "SHA-256")
                         (.getBytes (str value) StandardCharsets/UTF_8))]
     (apply str (map #(format "%02x" (bit-and (int %) 0xff)) digest))))
 
-(defn- migration-checksum [{:keys [version up down]}]
-  (subs (sha256-hex (str version up down)) 0 16))
+(defn- migration-checksum [descriptor]
+  (subs (sha256-hex (resource-text! (:up-resource descriptor))) 0 16))
+
+(defn- migration-metadata-ddl! [conn]
+  (common/execute-ddl! conn "CREATE TABLE IF NOT EXISTS schema_migration_meta (
+                               version INTEGER PRIMARY KEY,
+                               name TEXT NOT NULL,
+                               checksum TEXT NOT NULL,
+                               irreversible INTEGER NOT NULL,
+                               applied_at TEXT NOT NULL
+                             );"))
 
 (defn- migration-history* [conn]
   (common/select-many
-    conn
-    ["SELECT version, name, checksum, irreversible, applied_at
-      FROM schema_migration_meta
-      ORDER BY version ASC"]
-    (fn [{:keys [version name checksum irreversible applied_at]}]
-      {:version (int version)
-       :name name
-       :checksum checksum
-       :irreversible? (pos? (int irreversible))
-       :applied-at applied_at})))
+   conn
+   ["SELECT version, name, checksum, irreversible, applied_at
+     FROM schema_migration_meta
+     ORDER BY version ASC"]
+   (fn [{:keys [version name checksum irreversible applied_at]}]
+     {:version (int version)
+      :name name
+      :checksum checksum
+      :irreversible? (pos? (int irreversible))
+      :applied-at applied_at})))
 
 (defn migration-history [store]
   (common/with-connection
@@ -618,18 +113,10 @@
   (or (some->> (migration-history store) last :version)
       0))
 
-(defn- migration-metadata-ddl! [conn]
-  (common/execute-ddl! conn "CREATE TABLE IF NOT EXISTS schema_migration_meta (
-                               version INTEGER PRIMARY KEY,
-                               name TEXT NOT NULL,
-                               checksum TEXT NOT NULL,
-                               irreversible INTEGER NOT NULL,
-                               applied_at TEXT NOT NULL
-                             );"))
-
 (defn- record-migration-meta! [conn {:keys [version name irreversible?] :as descriptor}]
   (with-open [stmt (.prepareStatement conn
-                                      "INSERT OR REPLACE INTO schema_migration_meta (version, name, checksum, irreversible, applied_at)
+                                      "INSERT OR REPLACE INTO schema_migration_meta
+                                       (version, name, checksum, irreversible, applied_at)
                                        VALUES (?, ?, ?, ?, ?)")]
     (.setInt stmt 1 (int version))
     (.setString stmt 2 name)
@@ -639,32 +126,27 @@
     (.executeUpdate stmt))
   (common/set-user-version! conn version))
 
-(defn- remove-migration-meta! [conn version]
-  (with-open [stmt (.prepareStatement conn
-                                      "DELETE FROM schema_migration_meta WHERE version = ?")]
-    (.setInt stmt 1 (int version))
-    (.executeUpdate stmt))
-  (common/set-user-version! conn (dec version)))
+(defn- migration-drift! [details]
+  (throw (ex-info "SQLite schema drift detected"
+                  (assoc details :type :migration-drift))))
 
-(defn- effective-up-statements [{:keys [version up]} conn]
-  (case version
-    6 (if (common/column-exists? conn "agent_runs" "runner_options_json") [] up)
-    7 (cond-> []
-         (not (common/column-exists? conn "agent_run_commands" "request_id"))
-         (conj (first up))
-         (not (common/column-exists? conn "agent_run_commands" "response_json"))
-         (conj (second up)))
-    9 (cond-> []
-         (not (common/column-exists? conn "agent_runs" "idempotency_key"))
-         (conj (first up))
-         true
-         (into (rest up)))
-    18 (cond-> []
-          (not (common/column-exists? conn "messages" "metadata_json"))
-          (conj (first up))
-          (not (common/column-exists? conn "messages" "excluded_from_context"))
-          (conj (second up)))
-    up))
+(defn- verify-migration-checksums! [store]
+  (doseq [{:keys [version checksum]} (migration-history store)]
+    (let [descriptor (descriptor-by-version version)]
+      (when-not descriptor
+        (migration-drift! {:reason :unknown-migration
+                           :version version}))
+      (let [expected (migration-checksum descriptor)]
+        (when (not= checksum expected)
+          (migration-drift! {:reason :checksum-mismatch
+                             :version version
+                             :expected expected
+                             :actual checksum}))))))
+
+(defn- unversioned-schema? [conn]
+  (or (common/table-exists? conn "sessions")
+      (common/table-exists? conn "messages")
+      (common/table-exists? conn "agent_runs")))
 
 (defn- ensure-ragtime-table! [conn]
   (common/execute-ddl! conn "CREATE TABLE IF NOT EXISTS ragtime_migrations (
@@ -680,7 +162,8 @@
       (fn [conn]
         (ensure-ragtime-table! conn)
         (with-open [stmt (.prepareStatement conn
-                                            "INSERT OR REPLACE INTO ragtime_migrations (id, created_at) VALUES (?, ?)")]
+                                            "INSERT OR REPLACE INTO ragtime_migrations (id, created_at)
+                                             VALUES (?, ?)")]
           (.setString stmt 1 (str migration-id))
           (.setString stmt 2 (common/now-str))
           (.executeUpdate stmt)))))
@@ -703,104 +186,49 @@
                                   ["SELECT id FROM ragtime_migrations ORDER BY id ASC"]
                                   identity))))))
 
-(defrecord SqliteMigration [id version up down]
+(defrecord SqliteMigration [descriptor]
   ragtime-protocols/Migration
-  (id [_] id)
+  (id [_] (:id descriptor))
   (run-up! [_ data-store]
     (common/with-transaction
       (:store data-store)
       (fn [conn]
-        (doseq [sql (effective-up-statements {:version version :up up} conn)]
+        (doseq [sql (descriptor-up descriptor)]
           (common/execute-ddl! conn sql)))))
-  (run-down! [_ data-store]
-    (if (seq down)
-      (common/with-transaction
-        (:store data-store)
-        (fn [conn]
-          (doseq [sql down]
-            (common/execute-ddl! conn sql))))
-      (throw (ex-info "Irreversible migration"
-                      {:type :irreversible-migration
-                       :id id
-                       :version version})))))
+  (run-down! [_ _data-store]
+    (throw (ex-info "Irreversible migration"
+                    {:type :irreversible-migration
+                     :id (:id descriptor)
+                     :version (:version descriptor)}))))
 
-(defn- ragtime-migrations [_store]
-  (mapv (fn [{:keys [id version up down]}]
-          (->SqliteMigration id version up down))
-        migration-descriptors))
-
-(defn- datastore [store]
-  (->SqliteDataStore store))
+(defn- ragtime-migrations []
+  (mapv ->SqliteMigration migration-descriptors))
 
 (defn- reporter [store]
-  (fn [_store op version]
-    (when-let [descriptor (descriptor-by-version (Integer/parseInt (str version)))]
+  (fn [_store op migration-id]
+    (when-let [descriptor (descriptor-by-id (str migration-id))]
       (case op
         :up (common/with-transaction store
               (fn [conn]
                 (migration-metadata-ddl! conn)
                 (record-migration-meta! conn descriptor)))
-        :down (common/with-transaction store
-                (fn [conn]
-                  (migration-metadata-ddl! conn)
-                  (remove-migration-meta! conn (:version descriptor))))
         nil))))
-
-(defn- update-migration-checksum! [conn version checksum]
-  (with-open [stmt (.prepareStatement conn
-                                      "UPDATE schema_migration_meta
-                                       SET checksum = ?
-                                       WHERE version = ?")]
-    (.setString stmt 1 checksum)
-    (.setInt stmt 2 (int version))
-    (.executeUpdate stmt)))
-
-(defn- migration-drift! [version expected actual]
-  (throw (ex-info "Migration checksum drift detected"
-                  {:type :migration-drift
-                   :version version
-                   :expected expected
-                   :actual actual})))
-
-(defn- unknown-applied-migration! [version]
-  (throw (ex-info "Unknown applied migration"
-                  {:type :migration-drift
-                   :version version})))
-
-(defn- backfill-legacy-migration-checksums! [store]
-  (common/with-transaction
-    store
-    (fn [conn]
-      (doseq [{:keys [version checksum]} (migration-history* conn)]
-        (let [descriptor (descriptor-by-version version)]
-          (when-not descriptor
-            (unknown-applied-migration! version))
-          (let [expected (migration-checksum descriptor)]
-            (when (= checksum (get legacy-descriptor-checksums version))
-              (update-migration-checksum! conn version expected))))))))
-
-(defn- verify-migration-checksums! [store]
-  (doseq [{:keys [version checksum]} (migration-history store)]
-    (let [expected (descriptor-by-version version)]
-      (when-not expected
-        (unknown-applied-migration! version))
-      (let [expected-checksum (migration-checksum expected)]
-        (when (not= checksum expected-checksum)
-          (migration-drift! version expected-checksum checksum))))))
 
 (defn migrate! [store]
   (common/with-transaction
     store
     (fn [conn]
-      (migration-metadata-ddl! conn)))
-  (let [migrations (ragtime-migrations store)
+      (let [has-meta? (common/table-exists? conn metadata-table)]
+        (when (and (not has-meta?) (unversioned-schema? conn))
+          (migration-drift! {:reason :unversioned-schema}))
+        (migration-metadata-ddl! conn))))
+  (let [migrations (ragtime-migrations)
         index (ragtime/into-index migrations)]
     (ragtime/migrate-all
-      (datastore store)
-      index
-      migrations
-      {:strategy ragtime-strategy/apply-new
-       :reporter (reporter store)}))
-  (backfill-legacy-migration-checksums! store)
+     (->SqliteDataStore store)
+     index
+     migrations
+     {:strategy ragtime-strategy/apply-new
+      :reporter (reporter store)}))
   (verify-migration-checksums! store)
   store)

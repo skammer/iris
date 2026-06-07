@@ -23,16 +23,16 @@ limit :limit
 
 -- :name update-agent-run :! :n
 update agent_runs
-set status = coalesce(:status, status),
-    lease_id = coalesce(:lease_id, lease_id),
-    network_identity_json = coalesce(:network_identity_json, network_identity_json),
-    capabilities_json = coalesce(:capabilities_json, capabilities_json),
-    bootstrap_spec_json = coalesce(:bootstrap_spec_json, bootstrap_spec_json),
-    runner_metadata_json = coalesce(:runner_metadata_json, runner_metadata_json),
-    runner_options_json = coalesce(:runner_options_json, runner_options_json),
-    last_error = coalesce(:last_error, last_error),
-    started_at = coalesce(:started_at, started_at),
-    finished_at = coalesce(:finished_at, finished_at)
+set status = case when :status_set = 1 then :status else status end,
+    lease_id = case when :lease_id_set = 1 then :lease_id else lease_id end,
+    network_identity_json = case when :network_identity_json_set = 1 then :network_identity_json else network_identity_json end,
+    capabilities_json = case when :capabilities_json_set = 1 then :capabilities_json else capabilities_json end,
+    bootstrap_spec_json = case when :bootstrap_spec_json_set = 1 then :bootstrap_spec_json else bootstrap_spec_json end,
+    runner_metadata_json = case when :runner_metadata_json_set = 1 then :runner_metadata_json else runner_metadata_json end,
+    runner_options_json = case when :runner_options_json_set = 1 then :runner_options_json else runner_options_json end,
+    last_error = case when :last_error_set = 1 then :last_error else last_error end,
+    started_at = case when :started_at_set = 1 then :started_at else started_at end,
+    finished_at = case when :finished_at_set = 1 then :finished_at else finished_at end
 where id = :id
 
 -- :name create-agent-run-lease :! :n
@@ -165,11 +165,3 @@ set status = :status,
     error = :error,
     updated_at = :updated_at
 where activity_key = :activity_key
-
--- :name list-agent-run-activities :? :*
-select activity_key, run_id, command_id, activity_name, status, input_json, result_json, error, created_at, updated_at
-from agent_run_activities
-where run_id = :run_id
-  and (:command_id is null or command_id = :command_id)
-order by created_at asc
-limit :limit

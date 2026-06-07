@@ -5,6 +5,17 @@
 
 (hugsql/def-sqlvec-fns "agent/persistence/sqlite/tools.sql")
 
+(def ^:private statuses #{"pending" "approved" "denied"})
+
+(defn- valid-status! [status]
+  (let [status* (common/normalize-name status)]
+    (when-not (contains? statuses status*)
+      (throw (ex-info "Invalid tool approval status"
+                      {:type :invalid-tool-approval
+                       :field :status
+                       :value status})))
+    status*))
+
 (defn- row->approval [{:keys [id tool_name status input_json input_hash requested_permissions_json requested_by reason actor decision_reason expires_at created_at decided_at]}]
   {:id id
    :tool-name tool_name
@@ -55,13 +66,18 @@
      (fn [conn]
        (mapv row->approval
              (common/select-many conn
-                                 (list-tool-approvals-sqlvec {:status status
-                                                              :limit limit})
+                                 (list-tool-approvals-sqlvec {:status (some-> status valid-status!)
+                                                              :limit (common/bounded-limit limit)})
                                  identity))))))
 
 (defn decide-tool-approval! [store approval-id status actor decision-reason]
-  (let [status* (common/normalize-name status)
+  (let [status* (valid-status! status)
         decided-at (common/now-str)]
+    (when (= "pending" status*)
+      (throw (ex-info "Cannot decide approval back to pending"
+                      {:type :invalid-tool-approval
+                       :field :status
+                       :value status})))
     (common/with-connection
       store
       (fn [conn]

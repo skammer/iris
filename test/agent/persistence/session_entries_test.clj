@@ -2,7 +2,7 @@
   (:require
    [agent.persistence.sqlite :as sqlite]
    [clojure.java.io :as io]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defn temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-entries-" ".db")))

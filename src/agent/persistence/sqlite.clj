@@ -111,9 +111,6 @@
 (defn update-message-runtime-flags! [store message-id flags]
   (sessions/update-message-runtime-flags! store message-id flags))
 
-(defn migrate-messages-to-entries! [store]
-  (sessions/migrate-messages-to-entries! store))
-
 (defn append-entry!
   ([store session-id type payload]
    (sessions/append-entry! store session-id type payload))
@@ -122,9 +119,6 @@
 
 (defn list-entries [store session-id]
   (sessions/list-entries store session-id))
-
-(defn get-entry [store session-id entry-id]
-  (sessions/get-entry store session-id entry-id))
 
 (defn leaf-entry [store session-id]
   (sessions/leaf-entry store session-id))
@@ -196,9 +190,6 @@
 (defn save-memory-fact! [store fact]
   (memory/save-fact! store fact))
 
-(defn get-memory-fact [store id]
-  (memory/get-fact store id))
-
 (defn remove-memory-fact! [store fact]
   (memory/remove-fact! store fact))
 
@@ -214,10 +205,6 @@
 
 (defn count-memory-facts [store]
   (memory/count-facts store))
-
-(defn list-memory-facts
-  ([store] (memory/list-facts store))
-  ([store opts] (memory/list-facts store opts)))
 
 (defn save-todo-list! [store todo-list]
   (todos/save-list! store todo-list))
@@ -328,10 +315,6 @@
 (defn complete-agent-run-activity! [store activity-key updates]
   (runs/complete-agent-run-activity! store activity-key updates))
 
-(defn list-agent-run-activities
-  ([store run-id] (runs/list-agent-run-activities store run-id))
-  ([store run-id opts] (runs/list-agent-run-activities store run-id opts)))
-
 (defn upsert-federation-peer-key! [store peer-key]
   (federation/upsert-peer-key! store peer-key))
 
@@ -346,9 +329,6 @@
 
 (defn claim-due-federation-outbox! [store opts]
   (federation/claim-due-outbox! store opts))
-
-(defn update-federation-outbox! [store id updates]
-  (federation/update-outbox! store id updates))
 
 (defn mark-federation-outbox-retry! [store id updates]
   (federation/mark-outbox-retry! store id updates))

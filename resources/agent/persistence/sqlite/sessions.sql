@@ -199,30 +199,3 @@ values (:session_id, :leaf_entry_id, :updated_at)
 on conflict(session_id) do update set
   leaf_entry_id = excluded.leaf_entry_id,
   updated_at = excluded.updated_at
-
--- :name insert-missing-message-entries :! :n
-insert or ignore into session_entries (id, session_id, parent_id, type, payload_json, created_at)
-select 'message-' || id,
-       session_id,
-       case
-         when lag(id) over (partition by session_id order by id) is null then null
-         else 'message-' || lag(id) over (partition by session_id order by id)
-       end,
-       'message',
-       json_object('message-id', id,
-                   'role', role,
-                   'content', content,
-                   'tool-calls', json(tool_calls),
-                   'tool-call-id', tool_call_id,
-                   'metadata', json(metadata_json),
-                   'excluded-from-context?', excluded_from_context = 1),
-       created_at
-from messages
-
--- :name upsert-missing-session-leaves :! :n
-insert or ignore into session_leaf_selection (session_id, leaf_entry_id, updated_at)
-select session_id,
-       'message-' || max(id),
-       strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-from messages
-group by session_id
