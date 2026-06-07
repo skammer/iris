@@ -38,6 +38,10 @@
   --success: #4a9e5c;
   --warning: #d4a843;
   --grid-dot: #151515;
+  --scrollbar-track: rgba(255, 255, 255, 0.03);
+  --scrollbar-thumb: #3a3a3a;
+  --scrollbar-thumb-hover: #d71921;
+  --scrollbar-thumb-active: #e8e8e8;
   --space-xs: 4px;
   --space-sm: 8px;
   --space-md: 16px;
@@ -64,10 +68,16 @@
   --success: #2f7d46;
   --warning: #9a6a12;
   --grid-dot: #ddddd6;
+  --scrollbar-track: rgba(0, 0, 0, 0.05);
+  --scrollbar-thumb: #9c9c92;
+  --scrollbar-thumb-hover: #c5161d;
+  --scrollbar-thumb-active: #1f1f1d;
 }
 
 * {
   box-sizing: border-box;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  scrollbar-width: thin;
 }
 
 html,
@@ -1077,16 +1087,46 @@ textarea {
 }
 
 ::-webkit-scrollbar {
-  width: 10px;
+  width: 11px;
+  height: 11px;
 }
 
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--scrollbar-track);
+  border-left: 1px solid var(--border);
+}
+
+::-webkit-scrollbar-track:horizontal {
+  border-top: 1px solid var(--border);
+  border-left: 0;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border-visible);
-  border-radius: 999px;
+  min-height: 42px;
+  min-width: 42px;
+  background: var(--scrollbar-thumb);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-active);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--surface);
+}
+
+::-webkit-scrollbar-button {
+  display: none;
 }
 
 @media (max-width: 1180px) {
