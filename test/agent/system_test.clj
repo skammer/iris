@@ -68,7 +68,7 @@
                             :memory_datalog :memory_read_vault :memory_write_vault
                             :message_search :shell :system_reload
                             :todo_write :todo_get :todo_list :todo_search]))
-    (is (= ["Discord" "Slack" "Telegram"] (mapv :display-name adapters)))
+    (is (= ["Telegram"] (mapv :display-name adapters)))
     (is (contains? runner-keys :local-unsandboxed))
     (is (contains? runner-keys :bubblewrap))
     (is (contains? runner-keys :docker))
@@ -80,7 +80,7 @@
     (is (= :local (get-in system-health [:broker :backend])))
     (is (<= 7 (get-in system-health [:tools :count])))
     (is (integer? (get-in system-health [:runtime :run-count])))
-    (is (= 3 (get-in system-health [:channel-adapters :count])))
+    (is (= 1 (get-in system-health [:channel-adapters :count])))
     (is (= 0 (get-in system-health [:orchestrator :agent-count])))
     (is (= "ok" (get-in system-health [:health-snapshot :components "sqlite" :status])))
     (is (= "ok" (get-in system-health [:health-snapshot :components "runtime" :status])))))

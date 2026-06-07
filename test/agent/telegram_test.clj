@@ -5,7 +5,7 @@
    [agent.telegram :as telegram]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is testing]]))
 
 (defn temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-telegram-" ".db")))
@@ -48,10 +48,7 @@
   (let [service (telegram/create-service {:config {:channel-adapters {:telegram {:bot-token "token"}}}})
         caps (:capabilities (channels/describe-adapter service))]
     (is (= #{:supports-outbound
-             :supports-streaming
-             :supports-typing
-             :supports-draft-updates
-             :supports-draft-lifecycle}
+             :supports-typing}
            caps))
     (is (empty? (channels/capability-validation-errors service)))))
 
@@ -677,7 +674,6 @@
 (deftest draft-id-stays-positive
   (let [next-draft-id @#'telegram/next-draft-id
         rotate-draft-id @#'telegram/rotate-draft-id
-        valid? @#'telegram/valid-draft-id?
         max-id @#'telegram/max-draft-id]
     (testing "generated ids are in [1, max]"
       (let [id (next-draft-id)]
@@ -688,12 +684,4 @@
       (let [ids (take 5000 (iterate rotate-draft-id (- max-id 2)))]
         (is (every? pos? ids))
         (is (every? #(<= % max-id) ids))
-        (is (some #(= 1 %) ids) "wraps back to 1")))
-    (testing "external draft ids are validated"
-      (is (valid? 1))
-      (is (valid? max-id))
-      (is (not (valid? 0)))
-      (is (not (valid? -5)))
-      (is (not (valid? (inc max-id))))
-      (is (not (valid? 1.5)))
-      (is (not (valid? nil))))))
+        (is (some #(= 1 %) ids) "wraps back to 1")))))

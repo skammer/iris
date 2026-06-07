@@ -224,14 +224,12 @@
                                   :poll-timeout-seconds 30
                                   :poll-limit 100
                                   :max-download-bytes 20971520
-                                  :document-roots ["."]
-                                  :max-document-bytes 20971520
-                                  :allowlist {:allow-all? false
-                                              :user-ids []
-                                              :chat-ids []}}
-                      :discord {:enabled false}
-                      :slack {:enabled false}}
-   :runners {:default-substrate :auto
+	                                  :document-roots ["."]
+	                                  :max-document-bytes 20971520
+	                                  :allowlist {:allow-all? false
+	                                              :user-ids []
+	                                              :chat-ids []}}}
+	   :runners {:default-substrate :auto
              ;; Substrates a remote API caller may request. Excludes
              ;; :local-unsandboxed (no isolation) so the run API cannot be used
              ;; as a host-exec endpoint. Internal/system callers are unrestricted.

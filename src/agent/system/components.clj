@@ -67,37 +67,12 @@
 
 (defn create-channel-adapter-registry
   ([cfg] (create-channel-adapter-registry cfg nil))
-  ([cfg telegram-service]
+  ([_cfg telegram-service]
    (let [registry (channel-adapters/create-registry)
          registry* (if telegram-service
                      (channel-adapters/register-adapter registry telegram-service)
-                     registry)
-         specs [{:key :discord
-                 :display-name "Discord"
-                 :inbound-mode :gateway
-                 :capabilities #{}}
-                {:key :slack
-                 :display-name "Slack"
-                 :inbound-mode :socket-mode
-                 :capabilities #{}}]]
-     (reduce
-      (fn [acc {:keys [key display-name inbound-mode capabilities]}]
-        (channel-adapters/register-adapter
-         acc
-         (channel-adapters/create-adapter
-          {:description
-           (channel-adapters/create-adapter-description
-            key
-            display-name
-            inbound-mode
-            capabilities
-            :public-url-required? false
-            :config-schema {:enabled :boolean})
-           :health-fn (fn []
-                        {:healthy true
-                         :enabled (true? (get-in cfg [key :enabled]))})})))
-      registry*
-      specs))))
+                     registry)]
+     registry*)))
 
 (defn create-system-components
   [config-path system-ref reload-state health-registry system-control]

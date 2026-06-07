@@ -527,11 +527,6 @@
 
 (def ^:private max-draft-id 2147483647)
 
-(defn- valid-draft-id?
-  "Telegram requires a draft_id that is a strictly positive 32-bit int."
-  [id]
-  (and (integer? id) (pos? id) (<= id max-draft-id)))
-
 (defn- next-draft-id []
   (inc (mod (System/currentTimeMillis) max-draft-id)))
 
@@ -853,7 +848,7 @@
    :telegram
    "Telegram"
    :polling
-   #{:supports-outbound :supports-streaming :supports-typing :supports-draft-updates :supports-draft-lifecycle}
+   #{:supports-outbound :supports-typing}
    :public-url-required? false
    :config-schema {:enabled :boolean
                    :bot-token :string
@@ -872,26 +867,7 @@
       (send-message! (:bot-token config) (:recipient message*) (:content message*))))
   channels/IChannelTyping
   (send-adapter-typing! [_ recipient _metadata]
-    (send-chat-action! (:bot-token config) recipient "typing"))
-  channels/IChannelDrafts
-  (send-adapter-draft! [_ message]
-    (let [message* (channels/normalize-send-message nil message)
-          provided (get-in message* [:metadata :draft-id])
-          draft-id (if (valid-draft-id? provided)
-                     (long provided)
-                     (next-draft-id))]
-      (send-message-draft! (:bot-token config) (:recipient message*) draft-id (:content message*))
-      {:channel :telegram
-       :recipient (:recipient message*)
-       :draft-id draft-id}))
-  (update-adapter-draft! [_ draft update]
-    (let [content (or (:content update) (:text update) (str update))]
-      (send-message-draft! (:bot-token config) (:recipient draft) (:draft-id draft) content)
-      (assoc draft :content content)))
-  (finalize-adapter-draft! [_ draft final]
-    (let [content (or (:content final) (:text final) (str final))]
-      (send-message! (:bot-token config) (:recipient draft) content)
-      (assoc draft :content content :finalized? true))))
+    (send-chat-action! (:bot-token config) recipient "typing")))
 
 (defn create-service
   ([system] (create-service system {}))
