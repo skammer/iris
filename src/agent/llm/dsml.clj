@@ -1,8 +1,9 @@
 (ns agent.llm.dsml
   "Recovers tool calls that DeepSeek-style models leak as DSML markup
-   (e.g. `<｜DSML｜tool_calls>...`) inside `message.content` instead of
+  (e.g. `<｜DSML｜tool_calls>...`) inside `message.content` instead of
    populating the structured `tool_calls` field."
   (:require
+   [agent.logging :as logging]
    [cheshire.core :as json]
    [clojure.string :as str]))
 
@@ -119,7 +120,7 @@
                                           (when-not (seq tool-calls)
                                             recovered))))))
       (catch Exception e
-        (tap> {:event :dsml/recover-failed
-               :error (.getMessage e)
-               :content-preview (subs content 0 (min 200 (count content)))})
+        (logging/log! :agent.llm.dsml/recover-failed
+                      {:error/message (.getMessage e)
+                       :content/chars (count content)})
         turn))))

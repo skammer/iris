@@ -1,7 +1,7 @@
 (ns agent.llm.core-test
   "Tests for LLM core protocols and interfaces."
   (:require
-   [clojure.test :refer :all]
+   [clojure.test :refer [deftest is run-tests testing]]
    [agent.llm.core :as llm-core]))
 
 (deftest test-llm-protocol-definitions
@@ -32,9 +32,6 @@
       (is (some #{:health-check} health-methods)))))
 
 (deftest test-optional-protocols
-  (is (some #{:complete-with-tools} (keys (:sigs llm-core/ILLMProviderWithTools))))
-  (is (some #{:with-cache-controls} (keys (:sigs llm-core/ILLMProviderWithCache))))
-  (is (some #{:usage} (keys (:sigs llm-core/ILLMProviderWithUsage))))
   (is (some #{:invoke} (keys (:sigs llm-core/ILLMProviderInvoke))))
   (is (some #{:generate} (keys (:sigs llm-core/ILLMProviderInvoke)))))
 
@@ -45,12 +42,12 @@
                    (embed [_ _ _] [])
                    (list-models [_] [])
                    (get-capabilities [_ _] {})
-                   (estimate-cost [_ _ _] {:tokens 1 :cost-usd 0.0}))]
-    (let [response (llm-core/invoke provider {:messages [{:role "user" :content "hi"}]})]
-      (is (= "assistant" (:role response)))
-      (is (= "ok" (:content response)))
-      (is (= [] (:tool-calls response)))
-      (is (= "ok" (:raw response))))))
+                   (estimate-cost [_ _ _] {:tokens 1 :cost-usd 0.0}))
+        response (llm-core/invoke provider {:messages [{:role "user" :content "hi"}]})]
+    (is (= "assistant" (:role response)))
+    (is (= "ok" (:content response)))
+    (is (= [] (:tool-calls response)))
+    (is (= "ok" (:raw response)))))
 
 (deftest test-tool-call-directive-normalization
   (is (= [{:type :tool-call
@@ -65,40 +62,21 @@
           [{:id "call-1"
             :type "function"
             :function {:name "search"
-                       :arguments "{\"q\":\"clojure\"}"}}]))))
+	                       :arguments "{\"q\":\"clojure\"}"}}]))))
 
-(deftest test-helper-functions
-  (testing "Normalize messages function"
-    (let [messages [{:role "user" :content "Hello"}
-                    {:role :assistant :content "Hi there"}
-                    {:role "system" :content "Be helpful"}]]
-      (is (vector? (llm-core/normalize-messages messages)))
-      (is (= 3 (count (llm-core/normalize-messages messages))))))
-  
-  (testing "Message validation"
-    (let [valid-messages [{:role "user" :content "Hello"}]
-          invalid-messages [{:wrong-key "user" :content "Hello"}]]
-      (is (llm-core/validate-messages? valid-messages))
-      (is (not (llm-core/validate-messages? invalid-messages))))))
-
-(deftest test-error-handling
-  (testing "Error types exist"
-    (is (some? llm-core/ProviderError))
-    (is (some? llm-core/ConfigurationError))
-    (is (some? llm-core/ConnectionError))))
+(deftest stream-error-event-redacts-raw-provider-data-test
+  (let [event (llm-core/stream-error-event
+               (ex-info "rate limited"
+                        {:type :http-error
+                         :status 429
+                         :retry-after "0"
+                         :headers {"Authorization" "Bearer secret"}
+                         :body "secret response body"}))]
+    (is (= {:type :http-error
+            :status 429
+            :retry-after "0"}
+           (:details event)))))
 
 (comment
   ;; Run tests
-  (run-tests 'test.agent.llm.core-test)
-  
-  ;; Manual testing
-  (require '[agent.llm.core :as llm])
-  
-  ;; Check protocol methods
-  (keys (methods llm/ILLMProvider))
-  
-  ;; Test message normalization
-  (llm/normalize-messages [{:role "user" :content "Test"}])
-  
-  ;; Test validation
-  (llm/validate-messages? [{:role "user" :content "Test"}]))
+  (run-tests 'test.agent.llm.core-test))

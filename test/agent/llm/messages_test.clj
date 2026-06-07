@@ -1,7 +1,7 @@
 (ns agent.llm.messages-test
   (:require
    [agent.llm.messages :as llm-messages]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (deftest converts-rich-messages-to-openai-compatible-shape-test
   (is (= [{:role "system" :content "sys"}

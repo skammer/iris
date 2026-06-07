@@ -46,22 +46,6 @@
     "Estimate cost for completing messages with model.
     Returns: map with :tokens, :cost-usd, etc."))
 
-(defprotocol ILLMProviderWithTools
-  "Deprecated compatibility API. Prefer ILLMProviderInvoke/invoke with :tools."
-  (complete-with-tools [this messages tools opts]
-    "Complete with provider-native tool definitions.
-    Returns structured content/tool-call/usage data."))
-
-(defprotocol ILLMProviderWithCache
-  "Optional provider API for prompt-cache controls."
-  (with-cache-controls [this request cache-controls]
-    "Attach provider-native cache controls to request data."))
-
-(defprotocol ILLMProviderWithUsage
-  "Optional provider API for normalized usage extraction."
-  (usage [this response opts]
-    "Return normalized usage map: prompt/completion/cached tokens and cost."))
-
 (defprotocol ILLMProviderInvoke
   "Normalized expandable LLM request/response API."
   (invoke [this request]
@@ -94,36 +78,6 @@
   (get-metrics [this]
     "Get provider metrics.
     Returns: map with :requests, :errors, :avg-latency, etc."))
-
-;; ======================
-;; Provider Registry
-;; ======================
-
-(defprotocol ILLMProviderRegistry
-  "Protocol for managing multiple LLM providers."
-  
-  (register-provider [this name provider]
-    "Register a provider with a name.
-    name: keyword identifier for the provider
-    provider: ILLMProvider instance
-    Returns: updated registry")
-  
-  (get-provider [this name]
-    "Get provider by name.
-    Returns: provider instance or nil")
-  
-  (list-providers [this]
-    "List all registered providers.
-    Returns: map of name->provider-info")
-  
-  (select-provider [this criteria]
-    "Select provider based on criteria.
-    criteria: map with :model, :max-cost, :capabilities, etc.
-    Returns: provider name and instance")
-  
-  (remove-provider [this name]
-    "Remove provider from registry.
-    Returns: updated registry"))
 
 ;; ======================
 ;; Common Types and Specs
@@ -173,45 +127,12 @@
 ;; Common Utilities
 ;; ======================
 
-(defn normalize-messages
-  "Normalize messages to Iris internal rich format.
-   Provider wire conversion happens in provider namespaces."
-  [messages]
-  (llm-messages/messages->internal messages))
-
-(defn validate-messages?
-  [messages]
-  (s/valid? ::messages messages))
-
-(def ProviderError :provider-error)
-(def ConfigurationError :configuration-error)
-(def ConnectionError :connection-error)
-
 (defn count-tokens-estimate
   "Estimate token count for messages (rough approximation).
   Uses 4 chars per token as a rough estimate."
   [messages]
   (let [total-chars (reduce + (map #(count (llm-messages/content-text %)) messages))]
     (int (/ total-chars 4))))
-
-(defn create-completion-request
-  "Create standardized completion request."
-  [messages {:keys [model temperature max-tokens top-p
-                    frequency-penalty presence-penalty]
-             :or {temperature 0.7 max-tokens 1000}}]
-  {:model model
-   :messages (llm-messages/internal->openai-compatible messages)
-   :temperature temperature
-   :max_tokens max-tokens
-   :top_p top-p
-   :frequency_penalty frequency-penalty
-   :presence_penalty presence-penalty})
-
-(defn create-embedding-request
-  "Create standardized embedding request."
-  [text {:keys [model] :or {model "text-embedding-ada-002"}}]
-  {:model model
-   :input (if (string? text) [text] text)})
 
 (defn request->completion-opts
   [request]
@@ -303,16 +224,21 @@
 
 (defn stream-error-event
   [error]
-  (cond-> {:type :error
-           :error (if (instance? Throwable error)
-                    (.getMessage ^Throwable error)
-                    (str error))}
-    (instance? clojure.lang.ExceptionInfo error)
-    (assoc :details (ex-data error))))
+  (let [details (when (instance? clojure.lang.ExceptionInfo error)
+                  (select-keys (ex-data error)
+                               [:type :status :retry-after :provider :model]))]
+    (cond-> {:type :error
+             :error (if (instance? Throwable error)
+                      (.getMessage ^Throwable error)
+                      (str error))}
+      (seq details) (assoc :details details))))
 
-(defn- retry-after-ms [headers]
-  (when-let [value (or (get headers "Retry-After")
-                       (get headers "retry-after"))]
+(defn- retry-after-ms [error-data]
+  (when-let [value (or (:retry-after error-data)
+                       (get error-data "Retry-After")
+                       (get error-data "retry-after")
+                       (get-in error-data [:headers "Retry-After"])
+                       (get-in error-data [:headers "retry-after"]))]
     (or (try
           (* 1000 (Long/parseLong (str/trim value)))
           (catch Exception _ nil))
@@ -345,79 +271,7 @@
       (cond
         (not (instance? Exception result)) result
         :else (do
-                (Thread/sleep (or (retry-after-ms (:headers (ex-data result)))
+                (Thread/sleep (or (retry-after-ms (ex-data result))
                                   delay))
                 (recur (inc retry)
                        (min (* delay 2) max-delay)))))))
-
-;; ======================
-;; Provider Factory
-;; ======================
-
-(defmulti create-provider
-  "Create LLM provider based on type."
-  (fn [type config] type))
-
-(defmethod create-provider :default
-  [type config]
-  (throw (ex-info (str "Unknown provider type: " type) {:type type :config config})))
-
-;; ======================
-;; Example Usage
-;; ======================
-
-(comment
-  ;; Protocol usage example
-  (defprotocol IExampleProvider
-    (complete [this messages opts]))
-  
-  ;; Creating a provider that implements the protocol
-  (defrecord ExampleProvider [config]
-    ILLMProvider
-    (complete [this messages opts]
-      "Example implementation"
-      (str "Completed: " (count messages) " messages"))
-    
-    (stream [this messages opts]
-      (let [ch (async/chan)]
-        (async/go
-          (async/>! ch "Streaming not implemented")
-          (async/close! ch))
-        ch))
-    
-    (embed [this text opts]
-      [0.1 0.2 0.3]) ; Example embedding
-    
-    (list-models [this]
-      [{:model "example-model" :name "Example Model" :max-tokens 1000}])
-    
-    (get-capabilities [this model]
-      {:max-tokens 1000 :supports-embedding true})
-    
-    (estimate-cost [this messages model]
-      {:tokens 100 :cost-usd 0.001}))
-  
-  ;; Creating and using a provider
-  (def example-provider (->ExampleProvider {:api-key "test"}))
-  
-  (complete example-provider
-            [{:role "user" :content "Hello"}]
-            {:model "example-model"})
-  
-  ;; Using specs
-  (s/valid? ::messages [{:role "user" :content "Hello"}])
-  (s/valid? ::completion-opts {:model "gpt-4" :temperature 0.7})
-  
-  ;; Error handling
-  (try
-    (complete example-provider [] {})
-    (catch LLMError e
-      (println "LLM error:" (.getMessage e))))
-  
-  ;; Retry with backoff
-  (retry-with-backoff
-   #(complete example-provider
-              [{:role "user" :content "Hello"}]
-              {})
-   :max-retries 3
-   :initial-delay 1000))

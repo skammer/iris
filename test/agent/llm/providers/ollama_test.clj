@@ -22,9 +22,23 @@
                              :headers {"Content-Type" "application/json"}
                              :body {:message {:content "ollama-ok"}
                                     :done true}})]
-    (let [llm (provider/create-ollama-provider {})
-          result (llm-core/complete llm [{:role "user" :content "hi"}] {})]
-      (is (= "ollama-ok" result)))))
+	    (let [llm (provider/create-ollama-provider {})
+	          result (llm-core/complete llm [{:role "user" :content "hi"}] {})]
+	      (is (= "ollama-ok" result)))))
+
+(deftest ollama-uses-timeout-config-test
+  (let [request* (atom nil)]
+    (with-redefs [http/post (fn [_ request]
+                              (reset! request* request)
+                              {:status 200
+                               :headers {"Content-Type" "application/json"}
+                               :body {:message {:content "ok"}
+                                      :done true}})]
+      (let [llm (provider/create-ollama-provider {:timeout-ms 4321})]
+        (is (= "ok" (llm-core/complete llm [{:role "user" :content "hi"}] {})))
+        (is (= [4321 4321]
+               ((juxt :socket-timeout :connection-timeout) @request*)))
+        (is (not (contains? @request* :timeout-ms)))))))
 
 (deftest ollama-stream-and-embed-test
   (with-redefs [http/post (fn [url _]

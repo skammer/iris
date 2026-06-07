@@ -14,12 +14,30 @@
 
 (defn- random-id [] (str (UUID/randomUUID)))
 
+(defn- valid-http-uri? [endpoint-url]
+  (try
+    (let [uri (URI. endpoint-url)
+          scheme (some-> (.getScheme uri) str/lower-case)]
+      (and (#{"http" "https"} scheme)
+           (some? (.getHost uri))))
+    (catch Exception _
+      false)))
+
+(defn- validate-endpoint-url! [endpoint-url]
+  (when-not (and (string? endpoint-url)
+                 (not (str/blank? endpoint-url))
+                 (valid-http-uri? endpoint-url))
+    (throw (ex-info "MCP endpoint-url must be an absolute http(s) URL"
+                    {:type :invalid-mcp-endpoint
+                     :endpoint-url endpoint-url}))))
+
 (defn create-http-client
   [{:keys [endpoint-url headers protocol-version client-info capabilities timeout-ms telemetry]
     :or {protocol-version default-protocol-version
          client-info {:name "iris" :version "0.1.0"}
          capabilities {}
          timeout-ms 30000}}]
+  (validate-endpoint-url! endpoint-url)
   {:transport :streamable-http
    :endpoint-url endpoint-url
    :headers (or headers {})
@@ -178,18 +196,101 @@
    :description (:description description)
    :inputSchema (:input-schema description)})
 
+(declare json-schema->malli)
+
+(defn- nullable-type? [type]
+  (and (coll? type) (some #{"null"} type)))
+
+(defn- type-name [type]
+  (if (keyword? type) (name type) type))
+
+(defn- non-null-types [type]
+  (if (coll? type)
+    (remove #{"null"} (map type-name type))
+    [(type-name type)]))
+
+(defn- json-schema-type [schema]
+  (let [type (:type schema)]
+    (if (coll? type)
+      (map type-name type)
+      (or (type-name type)
+          (cond
+            (:properties schema) "object"
+            (:items schema) "array"
+            (:enum schema) "string"
+            :else nil)))))
+
+(defn- json-schema-object->malli [schema]
+  (let [required (set (map name (:required schema)))
+        properties (:properties schema)
+        entries (mapv (fn [[property child-schema]]
+                        (let [property-name (name property)
+                              property-key (keyword property-name)
+                              optional? (not (contains? required property-name))]
+                          (if optional?
+                            [property-key {:optional true} (json-schema->malli child-schema)]
+                            [property-key (json-schema->malli child-schema)])))
+                      properties)
+        props (cond-> {}
+                (false? (:additionalProperties schema))
+                (assoc :closed true))]
+    (if (seq entries)
+      (into [:map props] entries)
+      (if (:closed props)
+        [:map props]
+        [:map-of :any :any]))))
+
+(defn- json-schema-array->malli [schema]
+  [:vector (json-schema->malli (or (:items schema) {}))])
+
+(defn- json-schema-type->malli [schema type]
+  (case type
+    "null" :nil
+    "string" :string
+    "integer" :int
+    "number" number?
+    "boolean" :boolean
+    "array" (json-schema-array->malli schema)
+    "object" (json-schema-object->malli schema)
+    :any))
+
+(defn- json-schema-union->malli [schema types]
+  (let [schemas (mapv #(json-schema-type->malli schema %) types)]
+    (case (count schemas)
+      0 :any
+      1 (first schemas)
+      (into [:or] schemas))))
+
+(defn- json-schema->malli [schema]
+  (let [schema (or schema {})
+        type (json-schema-type schema)
+        malli-schema (cond
+                       (contains? schema :const) [:= (:const schema)]
+                       (contains? schema :enum) (into [:enum] (:enum schema))
+                       (seq (:anyOf schema)) (into [:or] (map json-schema->malli (:anyOf schema)))
+                       (seq (:oneOf schema)) (into [:or] (map json-schema->malli (:oneOf schema)))
+                       (coll? type) (json-schema-union->malli schema (non-null-types type))
+                       :else (json-schema-type->malli schema type))]
+    (if (nullable-type? type)
+      [:maybe malli-schema]
+      malli-schema)))
+
 (defn mcp-tool->description
   [mcp-tool & {:keys [name-prefix required-permissions]}]
-  (tools/create-tool-description
-   (keyword (str (or name-prefix "") (:name mcp-tool)))
-   (:description mcp-tool)
-   :category :mcp
-   :input-schema [:map-of :any :any]
-   :required-permissions (or required-permissions #{:mcp-call})
-   :source :mcp
-   :source-details {:remote-name (:name mcp-tool)
-                    :input-schema (or (:inputSchema mcp-tool)
-                                      (:input_schema mcp-tool))}))
+  (let [input-schema (or (:inputSchema mcp-tool)
+                         (:input_schema mcp-tool))
+        malli-schema (if input-schema
+                       (json-schema->malli input-schema)
+                       [:map-of :any :any])]
+    (tools/create-tool-description
+     (keyword (str (or name-prefix "") (:name mcp-tool)))
+     (:description mcp-tool)
+     :category :mcp
+     :input-schema malli-schema
+     :required-permissions (or required-permissions #{:mcp-call})
+     :source :mcp
+     :source-details {:remote-name (:name mcp-tool)
+                      :input-schema input-schema})))
 
 (defn create-remote-tool
   [client mcp-tool & opts]
@@ -206,10 +307,22 @@
 
 (defn register-remote-tools!
   [registry client & opts]
-  (reduce tools/register-tool
-          registry
-          (map #(apply create-remote-tool client % opts)
-               (list-tools! client))))
+  (let [remote-tools (mapv #(apply create-remote-tool client % opts)
+                           (list-tools! client))
+        names (mapv (comp :name tools/describe) remote-tools)
+        duplicate-name (first (keep (fn [[tool-name count]]
+                                      (when (> count 1) tool-name))
+                                    (frequencies names)))
+        existing-name (first (filter #(tools/get-tool registry %) names))]
+    (when duplicate-name
+      (throw (ex-info "MCP server returned duplicate tool names"
+                      {:type :mcp-tool-name-collision
+                       :tool-name duplicate-name})))
+    (when existing-name
+      (throw (ex-info "MCP remote tool would overwrite an existing tool"
+                      {:type :mcp-tool-name-collision
+                       :tool-name existing-name})))
+    (reduce tools/register-tool registry remote-tools)))
 
 (defn agent-envelope
   [{:keys [id from-address to-address message-type content metadata]}]
@@ -221,12 +334,3 @@
             :messageType (or message-type "request")
             :content content
             :metadata (or metadata {})}})
-
-(defn agent-envelope? [value]
-  (and (= "2.0" (:jsonrpc value))
-       (= "agents/message" (:method value))
-       (map? (:params value))))
-
-(defn endpoint-origin [endpoint-url]
-  (let [uri (URI. endpoint-url)]
-    (str (.getScheme uri) "://" (.getAuthority uri))))

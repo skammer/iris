@@ -114,6 +114,20 @@
           response (llm-core/invoke llm {:messages [{:role "user" :content "hi"}]})]
       (is (= 11 (get-in response [:usage :cached-tokens]))))))
 
+(deftest openai-compatible-nonstream-preserves-reasoning-content-test
+  (with-redefs [http/post (fn [_ _]
+                            {:status 200
+                             :headers {"Content-Type" "application/json"}
+                             :body {:choices [{:message {:role "assistant"
+                                                         :reasoning_content "think first"
+                                                         :content "ok"}
+                                               :finish_reason "stop"}]}})]
+    (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})
+          response (llm-core/invoke llm {:messages [{:role "user" :content "hi"}]})]
+      (is (= "ok" (:content response)))
+      (is (= {:type :thinking :text "think first"}
+             (first (:content-blocks response)))))))
+
 (deftest openai-compatible-provider-resolves-api-key-per-call-test
   (let [headers* (atom [])
         token (atom "k1")]
@@ -129,6 +143,31 @@
         (llm-core/complete llm [{:role "user" :content "hi"}] {})
         (is (= ["Bearer k1" "Bearer k2"]
                (mapv #(get % "Authorization") @headers*)))))))
+
+(deftest openai-compatible-uses-timeout-and-retry-config-test
+  (let [calls (atom [])]
+    (with-redefs [http/post (fn [_ request]
+                              (swap! calls conj request)
+                              (if (= 1 (count @calls))
+                                {:status 429
+                                 :headers {"Retry-After" "0"
+                                           "Content-Type" "application/json"
+                                           "Authorization" "Bearer secret"}
+                                 :body "secret error body"}
+                                {:status 200
+                                 :headers {"Content-Type" "application/json"}
+                                 :body {:choices [{:message {:content "ok"}}]}}))]
+      (let [llm (provider/create-openai-compatible-provider
+                 {:api-key "oa-key"
+                  :timeout-ms 1234
+                  :max-retries 1
+                  :initial-delay 1})]
+        (is (= "ok" (llm-core/complete llm [{:role "user" :content "hi"}] {})))
+        (is (= 2 (count @calls)))
+        (is (= [1234 1234]
+               ((juxt :socket-timeout :connection-timeout) (first @calls))))
+        (is (not (contains? (first @calls) :timeout-ms)))
+        (is (not (contains? (first @calls) :max-retries)))))))
 
 (deftest openai-compatible-responses-complete-test
   (let [url* (atom nil)

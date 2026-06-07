@@ -23,12 +23,38 @@
     (when (instance? java.io.Closeable body)
       (.close ^java.io.Closeable body))))
 
+(defn- header-value [headers header-name]
+  (let [target (str/lower-case header-name)]
+    (some (fn [[k v]]
+            (when (= target (str/lower-case (name k))) v))
+          headers)))
+
 (defn http-error [message response]
   (llm-core/llm-error :http-error
                       message
                       {:status (:status response)
-                       :headers (:headers response)
-                       :body (:body response)}))
+                       :retry-after (header-value (:headers response) "Retry-After")
+                       :content-type (header-value (:headers response) "Content-Type")}))
+
+(def ^:private transport-option-keys
+  [:timeout-ms :max-retries :initial-delay :max-delay])
+
+(defn with-transport-options
+  [request config opts]
+  (merge request
+         (select-keys config transport-option-keys)
+         (select-keys opts transport-option-keys)))
+
+(defn http-request-options [request]
+  (cond-> (apply dissoc request transport-option-keys)
+    (:timeout-ms request) (assoc :socket-timeout (:timeout-ms request)
+                                 :connection-timeout (:timeout-ms request))))
+
+(defn- retry-args [request]
+  (mapcat (fn [k]
+            (when-let [value (get request k)]
+              [k value]))
+          [:max-retries :initial-delay :max-delay]))
 
 (defn checked-response [response error-fn]
   (if (<= 200 (:status response 0) 299)
@@ -37,17 +63,24 @@
       (close-response-body! response)
       (throw error))))
 
-(defn post-json [url request error-fn]
-  (llm-core/retry-with-backoff
-   #(checked-response (http/post url (assoc request :throw-exceptions false))
-                      error-fn)))
+(defn post-json
+  ([url request error-fn] (post-json url request error-fn {}))
+  ([url request error-fn transport-opts]
+   (let [request* (merge transport-opts request)]
+     (apply llm-core/retry-with-backoff
+            #(checked-response (http/post url (assoc (http-request-options request*) :throw-exceptions false))
+                               error-fn)
+            (retry-args request*)))))
 
-(defn post-stream [url request error-fn]
-  (checked-response
-   (http/post url (assoc request
-                         :throw-exceptions false
-                         :as :stream))
-   error-fn))
+(defn post-stream
+  ([url request error-fn] (post-stream url request error-fn {}))
+  ([url request error-fn transport-opts]
+   (let [request* (merge transport-opts request)]
+     (checked-response
+      (http/post url (assoc (http-request-options request*)
+                            :throw-exceptions false
+                            :as :stream))
+      error-fn))))
 
 (defn stream-channel [f]
   (let [ch (async/chan)]

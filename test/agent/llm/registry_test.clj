@@ -1,7 +1,7 @@
 (ns agent.llm.registry-test
   (:require
    [agent.llm.registry :as registry]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (def llm-cfg
   {:active-provider :openrouter
@@ -59,9 +59,17 @@
     (is (= :high (:reasoning opts)))
     (is (= "ephemeral" (:cache-retention opts)))
     (is (= "s1" (:session-id opts)))
-    (is (= {"X-Test" "1"} (:headers opts)))
+    (is (not (contains? opts :headers)))
     (is (= 1000 (:timeout-ms opts)))
     (is (= 2 (:max-retries opts)))))
+
+(deftest unknown-provider-type-error-test
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"Unknown LLM provider type"
+                        (registry/create-registry
+                         {:active-provider :bad
+                          :providers {:bad {:type :not-real
+                                            :model "m"}}}))))
 
 (deftest dynamic-api-key-resolver-test
   (let [reg (registry/create-registry

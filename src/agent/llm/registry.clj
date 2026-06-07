@@ -66,14 +66,26 @@
     (nil? value) nil
     (integer? value) (long value)
     (number? value) (long value)
-    (string? value) (Long/parseLong value)
+    (string? value) (try
+                      (Long/parseLong value)
+                      (catch NumberFormatException e
+                        (throw (ex-info "Invalid integer LLM option"
+                                        {:type :invalid-llm-option
+                                         :value value}
+                                        e))))
     :else value))
 
 (defn- maybe-double [value]
   (cond
     (nil? value) nil
     (number? value) (double value)
-    (string? value) (Double/parseDouble value)
+    (string? value) (try
+                      (Double/parseDouble value)
+                      (catch NumberFormatException e
+                        (throw (ex-info "Invalid numeric LLM option"
+                                        {:type :invalid-llm-option
+                                         :value value}
+                                        e))))
     :else value))
 
 (defn- compact-map [m]
@@ -86,7 +98,10 @@
   (let [kind (provider-kind provider-key provider-cfg)]
     (or (default-provider-metadata provider-key)
         (default-provider-metadata kind)
-        (default-provider-metadata :openai-compatible))))
+        (throw (ex-info "Unknown LLM provider type"
+                        {:type :unknown-provider-type
+                         :provider provider-key
+                         :provider-type kind})))))
 
 (defn- model-overrides [provider-cfg model-id]
   (let [models (:models provider-cfg)]
@@ -122,25 +137,19 @@
 
 (defn normalize-options
   ([opts] (normalize-options nil nil opts))
-  ([registry provider-key opts]
-   (let [provider-cfg (get-in registry [:providers (normalize-provider-key provider-key) :config])
-         headers (merge (or (:headers provider-cfg) {})
-                        (or (:extra-headers provider-cfg) {})
-                        (or (:headers opts) {})
-                        (or (:extra-headers opts) {}))]
-     (compact-map
-      {:temperature (maybe-double (:temperature opts))
-       :api (:api opts)
-       :max-tokens (maybe-long (or (:max-tokens opts) (:max_tokens opts)))
-       :reasoning (normalize-reasoning (:reasoning opts))
-       :cache-retention (or (:cache-retention opts)
-                            (:cache_retention opts)
-                            (:prompt-cache-retention opts)
-                            (:prompt_cache_retention opts))
-       :session-id (or (:session-id opts) (:session_id opts))
-       :headers (when (seq headers) headers)
-       :timeout-ms (maybe-long (or (:timeout-ms opts) (:timeout_ms opts)))
-       :max-retries (maybe-long (or (:max-retries opts) (:max_retries opts)))}))))
+  ([_registry _provider-key opts]
+   (compact-map
+    {:temperature (maybe-double (:temperature opts))
+     :api (:api opts)
+     :max-tokens (maybe-long (or (:max-tokens opts) (:max_tokens opts)))
+     :reasoning (normalize-reasoning (:reasoning opts))
+     :cache-retention (or (:cache-retention opts)
+                          (:cache_retention opts)
+                          (:prompt-cache-retention opts)
+                          (:prompt_cache_retention opts))
+     :session-id (or (:session-id opts) (:session_id opts))
+     :timeout-ms (maybe-long (or (:timeout-ms opts) (:timeout_ms opts)))
+     :max-retries (maybe-long (or (:max-retries opts) (:max_retries opts)))})))
 
 (defn create-registry
   ([llm-cfg] (create-registry llm-cfg {}))
