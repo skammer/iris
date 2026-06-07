@@ -36,22 +36,27 @@
 
 (defn event->subjects
   [{:keys [event-type entity-type entity-id]}]
-  (let [run-event? (and (= "agent_run" (name entity-type)) (seq entity-id))
+  (let [event-type* (some-> event-type name)
+        entity-type* (some-> entity-type name)
+        run-id (some-> entity-id str)
+        run-event? (and (= "agent_run" entity-type*)
+                        (not (str/blank? run-id)))
         subjects (cond-> ["events.all"]
                    run-event?
-                   (conj (run-events-subject entity-id))
+                   (conj (run-events-subject run-id))
 
-                   (= "agent.run.output" (name event-type))
-                   (conj (run-output-subject entity-id))
+                   (and run-event? (= "agent.run.output" event-type*))
+                   (conj (run-output-subject run-id))
 
-                   (= "agent.run.heartbeat" (name event-type))
-                   (conj (run-heartbeats-subject entity-id))
+                   (and run-event? (= "agent.run.heartbeat" event-type*))
+                   (conj (run-heartbeats-subject run-id))
 
-                   (= "agent.run.checkpointed" (name event-type))
-                   (conj (run-checkpoints-subject entity-id))
+                   (and run-event? (= "agent.run.checkpointed" event-type*))
+                   (conj (run-checkpoints-subject run-id))
 
-                   (str/includes? (name event-type) "agent.run.command.")
-                   (conj (run-commands-subject entity-id)))]
+                   (and run-event?
+                        (str/starts-with? (or event-type* "") "agent.run.command."))
+                   (conj (run-commands-subject run-id)))]
     (vec subjects)))
 
 (defn event->messages [event]

@@ -8,6 +8,7 @@
 (def tool-output-max-chars 8000)
 
 (def broker-channel-buffer-size 64)
+(def broker-block-timeout-ms 1000)
 (def agent-inbox-buffer-size 64)
 (def channel-bus-buffer-size 128)
 (def event-stream-buffer-size 256)

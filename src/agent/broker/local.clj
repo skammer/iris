@@ -29,7 +29,12 @@
       (swap! dropped-count inc))
 
     :block
-    (async/>!! channel message)
+    (let [timeout-ms (long (or (:block-timeout-ms opts)
+                               defaults/broker-block-timeout-ms))
+          timeout-ch (async/timeout timeout-ms)
+          [ok? port] (async/alts!! [[channel message] timeout-ch])]
+      (when-not (and (= port channel) ok?)
+        (swap! dropped-count inc)))
 
     (async/put! channel message)))
 
@@ -68,25 +73,29 @@
                                         wait? true}}]
     (let [request-id (str (UUID/randomUUID))
           reply-to (broker/reply-subject request-id)
-          sub (broker/subscribe! this reply-to)
           message {:subject subject
                    :request-id request-id
                    :reply-to reply-to
                    :payload payload}]
-      (broker/publish! this message)
       (if-not wait?
-        {:request-id request-id
-         :reply-to reply-to}
-        (let [timeout-ch (async/timeout timeout-ms)
-              [reply port] (async/alts!! [(:channel sub) timeout-ch])]
-          (broker/unsubscribe! this sub)
-          (if (= port timeout-ch)
-            {:request-id request-id
-             :reply-to reply-to
-             :timed-out true}
-            {:request-id request-id
-             :reply-to reply-to
-             :response reply})))))
+        (do
+          (broker/publish! this message)
+          {:request-id request-id
+           :reply-to reply-to})
+        (let [sub (broker/subscribe! this reply-to)]
+          (try
+            (broker/publish! this message)
+            (let [timeout-ch (async/timeout timeout-ms)
+                  [reply port] (async/alts!! [(:channel sub) timeout-ch])]
+              (if (= port timeout-ch)
+                {:request-id request-id
+                 :reply-to reply-to
+                 :timed-out true}
+                {:request-id request-id
+                 :reply-to reply-to
+                 :response reply}))
+            (finally
+              (broker/unsubscribe! this sub)))))))
   (health-check [_]
     {:healthy true
      :backend :local
