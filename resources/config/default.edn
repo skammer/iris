@@ -193,7 +193,8 @@
                   :writable? true}
           :facts {:extractor {:enabled true
                               :provider nil
-                              :model nil}
+                              :model nil
+                              :format :json-schema}
                   :default-scope :session
                   :dedup {:similarity-threshold nil}}}
  :channel-adapters {:telegram {:enabled false

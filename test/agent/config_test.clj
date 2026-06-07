@@ -92,7 +92,8 @@
       (is (= 900 (get-in cfg [:tools :approvals :ttl-seconds])))
       (is (= {:enabled true
               :provider nil
-              :model nil}
+              :model nil
+              :format :json-schema}
              (get-in cfg [:memory :facts :extractor])))
       (is (= {:default-limit 10
               :max-limit 10

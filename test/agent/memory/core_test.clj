@@ -26,6 +26,25 @@
   (generate [this messages opts]
     (llm-core/invoke this (assoc opts :messages messages))))
 
+(defrecord CapturingFactProvider [responses requests]
+  llm-core/ILLMProvider
+  (complete [_ _ _] "")
+  (stream [_ _ _] nil)
+  (embed [_ _ _] [])
+  (list-models [_] [])
+  (get-capabilities [_ _] {:supports-tools true})
+  (estimate-cost [_ _ _] {:tokens 1 :cost-usd 0.0})
+  llm-core/ILLMProviderInvoke
+  (invoke [_ request]
+    (swap! requests conj request)
+    {:role "assistant"
+     :content (first (first (swap-vals! responses rest)))
+     :tool-calls []
+     :usage nil
+     :raw nil})
+  (generate [this messages opts]
+    (llm-core/invoke this (assoc opts :messages messages))))
+
 (defn temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-memory-" ".db")))
 
@@ -235,6 +254,35 @@
         (is (= {:type "global" :id nil} (:scope (first global-facts)))))
       (finally
         (io/delete-file db-path true)))))
+
+(deftest memory-extraction-defaults-to-json-schema-output-test
+  (let [responses (atom [(json/generate-string {:facts []})])
+        requests (atom [])
+        provider (->CapturingFactProvider responses requests)]
+    (memory/extract-facts provider
+                          {:user-message "I prefer concise answers"
+                           :assistant-message "noted"
+                           :model "model"
+                           :session-id "s1"
+                           :extractor {:enabled true}})
+    (let [request (first @requests)]
+      (is (= "memory_facts" (get-in request [:structured-output :name])))
+      (is (nil? (:response-format request))))))
+
+(deftest memory-extraction-supports-json-object-output-test
+  (let [responses (atom [(json/generate-string {:facts []})])
+        requests (atom [])
+        provider (->CapturingFactProvider responses requests)]
+    (memory/extract-facts provider
+                          {:user-message "I prefer concise answers"
+                           :assistant-message "noted"
+                           :model "model"
+                           :session-id "s1"
+                           :extractor {:enabled true
+                                       :format :json-object}})
+    (let [request (first @requests)]
+      (is (= {:type "json_object"} (:response-format request)))
+      (is (nil? (:structured-output request))))))
 
 (deftest memory-facts-similarity-fallback-test
   (let [db-path (temp-db-path)

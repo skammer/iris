@@ -365,22 +365,41 @@
          (filter #(every? (fn [k] (string? (get % k))) [:subject :predicate :object]))
          (mapv #(select-keys % [:subject :predicate :object :scope :confidence])))))
 
+(defn- extractor-format [extractor]
+  (let [format (or (:format extractor) :json-schema)]
+    (case format
+      (:json-schema "json-schema") :json-schema
+      (:json-object "json-object") :json-object
+      (throw (ex-info "Unsupported memory fact extractor format"
+                      {:type :unsupported-fact-extractor-format
+                       :format format
+                       :allowed [:json-schema :json-object]})))))
+
+(defn- output-options [extractor]
+  (case (extractor-format extractor)
+    :json-schema
+    {:structured-output {:name "memory_facts"
+                         :strict? (not (false? (:strict? extractor)))
+                         :schema (extraction-schema)}}
+
+    :json-object
+    {:response-format {:type "json_object"}}))
+
 (defn extract-facts
-  [provider {:keys [user-message assistant-message model session-id]}]
+  [provider {:keys [user-message assistant-message model session-id extractor]}]
   (let [response (llm/invoke
                   provider
-                  {:model model
-                   :session-id session-id
-                   :temperature 0.0
-                   :structured-output {:name "memory_facts"
-                                       :strict? true
-                                       :schema (extraction-schema)}
-                   :messages [{:role "system"
-                               :content (prompts/load-prompt "fact-extraction")}
-                              {:role "user"
-                               :content (json/generate-string
-                                         {:user user-message
-                                          :assistant assistant-message})}]})]
+                  (merge
+                   {:model model
+                    :session-id session-id
+                    :temperature 0.0
+                    :messages [{:role "system"
+                                :content (prompts/load-prompt "fact-extraction")}
+                               {:role "user"
+                                :content (json/generate-string
+                                          {:user user-message
+                                           :assistant assistant-message})}]}
+                   (output-options extractor)))]
     (parse-fact-response (:content response))))
 
 (defn extract-and-save-facts!
@@ -392,7 +411,8 @@
         (let [model (or (:model extractor) (:model opts))
               facts (extract-facts provider (assoc exchange
                                                    :model model
-                                                   :session-id (:session-id opts)))]
+                                                   :session-id (:session-id opts)
+                                                   :extractor extractor))]
           (mapv (fn [fact]
                   (let [scope-type (or (:scope fact)
                                        (name (or (get-in memory-service [:config :facts :default-scope])
