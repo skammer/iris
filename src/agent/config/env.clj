@@ -3,17 +3,40 @@
   (:require
    [clojure.string :as str]))
 
+(defn- blank? [value]
+  (or (nil? value)
+      (str/blank? (str value))))
+
+(defn- clean [value]
+  (when-not (blank? value)
+    (str/trim (str value))))
+
+(defn- invalid-env [message data]
+  (throw (ex-info message (assoc data :type :env-config-invalid))))
+
 (defn- parse-bool [value]
-  (when-not (nil? value)
-    (contains? #{"1" "true" "yes" "on"} (str/lower-case (str value)))))
+  (when-let [value* (some-> value clean str/lower-case)]
+    (cond
+      (contains? #{"1" "true" "yes" "on"} value*) true
+      (contains? #{"0" "false" "no" "off"} value*) false
+      :else (invalid-env "Invalid boolean env config"
+                         {:env/expected "true|false|1|0|yes|no|on|off"}))))
 
 (defn- parse-long* [value]
-  (when (some? value)
-    (Long/parseLong (str value))))
+  (when-let [value* (clean value)]
+    (try
+      (Long/parseLong value*)
+      (catch NumberFormatException _
+        (invalid-env "Invalid integer env config"
+                     {:env/expected "integer"})))))
 
 (defn- parse-double* [value]
-  (when (some? value)
-    (Double/parseDouble (str value))))
+  (when-let [value* (clean value)]
+    (try
+      (Double/parseDouble value*)
+      (catch NumberFormatException _
+        (invalid-env "Invalid decimal env config"
+                     {:env/expected "decimal"})))))
 
 (defn- parse-csv [value]
   (when (some? value)
@@ -28,13 +51,29 @@
            vec))
 
 (defn- parse-keyword* [value]
-  (some-> value str/lower-case not-empty keyword))
+  (some-> value clean str/lower-case keyword))
 
 (defn- configured-env-value [getenv names]
   (some (fn [name]
           (let [value (getenv name)]
-            (when (some? value) value)))
+            (when (some? value) [name value])))
         (if (sequential? names) names [names])))
+
+(defn- parse-env-value [name raw parse]
+  (try
+    ((or parse clean) raw)
+    (catch clojure.lang.ExceptionInfo e
+      (throw (ex-info (or (.getMessage e) "Invalid env config")
+                      (merge {:env/name name
+                              :env/value raw}
+                             (ex-data e))
+                      e)))
+    (catch Exception e
+      (throw (ex-info "Invalid env config"
+                      {:type :env-config-invalid
+                       :env/name name
+                       :env/value raw}
+                      e)))))
 
 (defn- assoc-path [path]
   (fn [cfg value]
@@ -129,14 +168,19 @@
    {:names "AGENT_NREPL_ENABLED" :parse parse-bool :apply (assoc-path [:nrepl :enabled])}
    {:names "AGENT_NREPL_BIND" :apply (assoc-path [:nrepl :bind])}
    {:names "AGENT_NREPL_PORT" :parse parse-long* :apply (assoc-path [:nrepl :port])}
-   {:names "AGENT_NREPL_PORT_FILE" :apply (assoc-path [:nrepl :port-file])}])
+   {:names "AGENT_NREPL_PORT_FILE" :apply (assoc-path [:nrepl :port-file])}
+   {:names "AGENT_FEDERATION_KEY_ID" :apply (assoc-path [:orchestrator :federation :key-id])}
+   {:names "AGENT_FEDERATION_PRIVATE_KEY" :apply (assoc-path [:orchestrator :federation :private-key])}
+   {:names "AGENT_FEDERATION_TIMEOUT_MS" :parse parse-long* :apply (assoc-path [:orchestrator :federation :timeout-ms])}
+   {:names "AGENT_FEDERATION_MAX_CLOCK_SKEW_MS" :parse parse-long* :apply (assoc-path [:orchestrator :federation :max-clock-skew-ms])}
+   {:names "AGENT_FEDERATION_OUTBOX_POLL_MS" :parse parse-long* :apply (assoc-path [:orchestrator :federation :outbox-poll-ms])}])
 
 (defn apply-env-config
   [cfg getenv]
   (reduce
    (fn [acc {:keys [names parse] apply-fn :apply}]
-     (if-let [raw (configured-env-value getenv names)]
-       (let [value ((or parse identity) raw)]
+     (if-let [[name raw] (configured-env-value getenv names)]
+       (let [value (parse-env-value name raw parse)]
          (if (some? value)
            (apply-fn acc value)
            acc))

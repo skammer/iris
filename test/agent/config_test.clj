@@ -144,6 +144,30 @@
     (let [cfg (config/load-config)]
       (is (true? (get-in cfg [:orchestrator :enabled]))))))
 
+(deftest invalid-env-bool-fails-with-env-context-test
+  (with-isolated-config [_root {"AGENT_ORCHESTRATOR_ENABLED" "maybe"}]
+    (try
+      (config/load-config)
+      (is false "expected invalid env config")
+      (catch clojure.lang.ExceptionInfo e
+        (is (= :env-config-invalid (:type (ex-data e))))
+        (is (= "AGENT_ORCHESTRATOR_ENABLED" (:env/name (ex-data e))))))))
+
+(deftest federation-env-overrides-test
+  (with-isolated-config [_root {"AGENT_FEDERATION_KEY_ID" "k1"
+                                "AGENT_FEDERATION_PRIVATE_KEY" "secret"
+                                "AGENT_FEDERATION_TIMEOUT_MS" "2000"
+                                "AGENT_FEDERATION_MAX_CLOCK_SKEW_MS" "1000"
+                                "AGENT_FEDERATION_OUTBOX_POLL_MS" "50"}]
+    (let [cfg (config/load-config)]
+      (is (= {:key-id "k1"
+              :private-key "secret"
+              :timeout-ms 2000
+              :max-clock-skew-ms 1000
+              :outbox-poll-ms 50}
+             (select-keys (get-in cfg [:orchestrator :federation])
+                          [:key-id :private-key :timeout-ms :max-clock-skew-ms :outbox-poll-ms]))))))
+
 (deftest sqlite-pool-env-overrides-test
   (with-isolated-config [_root {"AGENT_SQLITE_MAXIMUM_POOL_SIZE" "12"
                                 "AGENT_SQLITE_MINIMUM_IDLE" "3"

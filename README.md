@@ -102,6 +102,8 @@ Notes:
   - `AGENT_RUNNER_DEFAULT_SUBSTRATE=auto|seatbelt|bubblewrap|docker|podman|local-unsandboxed`. `auto` means Seatbelt on macOS, Bubblewrap on Linux.
 - Orchestrator env var:
   - `AGENT_ORCHESTRATOR_ENABLED=true`: enables experimental in-memory `/v1/agents`, `/v1/channels`, and `/v1/federation` APIs. Default is false because this state is not durable.
+  - Federation outbound signing: `AGENT_FEDERATION_KEY_ID`, `AGENT_FEDERATION_PRIVATE_KEY`.
+  - Federation tuning: `AGENT_FEDERATION_TIMEOUT_MS`, `AGENT_FEDERATION_MAX_CLOCK_SKEW_MS`, `AGENT_FEDERATION_OUTBOX_POLL_MS`.
 - Isolated child runtime env vars:
   - `AGENT_CONTROL_URL`: parent API URL used by container children.
   - `AGENT_BOOTSTRAP_TOKEN`: per-run token; injected by runner.
@@ -233,6 +235,7 @@ Required/important env:
 - `AGENT_SQLITE_DESTRUCTIVE_RESET_ON_DRIFT=false`: keep false in production unless data loss is acceptable; true rebuilds drifted DB files.
 - `AGENT_RUNNER_DEFAULT_SUBSTRATE=auto`: Seatbelt on macOS, Bubblewrap on Linux.
 - `AGENT_ORCHESTRATOR_ENABLED=false`: keep false unless testing experimental process-local agent/federation APIs.
+- Federation peers use `keys [{key_id, public_key, status, valid_from, valid_until}]`; outbound federation requires `AGENT_FEDERATION_KEY_ID` + `AGENT_FEDERATION_PRIVATE_KEY`.
 - `JAVA_TOOL_OPTIONS=--enable-native-access=ALL-UNNAMED`: suppresses sqlite-jdbc native access warning.
 - Tool permissions/policy: `AGENT_API_TOOL_PERMISSIONS`, `AGENT_UI_TOOL_PERMISSIONS`, `AGENT_AGENT_TOOL_PERMISSIONS`, `AGENT_TOOL_ALLOWLIST`, `AGENT_TOOL_BLOCKLIST`, `AGENT_TOOL_APPROVAL_TTL_SECONDS`, `AGENT_TOOLS_YOLO`.
 - LLM: `AGENT_LLM_PROVIDER`, `AGENT_LLM_MODEL`, `AGENT_LLM_API=chat-completions|responses`, plus `OLLAMA_BASE_URL`, `OPENROUTER_API_KEY`, or `OPENAI_API_KEY`.

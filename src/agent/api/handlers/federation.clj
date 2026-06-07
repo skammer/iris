@@ -21,8 +21,13 @@
         logical-address-prefix (:logical_address_prefix body)
         capabilities (or (:capabilities body) [])
         status (or (:status body) "online")
-        key-id (:key_id body)
-        public-key (:public_key body)
+        keys (mapv (fn [key*]
+                     {:key-id (:key_id key*)
+                      :public-key (:public_key key*)
+                      :status (or (:status key*) "active")
+                      :valid-from (:valid_from key*)
+                      :valid-until (:valid_until key*)})
+                   (or (:keys body) []))
         peer (orchestrator/register-federated-peer!
               (:orchestrator system)
               {:id id
@@ -31,15 +36,12 @@
                :logical-address-prefix logical-address-prefix
                :capabilities capabilities
                :status status
-               :key-id key-id
-               :public-key public-key})]
-    (when (and (:store system) public-key)
-      (sqlite/upsert-federation-peer-key!
-       (:store system)
-       {:peer-id (:id peer)
-        :key-id (or key-id "default")
-        :public-key public-key
-        :status "active"}))
+               :keys keys})]
+    (when (:store system)
+      (doseq [key* keys]
+        (sqlite/upsert-federation-peer-key!
+         (:store system)
+         (assoc key* :peer-id (:id peer)))))
     (responses/json-response 201 {:data (ser/federated-peer->response peer)})))
 
 (defn inbox [system request]
@@ -66,4 +68,6 @@
           :signature-invalid (throw (errors/api-error 401 "signature_invalid" "Federation signature invalid"))
           :timestamp-skew (throw (errors/api-error 401 "timestamp_skew" "Federation timestamp outside skew"))
           :nonce-replay (throw (errors/api-error 409 "nonce_replay" "Federation nonce replay"))
+          :key-inactive (throw (errors/api-error 401 "key_inactive" "Federation signing key inactive"))
+          :nonce-store-missing (throw (errors/api-error 500 "nonce_store_missing" "Federation nonce store missing"))
           (throw e))))))

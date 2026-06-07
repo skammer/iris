@@ -2,6 +2,8 @@
   (:require
    [agent.persistence.sqlite.common :as common]))
 
+(declare row->outbox)
+
 (defn upsert-peer-key!
   [store {:keys [peer-id key-id public-key status valid-from valid-until]}]
   (let [record {:peer-id peer-id
@@ -45,8 +47,8 @@
           :public-key public_key
           :status status
           :valid-from valid_from
-          :valid-until valid_until
-          :created-at created_at})))))
+	          :valid-until valid_until
+	          :created-at created_at})))))
 
 (defn insert-nonce!
   [store {:keys [peer-id nonce seen-at expires-at]}]
@@ -98,7 +100,38 @@
           (:last-status record)
           (:created-at record)
           (:updated-at record)])))
-    record))
+	    record))
+
+(defn claim-due-outbox!
+  [store {:keys [limit now]
+          :or {limit 25}}]
+  (common/with-transaction
+    store
+    (fn [conn]
+      (let [now* (or now (common/now-str))
+	            rows (common/select-many
+                  conn
+                  ["SELECT id, peer_id, key_id, url, envelope_json, state, attempt_count,
+                           next_attempt_at, last_error, last_status, created_at, updated_at
+                    FROM federation_outbox
+                    WHERE state = 'queued'
+                      AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+                    ORDER BY created_at ASC
+                    LIMIT ?"
+                   now*
+                   (long limit)]
+                  row->outbox)
+            ids (mapv :id rows)]
+        (doseq [id ids]
+          (common/execute!
+           conn
+           ["UPDATE federation_outbox
+             SET state = 'in_flight',
+                 updated_at = ?
+             WHERE id = ? AND state = 'queued'"
+            now*
+            id]))
+        rows))))
 
 (defn update-outbox!
   [store id {:keys [state attempt-count next-attempt-at last-error last-status]}]
@@ -121,7 +154,31 @@
         last-error
         last-status
         (common/now-str)
-        id]))))
+	        id]))))
+
+(defn mark-outbox-retry!
+  [store id {:keys [attempt-count next-attempt-at last-error last-status]}]
+  (update-outbox! store id {:state "queued"
+                            :attempt-count attempt-count
+                            :next-attempt-at next-attempt-at
+                            :last-error last-error
+                            :last-status last-status}))
+
+(defn mark-outbox-acked!
+  [store id {:keys [attempt-count last-status]}]
+  (update-outbox! store id {:state "acked"
+                            :attempt-count attempt-count
+                            :next-attempt-at nil
+                            :last-error nil
+                            :last-status last-status}))
+
+(defn mark-outbox-dead-letter!
+  [store id {:keys [attempt-count last-error last-status]}]
+  (update-outbox! store id {:state "dead_letter"
+                            :attempt-count attempt-count
+                            :next-attempt-at nil
+                            :last-error last-error
+                            :last-status last-status}))
 
 (defn row->outbox
   [{:keys [id peer_id key_id url envelope_json state attempt_count next_attempt_at

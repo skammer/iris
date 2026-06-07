@@ -127,10 +127,11 @@
 
 (defn create-orchestrator
   ([] (create-orchestrator {}))
-  ([{:keys [event-sink federation-deliver telemetry observer trace enabled?]
+  ([{:keys [event-sink federation-forwarder federation-deliver telemetry observer trace enabled?]
      :or {enabled? true}}]
    {:state (atom (initial-state))
     :enabled? (boolean enabled?)
+    :federation-forwarder federation-forwarder
     :federation-deliver federation-deliver
     :event-sink event-sink
     :telemetry telemetry
@@ -185,6 +186,12 @@
              {}
              (or policies {})))
 
+(defn- peer-key-view [key*]
+  {:key-id (:key-id key*)
+   :status (:status key*)
+   :valid-from (:valid-from key*)
+   :valid-until (:valid-until key*)})
+
 (defn- federated-peer-view [peer]
   {:id (:id peer)
    :name (:name peer)
@@ -192,6 +199,7 @@
    :logical-address-prefix (:logical-address-prefix peer)
    :capabilities (vec (sort (:capabilities peer)))
    :key-ids (vec (sort (keys (:keys peer))))
+   :keys (mapv peer-key-view (vals (:keys peer)))
    :status (:status peer)
    :created-at (:created-at peer)})
 
@@ -389,22 +397,24 @@
     (agent-view updated)))
 
 (defn register-federated-peer!
-  [orchestrator {:keys [id name base-url logical-address-prefix capabilities status key-id public-key private-key]
+  [orchestrator {:keys [id name base-url logical-address-prefix capabilities status keys]
                  :or {capabilities []
                       status "online"}}]
   (ensure-enabled! orchestrator :register-federated-peer)
   (let [peer-id (or id (random-id "peer"))
-        key-id* (or key-id "default")
         peer {:id peer-id
               :name (or name peer-id)
               :base-url base-url
               :logical-address-prefix (or logical-address-prefix (str "federation://" peer-id "/"))
               :capabilities (set capabilities)
-              :key-id key-id
-              :private-key private-key
-              :keys (cond-> {}
-                      public-key (assoc key-id* {:public-key public-key
-                                                 :status "active"}))
+              :keys (into {}
+                          (map (fn [{:keys [key-id public-key status valid-from valid-until]}]
+                                 [key-id {:key-id key-id
+                                          :public-key public-key
+                                          :status (or status "active")
+                                          :valid-from valid-from
+                                          :valid-until valid-until}]))
+                          keys)
               :status status
               :created-at (now)}]
     (swap-state! orchestrator assoc-in [:federated-peers peer-id] peer)
@@ -575,40 +585,42 @@
                        :agent-id agent-id
                        :limit limit})))))
 
+(defn- apply-federation-result! [orchestrator envelope result]
+  (let [updated (if (:ok? result)
+                  (assoc envelope
+                         :status "forwarded"
+                         :forwarded-at (now))
+                  (assoc envelope
+                         :status "forward_failed"
+                         :last-error (or (some-> result :body :message)
+                                         (str "peer returned " (:status result)))))]
+    (store-interop-message! orchestrator updated)
+    (emit-event! orchestrator
+                 {:event-type (if (:ok? result)
+                                :agent.interop.message.forwarded
+                                :agent.interop.message.forward.failed)
+                  :entity-type :peer
+                  :entity-id (:to-peer-id envelope)
+                  :payload (cond-> {:message-id (:id updated)
+                                    :remote-agent-id (:remote-agent-id updated)
+                                    :status (:status result)}
+                             (not (:ok? result))
+                             (assoc :last-error (:last-error updated)))})
+    updated))
+
 (defn- deliver-federated!
   [orchestrator peer-id peer remote-agent-id envelope]
   (if-let [deliver (:federation-deliver orchestrator)]
     (let [result (deliver {:peer-id peer-id
                            :peer peer
                            :remote-agent-id remote-agent-id
-                           :envelope envelope})]
+                           :envelope envelope
+                           :on-result #(apply-federation-result! orchestrator envelope %)})]
       (if (:ok? result)
-        (let [updated (assoc envelope
-                             :status "forwarded"
-                             :forwarded-at (now))]
-          (store-interop-message! orchestrator updated)
-          (emit-event! orchestrator
-                       {:event-type :agent.interop.message.forwarded
-                        :entity-type :peer
-                        :entity-id peer-id
-                        :payload {:message-id (:id updated)
-                                  :remote-agent-id remote-agent-id
-                                  :status (:status result)}})
-          updated)
-        (let [updated (assoc envelope
-                             :status "forward_failed"
-                             :last-error (or (some-> result :body :message)
-                                             (str "peer returned " (:status result))))]
-          (store-interop-message! orchestrator updated)
-          (emit-event! orchestrator
-                       {:event-type :agent.interop.message.forward.failed
-                        :entity-type :peer
-                        :entity-id peer-id
-                        :payload {:message-id (:id updated)
-                                  :remote-agent-id remote-agent-id
-                                  :status (:status result)
-                                  :last-error (:last-error updated)}})
-          updated)))
+        (assoc envelope
+               :status "queued"
+               :outbox-id (:outbox-id result))
+        (apply-federation-result! orchestrator envelope result)))
     envelope))
 
 (defn- validate-interop-content! [content]
@@ -720,7 +732,7 @@
                                  (:to-agent-id envelope))
                   :payload envelope})
 
-    "forward_requested"
+    ("forward_requested" "queued")
     (emit-event! orchestrator
                  {:event-type :agent.interop.message.forward.requested
                   :entity-type :peer

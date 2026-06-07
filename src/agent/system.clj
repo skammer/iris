@@ -150,6 +150,11 @@
     (catch Exception e
       (logging/log-error! :agent.system.lifecycle/api-stop-failed e {})))
   (try
+    (when-let [stop! (some-> system :orchestrator :federation-forwarder :stop!)]
+      (stop!))
+    (catch Exception e
+      (logging/log-error! :agent.system.lifecycle/federation-stop-failed e {})))
+  (try
     (some-> (:store system) sqlite/close-store!)
     (catch Exception e
       (logging/log-error! :agent.system.lifecycle/store-close-failed e {}))))

@@ -252,7 +252,20 @@
                       :user "65532:65532"
                       :host-working-dir "."
                       :share-network? false}}
-   :orchestrator {:enabled false}
+   :orchestrator {:enabled false
+                  :federation {:timeout-ms 10000
+                               :inbox-path "/v1/federation/inbox"
+                               :max-clock-skew-ms 300000
+                               :outbox-poll-ms 1000
+                               :retry-policy {:max-attempts 3
+                                              :base-delay-ms 100
+                                              :max-delay-ms 2000}
+                               :peer-policy {:max-concurrency 8
+                                             :rate-limit-per-minute 120
+                                             :failure-threshold 5
+                                             :circuit-open-ms 30000}
+                               :key-id nil
+                               :private-key nil}}
    :nrepl {:enabled true
            :bind "127.0.0.1"
            :port 0

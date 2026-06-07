@@ -281,6 +281,8 @@
 	                              {"Authorization" (str "Bearer " token)})))))
 	      (is (= 401 (:status (http-get (str base-url "/ui/dashboard")))))
       (finally
+        (when-let [stop! (some-> system :orchestrator :federation-forwarder :stop!)]
+          (stop!))
         (api/stop-server! server)
         (io/delete-file path true)))))
 
@@ -722,7 +724,8 @@
                             true)
             peer-create (http-post (str base-url "/v1/federation/peers")
                                    {:id "unsafe-peer"
-                                    :public_key "public"
+                                    :keys [{:key_id "test"
+                                            :public_key "public"}]
                                     :private_key "must-be-ignored"})
             peer (orchestrator/get-federated-peer (:orchestrator system) "unsafe-peer")]
         (is (= 404 (:status vault-missing)))
@@ -774,7 +777,10 @@
                       :memory-service (memory/create-memory-service (:memory config) store)
                       :runtime-service runtime-service
                       :runner-registry (runs/create-runner-registry runtime-service)
-                      :orchestrator (components/create-orchestrator (:orchestrator config) event-sink)
+                      :orchestrator (components/create-orchestrator (:orchestrator config)
+                                                                    event-sink
+                                                                    nil
+                                                                    store)
                       :config (assoc config
                                      :api {:host "127.0.0.1" :port port}
                                      :storage {:sqlite {:path path}}))
@@ -944,8 +950,8 @@
                                               {:id "mesh-1"
                                                :base_url base-url
                                                :capabilities ["interop"]
-                                               :key_id "iris-test"
-                                               :public_key (:public-key fed-keys)})
+                                               :keys [{:key_id "iris-test"
+                                                       :public_key (:public-key fed-keys)}]})
             created-federated-peer-body (json/parse-string (:body created-federated-peer) true)
             federation-peers (http-get (str base-url "/v1/federation/peers"))
             federation-peers-body (json/parse-string (:body federation-peers) true)
@@ -999,6 +1005,7 @@
                                                   :content "collect remote"
                                                   :to_agent_ref (str "federation://mesh-1/" agent-id)})
             federated-interop-message-body (json/parse-string (:body federated-interop-message) true)
+            _ ((-> system :orchestrator :federation-forwarder :drain!))
             interop-list-after-federation (http-get (str base-url "/v1/agents/" agent-id "/interop/messages?direction=inbound"))
             interop-list-after-federation-body (json/parse-string (:body interop-list-after-federation) true)
             agent-tool-exec (http-post (str base-url "/v1/agents/" agent-id "/tools/http/execute")
@@ -1209,7 +1216,7 @@
         (is (= "completed" (get-in interop-ack-body [:data :ack_type])))
         (is (= 201 (:status federated-interop-message)))
         (is (= "federated" (get-in federated-interop-message-body [:data :route])))
-        (is (= "forwarded" (get-in federated-interop-message-body [:data :status])))
+        (is (= "queued" (get-in federated-interop-message-body [:data :status])))
         (is (= 200 (:status interop-list-after-federation)))
         (is (= 2 (count (:data interop-list-after-federation-body))))
         (is (= 1 (count (filter #(= "federated" (:route %)) (:data interop-list-after-federation-body)))))

@@ -344,8 +344,20 @@
 (defn create-federation-outbox! [store outbox]
   (federation/create-outbox! store outbox))
 
+(defn claim-due-federation-outbox! [store opts]
+  (federation/claim-due-outbox! store opts))
+
 (defn update-federation-outbox! [store id updates]
   (federation/update-outbox! store id updates))
+
+(defn mark-federation-outbox-retry! [store id updates]
+  (federation/mark-outbox-retry! store id updates))
+
+(defn mark-federation-outbox-acked! [store id updates]
+  (federation/mark-outbox-acked! store id updates))
+
+(defn mark-federation-outbox-dead-letter! [store id updates]
+  (federation/mark-outbox-dead-letter! store id updates))
 
 (defn get-federation-outbox [store id]
   (federation/get-outbox store id))

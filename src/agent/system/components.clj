@@ -4,7 +4,7 @@
    [agent.channels.core :as channel-adapters]
    [agent.chat :as chat]
    [agent.config :as config]
-   [agent.federation.http :as federation-http]
+   [agent.federation.forwarder :as federation-forwarder]
    [agent.llm.registry :as llm-registry]
    [agent.llm.service :as llm-service]
    [agent.logging :as logging]
@@ -44,15 +44,18 @@
   ([cfg event-sink telemetry-collector store]
    (create-orchestrator cfg event-sink telemetry-collector store nil nil))
   ([cfg event-sink telemetry-collector store observer trace]
-   (orchestrator/create-orchestrator {:event-sink event-sink
-                                      :enabled? (true? (:enabled cfg))
-                                      :telemetry telemetry-collector
-                                      :observer observer
-                                      :trace trace
-                                      :federation-deliver (federation-http/create-forwarder
-                                                           (assoc (:federation cfg)
-                                                                  :store store
-                                                                  :telemetry telemetry-collector))})))
+   (let [forwarder (federation-forwarder/create-forwarder
+                    (assoc (:federation cfg)
+                           :store store
+                           :telemetry telemetry-collector
+                           :auto-start? (true? (:enabled cfg))))]
+     (orchestrator/create-orchestrator {:event-sink event-sink
+                                        :enabled? (true? (:enabled cfg))
+                                        :telemetry telemetry-collector
+                                        :observer observer
+                                        :trace trace
+                                        :federation-forwarder forwarder
+                                        :federation-deliver (:deliver forwarder)}))))
 
 (defn create-skills-registry
   [cfg]
