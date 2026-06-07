@@ -51,7 +51,7 @@
                                :payload (:compaction payload)})
 
         (chat-util/same-event-type? event :message-end)
-        (let [{:keys [role content final? tool-turn? audit? tool-call-id]} payload
+        (let [{:keys [role content final? tool-turn? audit?]} payload
               thinking (or (not-empty (:thinking @persisted))
                            (content-block-thinking (:content-blocks payload)))
               payload* (cond-> payload
@@ -61,26 +61,26 @@
           (cond
             (and (= "assistant" role) final?)
             (let [message (history/persist-final-assistant! system
-                                                           session-id
-                                                           prompt
-                                                           content
-                                                           request-id
-                                                           (history/message-extra payload*))]
+                                                            session-id
+                                                            prompt
+                                                            content
+                                                            request-id
+                                                            (history/message-extra payload* request-id))]
               (swap! persisted dissoc :thinking)
               (swap! persisted assoc :assistant-message message))
 
             (and session-id (= "assistant" role) audit?)
             (do
-              (history/append-message-record! system session-id "assistant" content (history/message-extra payload*))
+              (history/append-message-record! system session-id "assistant" content (history/message-extra payload* request-id))
               (swap! persisted dissoc :thinking))
 
             (and session-id (= "assistant" role) tool-turn?)
             (do
-              (history/append-message-record! system session-id "assistant" content (history/message-extra payload*))
+              (history/append-message-record! system session-id "assistant" content (history/message-extra payload* request-id))
               (swap! persisted dissoc :thinking))
 
             (and session-id (= "tool" role) tool-turn?)
-            (history/append-message-record! system session-id "tool" content {:tool-call-id tool-call-id})))))))
+            (history/append-message-record! system session-id "tool" content (history/message-extra payload* request-id))))))))
 
 (defn streaming-subscriber
   [system session-id on-delta]
@@ -95,9 +95,7 @@
             (swap! (:streaming-state (service/require-service system))
                    update session-id
                    (fn [state]
-                     (update (if (map? state)
-                               state
-                               {:content (or state "")})
+                     (update (or state {})
                              :content (fnil str "") (:delta payload)))))
           (when on-delta
             (on-delta (:delta payload))))
@@ -109,9 +107,7 @@
           (swap! (:streaming-state (service/require-service system))
                  update session-id
                  (fn [state]
-                   (update (if (map? state)
-                             state
-                             {:content (or state "")})
+                   (update (or state {})
                            :thinking (fnil str "") (:thinking-delta payload)))))
 
         (and (chat-util/same-event-type? event :message-end)

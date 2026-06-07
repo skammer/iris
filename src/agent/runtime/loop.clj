@@ -108,7 +108,7 @@
       :else step)))
 
 (defn- attach-allowed-tools [step allowed-tools]
-  (if (seq allowed-tools)
+  (if (some? allowed-tools)
     (update step :directives
             (fn [directives]
               (mapv (fn [directive]

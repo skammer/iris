@@ -5,7 +5,7 @@
    [agent.test.chat-harness :as h]
    [agent.test.predictable :as predictable]
    [clojure.string :as str]
-   [clojure.test :refer :all]
+   [clojure.test :refer [deftest is]]
    [cheshire.core :as json]))
 
 (defn- eventually [pred]
@@ -67,7 +67,7 @@
     (try
       (let [chat-f (h/send-chat-async! harness session-id "delay: 0.5")]
         (is (eventually #(true? (:working (h/session-state harness session-id)))))
-        (is (= true (get-in (h/stop-session! harness session-id) [:body :data :cancelled?])))
+        (is (= true (get-in (h/stop-session! harness session-id) [:body :data :cancelled-active?])))
         (is (= 200 (:status @chat-f)))
         (is (= runtime-loop/stopped-content (h/wait-response harness session-id)))
         (is (= false (:working (h/session-state harness session-id)))))

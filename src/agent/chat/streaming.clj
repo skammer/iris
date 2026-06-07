@@ -10,15 +10,16 @@
 
 (def stream-flush-interval-ms 50)
 
-(defn- text-delta-event? [event]
+(defn- delta-field [event]
   (let [payload (chat-util/event-payload event)]
-    (and (chat-util/same-event-type? event :message-update)
-         (string? (:delta payload))
-         (not= "" (:delta payload)))))
+    (when (chat-util/same-event-type? event :message-update)
+      (cond
+        (and (string? (:delta payload)) (not= "" (:delta payload))) :delta
+        (and (string? (:thinking-delta payload)) (not= "" (:thinking-delta payload))) :thinking-delta))))
 
-(defn- buffered-delta-event [event text]
+(defn- buffered-delta-event [event field text]
   (-> event
-      (assoc :payload (assoc (chat-util/event-payload event) :delta text))
+      (assoc :payload (assoc (chat-util/event-payload event) field text))
       (assoc :timestamp (util/now-str))))
 
 (defn- fallback-schedule! [flush!]
@@ -39,44 +40,56 @@
     (fallback-schedule! flush!)))
 
 (defn stream-delta-flusher
-  "Returns {:flush! fn :emit! fn}. :emit! coalesces consecutive text deltas and
-   schedules a flush; any non-delta event flushes pending text first, preserving
-   ordering."
+  "Returns {:flush! fn :emit! fn}. :emit! coalesces consecutive content or
+   thinking deltas and flushes when delta kind changes, preserving ordering."
   ([emit-event!] (stream-delta-flusher emit-event! nil))
   ([emit-event! scheduler]
-  (let [lock (Object.)
-        state (atom {:text ""
-                     :event nil
-                     :scheduled? false
-                     :timer-id 0})
-        flush! (fn [expected-timer-id]
-                 (let [event* (locking lock
-                                (let [{:keys [text event timer-id]} @state]
-                                  (when (or (nil? expected-timer-id)
-                                            (= expected-timer-id timer-id))
-                                    (swap! state assoc
-                                           :text ""
-                                           :event nil
-                                           :scheduled? false)
-                                    (when (and event (not= "" text))
-                                      (buffered-delta-event event text)))))]
+   (let [lock (Object.)
+         state (atom {:field nil
+                      :text ""
+                      :event nil
+                      :scheduled? false
+                      :timer-id 0})
+         flush! (fn [expected-timer-id]
+                  (let [event* (locking lock
+                                 (let [{:keys [field text event timer-id]} @state]
+                                   (when (or (nil? expected-timer-id)
+                                             (= expected-timer-id timer-id))
+                                     (swap! state assoc
+                                            :field nil
+                                            :text ""
+                                            :event nil
+                                            :scheduled? false)
+                                     (when (and event (not= "" text))
+                                       (buffered-delta-event event field text)))))]
+                    (when event*
+                      (emit-event! event*))))]
+     {:flush! #(flush! nil)
+      :emit! (fn [event]
+               (if-let [field (delta-field event)]
+                 (let [payload (chat-util/event-payload event)
+                       value (get payload field)
+                       [event* schedule? timer-id] (locking lock
+                                                      (let [flush-now? (and (:field @state)
+                                                                            (not= field (:field @state)))
+                                                            event* (when flush-now?
+                                                                     (let [{:keys [field text event]} @state]
+                                                                       (when (and event (not= "" text))
+                                                                         (buffered-delta-event event field text))))
+                                                            schedule? (or flush-now? (not (:scheduled? @state)))]
+                                                        (swap! state
+                                                               (fn [s]
+                                                                 (cond-> (-> s
+                                                                             (assoc :field field
+                                                                                    :event event
+                                                                                    :scheduled? true)
+                                                                             (update :text #(str (if flush-now? "" %) value)))
+                                                                   schedule? (update :timer-id inc))))
+                                                        [event* schedule? (:timer-id @state)]))]
                    (when event*
-                     (emit-event! event*))))]
-    {:flush! #(flush! nil)
-     :emit! (fn [event]
-              (if (text-delta-event? event)
-                (let [[schedule? timer-id] (locking lock
-                                             (let [schedule? (not (:scheduled? @state))]
-                                               (swap! state
-                                                      (fn [s]
-                                                        (cond-> (-> s
-                                                                    (update :text str (get-in event [:payload :delta]))
-                                                                    (assoc :event event
-                                                                           :scheduled? true))
-                                                          schedule? (update :timer-id inc))))
-                                               [schedule? (:timer-id @state)]))]
-                  (when schedule?
-                    (schedule-flush! scheduler #(flush! timer-id))))
-                (do
-                  (flush! nil)
-                  (emit-event! event))))})))
+                     (emit-event! event*))
+                   (when schedule?
+                     (schedule-flush! scheduler #(flush! timer-id))))
+                 (do
+                   (flush! nil)
+                   (emit-event! event))))})))

@@ -10,15 +10,16 @@
    [agent.loop :as loop-support]
    [agent.util :as util]))
 
-(declare run! run-queued-item!)
+(declare run! run-active-item!)
 
 (defn- empty-queue []
   clojure.lang.PersistentQueue/EMPTY)
 
-(defn- active-turn [request-id cancelled? stream?]
+(defn- active-turn [request-id cancelled? stream? result]
   {:request-id request-id
    :started-at (util/now-str)
    :cancelled? cancelled?
+   :result result
    :stream? (boolean stream?)
    :stream-state (atom {})})
 
@@ -28,18 +29,36 @@
           (fnil conj (empty-queue))
           item))
 
+(defn- submit-active! [system {:keys [request-id result] :as item}]
+  (let [service (service/require-service system)
+        future (try
+                 (service/submit! service #(run-active-item! system item))
+                 (catch Throwable t
+                   (when result
+                     (deliver result {:error t}))
+                   (throw t)))]
+    (locking (:manager-lock service)
+      (when (= request-id (get-in @(:session-runtimes service)
+                                  [(:session-id (:opts item)) :active :request-id]))
+        (swap! (:session-runtimes service)
+               assoc-in
+               [(:session-id (:opts item)) :active :future]
+               future)))
+    future))
+
 (defn- start-next-queued! [system session-id request-id terminal-reason]
   (let [service (service/require-service system)
         {:keys [item cleared?]} (locking (:manager-lock service)
                                   (let [{:keys [active queue]} (get @(:session-runtimes service) session-id)]
                                     (when (= request-id (:request-id active))
-                                      (if (seq queue)
+                                      (if (and (not (service/stopping? service)) (seq queue))
                                         (let [item (peek queue)
                                               queue* (pop queue)]
                                           (swap! (:session-runtimes service) assoc session-id
                                                  {:active (active-turn (:request-id item)
                                                                        (:cancelled? item)
-                                                                       (get-in item [:opts :stream?]))
+                                                                       (get-in item [:opts :stream?])
+                                                                       (:result item))
                                                   :queue queue*})
                                           {:item item})
                                         (do
@@ -49,7 +68,7 @@
       item
       (do
         (service/emit-session-state! system session-id :drain)
-        (future (run-queued-item! system item)))
+        (submit-active! system item))
 
       cleared?
       (service/emit-session-state! system session-id terminal-reason))))
@@ -83,12 +102,10 @@
       (finally
         (start-next-queued! system (:session-id opts) request-id @terminal-reason)))))
 
-(defn- run-queued-item! [system item]
-  (run-active-item! system item))
-
 (defn- begin-managed-run! [system {:keys [session-id stream?] :as opts} request-id cancelled? result]
   (let [service (service/require-service system)]
     (locking (:manager-lock service)
+      (service/ensure-running! service)
       (if (get-in @(:session-runtimes service) [session-id :active])
         (let [queued-message (history/persist-queued-user-turn! system session-id (:messages opts) request-id)
               item {:opts opts
@@ -108,9 +125,21 @@
           :queued)
         (do
           (swap! (:session-runtimes service) assoc-in [session-id :active]
-                 (active-turn request-id cancelled? stream?))
+                 (active-turn request-id cancelled? stream? result))
           (service/emit-session-state! system session-id :start)
           :active)))))
+
+(defn- await-result! [result]
+  (let [{:keys [result error]} @result]
+    (if error
+      (throw error)
+      result)))
+
+(defn cancel-session! [system session-id]
+  (let [{:keys [queued-items] :as result} (service/cancel-session! system session-id)]
+    (doseq [{:keys [queued-message request-id]} queued-items]
+      (history/mark-queued-message-cancelled! system queued-message request-id))
+    (dissoc result :queued-items)))
 
 (defn run!
   "Run or queue a chat turn for `session-id`."
@@ -135,12 +164,12 @@
             mode (begin-managed-run! system opts request-id* cancelled? result)]
         (case mode
           :active
-          (run-active-item! system {:opts opts
+          (do
+            (submit-active! system {:opts opts
                                     :request-id request-id*
-                                    :cancelled? cancelled?})
+                                    :cancelled? cancelled?
+                                    :result result})
+            (await-result! result))
 
           :queued
-          (let [{:keys [result error]} @result]
-            (if error
-              (throw error)
-              result)))))))
+          (await-result! result))))))

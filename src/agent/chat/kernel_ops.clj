@@ -8,11 +8,7 @@
    [agent.tools.core :as tools]))
 
 (defn- profile-permissions [system profile]
-  (set (get-in system [:config :tools :permissions profile]
-               (get-in system [:config :tools :permissions :agent] #{}))))
-
-(defn- all-tool-names [system]
-  (set (map :name (tools/list-tools (:tool-registry system)))))
+  (set (get-in system [:config :tools :permissions profile] #{})))
 
 (defn chat-tool-context [system session-id request-id extra-context context]
   (merge (or extra-context {})
@@ -21,7 +17,6 @@
           :session-id session-id
           :request-id request-id
           :permissions (profile-permissions system :chat)
-          :allowed-tools (all-tool-names system)
           :yolo? (true? (get-in system [:config :tools :yolo?]))}
          (select-keys extra-context [:allowed-tools])
          (select-keys context [:allowed-tools])))

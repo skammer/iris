@@ -150,7 +150,7 @@
         cancelled? (or cancellation-token (atom false))
         prompt (history/latest-user-prompt messages)
         user-message (if persist-user?
-                       (history/persist-user-turn! system session-id messages)
+                       (history/persist-user-turn! system session-id messages request-id)
                        user-message)
         _ (when session-id
             (try
@@ -160,7 +160,7 @@
         history (if session-id
                   (history/session-messages system session-id)
                   (llm-messages/messages->internal messages))
-        recall (chat-memory/recall-memory system session-id prompt)
+        recall (chat-memory/recall-memory system session-id prompt request-id)
         iris-context (iris-context-message system)
         active-mode (some-> (and session-id
                                   (sqlite/get-session (:store system) session-id))

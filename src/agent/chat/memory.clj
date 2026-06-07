@@ -12,27 +12,48 @@
 (def memory-result-limit 5)
 (def memory-max-chars 6000)
 
+(def empty-recall
+  {:prompt {:documents []}
+   :search {:messages []
+            :events []
+            :facts []
+            :graph []}})
+
 (defn- compact-memory-json
   "Serializes recalled memory to JSON, capped at memory-max-chars to keep
    recall payloads bounded."
   [value]
   (let [text (json/generate-string value)]
     (if (> (count text) memory-max-chars)
-      (subs text 0 memory-max-chars)
+      (json/generate-string {:truncated true
+                             :max-chars memory-max-chars
+                             :preview (subs text 0 memory-max-chars)})
       text)))
 
-(defn recall-memory [system session-id query]
-  (let [prompt (memory/read-prompt-memory (:memory-service system))
-        search (when-not (str/blank? (or query ""))
-                 (memory/search-memory (:memory-service system)
-                                       query
-                                       {:limit memory-result-limit
-                                        :session-id session-id
-                                        :entity-type :session
-                                        :entity-id session-id
-                                        :scope {:type :session :id session-id}}))]
-    {:prompt prompt
-     :search search}))
+(defn recall-memory [system session-id query request-id]
+  (try
+    (if-let [memory-service (:memory-service system)]
+      (let [prompt (memory/read-prompt-memory memory-service)
+            search (when-not (str/blank? (or query ""))
+                     (memory/search-memory memory-service
+                                           query
+                                           {:limit memory-result-limit
+                                            :session-id session-id
+                                            :entity-type :session
+                                            :entity-id session-id
+                                            :scope {:type :session :id session-id}}))]
+        {:prompt prompt
+         :search (or search (:search empty-recall))})
+      empty-recall)
+    (catch Exception e
+      (util/emit! system {:event-type :message-update
+                          :entity-type :session
+                          :entity-id session-id
+                          :request-id request-id
+                          :payload {:kind :memory-recall-failed
+                                    :message (.getMessage e)
+                                    :type (some-> e ex-data :type)}})
+      empty-recall)))
 
 (defn memory-message [recall]
   {:role "system"

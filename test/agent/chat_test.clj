@@ -1,6 +1,7 @@
 (ns agent.chat-test
   (:require
    [agent.chat :as chat]
+   [agent.chat.memory :as chat-memory]
    [agent.kernel.runtime :as kernel-runtime]
    [agent.llm.core :as llm-core]
    [agent.llm.messages :as llm-messages]
@@ -552,13 +553,33 @@
                        (chat/run! system {:session-id (:id session)
                                           :messages [{:role "user" :content "wait"}]}))]
         (is (true? (deref started 1000 false)))
-        (is (:cancelled? (chat/cancel-session! system (:id session))))
+        (is (:cancelled-active? (chat/cancel-session! system (:id session))))
         (deliver response "late answer")
         (is (= chat/stopped-content (:content (deref result-f 1000 nil))))
-        (is (eventually #(false? (chat/active? system (:id session)))))
+        (is (eventually #(false? (:working? (chat/session-state system (:id session))))))
         (is (= ["wait" chat/stopped-content]
                (mapv :content (sqlite/list-messages (:store system) (:id session))))))
       (finally
+        (io/delete-file path true)))))
+
+(deftest chat-service-stop-cancels-active-run-test
+  (let [path (temp-db-path)
+        started (promise)
+        response (promise)
+        provider (->BlockingProvider started response)
+        system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
+        session (sessions/create-session! system "service-stop")]
+    (try
+      (let [result-f (future
+                       (chat/run! system {:session-id (:id session)
+                                          :messages [{:role "user" :content "wait"}]}))]
+        (is (true? (deref started 1000 false)))
+        (is (= {:stopped true} (chat/stop! (:chat-service system))))
+        (is (= chat/stopped-content (:content (deref result-f 1000 nil))))
+        (is (= 0 (:active-session-count (chat/health-check (:chat-service system)))))
+        (is (= 0 (:queued-count (chat/health-check (:chat-service system))))))
+      (finally
+        (deliver response "late answer")
         (io/delete-file path true)))))
 
 (deftest chat-service-state-is-system-local-test
@@ -595,15 +616,15 @@
                                               :messages [{:role "user" :content "go"}]
                                               :stream? true}))]
           (is (true? (deref entered 1000 false)))
-          (is (eventually #(chat/active? system-a (:id session-a))))
-          (is (false? (chat/active? system-b (:id session-a))))
+          (is (eventually #(:working? (chat/session-state system-a (:id session-a)))))
+          (is (false? (:working? (chat/session-state system-b (:id session-a)))))
           (is (eventually #(= "partial"
-                              (chat/streaming-content system-a (:id session-a)))))
-          (is (nil? (chat/streaming-content system-b (:id session-a))))
+                              (:content (chat/streaming-state system-a (:id session-a))))))
+          (is (nil? (chat/streaming-state system-b (:id session-a))))
           (deliver release true)
           (is (= "done" (:content (deref result-f 1000 nil))))
-          (is (eventually #(false? (chat/active? system-a (:id session-a)))))
-          (is (nil? (chat/streaming-content system-a (:id session-a))))))
+          (is (eventually #(false? (:working? (chat/session-state system-a (:id session-a))))))
+          (is (nil? (chat/streaming-state system-a (:id session-a))))))
       (finally
         (deliver release true)
         (io/delete-file path-a true)
@@ -709,11 +730,13 @@
                          (chat/run! system {:session-id (:id session)
                                             :messages [{:role "user" :content "after cancel"}]}))]
           (is (eventually #(= 2 (count (sqlite/list-messages (:store system) (:id session))))))
-          (is (:cancelled? (chat/cancel-session! system (:id session))))
+          (let [cancelled (chat/cancel-session! system (:id session))]
+            (is (:cancelled-active? cancelled))
+            (is (= 1 (:cleared-queued-count cancelled))))
           (deliver first-response "late answer")
           (is (= chat/stopped-content (:content (deref first-f 2000 nil))))
-          (is (= "after cancel answer" (:content (deref second-f 2000 nil))))
-          (is (= ["wait" chat/stopped-content "after cancel" "after cancel answer"]
+          (is (= chat/stopped-content (:content (deref second-f 2000 nil))))
+          (is (= ["wait" "after cancel" chat/stopped-content]
                  (mapv :content (sqlite/list-messages (:store system) (:id session)))))))
       (finally
         (io/delete-file path true)))))
@@ -1102,6 +1125,46 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest chat-loop-blocks-tools-when-routed-allow-list-empty-test
+  (let [path (temp-db-path)
+        executed (atom false)
+        responses (atom [(tool-call-response :secret_tool {:value 1})
+                         "done"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (-> (test-system
+                    path
+                    provider
+                    (fn [cfg]
+                      (let [provider-key (get-in cfg [:llm :active-provider])
+                            model (get-in cfg [:llm :providers provider-key :model])]
+                        (-> cfg
+                            (assoc-in [:memory :facts :extractor :enabled] false)
+                            (assoc-in [:llm :providers provider-key :models model :chat-profile]
+                                      {:tool-routing? true
+                                       :tool-categories #{}})))))
+                   (assoc :tool-registry
+                          (custom-registry
+                           (custom-tool :secret_tool
+                                        (fn [_]
+                                          (reset! executed true)
+                                          "secret")
+                                        {:parallel-safe? true}))))
+        session (sessions/create-session! system "empty-allow-list")]
+    (try
+      (let [result (chat/run! system {:session-id (:id session)
+                                      :messages [{:role "user" :content "call secret"}]})
+            events (sqlite/list-events (:store system) {:entity-type :session
+                                                        :entity-id (:id session)
+                                                        :limit 50})]
+        (is (= "done" (:content result)))
+        (is (false? @executed))
+        (is (some #(and (= "tool-execution-end" (:event-type %))
+                        (= "denied" (get-in % [:payload :status])))
+                  events)))
+      (finally
+        (io/delete-file path true)))))
+
 (deftest chat-loop-auto-extracts-scoped-facts-test
   (let [path (temp-db-path)
         responses (atom ["noted"
@@ -1129,6 +1192,40 @@
         (is (empty? other-session)))
       (finally
         (io/delete-file path true)))))
+
+(deftest chat-loop-continues-when-memory-recall-fails-test
+  (let [path (temp-db-path)
+        responses (atom ["ok"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
+        session (sessions/create-session! system "memory-fails")]
+    (try
+      (with-redefs [memory/read-prompt-memory (fn [_]
+                                                (throw (ex-info "memory boom" {:type :memory-test})))]
+        (let [result (chat/run! system {:session-id (:id session)
+                                        :messages [{:role "user" :content "hi"}]})
+              events (sqlite/list-events (:store system) {:entity-type :session
+                                                          :entity-id (:id session)
+                                                          :limit 50})]
+          (is (= "ok" (:content result)))
+          (is (some #(and (= "message-update" (:event-type %))
+                          (= "memory-recall-failed" (get-in % [:payload :kind])))
+                    events))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest memory-message-truncation-remains-valid-json-test
+  (let [content (:content (chat-memory/memory-message
+                           {:prompt {:documents (vec (repeat 1000 {:content (apply str (repeat 40 "x"))}))}
+                            :search {:messages []
+                                     :events []
+                                     :facts []}}))
+        json-text (subs content (count "Relevant memory JSON: "))
+        parsed (json/parse-string json-text true)]
+    (is (true? (:truncated parsed)))
+    (is (= chat-memory/memory-max-chars (:max-chars parsed)))
+    (is (string? (:preview parsed)))))
 
 (deftest chat-loop-streams-content-tokens-during-plan-step-test
   (let [path (temp-db-path)
@@ -1170,7 +1267,7 @@
         (is (= "Hello" (:content result)))
         (is invoked-with-callback?)
         (is (= ["think " "hard"] @thinking))
-        (is (= {"think " 1 "hard" 1}
+        (is (= {"think hard" 1}
                (frequencies (keep #(get-in % [:payload :thinking-delta]) events)))))
       (finally
         (io/delete-file path true)))))

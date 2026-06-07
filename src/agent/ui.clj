@@ -544,8 +544,7 @@
   (let [provided? (contains? opts :streaming)
         value (if provided?
                 (:streaming opts)
-                {:content (chat/streaming-content system session-id)
-                 :thinking (chat/streaming-thinking system session-id)})]
+                (chat/streaming-state system session-id))]
     (if (map? value)
       value
       {:content value})))

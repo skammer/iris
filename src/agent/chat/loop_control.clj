@@ -16,7 +16,8 @@
 (defn- run-loop-worker! [system session-id run-fn]
   (try
     (loop []
-      (when-let [state (loop-support/prepare-iteration! session-id)]
+      (when-let [state (when-not (service/stopping? (service/require-service system))
+                         (loop-support/prepare-iteration! session-id))]
         (let [result (run-fn system
                              {:messages [{:role "user"
                                           :content (loop-support/build-prompt state)}]
@@ -45,7 +46,8 @@
 
 (defn start-loop-worker! [system session-id run-fn]
   (when-not (loop-worker-running? system session-id)
-    (let [worker (future (run-loop-worker! system session-id run-fn))]
+    (let [worker (service/submit! (service/require-service system)
+                                  #(run-loop-worker! system session-id run-fn))]
       (swap! (:loop-workers (service/require-service system)) assoc session-id worker))))
 
 (defn loop-command!
