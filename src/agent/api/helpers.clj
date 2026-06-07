@@ -1,10 +1,12 @@
 (ns agent.api.helpers
   "Ring-request parsing helpers. All input fns take a ring request map; output
-   helpers (json/html/bytes responses) live in agent.api.responses."
+  helpers (json/html/bytes responses) live in agent.api.responses."
   (:require
+   [agent.api.errors :as errors]
    [cheshire.core :as json]
    [clojure.string :as str])
   (:import
+   (com.fasterxml.jackson.core JsonProcessingException)
    (java.net URLDecoder)
    (java.nio.charset StandardCharsets)))
 
@@ -56,7 +58,12 @@
       (let [raw (body-string request)]
         (if (or (nil? raw) (str/blank? raw))
           {}
-          (json/parse-string raw true)))))
+          (try
+            (json/parse-string raw true)
+            (catch JsonProcessingException _
+              (throw (errors/api-error 400
+                                       "bad_json"
+                                       "Malformed JSON body"))))))))
 
 (defn read-form-body
   "Return the parsed form body for `request`. Prefers `:form-params` (set by

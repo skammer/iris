@@ -4,6 +4,17 @@
    [agent.api.event-compat :as event-compat]
    [clojure.string :as str]))
 
+(defn- ->name [value]
+  (cond
+    (keyword? value) (name value)
+    (some? value) (str value)))
+
+(defn- json-key [k]
+  (keyword (str/replace (->name k) "-" "_")))
+
+(defn- json-keys [m]
+  (some-> m (update-keys json-key)))
+
 (defn session->response [session]
   (cond-> {:id (:id session)
            :title (:title session)
@@ -29,12 +40,12 @@
     (:excluded-from-context? message) (assoc :excluded_from_context true)))
 
 (defn tool->response [tool]
-  {:name (name (:name tool))
+  {:name (->name (:name tool))
    :description (:description tool)
    :version (:version tool)
-   :category (some-> (:category tool) name)
+   :category (->name (:category tool))
    :required_permissions (mapv name (:required-permissions tool))
-   :source (some-> (:source tool) name)
+   :source (->name (:source tool))
    :source_details (:source-details tool)})
 
 (defn skill->response [skill]
@@ -42,15 +53,15 @@
    :description (:description skill)
    :path (:path skill)
    :base_dir (:base-dir skill)
-   :source (some-> (:source skill) name)})
+   :source (->name (:source skill))})
 
 (defn channel-adapter->response [adapter]
-  {:name (name (:name adapter))
+  {:name (->name (:name adapter))
    :display_name (:display-name adapter)
-   :inbound_mode (name (:inbound-mode adapter))
+   :inbound_mode (->name (:inbound-mode adapter))
    :capabilities (mapv name (:capabilities adapter))
    :public_url_required (:public-url-required? adapter)
-   :source (some-> (:source adapter) name)})
+   :source (->name (:source adapter))})
 
 (defn agent->response [agent]
   {:id (:id agent)
@@ -164,14 +175,10 @@
      :created_at (:created-at run)
      :started_at (:started-at run)
      :finished_at (:finished-at run)
-     :lease (some-> (:lease run)
-                    (update-keys #(keyword (str/replace (name %) "-" "_"))))
-     :heartbeat (some-> (:heartbeat run)
-                        (update-keys #(keyword (str/replace (name %) "-" "_"))))
-     :checkpoint (some-> (:checkpoint run)
-                         (update-keys #(keyword (str/replace (name %) "-" "_"))))
-     :pending_commands (mapv #(update-keys % (fn [k] (keyword (str/replace (name k) "-" "_"))))
-                             (:pending-commands run))}))
+     :lease (json-keys (:lease run))
+     :heartbeat (json-keys (:heartbeat run))
+     :checkpoint (json-keys (:checkpoint run))
+     :pending_commands (mapv json-keys (:pending-commands run))}))
 
 (defn heartbeat->response [heartbeat]
   {:run_id (:run-id heartbeat)
@@ -202,8 +209,8 @@
    :error (:error command)})
 
 (defn memory-surface->response [surface]
-  {:name (name (:name surface))
-   :type (name (:type surface))
+  {:name (->name (:name surface))
+   :type (->name (:type surface))
    :writable (boolean (:writable surface))
    :enabled (boolean (:enabled surface))
    :paths (:paths surface)

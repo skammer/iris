@@ -219,20 +219,26 @@
 
 (defn control-command-ack [system request run-id command-id]
   (ensure-run-control! system request run-id)
-  (runs/acknowledge-run-command! system run-id command-id)
-  (responses/json-response 200 {:data {:id command-id :status "acknowledged"}}))
+  (try
+    (runs/acknowledge-run-command! system run-id command-id)
+    (responses/json-response 200 {:data {:id command-id :status "acknowledged"}})
+    (catch clojure.lang.ExceptionInfo e
+      (throw (errors/domain-error->api-error e)))))
 
 (defn control-command-complete [system request run-id command-id]
   (ensure-run-control! system request run-id)
   (let [body (h/read-json-body request)
-        status (keyword (or (:status body) "completed"))
-        command (runs/complete-run-command! system
-                                            run-id
-                                            command-id
-                                            status
-                                            (:error body)
-                                            (:response body))]
-    (responses/json-response 200 {:data (ser/run-command->response command)})))
+        status (keyword (or (:status body) "completed"))]
+    (try
+      (let [command (runs/complete-run-command! system
+                                                run-id
+                                                command-id
+                                                status
+                                                (:error body)
+                                                (:response body))]
+        (responses/json-response 200 {:data (ser/run-command->response command)}))
+      (catch clojure.lang.ExceptionInfo e
+        (throw (errors/domain-error->api-error e))))))
 
 (defn control-transition [system request run-id]
   (ensure-run-control! system request run-id)
@@ -259,9 +265,22 @@
   (and (= "agent_run" (:entity-type event))
        (= run-id (:entity-id event))))
 
+(defn- next-run-stream-id [stream-id counter event]
+  (str (or (:id event)
+           (str stream-id "-" (swap! counter inc)))))
+
+(defn- send-run-event! [ctx stream-id counter event]
+  (let [event-id (next-run-stream-id stream-id counter event)]
+    (streaming/send-sse-chunk! ctx
+                               event-id
+                               {:type "event"
+                                :data (ser/event->response event)})))
+
 (defn events-stream-response
   [system run-id request]
   (let [{:keys [after_id replay_limit]} (-> request :parameters :query)
+        stream-id (str "run-events-" (System/currentTimeMillis))
+        fallback-id (atom 0)
         broker-instance (or (:event-bus system) (:broker system))
         replay-limit (or replay_limit 100)
         replay-messages (broker/replay! broker-instance
@@ -271,8 +290,8 @@
     (streaming/managed-response
      request
      {:name :run-events-stream
-      :on-error (fn [ctx error]
-                  (streaming/send-sse-error! ctx "stream_error" (.getMessage error)))}
+      :on-error (fn [ctx _error]
+                  (streaming/send-sse-error! ctx "stream_error" "Stream failed"))}
      (fn [ctx]
        (let [subscription (streaming/subscribe! ctx
                                                broker-instance
@@ -287,15 +306,11 @@
                                        :run (ser/run->response run)}))
          (doseq [message replay-messages]
            (when (relevant-run-event? (:payload message) run-id)
-             (streaming/send-sse-chunk! ctx
-                                        {:type "event"
-                                         :data (ser/event->response (:payload message))})))
+             (send-run-event! ctx stream-id fallback-id (:payload message))))
          (loop []
            (when-let [event (streaming/take! ctx ch)]
              (when (relevant-run-event? (:payload event) run-id)
-               (streaming/send-sse-chunk! ctx
-                                          {:type "event"
-                                           :data (ser/event->response (:payload event))}))
+               (send-run-event! ctx stream-id fallback-id (:payload event)))
             (recur))))))))
 
 (defn wait [system request run-id]

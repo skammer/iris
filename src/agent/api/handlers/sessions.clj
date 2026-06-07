@@ -86,7 +86,10 @@
         branch-summary? (true? (:branch_summary body))
         summary (when (and branch-summary? old-leaf new-leaf (not= old-leaf new-leaf))
                   (compaction/store-branch-summary! (:store system) session-id old-leaf new-leaf))
-        entry (sqlite/select-leaf! (:store system) session-id new-leaf)]
+        entry (try
+                (sqlite/select-leaf! (:store system) session-id new-leaf)
+                (catch clojure.lang.ExceptionInfo e
+                  (throw (errors/domain-error->api-error e))))]
     (responses/json-response 200
                              (cond-> {:data entry}
                                summary (assoc :branch_summary summary)))))

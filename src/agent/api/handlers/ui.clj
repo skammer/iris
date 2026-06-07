@@ -193,6 +193,7 @@
                    (ui/session-messages-fragment system session_id)))}
      (fn [ctx]
        (let [broker-instance (or (:event-bus system) (:broker system))
+             final-fallback-ms 1000
              subscription (streaming/subscribe! ctx
                                                 broker-instance
                                                 (broker/all-events-subject)
@@ -212,6 +213,11 @@
                        (ui/session-messages-fragment system
                                                      session_id
                                                      {:streaming streaming}))))
+             final-pushed? (atom false)
+             push-final! (fn []
+                           (when-not @final-pushed?
+                             (reset! final-pushed? true)
+                             (push!)))
              push-delta! (fn [delta]
                            (when-not (str/blank? (str delta))
                              (push! (swap! streaming-state
@@ -230,33 +236,45 @@
                                      :on-thinking-delta push-thinking!}))]
          (push!)
          (loop [done? false
-                terminal? false]
+                result-ch* result-ch
+                terminal? false
+                fallback-ch nil]
            (when-not (and done? terminal?)
-             (let [[value port] (async/alts!! [result-ch ch])]
+             (let [ports (cond-> [ch]
+                           result-ch* (conj result-ch*)
+                           fallback-ch (conj fallback-ch))
+                   [value port] (async/alts!! ports)]
                (cond
-                 (= port result-ch)
+                 (= port result-ch*)
                  (if-let [error (:error value)]
                    (throw error)
-                   (do
-                     (push!)
-                     (recur true terminal?)))
+                   (if terminal?
+                     (push-final!)
+                     (recur true nil terminal? (async/timeout final-fallback-ms))))
+
+                 (= port fallback-ch)
+                 (push-final!)
 
                  (= port ch)
-                 (when-let [event (:payload value)]
-                   (cond
-                     (message-stream-update-event? event session_id)
-                     nil
+                 (if-let [event (:payload value)]
+                   (let [terminal?* (or terminal?
+                                        (terminal-session-event? event session_id))]
+                     (cond
+                       (message-stream-update-event? event session_id)
+                       nil
 
-                     (stream-ending-message-event? event session_id)
-                     (do
-                       (reset! streaming-state {})
-                       (push! nil))
+                       (stream-ending-message-event? event session_id)
+                       (do
+                         (reset! streaming-state {})
+                         (push-final!))
 
-                     (relevant-session-event? event session_id)
-                     (push!))
-                   (recur done? (or terminal?
-                                      (terminal-session-event? event session_id))))))))
-        (push!))))))
+                       (relevant-session-event? event session_id)
+                       (push!))
+                     (if (and done? terminal?*)
+                       (push-final!)
+                       (recur done? result-ch* terminal?* fallback-ch)))
+                   (when done?
+                     (push-final!))))))))))))
 
 (defn chat-stop [system request]
   (let [{:keys [session_id]} (h/read-form-body request)]

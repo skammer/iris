@@ -38,13 +38,22 @@
 
 (defn execution-context [system profile tool-name input
                          {:keys [approval-id user request-id activity]}]
-  (let [granted (if approval-id
-                  (tool-approvals/granted-permissions tool-name input)
+  (let [user* (or user (name profile))
+        approval-context {:user user*}
+        approval (when approval-id
+                   (tool-approvals/resolve-valid-request
+                    (:store system)
+                    approval-id
+                    tool-name
+                    input
+                    approval-context))
+        granted (if approval-id
+                  (:permissions approval)
                   (configured-tool-permissions system profile))]
     (cond-> {:permissions granted
              :approval-id approval-id
              :yolo? (true? (get-in system [:config :tools :yolo?]))
-             :user (or user "api")
+             :user user*
              :request-id request-id}
       activity (assoc :activity activity))))
 

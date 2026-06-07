@@ -4,7 +4,6 @@
    [agent.api.helpers :as h]
    [agent.api.responses :as responses]
    [agent.api.serializers :as ser]
-   [agent.api.validation :as v]
    [agent.federation.http :as federation-http]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]))
@@ -24,25 +23,24 @@
         status (or (:status body) "online")
         key-id (:key_id body)
         public-key (:public_key body)
-        private-key (:private_key body)]
-    (let [peer (orchestrator/register-federated-peer! (:orchestrator system)
-                                                      {:id id
-                                                       :name name
-                                                       :base-url base-url
-                                                       :logical-address-prefix logical-address-prefix
-                                                       :capabilities capabilities
-                                                       :status status
-                                                       :key-id key-id
-                                                       :public-key public-key
-                                                       :private-key private-key})]
-      (when (and (:store system) public-key)
-        (sqlite/upsert-federation-peer-key!
-         (:store system)
-         {:peer-id (:id peer)
-          :key-id (or key-id "default")
-          :public-key public-key
-          :status "active"}))
-      (responses/json-response 201 {:data (ser/federated-peer->response peer)}))))
+        peer (orchestrator/register-federated-peer!
+              (:orchestrator system)
+              {:id id
+               :name name
+               :base-url base-url
+               :logical-address-prefix logical-address-prefix
+               :capabilities capabilities
+               :status status
+               :key-id key-id
+               :public-key public-key})]
+    (when (and (:store system) public-key)
+      (sqlite/upsert-federation-peer-key!
+       (:store system)
+       {:peer-id (:id peer)
+        :key-id (or key-id "default")
+        :public-key public-key
+        :status "active"}))
+    (responses/json-response 201 {:data (ser/federated-peer->response peer)})))
 
 (defn inbox [system request]
   (let [body (h/read-json-body request)

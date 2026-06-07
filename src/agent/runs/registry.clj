@@ -282,21 +282,31 @@
                                                   :error (.getMessage ex)})
             (throw ex)))))))
 
+(defn- command-for-run!
+  [runtime run-id command-id]
+  (let [command (sqlite/get-agent-run-command (:store runtime) command-id)]
+    (when-not (and command (= run-id (:run-id command)))
+      (throw (ex-info "Command not found"
+                      {:type :command-not-found
+                       :run-id run-id
+                       :command-id command-id})))
+    command))
+
 (defn acknowledge-command!
-  [runtime _run-id command-id]
-  (let [existing (sqlite/get-agent-run-command (:store runtime) command-id)]
+  [runtime run-id command-id]
+  (let [existing (command-for-run! runtime run-id command-id)]
     (when-not (or (= "acknowledged" (:status existing))
                   (contains? terminal-command-statuses (:status existing)))
       (let [before-event-id (event-watermark runtime)]
-      (sqlite/update-agent-run-command! (:store runtime) command-id {:status :acknowledged})
+        (sqlite/update-agent-run-command! (:store runtime) command-id {:status :acknowledged})
         (publish-events-after! runtime before-event-id))))
   command-id)
 
 (defn complete-command!
   ([runtime run-id command-id status error]
    (complete-command! runtime run-id command-id status error nil))
-  ([runtime _run-id command-id status error response]
-   (let [existing (sqlite/get-agent-run-command (:store runtime) command-id)
+  ([runtime run-id command-id status error response]
+   (let [existing (command-for-run! runtime run-id command-id)
          before-event-id (when-not (contains? terminal-command-statuses (:status existing))
                            (event-watermark runtime))
          command (if (contains? terminal-command-statuses (:status existing))

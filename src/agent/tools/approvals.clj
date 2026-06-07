@@ -84,18 +84,66 @@
   ([approval tool-name input]
    (valid-approval? approval tool-name input {}))
   ([approval tool-name input context]
-  (and approval
-       (= "approved" (:status approval))
-       (= (name tool-name) (:tool-name approval))
-       (= (input-hash input)
-          (or (:input-hash approval)
-              (input-hash (:input approval))))
-       (not (expired? (:expires-at approval)))
-       (let [requested-by (:requested-by approval)
-             user (:user context)]
-         (or (str/blank? requested-by)
-             (str/blank? user)
-             (= requested-by user))))))
+   (and approval
+        (= "approved" (:status approval))
+        (= (name tool-name) (:tool-name approval))
+        (= (input-hash input)
+           (or (:input-hash approval)
+               (input-hash (:input approval))))
+        (not (expired? (:expires-at approval)))
+        (let [requested-by (:requested-by approval)
+              user (:user context)]
+          (or (str/blank? requested-by)
+              (str/blank? user)
+              (= requested-by user))))))
+
+(defn- approval-permissions [approval]
+  (set (or (seq (:requested-permissions approval))
+           (granted-permissions (keyword (:tool-name approval)) (:input approval)))))
+
+(defn- approval-invalid
+  [message details]
+  (tools/tool-error :approval-invalid message details))
+
+(defn validate-approved-request!
+  [approval approval-id tool-name input context]
+  (when-not approval
+    (throw (tools/tool-error :approval-not-found
+                             "Approval request not found"
+                             {:approval-id approval-id})))
+  (when-not (= "approved" (:status approval))
+    (throw (tools/tool-error :approval-not-approved
+                             "Approval request is not approved"
+                             {:approval-id approval-id
+                              :status (:status approval)})))
+  (when (expired? (:expires-at approval))
+    (throw (tools/tool-error :approval-expired
+                             "Approval request is expired"
+                             {:approval-id approval-id
+                              :expires-at (:expires-at approval)})))
+  (when-not (= (name tool-name) (:tool-name approval))
+    (throw (approval-invalid
+            "Approval request does not match tool"
+            {:approval-id approval-id
+             :expected-tool (:tool-name approval)
+             :actual-tool (name tool-name)})))
+  (when-not (= (input-hash input)
+               (or (:input-hash approval)
+                   (input-hash (:input approval))))
+    (throw (approval-invalid
+            "Approval request does not match input"
+            {:approval-id approval-id})))
+  (let [requested-by (:requested-by approval)
+        user (:user context)]
+    (when-not (or (str/blank? requested-by)
+                  (str/blank? user)
+                  (= requested-by user))
+      (throw (tools/tool-error :approval-forbidden
+                               "Approval request belongs to another requester"
+                               {:approval-id approval-id
+                                :requested-by requested-by
+                                :user user}))))
+  approval)
 
 (defn resolve-approved-request
   [store approval-id]
@@ -109,9 +157,27 @@
                                "Approval request is not approved"
                                {:approval-id approval-id
                                 :status (:status approval)})))
+    (when (expired? (:expires-at approval))
+      (throw (tools/tool-error :approval-expired
+                               "Approval request is expired"
+                               {:approval-id approval-id
+                                :expires-at (:expires-at approval)})))
     {:tool-name (keyword (:tool-name approval))
      :input (:input approval)
-     :permissions (granted-permissions (keyword (:tool-name approval)) (:input approval))
+     :permissions (approval-permissions approval)
+     :approval approval}))
+
+(defn resolve-valid-request
+  [store approval-id tool-name input context]
+  (let [approval (validate-approved-request!
+                  (get-request store approval-id)
+                  approval-id
+                  tool-name
+                  input
+                  context)]
+    {:tool-name (keyword (:tool-name approval))
+     :input (:input approval)
+     :permissions (approval-permissions approval)
      :approval approval}))
 
 (defn create-policy-hook

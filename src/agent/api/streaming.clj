@@ -2,6 +2,7 @@
   "Server-Sent Events helpers for http-kit channels."
   (:require
    [agent.broker.core :as broker]
+   [agent.logging :as logging]
    [agent.streaming.metrics :as metrics]
    [cheshire.core :as json]
    [clojure.core.async :as async]
@@ -9,12 +10,6 @@
    [org.httpkit.server :as http-kit]))
 
 (declare send-sse-chunk!)
-
-(defn metrics []
-  (metrics/metrics))
-
-(defn reset-metrics! []
-  (metrics/reset-metrics!))
 
 (defn- context? [target]
   (and (map? target)
@@ -80,11 +75,11 @@
     (register-cleanup! ctx #(future-cancel worker))
     ch))
 
-(defn- default-error! [ctx error]
+(defn- default-error! [ctx _error]
   (when (open? ctx)
     (send-sse-chunk! ctx {:type "error"
                           :error "stream_error"
-                          :message (.getMessage error)})))
+                          :message "Stream failed"})))
 
 (defn datastar-patch-frame [html]
   (let [lines (str/split (str html) #"\n" -1)]
@@ -127,8 +122,13 @@
       (metrics/record! :dropped-events)
       false)))
 
-(defn send-sse-chunk! [channel payload]
-  (send-sse-text! channel (str "data: " (json/generate-string payload) "\n\n")))
+(defn send-sse-chunk!
+  ([channel payload]
+   (send-sse-chunk! channel nil payload))
+  ([channel event-id payload]
+   (send-sse-text! channel
+                   (str (when event-id (str "id: " event-id "\n"))
+                        "data: " (json/generate-string payload) "\n\n"))))
 
 (defn send-sse-done! [channel]
   (send-sse-text! channel "data: [DONE]\n\n"))
@@ -140,11 +140,6 @@
   (send-sse-chunk! channel {:type "error"
                             :error code
                             :message message}))
-
-(defn send-sse-terminal! [channel payload]
-  (send-sse-chunk! channel (merge {:type "terminal"} payload))
-  (send-sse-done! channel)
-  (close! channel))
 
 (defn managed-response
   ([request stream-fn]
@@ -172,6 +167,9 @@
                (metrics/record! :completed)
                (catch Throwable t
                  (metrics/record! :errors)
+                 (logging/log-error! :agent.api.streaming/stream-failed t
+                                     (cond-> {}
+                                       name (assoc :name name)))
                  ((or on-error default-error!) ctx t))
                (finally
                  (cleanup! ctx)

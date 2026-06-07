@@ -1,12 +1,20 @@
 (ns agent.api-test
   (:require
    [agent.api :as api]
+   [agent.api.errors :as api-errors]
+   [agent.api.helpers :as api-helpers]
+   [agent.api.middleware :as api-middleware]
+   [agent.api.responses :as api-responses]
+   [agent.api.routes :as api-routes]
+   [agent.api.schemas :as api-schemas]
    [agent.config :as cfg]
    [agent.federation.http :as federation-http]
+   [agent.logging :as logging]
    [agent.system :as system]
    [agent.llm.core :as llm-core]
    [agent.llm.messages :as llm-messages]
    [agent.memory.core :as memory]
+   [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
    [agent.runs.service :as runs]
    [agent.runs.registry :as runtime]
@@ -17,7 +25,8 @@
    [clojure.core.async :as async]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [clojure.test :refer [deftest is]])
+   [clojure.test :refer [deftest is]]
+   [malli.core :as m])
   (:import
    (java.io BufferedReader ByteArrayOutputStream InputStreamReader)
    (java.net URI)
@@ -275,6 +284,109 @@
         (api/stop-server! server)
         (io/delete-file path true)))))
 
+(deftest api-middleware-request-id-and-500-safety-test
+  (let [events (atom [])
+        errors (atom [])
+        ok-handler (api-middleware/wrap-defaults
+                    (fn [_] {:status 204 :headers {} :body ""})
+                    nil)
+        failing-handler (api-middleware/wrap-defaults
+                         (fn [_] (throw (Exception. "secret database path")))
+                         nil)]
+    (with-redefs [logging/log! (fn [event attrs]
+                                 (swap! events conj [event attrs]))
+                  logging/log-error! (fn [event error attrs]
+                                       (swap! errors conj [event (.getMessage error) attrs]))]
+      (let [ok-response (ok-handler {:request-method :get
+                                     :uri "/health"
+                                     :headers {"x-request-id" "rid-ok"}})
+            failed-response (failing-handler {:request-method :get
+                                              :uri "/boom"
+                                              :headers {"x-request-id" "rid-fail"}})
+            failed-body (json/parse-string (:body failed-response) true)]
+        (is (= "rid-ok" (get-in ok-response [:headers "X-Request-Id"])))
+        (is (= 500 (:status failed-response)))
+        (is (= "rid-fail" (get-in failed-response [:headers "X-Request-Id"])))
+        (is (= {:error "internal_error"
+                :message "Internal server error"
+                :request_id "rid-fail"}
+               failed-body))
+        (is (not (str/includes? (:body failed-response) "secret database path")))
+        (is (some #(and (= :agent.http/request-started (first %))
+                        (= "rid-ok" (get-in % [1 :request-id])))
+                  @events))
+        (is (some #(and (= :agent.http/request-completed (first %))
+                        (= "rid-ok" (get-in % [1 :request-id])))
+                  @events))
+        (is (= [[:agent.http/request-failed
+                 "secret database path"
+                 {:method "get" :path "/boom" :request-id "rid-fail"}]]
+               @errors))))))
+
+(deftest api-malformed-json-is-controlled-bad-json-test
+  (let [error (try
+                (api-helpers/read-json-body {:body "{\"broken\""})
+                nil
+                (catch clojure.lang.ExceptionInfo e
+                  e))
+        response (api-responses/error-response error {:request-id "rid-json"})
+        body (json/parse-string (:body response) true)]
+    (is (= 400 (:status response)))
+    (is (= "bad_json" (:error body)))
+    (is (= "Malformed JSON body" (:message body)))))
+
+(deftest api-route-handler-binding-check-test
+  (is (nil? (#'api/assert-route-bindings! (#'api/handler-map (system/create-system))
+                                          api-routes/routes)))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"API route handler binding mismatch"
+                        (#'api/assert-route-bindings! {:health identity}
+                                                      [["/missing" {:get {:handler/id :missing}}]])))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"API route handler binding mismatch"
+                        (#'api/assert-route-bindings! {:extra identity} []))))
+
+(deftest api-chat-schema-openai-compatible-messages-test
+  (is (m/validate api-schemas/ChatMessage
+                  {:role "assistant"
+                   :tool_calls [{:id "call-1"
+                                 :type "function"
+                                 :function {:name "lookup"
+                                            :arguments "{}"}}]}))
+  (is (m/validate api-schemas/ChatMessage
+                  {:role "tool"
+                   :tool_call_id "call-1"
+                   :name "lookup"
+                   :content "ok"}))
+  (is (m/validate api-schemas/ChatMessage
+                  {:role "user"
+                   :content [{:type "custom_payload"
+                              :payload {:x 1}}]}))
+  (is (not (m/validate api-schemas/ChatMessage
+                       {:role "assistant"})))
+  (is (not (m/validate api-schemas/ChatMessage
+                       {:role "user"
+                        :content [{:type "image_url"}]}))))
+
+(deftest api-domain-error-mapping-expanded-test
+  (let [cases [[:run-not-found 404 "run_not_found"]
+               [:runner-not-found 404 "runner_not_found"]
+               [:agent-not-found 404 "agent_not_found"]
+               [:channel-not-found 404 "channel_not_found"]
+               [:peer-not-found 404 "peer_not_found"]
+               [:lease-not-found 404 "lease_not_found"]
+               [:activity-not-found 404 "activity_not_found"]
+               [:orchestrator-disabled 404 "orchestrator_disabled"]
+               [:illegal-run-transition 409 "illegal_run_transition"]]]
+    (doseq [[type status code] cases]
+      (let [response (api-responses/error-response
+                      (api-errors/domain-error->api-error
+                       (ex-info "mapped" {:type type})))
+            body (json/parse-string (:body response) true)]
+        (is (= status (:status response)))
+        (is (= code (:error body)))
+        (is (= "mapped" (:message body)))))))
+
 (deftest api-refuses-non-loopback-bind-without-key-test
   (let [base-system (system/create-system)
         system (assoc-in base-system [:config :api] {:host "0.0.0.0"
@@ -325,7 +437,10 @@
   (let [path (temp-db-path)
         port (free-port)
         base-url (str "http://127.0.0.1:" port)
-        {:keys [system server]} (started-test-system path port identity)]
+        {:keys [system server]} (started-test-system
+                                  path
+                                  port
+                                  #(assoc-in % [:memory :facts :extractor :enabled] false))]
     (try
       (let [response (http-post (str base-url "/v1/chat/completions")
                                 {:messages [{:role "user"
@@ -422,7 +537,10 @@
   (let [path (temp-db-path)
         port (free-port)
         base-url (str "http://127.0.0.1:" port)
-        {:keys [system server]} (started-test-system path port identity)]
+        {:keys [system server]} (started-test-system
+                                  path
+                                  port
+                                  #(assoc-in % [:memory :facts :extractor :enabled] false))]
     (try
       (let [created (http-post (str base-url "/v1/sessions") {:title "upload"})
             session-id (:id (json/parse-string (:body created) true))
@@ -468,6 +586,155 @@
             write-denied-body (json/parse-string (:body write-denied) true)]
         (is (= 403 (:status write-denied)))
         (is (= "approval_required" (:error write-denied-body))))
+      (finally
+        (api/stop-server! server)
+        (io/delete-file path true)))))
+
+(deftest api-tool-approval-permissions-are-validated-test
+  (let [path (temp-db-path)
+        port (free-port)
+        base-url (str "http://127.0.0.1:" port)
+        write-path "target/api-agent-approved-write.txt"
+        {:keys [server]} (started-test-system
+                           path
+                           port
+                           #(-> %
+                                (assoc-in [:orchestrator :enabled] true)
+                                (assoc-in [:tools :permissions :api] [])
+                                (assoc-in [:tools :permissions :agent] [])
+                                (assoc-in [:tools :policy :blocklist] [])))]
+    (try
+      (let [fake-approval-read (http-post (str base-url "/v1/tools/fs_list/execute")
+                                          {:input {:path "."}
+                                           :approval_id "missing-approval"})
+            shell-approval-create (http-post (str base-url "/v1/tool-approvals")
+                                             {:tool "shell"
+                                              :input {:argv ["printf" "approved-api"]}
+                                              :requested_by "api"})
+            shell-approval-id (get-in (json/parse-string (:body shell-approval-create) true) [:data :id])
+            _shell-approval-approve (http-post (str base-url "/v1/tool-approvals/" shell-approval-id "/approve")
+                                               {:actor "tester"})
+            shell-approved-exec (http-post (str base-url "/v1/tools/shell/execute")
+                                           {:input {:argv ["printf" "approved-api"]}
+                                            :approval_id shell-approval-id})
+            shell-approved-body (json/parse-string (:body shell-approved-exec) true)
+            created-agent (http-post (str base-url "/v1/agents")
+                                     {:name "Tool Agent"
+                                      :tool_access ["fs"]})
+            agent-id (:id (json/parse-string (:body created-agent) true))
+            fs-approval-create (http-post (str base-url "/v1/tool-approvals")
+                                          {:tool "fs_write"
+                                           :input {:path write-path
+                                                   :content "approved-agent"}
+                                           :requested_by (str "agent:" agent-id)})
+            fs-approval-id (get-in (json/parse-string (:body fs-approval-create) true) [:data :id])
+            _fs-approval-approve (http-post (str base-url "/v1/tool-approvals/" fs-approval-id "/approve")
+                                            {:actor "tester"})
+            agent-write (http-post (str base-url "/v1/agents/" agent-id "/tools/fs_write/execute")
+                                   {:input {:path write-path
+                                            :content "approved-agent"}
+                                    :approval_id fs-approval-id})]
+        (is (= 404 (:status fake-approval-read)))
+        (is (= 200 (:status shell-approved-exec)))
+        (is (= "approved-api" (get-in shell-approved-body [:data :stdout])))
+        (is (= 200 (:status agent-write)))
+        (is (= "approved-agent" (slurp write-path))))
+      (finally
+        (api/stop-server! server)
+        (io/delete-file write-path true)
+        (io/delete-file path true)))))
+
+(deftest api-run-control-command-is-run-scoped-test
+  (let [path (temp-db-path)
+        port (free-port)
+        base-url (str "http://127.0.0.1:" port)
+        {:keys [system server]} (started-test-system path port identity)]
+    (try
+      (let [run-a (runs/request-run! system {:agent-id "run-a"
+                                             :substrate :local-unsandboxed})
+            run-b (runs/request-run! system {:agent-id "run-b"
+                                             :substrate :local-unsandboxed})
+            command-a (runs/enqueue-run-command! system (:id run-a) {:command-type :pause
+                                                                     :payload {}})
+            command-b (runs/enqueue-run-command! system (:id run-b) {:command-type :pause
+                                                                     :payload {}})
+            headers {"Authorization" (str "Bearer " (:bootstrap-token run-a))}
+            foreign-ack (http-post-headers
+                         (str base-url "/v1/runs/" (:id run-a) "/control/commands/" (:id command-b) "/ack")
+                         {}
+                         headers)
+            correct-ack (http-post-headers
+                         (str base-url "/v1/runs/" (:id run-a) "/control/commands/" (:id command-a) "/ack")
+                         {}
+                         headers)
+            foreign-complete (http-post-headers
+                              (str base-url "/v1/runs/" (:id run-a) "/control/commands/" (:id command-b) "/complete")
+                              {:status "completed"}
+                              headers)
+            correct-complete (http-post-headers
+                              (str base-url "/v1/runs/" (:id run-a) "/control/commands/" (:id command-a) "/complete")
+                              {:status "completed"}
+                              headers)]
+        (is (= 404 (:status foreign-ack)))
+        (is (= 200 (:status correct-ack)))
+        (is (= 404 (:status foreign-complete)))
+        (is (= 200 (:status correct-complete))))
+      (finally
+        (api/stop-server! server)
+        (io/delete-file path true)))))
+
+(deftest api-domain-errors-and-normalized-provider-models-test
+  (let [path (temp-db-path)
+        port (free-port)
+        base-url (str "http://127.0.0.1:" port)
+        {:keys [system server]} (started-test-system
+                                  path
+                                  port
+                                  #(-> %
+                                       (assoc-in [:orchestrator :enabled] true)
+                                       (assoc-in [:memory :vault :writable?] false)))]
+    (try
+      (let [session-id (:id (json/parse-string
+                             (:body (http-post (str base-url "/v1/sessions") {:title "branches"}))
+                             true))
+            _ (events/log-event! system {:event-type :test.one
+                                         :entity-type :test
+                                         :entity-id "one"
+                                         :payload {}})
+            _ (events/log-event! system {:event-type :test.two
+                                         :entity-type :test
+                                         :entity-id "two"
+                                         :payload {}})
+            vault-missing (http-post (str base-url "/v1/memory/vault/read")
+                                     {:path "memory/missing.md"})
+            vault-read-only (http-post (str base-url "/v1/memory/vault/write")
+                                       {:path "memory/blocked.md"
+                                        :content "blocked"})
+            unknown-provider-health (http-get (str base-url "/v1/providers/missing/health"))
+            unknown-provider-models (http-get (str base-url "/v1/providers/missing/models"))
+            provider-models (json/parse-string
+                             (:body (http-get (str base-url "/v1/providers/ollama/models")))
+                             true)
+            missing-leaf (http-post (str base-url "/v1/sessions/" session-id "/leaf")
+                                    {:entry_id "missing-entry"})
+            limited-events (json/parse-string
+                            (:body (http-get (str base-url "/v1/events?limit=1")))
+                            true)
+            peer-create (http-post (str base-url "/v1/federation/peers")
+                                   {:id "unsafe-peer"
+                                    :public_key "public"
+                                    :private_key "must-be-ignored"})
+            peer (orchestrator/get-federated-peer (:orchestrator system) "unsafe-peer")]
+        (is (= 404 (:status vault-missing)))
+        (is (= 403 (:status vault-read-only)))
+        (is (= 404 (:status unknown-provider-health)))
+        (is (= 404 (:status unknown-provider-models)))
+        (is (contains? (first (:data provider-models)) :model_id))
+        (is (not (contains? (first (:data provider-models)) :model-id)))
+        (is (= 404 (:status missing-leaf)))
+        (is (= 1 (count (:data limited-events))))
+        (is (= 201 (:status peer-create)))
+        (is (nil? (:private-key peer))))
       (finally
         (api/stop-server! server)
         (io/delete-file path true)))))

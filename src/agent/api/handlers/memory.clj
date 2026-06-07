@@ -4,7 +4,6 @@
    [agent.api.helpers :as h]
    [agent.api.responses :as responses]
    [agent.api.serializers :as ser]
-   [agent.api.validation :as v]
    [agent.memory.core :as memory]))
 
 (defn surfaces [system _request]
@@ -59,13 +58,19 @@
 
 (defn vault-read [system request]
   (let [{:keys [path]} (h/read-json-body request)]
-    (responses/json-response 200
-                             {:data (memory/read-vault-file (:memory-service system) path)})))
+    (try
+      (responses/json-response 200
+                               {:data (memory/read-vault-file (:memory-service system) path)})
+      (catch clojure.lang.ExceptionInfo e
+        (throw (errors/domain-error->api-error e))))))
 
 (defn vault-write [system request]
   (let [{:keys [path content]} (h/read-json-body request)]
-    (responses/json-response 201
-                             {:data (memory/write-vault-file! (:memory-service system) path content)})))
+    (try
+      (responses/json-response 201
+                               {:data (memory/write-vault-file! (:memory-service system) path content)})
+      (catch clojure.lang.ExceptionInfo e
+        (throw (errors/domain-error->api-error e))))))
 
 (defn- normalize-graph-fact [body]
   (cond-> {:subject (:subject body)
@@ -90,23 +95,24 @@
     (try
       (responses/json-response 201
                                {:data (memory/save-graph-fact! (:memory-service system) fact)})
-      (catch Exception e
-        (if (= :graph-memory-disabled (:type (ex-data e)))
-          (throw (errors/api-error 409 "graph_memory_disabled" "Graph memory backend is disabled"))
-          (throw e))))))
+      (catch clojure.lang.ExceptionInfo e
+        (throw (errors/domain-error->api-error e))))))
 
 (defn graph-query [system request]
   (let [{:keys [mode query limit entity depth from to max_depth as_of include_historical]} (h/read-json-body request)]
-    (responses/json-response 200
-                             {:data (memory/query-graph-memory (:memory-service system)
-                                                               query
-                                                               (cond-> {}
-                                                                 mode (assoc :mode (keyword mode))
-                                                                 limit (assoc :limit limit)
-                                                                 entity (assoc :entity entity)
-                                                                 depth (assoc :depth depth)
-                                                                 from (assoc :from from)
-                                                                 to (assoc :to to)
-                                                                 max_depth (assoc :max-depth max_depth)
-                                                                 as_of (assoc :as-of as_of)
-                                                                 include_historical (assoc :include-historical? true)))})))
+    (try
+      (responses/json-response 200
+                               {:data (memory/query-graph-memory (:memory-service system)
+                                                                 query
+                                                                 (cond-> {}
+                                                                   mode (assoc :mode (keyword mode))
+                                                                   limit (assoc :limit limit)
+                                                                   entity (assoc :entity entity)
+                                                                   depth (assoc :depth depth)
+                                                                   from (assoc :from from)
+                                                                   to (assoc :to to)
+                                                                   max_depth (assoc :max-depth max_depth)
+                                                                   as_of (assoc :as-of as_of)
+                                                                   include_historical (assoc :include-historical? true)))})
+      (catch clojure.lang.ExceptionInfo e
+        (throw (errors/domain-error->api-error e))))))

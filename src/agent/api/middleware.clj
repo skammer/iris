@@ -1,5 +1,6 @@
 (ns agent.api.middleware
-  (:require [agent.api.responses :as responses]
+  (:require [agent.api.helpers :as h]
+            [agent.api.responses :as responses]
             [agent.logging :as logging]
             [agent.security :as security]
             [clojure.string :as str]
@@ -29,7 +30,7 @@
                             {:method (some-> (:request-method request) name)
                              :path (:uri request)
                              :request-id (:request-id request)})
-        (responses/error-response e)))))
+        (responses/error-response e request)))))
 
 (defn wrap-request-logging
   [handler]
@@ -59,11 +60,6 @@
 (defn- run-control-path? [path]
   (boolean (re-matches #"^/v1/runs/[^/]+/control(?:/.*)?$" (or path ""))))
 
-(defn- bearer-token [authorization]
-  (when (and authorization
-             (str/starts-with? (str/lower-case authorization) "bearer "))
-    (subs authorization 7)))
-
 (defn- basic-token [authorization]
   (when (and authorization
              (str/starts-with? (str/lower-case authorization) "basic "))
@@ -76,7 +72,7 @@
 
 (defn- request-api-key [request]
   (or (get-in request [:headers "x-api-key"])
-      (bearer-token (get-in request [:headers "authorization"]))
+      (h/bearer-token (get-in request [:headers "authorization"]))
       (basic-token (get-in request [:headers "authorization"]))))
 
 (defn wrap-api-key-auth
@@ -98,6 +94,6 @@
   ([handler api-config]
    (-> handler
        (wrap-api-key-auth api-config)
-       wrap-request-id
+       wrap-error-boundary
        wrap-request-logging
-       wrap-error-boundary)))
+       wrap-request-id)))

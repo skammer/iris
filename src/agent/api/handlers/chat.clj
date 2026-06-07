@@ -65,6 +65,7 @@
 (defn- stream-response
   [system request messages session-id]
   (let [stream-id (str "chatcmpl-" (System/currentTimeMillis))
+        final-fallback-ms 1000
         llm (config/active-provider-config (get-in system [:config :llm]))
         provider (name (:provider llm))
         model (:model llm)
@@ -109,8 +110,8 @@
     (streaming/managed-response
      request
      {:name :chat-completions-stream
-      :on-error (fn [ctx error]
-                  (streaming/send-sse-error! ctx "stream_error" (.getMessage error))
+      :on-error (fn [ctx _error]
+                  (streaming/send-sse-error! ctx "stream_error" "Stream failed")
                   (streaming/send-sse-done! ctx))}
      (fn [ctx]
        (let [subscription (streaming/subscribe! ctx
@@ -136,27 +137,38 @@
                                                 :delta {:role "assistant"}
                                                 :finish_reason nil}]})
          (loop [result-value nil
-                terminal? false]
+                result-ch* result-ch
+                terminal? false
+                fallback-ch nil]
            (when (streaming/open? ctx)
-             (let [[value port] (async/alts!! [result-ch events-ch])]
+             (let [ports (cond-> [events-ch]
+                           result-ch* (conj result-ch*)
+                           fallback-ch (conj fallback-ch))
+                   [value port] (async/alts!! ports)]
                (cond
-                 (= port result-ch)
-                 (if-let [error (:error value)]
+                 (= port result-ch*)
+                 (if (:error value)
                    (do
-                     (streaming/send-sse-error! ctx "stream_error" (.getMessage error))
+                     (streaming/send-sse-error! ctx "stream_error" "Stream failed")
                      (streaming/send-sse-done! ctx))
                    (if terminal?
                      (finish! ctx value)
-                     (recur value terminal?)))
+                     (recur value nil terminal? (async/timeout final-fallback-ms))))
+
+                 (= port fallback-ch)
+                 (finish! ctx result-value)
 
                  (= port events-ch)
-                 (when-let [event (:payload value)]
-                   (send-event! ctx event)
-                   (let [terminal?* (or terminal?
-                                        (chat-stream-terminal-event? event session-id))]
-                     (if (and result-value terminal?*)
-                       (finish! ctx result-value)
-                       (recur result-value terminal?*)))))))))))))
+                 (if-let [event (:payload value)]
+                   (do
+                     (send-event! ctx event)
+                     (let [terminal?* (or terminal?
+                                          (chat-stream-terminal-event? event session-id))]
+                       (if (and result-value terminal?*)
+                         (finish! ctx result-value)
+                         (recur result-value result-ch* terminal?* fallback-ch))))
+                   (when result-value
+                     (finish! ctx result-value))))))))))))
 
 (defn completions-response
   "Ring-style handler for POST /v1/chat/completions."

@@ -198,11 +198,13 @@
 
 (defn agent-tool-context
   [system agent agent-id context]
-  (merge context
-         {:permissions (tool-permissions system :agent)
-          :yolo? (true? (get-in system [:config :tools :yolo?]))
-          :user (or (:user context) agent-id)
-          :allowed-tools (tool-name-set (:tool-access agent))}))
+  (let [profile-permissions (tool-permissions system :agent)
+        context-permissions (set (:permissions context))]
+    (merge context
+           {:permissions (set/union profile-permissions context-permissions)
+            :yolo? (true? (get-in system [:config :tools :yolo?]))
+            :user (or (:user context) agent-id)
+            :allowed-tools (tool-name-set (:tool-access agent))})))
 
 (defn execute-agent-tool!
   ([system agent-id tool-name input]

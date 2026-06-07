@@ -8,7 +8,7 @@
    [cheshire.core :as json]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defn- with-server [config-fn f]
   (let [path (helpers/temp-db-path)

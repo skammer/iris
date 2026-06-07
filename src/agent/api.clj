@@ -56,22 +56,6 @@
     (responses/json-response (if (= :scheduled (:status result)) 202 200)
                              {:data result})))
 
-(def ^:private orchestrator-mutating-handler-ids
-  #{:create-agent
-    :agent-message
-    :agent-tool-execute
-    :orchestrator-spawn-worker
-    :agent-step-execute
-    :consume-agent-inbox
-    :agent-interop-capabilities
-    :agent-interop-message
-    :agent-interop-ack
-    :agent-interop-retry
-    :create-federated-peer
-    :federation-inbox
-    :create-channel
-    :channel-message})
-
 (defn- orchestrator-enabled?
   [system]
   (true? (get-in (current-system system) [:config :orchestrator :enabled])))
@@ -83,8 +67,8 @@
     :message "Orchestrator API disabled; set AGENT_ORCHESTRATOR_ENABLED=true or :orchestrator {:enabled true}."}))
 
 (defn- maybe-orchestrator-handler
-  [system handler-id handler]
-  (if (contains? orchestrator-mutating-handler-ids handler-id)
+  [system route-data handler]
+  (if (:orchestrator/mutating? route-data)
     (fn [request]
       (if (orchestrator-enabled? system)
         (handler request)
@@ -224,18 +208,40 @@
    :channel-messages (fn [r] (channels/list-messages (sys) r (path-param r :channel-id)))
    :channel-message (fn [r] (channels/post-message (sys) r (path-param r :channel-id)))}))
 
+(defn- route-handler-ids [route-data]
+  (let [ids (atom [])]
+    (walk/postwalk
+     (fn [node]
+       (when (and (map? node) (contains? node :handler/id))
+         (swap! ids conj (:handler/id node)))
+       node)
+     route-data)
+    @ids))
+
+(defn- assert-route-bindings! [handlers route-data]
+  (let [route-ids (set (route-handler-ids route-data))
+        handler-ids (set (keys handlers))
+        missing-handlers (sort (remove handler-ids route-ids))
+        extra-handlers (sort (remove route-ids handler-ids))]
+    (when (or (seq missing-handlers) (seq extra-handlers))
+      (throw (ex-info "API route handler binding mismatch"
+                      {:missing-handlers missing-handlers
+                       :extra-handlers extra-handlers})))))
+
 (defn- bind-route-handlers
   [system]
   (let [handlers (handler-map system)]
+    (assert-route-bindings! handlers routes/routes)
     (walk/postwalk
      (fn [node]
        (if (and (map? node) (contains? node :handler/id))
-         (-> node
-             (dissoc :handler/id)
-             (assoc :handler
-                    (maybe-orchestrator-handler system
-                                                (:handler/id node)
-                                                (get handlers (:handler/id node)))))
+         (let [handler-id (:handler/id node)]
+           (-> node
+               (dissoc :handler/id :orchestrator/mutating?)
+               (assoc :handler
+                      (maybe-orchestrator-handler system
+                                                  node
+                                                  (get handlers handler-id)))))
          node))
      routes/routes)))
 

@@ -39,6 +39,14 @@
     (when (and (.startsWith canonical root) (.isFile file))
       (Files/readAllBytes (.toPath file)))))
 
+(defn- public-not-found-response []
+  (responses/json-response 404 {:error "not_found"} {"Cache-Control" "no-cache"}))
+
+(defn- cache-headers [relative]
+  (if (re-find #"\.(?:css|js|woff2?|ttf|otf|png|jpe?g|gif|webp|svg)$" relative)
+    {"Cache-Control" "public, max-age=3600"}
+    {"Cache-Control" "no-cache"}))
+
 (defn file-response
   "Ring-style handler for /public/* paths."
   [request]
@@ -47,6 +55,7 @@
                        (file-bytes relative))]
       (responses/bytes-response 200
                                 (h/content-type-for-path relative)
-                                bytes)
-      (responses/not-found-response))
-    (responses/not-found-response)))
+                                bytes
+                                (cache-headers relative))
+      (public-not-found-response))
+    (public-not-found-response)))
