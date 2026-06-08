@@ -5,25 +5,15 @@
    [agent.defaults :as defaults]
    [agent.llm.messages :as llm-messages]
    [agent.planner :as planner]
+   [agent.runtime.cancel :as cancel]
    [agent.runtime.doom-loop :as doom-loop]
    [agent.runtime.events :as runtime-events]
    [agent.runtime.messages :as runtime-messages]
    [agent.runtime.nudge :as nudge]
    [agent.runtime.tool-router :as tool-router]
-   [agent.runtime.cancel :as cancel]
    [agent.util :as util]
+   [cheshire.core :as json]
    [clojure.string :as str]))
-
-(def stopped-content runtime-messages/stopped-content)
-(def max-steps-content runtime-messages/max-steps-content)
-(def doom-loop-content runtime-messages/doom-loop-content)
-(def max-tokens-content runtime-messages/max-tokens-content)
-(def guardrail-exhausted-content runtime-messages/guardrail-exhausted-content)
-(def synthetic-tool-result-content runtime-messages/synthetic-tool-result-content)
-(def empty-assistant-content runtime-messages/empty-assistant-content)
-(def tool-output-content runtime-messages/tool-output-content)
-(def tool-protocol-messages runtime-messages/tool-protocol-messages)
-(def normalize-chat-history runtime-messages/normalize-chat-history)
 
 (def ^:private event! runtime-events/emit!)
 (def ^:private emit-message-delta! runtime-events/emit-message-delta!)
@@ -33,11 +23,15 @@
 (def ^:private emit-max-token-truncation! runtime-events/emit-max-token-truncation!)
 (def ^:private emit-tool-turn! runtime-events/emit-tool-turn!)
 
-(def cancelled? cancel/cancelled?)
-
-(def throw-if-cancelled! cancel/throw-if-cancelled!)
+(def ^:private cancelled? cancel/cancelled?)
+(def ^:private throw-if-cancelled! cancel/throw-if-cancelled!)
 
 (def ^:private result-text util/result-content)
+(def ^:private stopped-content runtime-messages/stopped-content)
+(def ^:private max-steps-content runtime-messages/max-steps-content)
+(def ^:private doom-loop-content runtime-messages/doom-loop-content)
+(def ^:private max-tokens-content runtime-messages/max-tokens-content)
+(def ^:private guardrail-exhausted-content runtime-messages/guardrail-exhausted-content)
 
 (defn- approval-receipts [receipts]
   (filter #(= :approval-required (keyword (:status %))) receipts))
@@ -58,21 +52,32 @@
 (defn- display-reason [approval]
   (some-> (:reason approval) str str/trim not-empty))
 
+(defn- canonical-input [input]
+  (json/generate-string input {:canonical true}))
+
+(defn- tool-call-key [value]
+  (when-let [tool-call-id (:tool-call-id value)]
+    [(some-> (:tool-name value) keyword) tool-call-id]))
+
+(defn- input-key [value]
+  [(some-> (:tool-name value) keyword) (canonical-input (:input value))])
+
 (defn- align-approval-reasons [receipts approvals]
-  (loop [remaining (seq receipts)
-         approvals* (seq approvals)
-         out []]
-    (if-not remaining
-      out
-      (let [receipt (first remaining)]
-        (if (and (approval-required? receipt) approvals*)
-          (let [approval (first approvals*)
-                reason (display-reason approval)]
-            (recur (next remaining)
-                   (next approvals*)
-                   (conj out (cond-> receipt
-                               reason (assoc :reason reason)))))
-          (recur (next remaining) approvals* (conj out receipt)))))))
+  (let [approvals-by-tool-call (group-by tool-call-key (filter :tool-call-id approvals))
+        approvals-by-input (group-by input-key approvals)]
+    (mapv (fn [receipt]
+            (if-not (approval-required? receipt)
+              receipt
+              (let [approval (or (some-> (tool-call-key receipt)
+                                         approvals-by-tool-call
+                                         first)
+                                 (some-> (input-key receipt)
+                                         approvals-by-input
+                                         first))
+                    reason (display-reason approval)]
+                (cond-> receipt
+                  reason (assoc :reason reason)))))
+          receipts)))
 
 (defn- apply-context-injectors [messages injectors]
   (llm-messages/messages->internal
@@ -240,7 +245,7 @@
                 _ (reset! delta-emitted? false)
                 _ (discard-pending-deltas!)
                 _ (event! event-sink :message-start base {:role "assistant" :step step-no})
-                {planner-messages* :messages repairs :repairs} (normalize-chat-history planner-messages)
+                {planner-messages* :messages repairs :repairs} (runtime-messages/normalize-chat-history planner-messages)
                 _ (when (seq repairs)
                     (event! event-sink :message-update base {:kind :history-repaired :repairs repairs}))
                 context-pack-raw (context-pack-fn {:messages planner-messages*
@@ -356,8 +361,7 @@
                                  :fingerprint (:fingerprint call)
                                  :count (:count doom-check)
                                  :threshold (:threshold doom-loop-config*)
-                                 :window-size (:window-size doom-loop-config*)
-                                 :action (:action doom-loop-config*)}]
+                                 :window-size (:window-size doom-loop-config*)}]
                     (discard-pending-deltas!)
                     (event! event-sink :tool-execution-update base payload)
                     (emit-terminal-message! event-sink base doom-loop-content {:stop-reason :doom-loop
@@ -469,51 +473,51 @@
                              [{:role "assistant" :content stopped-content}]
                              [] {} :cancelled stream?*
                              {:cancelled? true}))
-          (do
-            (event! event-sink :agent-end base {:stop-reason :planner-error
-                                                :message (.getMessage e)
-                                                :type (some-> e ex-data :type)
-                                                :stream stream?*})
-            (if fallback-fn
-              (try
-                (reset! delta-emitted? false)
-                (event! event-sink :message-start base {:role "assistant"
-                                                        :fallback? true
-                                                        :reason (.getMessage e)})
-                (let [fallback (fallback-fn {:messages messages*
-                                             :error e
-                                             :stream? stream?*
-                                             :emit-delta emit-delta!})
-                      content (:content fallback)]
-                  (when-not @delta-emitted?
-                    (emit-delta! content))
+          (if fallback-fn
+            (try
+              (reset! delta-emitted? false)
+              (event! event-sink :message-start base {:role "assistant"
+                                                      :fallback? true
+                                                      :reason (.getMessage e)})
+              (let [fallback (fallback-fn {:messages messages*
+                                           :error e
+                                           :stream? stream?*
+                                           :emit-delta emit-delta!})
+                    content (:content fallback)]
+                (when-not @delta-emitted?
+                  (emit-delta! content))
+                (event! event-sink :message-end base {:role "assistant"
+                                                      :content content
+                                                      :final? true
+                                                      :fallback? true
+                                                      :stop-reason (if (:error? fallback) :error :completed)})
+                (event! event-sink :agent-end base {:stop-reason (if (:error? fallback) :error :completed)
+                                                    :fallback? true
+                                                    :stream stream?*})
+                (merge (terminal-result content request-id
+                                        [{:role "assistant" :content content}]
+                                        [] (:usage fallback {})
+                                        (if (:error? fallback) :error :completed) stream?*)
+                       fallback))
+              (catch Exception fallback-error
+                (let [content (str "Chat failed: " (.getMessage fallback-error))]
                   (event! event-sink :message-end base {:role "assistant"
                                                         :content content
                                                         :final? true
                                                         :fallback? true
-                                                        :stop-reason (if (:error? fallback) :error :completed)})
-                  (event! event-sink :agent-end base {:stop-reason (if (:error? fallback) :error :completed)
+                                                        :stop-reason :error})
+                  (event! event-sink :agent-end base {:stop-reason :error
                                                       :fallback? true
+                                                      :message (.getMessage fallback-error)
+                                                      :initial-error (.getMessage e)
                                                       :stream stream?*})
-                  (merge (terminal-result content request-id
-                                          [{:role "assistant" :content content}]
-                                          [] (:usage fallback {})
-                                          (if (:error? fallback) :error :completed) stream?*)
-                         fallback))
-                (catch Exception fallback-error
-                  (let [content (str "Chat failed: " (.getMessage fallback-error))]
-                    (event! event-sink :message-end base {:role "assistant"
-                                                          :content content
-                                                          :final? true
-                                                          :fallback? true
-                                                          :stop-reason :error})
-                    (event! event-sink :agent-end base {:stop-reason :error
-                                                        :fallback? true
-                                                        :message (.getMessage fallback-error)
-                                                        :initial-error (.getMessage e)
-                                                        :stream stream?*})
-                    (terminal-result content request-id
-                                     [{:role "assistant" :content content}]
-                                     [] {} :error stream?*
-                                     {:error? true}))))
+                  (terminal-result content request-id
+                                   [{:role "assistant" :content content}]
+                                   [] {} :error stream?*
+                                   {:error? true}))))
+            (do
+              (event! event-sink :agent-end base {:stop-reason :planner-error
+                                                  :message (.getMessage e)
+                                                  :type (some-> e ex-data :type)
+                                                  :stream stream?*})
               (throw e))))))))

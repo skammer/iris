@@ -1,7 +1,7 @@
 (ns agent.chat-harness-test
-  (:require
+   (:require
    [agent.persistence.sqlite :as sqlite]
-   [agent.runtime.loop :as runtime-loop]
+   [agent.runtime.messages :as runtime-messages]
    [agent.test.chat-harness :as h]
    [agent.test.predictable :as predictable]
    [clojure.string :as str]
@@ -69,7 +69,7 @@
         (is (eventually #(true? (:working (h/session-state harness session-id)))))
         (is (= true (get-in (h/stop-session! harness session-id) [:body :data :cancelled-active?])))
         (is (= 200 (:status @chat-f)))
-        (is (= runtime-loop/stopped-content (h/wait-response harness session-id)))
+        (is (= runtime-messages/stopped-content (h/wait-response harness session-id)))
         (is (= false (:working (h/session-state harness session-id)))))
       (finally
         (h/stop! harness)))))
@@ -90,7 +90,7 @@
     (try
       (is (= 200 (:status (h/send-chat! harness session-id "truncate"))))
       (let [messages (h/list-messages harness session-id)]
-        (is (= runtime-loop/max-tokens-content (:content (last messages))))
+        (is (= runtime-messages/max-tokens-content (:content (last messages))))
         (is (= "predictable truncated output" (:content (second messages))))
         (is (true? (get-in (second messages) [:metadata :truncated])))
         (is (true? (:excluded_from_context (second messages)))))

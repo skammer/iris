@@ -3,10 +3,11 @@
   (:require
    [agent.llm.messages :as llm-messages]
    [agent.runtime.schema :as runtime-schema]
+   [agent.runtime.tokens :as tokens]
    [clojure.string :as str]
    [clojure.walk :as walk]))
 
-(def default-config
+(def ^:private default-config
   {:max-context-tokens 8192
    :reserve-output-tokens 1024
    :warning-threshold 0.8
@@ -23,13 +24,6 @@
              :referenced-file 2400
              :output-reserve 1024}})
 
-(defn estimate-tokens [value]
-  (let [text (cond
-               (string? value) value
-               (nil? value) ""
-               :else (pr-str value))]
-    (long (Math/ceil (/ (count text) 4.0)))))
-
 (defn- role [message]
   (cond
     (keyword? (:role message)) (name (:role message))
@@ -37,7 +31,7 @@
     :else (str (:role message))))
 
 (defn- message-tokens [message]
-  (estimate-tokens
+  (tokens/estimate
    (walk/postwalk
     (fn [value]
       (if (map? value)
@@ -49,10 +43,10 @@
   (reduce + 0 (map message-tokens messages)))
 
 (defn- tools-tokens [tools]
-  (estimate-tokens (or tools [])))
+  (tokens/estimate (or tools [])))
 
 (defn- total-context-tokens [{:keys [messages system-prompt tools reserve-output-tokens]}]
-  (+ (estimate-tokens system-prompt)
+  (+ (tokens/estimate system-prompt)
      (tools-tokens tools)
      (long (or reserve-output-tokens 0))
      (messages-tokens messages)))
@@ -114,7 +108,8 @@
 
 (defn- nudge-message? [message]
   (and (= "system" (role message))
-       (str/starts-with? (llm-messages/content-text message) "NUDGE ")))
+       (or (= true (get-in message [:metadata :runtime/nudge?]))
+           (str/starts-with? (llm-messages/content-text message) "NUDGE "))))
 
 (defn- drop-stale-nudges [messages]
   (let [last-idx (dec (count messages))]
@@ -125,7 +120,7 @@
                        messages))))
 
 (defn- system-token-count [messages system-prompt]
-  (+ (estimate-tokens system-prompt)
+  (+ (tokens/estimate system-prompt)
      (messages-tokens (filter #(= "system" (role %)) messages))))
 
 (defn- memory-token-count [messages]
@@ -179,7 +174,7 @@
                (if (and (tool-result-message? message)
                         (not (contains? protected idx))
                         (> (message-tokens message)
-                           (estimate-tokens (:tool-result-truncate-chars cfg))))
+                           (tokens/estimate (:tool-result-truncate-chars cfg))))
                  (-> acc
                      (update :messages assoc idx
                              (compact-tool-result-message message
@@ -216,7 +211,7 @@
       (str/replace #"\s+" " ")
       (truncate 360)))
 
-(defn summary-input [messages max-tokens]
+(defn- summary-input [messages max-tokens]
   (loop [remaining messages
          tokens 0
          acc []]
@@ -227,13 +222,13 @@
                                     (tool-call-blocks message))
                   :tool-results (mapv #(select-keys % [:tool-call-id :name :status])
                                       (tool-result-blocks message))}
-            tokens* (+ tokens (estimate-tokens line))]
+            tokens* (+ tokens (tokens/estimate line))]
         (if (> tokens* max-tokens)
           acc
           (recur (rest remaining) tokens* (conj acc line))))
       acc)))
 
-(defn summary-prompt [messages cfg]
+(defn- summary-prompt [messages cfg]
   (str "Summarize compacted Iris chat context for the next LLM call. "
        "Preserve user goals, constraints, decisions, files, tool results, pending work. "
        "Be concise.\n\n"
@@ -248,7 +243,7 @@
                                      (or (:summarizer-input-cap cfg)
                                          (:max-summary-input-tokens cfg)))))))
 
-(defn deterministic-summary [messages cfg]
+(defn- deterministic-summary [messages cfg]
   (let [input (summary-input messages (:max-summary-input-tokens cfg))
         roles (frequencies (map :role input))
         latest-user (some #(when (= "user" (:role %)) (:content %))

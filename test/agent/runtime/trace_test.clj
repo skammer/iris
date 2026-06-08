@@ -55,3 +55,22 @@
              (:path runtime-trace)))
       (finally
         (io/delete-file dir true)))))
+
+(deftest concurrent-writes-remain-jsonl-and-rolling-capped
+  (let [dir (temp-dir)
+        runtime-trace (trace/create-trace {:mode :rolling
+                                           :path "trace.jsonl"
+                                           :rolling-max-entries 25}
+                                          (.getPath dir))]
+    (try
+      (doseq [f (doall
+                 (for [i (range 80)]
+                   (future
+                     (trace/record-event! runtime-trace {:event-type :tool.call
+                                                         :payload {:i i}}))))]
+        @f)
+      (let [events (trace/load-events runtime-trace {:limit 100})]
+        (is (= 25 (count events)))
+        (is (= 25 (count (distinct (map :id events))))))
+      (finally
+        (io/delete-file dir true)))))

@@ -170,9 +170,10 @@
                         (mapv provider-tool-call->internal legacy-tool-calls))]
     (cond-> {:role role
              :content (vec (concat blocks legacy-blocks))}
-      (:id message) (assoc :id (:id message))
-      (:name message) (assoc :name (:name message))
-      (:created-at message) (assoc :created-at (:created-at message)))))
+	      (:id message) (assoc :id (:id message))
+	      (:name message) (assoc :name (:name message))
+	      (:metadata message) (assoc :metadata (:metadata message))
+	      (:created-at message) (assoc :created-at (:created-at message)))))
 
 (defn messages->internal
   [messages]

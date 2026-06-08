@@ -4,11 +4,13 @@
    [clojure.set]
    [clojure.string :as str]))
 
-(def respond-tool
+(def ^:private respond-tool
   {:name :respond
    :description "Return final assistant answer to user. Use only when no more tool work is needed."
    :version "1.0.0"
    :category :respond
+   :operation :read
+   :routing-categories #{:respond}
    :input-schema {:type "object"
                   :additionalProperties false
                   :required ["content"]
@@ -18,7 +20,7 @@
    :source :synthetic
    :sensitive false})
 
-(def all-categories #{:respond :read :write :run :search :web :plan :messaging})
+(def ^:private all-categories #{:respond :read :write :run :search :web :plan :messaging})
 
 (defn- tool-name [tool]
   (keyword (:name tool)))
@@ -30,39 +32,35 @@
        (str/join "\n")
        str/lower-case))
 
-(defn classify-tool [tool]
-  (case (tool-name tool)
-    :respond #{:respond}
-    :fs_read #{:read}
-    :fs_list #{:read :search}
-    :fs_write #{:write}
-    :fs_create #{:write}
-    :fs_replace #{:write}
-    :fs_delete #{:write}
-    :fs_mkdir #{:write}
-    :shell #{:run}
-    :http #{:web :read}
-    :memory_search #{:search :read}
-    :memory_save_fact #{:write}
-    :memory_remove_fact #{:write}
-    :memory_read_vault #{:read}
-    :memory_write_vault #{:write}
-    :message_search #{:search :read}
-    :todo_write #{:write :plan}
-    :todo_get #{:read :plan}
-    :todo_list #{:read :search :plan}
-    :todo_search #{:read :search :plan}
-    :telegram_send_photo #{:messaging}
-    :telegram_send_document #{:messaging}
-    :system_reload #{:run}
-    (case (:category tool)
-      :respond #{:respond}
-      :system #{:run}
-      :messaging #{:messaging}
-      :memory #{:search :read :write}
-      #{:read})))
+(defn- normalize-category [category]
+  (cond
+    (keyword? category) category
+    (string? category) (keyword (str/lower-case category))
+    :else category))
 
-(defn infer-categories [messages]
+(defn- normalize-categories [categories]
+  (set (keep normalize-category categories)))
+
+(defn- legacy-category-routing [tool]
+  (let [category (normalize-category (:category tool))
+        operation (normalize-category (:operation tool))]
+    (case category
+      :respond #{:respond}
+      :messaging #{:messaging}
+      :api #{:web :read}
+      :memory (if (= :act operation) #{:write :plan} #{:read :search :plan})
+      :system (if (= :act operation) #{:write :run} #{:read :search})
+      :mcp (if (= :act operation) #{:write :run :web} #{:read :search :web})
+      (case operation
+        :act #{:write}
+        :read #{:read}
+        #{:read}))))
+
+(defn- classify-tool [tool]
+  (or (not-empty (normalize-categories (:routing-categories tool)))
+      (legacy-category-routing tool)))
+
+(defn- infer-categories [messages]
   (let [text (haystack messages)
         categories (cond-> #{:respond}
                      (re-find #"\b(read|open|show|list|inspect|find|search)\b|найд|поищ|ищи|найти|найди|список|покаж" text)
@@ -87,11 +85,12 @@
                             (when (:tool-routing? profile)
                               (infer-categories messages))
                             all-categories))
-        selected (if (:tool-routing? profile)
-                   (filterv (fn [tool]
-                              (seq (clojure.set/intersection categories
-                                                             (classify-tool tool))))
-                            tools*)
+	        selected (if (:tool-routing? profile)
+	                   (filterv (fn [tool]
+	                              (or (= :respond (tool-name tool))
+	                                  (seq (clojure.set/intersection categories
+	                                                                 (classify-tool tool)))))
+	                            tools*)
                    tools*)]
     {:tools selected
      :allowed-tools (set (map tool-name selected))

@@ -101,15 +101,9 @@
                                                          :tool 2
                                                          :prereq 2}}
                     }
-          :guardrails {:doom-loop {:enabled? true
-                                   :threshold 3
-                                   :window-size 16
-                                   :action :stop}
-                        :enabled? true
-                        :max-retries 3
-                        :respond-tool? true
-                        :force-tool-choice? true
-                        :tool-routing? false}
+	          :guardrails {:doom-loop {:enabled? true
+	                                   :threshold 3
+	                                   :window-size 16}}
           :compaction {:max-context-tokens 8192
                        :reserve-output-tokens 1024
                        :keep-recent-tokens 2048

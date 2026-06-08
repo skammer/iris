@@ -306,6 +306,7 @@
         edits (atom [])
         continuation-messages (atom [])
         continuation-context (atom nil)
+        continuation-session-id (atom nil)
         approval (tool-approvals/create-request!
                   store
                   {:tool-name :shell
@@ -327,7 +328,8 @@
                                                                  :message-id message-id
                                                                  :reply-markup reply-markup}))
               :send-chat-action-fn (fn [_ _] nil)
-              :chat-fn (fn [_ {:keys [messages context]}]
+              :chat-fn (fn [_ {:keys [session-id messages context]}]
+                         (reset! continuation-session-id session-id)
                          (reset! continuation-messages messages)
                          (reset! continuation-context context)
                          {:content "agent continued"})}]
@@ -342,8 +344,77 @@
               {:chat-id 100 :text "agent continued"}]
              @sent))
       (is (str/includes? (:content (last @continuation-messages)) "stdout:\nok"))
+      (is (= "telegram-session" @continuation-session-id))
       (is (= {:telegram-chat-id 100} @continuation-context))
       (is (not (some #(str/includes? (:text %) "Tool executed") @sent)))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-approval-continuation-sends-nested-approval-card
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        registry (tool-service/create-tool-registry
+                  {:shell {:roots ["."]
+                           :working-dir "."
+                           :default-decision :ask
+                           :rules []}}
+                  (fn [_] nil)
+                  store)
+        sent (atom [])
+        html-sent (atom [])
+        answers (atom [])
+        edits (atom [])
+        first-approval (tool-approvals/create-request!
+                        store
+                        {:tool-name :shell
+                         :input {:argv ["printf" "ok"]}
+                         :requested-by "telegram-session"
+                         :reason "first"})
+        nested-approval (tool-approvals/create-request!
+                         store
+                         {:tool-name :shell
+                          :input {:argv ["pwd"]}
+                          :requested-by "telegram-session"
+                          :reason "nested"})
+        system {:store store
+                :tool-registry registry
+                :config {:tools {:yolo? false}}
+                :event-sink (fn [_] nil)}
+        config {:bot-token "token"
+                :allowlist {:allow-all? true}}
+        opts {:send-message-fn (fn [chat-id text]
+                                 (swap! sent conj {:chat-id chat-id :text text}))
+              :send-html-message-with-reply-markup-fn
+              (fn [chat-id text reply-markup]
+                (swap! html-sent conj {:chat-id chat-id
+                                       :text text
+                                       :reply-markup reply-markup}))
+              :answer-callback-query-fn (fn [callback-id body]
+                                          (swap! answers conj {:callback-id callback-id :body body}))
+              :edit-message-reply-markup-fn (fn [chat-id message-id reply-markup]
+                                              (swap! edits conj {:chat-id chat-id
+                                                                 :message-id message-id
+                                                                 :reply-markup reply-markup}))
+              :send-chat-action-fn (fn [_ _] nil)
+              :chat-fn (fn [_ {:keys [session-id]}]
+                         {:content (str "Tool approval required: shell approval_id=" (:id nested-approval))
+                          :session-id session-id
+                          :stop-reason :approval-required
+                          :approvals [nested-approval]})}]
+    (try
+      (is (= :processed
+             (telegram/process-update! system config opts
+                                       (callback-update-for 1 100 7 55 (str "ta:run:" (:id first-approval))))))
+      (is (= [{:chat-id 100 :text "shell status: ok"}] @sent))
+      (is (= 1 (count @html-sent)))
+      (is (str/includes? (:text (first @html-sent)) "Tool approval required"))
+      (is (str/includes? (:text (first @html-sent)) (:id nested-approval)))
+      (is (= [[{:text "Approve & run"
+                :callback_data (str "ta:run:" (:id nested-approval))}
+               {:text "Deny"
+                :callback_data (str "ta:deny:" (:id nested-approval))}]]
+             (get-in (first @html-sent) [:reply-markup :inline_keyboard])))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))

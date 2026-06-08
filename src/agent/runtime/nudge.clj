@@ -291,4 +291,6 @@
 
 (defn nudge-message [verdict]
   {:role "system"
-   :content (str "NUDGE (" (name (:reason verdict)) "): " (:content verdict))})
+   :content (str "NUDGE (" (name (:reason verdict)) "): " (:content verdict))
+   :metadata {:runtime/nudge? true
+              :reason (:reason verdict)}})

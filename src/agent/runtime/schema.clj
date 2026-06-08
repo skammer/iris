@@ -5,10 +5,7 @@
    [malli.core :as m]
    [malli.error :as me]))
 
-(def message-block-types
-  #{:text :thinking :image :audio :video :file :tool-call :tool-result :custom})
-
-(def runtime-event-types
+(def ^:private runtime-event-types
   #{:agent-start
     :agent-end
     :turn-start
@@ -54,27 +51,27 @@
     :custom :custom
     (normalize-token value)))
 
-(def text-block-schema
+(def ^:private text-block-schema
   [:map {:closed true}
    [:type [:= :text]]
    [:text :string]
    [:annotations {:optional true} :any]])
 
-(def thinking-block-schema
+(def ^:private thinking-block-schema
   [:map {:closed true}
    [:type [:= :thinking]]
    [:text :string]
    [:signature {:optional true} [:maybe :string]]])
 
-(def media-source-schema
+(def ^:private media-source-schema
   [:map {:closed true}
    [:type [:enum :url :base64 :file]]
    [:value :string]
    [:media-type {:optional true} [:maybe :string]]])
 
-(def image-source-schema media-source-schema)
+(def ^:private image-source-schema media-source-schema)
 
-(def image-block-schema
+(def ^:private image-block-schema
   [:map {:closed true}
    [:type [:= :image]]
    [:source image-source-schema]
@@ -82,7 +79,7 @@
    [:detail {:optional true} [:maybe [:or :keyword :string]]]
    [:filename {:optional true} [:maybe :string]]])
 
-(def audio-block-schema
+(def ^:private audio-block-schema
   [:map {:closed true}
    [:type [:= :audio]]
    [:source media-source-schema]
@@ -90,21 +87,21 @@
    [:transcript {:optional true} [:maybe :string]]
    [:filename {:optional true} [:maybe :string]]])
 
-(def video-block-schema
+(def ^:private video-block-schema
   [:map {:closed true}
    [:type [:= :video]]
    [:source media-source-schema]
    [:alt {:optional true} [:maybe :string]]
    [:filename {:optional true} [:maybe :string]]])
 
-(def file-block-schema
+(def ^:private file-block-schema
   [:map {:closed true}
    [:type [:= :file]]
    [:source media-source-schema]
    [:alt {:optional true} [:maybe :string]]
    [:filename {:optional true} [:maybe :string]]])
 
-(def tool-call-block-schema
+(def ^:private tool-call-block-schema
   [:map {:closed true}
    [:type [:= :tool-call]]
    [:id {:optional true} [:maybe :string]]
@@ -112,7 +109,7 @@
    [:arguments {:optional true} [:map-of :any :any]]
    [:raw {:optional true} :any]])
 
-(def tool-result-block-schema
+(def ^:private tool-result-block-schema
   [:map {:closed true}
    [:type [:= :tool-result]]
    [:tool-call-id :string]
@@ -121,13 +118,13 @@
    [:content :any]
    [:raw {:optional true} :any]])
 
-(def custom-block-schema
+(def ^:private custom-block-schema
   [:map {:closed true}
    [:type [:= :custom]]
    [:kind [:or :keyword :string]]
    [:data :any]])
 
-(def message-block-schema
+(def ^:private message-block-schema
   [:multi {:dispatch :type}
    [:text text-block-schema]
    [:thinking thinking-block-schema]
@@ -139,7 +136,7 @@
    [:tool-result tool-result-block-schema]
    [:custom custom-block-schema]])
 
-(def assistant-turn-schema
+(def ^:private assistant-turn-schema
   [:map {:closed true}
    [:provider [:maybe [:or :keyword :string]]]
    [:model [:maybe :string]]
@@ -151,6 +148,88 @@
    [:error [:maybe :any]]
    [:timestamp :string]])
 
+(def ^:private stop-reason-schema [:or :keyword :string])
+(def ^:private tool-status-schema [:or :keyword :string])
+(def ^:private step-schema [:int {:min 0}])
+
+(defn- open-payload [& entries]
+  (into [:map {:closed false}] entries))
+
+(defn- event-payload-schema [event-type]
+  (case event-type
+    :agent-start
+    (open-payload [:message-count :int]
+                  [:stream :boolean])
+
+    :agent-end
+    (open-payload [:stop-reason stop-reason-schema]
+                  [:steps {:optional true} :int]
+                  [:stream {:optional true} :boolean]
+                  [:fallback? {:optional true} :boolean]
+                  [:message {:optional true} [:maybe :string]]
+                  [:type {:optional true} [:maybe [:or :keyword :string]]])
+
+    :turn-start
+    (open-payload [:step step-schema])
+
+    :turn-end
+    (open-payload [:step step-schema]
+                  [:directives {:optional true} [:sequential :any]]
+                  [:receipts {:optional true} [:sequential :any]])
+
+    :message-start
+    (open-payload [:role :string]
+                  [:step {:optional true} :int]
+                  [:fallback? {:optional true} :boolean]
+                  [:reason {:optional true} [:maybe :string]])
+
+    :message-update
+    (open-payload [:kind {:optional true} [:or :keyword :string]]
+                  [:role {:optional true} :string]
+                  [:delta {:optional true} :string]
+                  [:thinking-delta {:optional true} :string]
+                  [:append? {:optional true} :boolean])
+
+    :message-end
+    (open-payload [:role :string]
+                  [:content {:optional true} :any]
+                  [:content-blocks {:optional true} [:sequential :any]]
+                  [:final? {:optional true} :boolean]
+                  [:tool-turn? {:optional true} :boolean]
+                  [:audit? {:optional true} :boolean]
+                  [:stop-reason {:optional true} stop-reason-schema])
+
+    :nudge-injected
+    (open-payload [:step step-schema]
+                  [:reason :string]
+                  [:content :string])
+
+    :guardrail-blocked
+    (open-payload [:step step-schema]
+                  [:action :string]
+                  [:reason :string]
+                  [:fingerprint {:optional true} :any])
+
+    :tool-execution-start
+    (open-payload [:tool-name :string]
+                  [:tool-call-id :string]
+                  [:source-index {:optional true} :int])
+
+    :tool-execution-update
+    (open-payload [:kind {:optional true} [:or :keyword :string]]
+                  [:tool-name {:optional true} :string]
+                  [:tool-call-id {:optional true} :string])
+
+    :tool-execution-end
+    (open-payload [:tool-name :string]
+                  [:tool-call-id :string]
+                  [:status tool-status-schema]
+                  [:duration-ms {:optional true} number?]
+                  [:tool-call {:optional true} :any]
+                  [:receipt {:optional true} :any]
+                  [:error {:optional true} [:maybe :string]]
+                  [:error-type {:optional true} [:maybe [:or :keyword :string]]])))
+
 (defn- event-schema [event-type]
   [:map {:closed true}
    [:event-type [:= event-type]]
@@ -158,9 +237,9 @@
    [:entity-id {:optional true} [:maybe :string]]
    [:request-id {:optional true} [:maybe :string]]
    [:timestamp :string]
-   [:payload {:optional true} :any]])
+   [:payload {:optional true} (event-payload-schema event-type)]])
 
-(def runtime-event-schema
+(def ^:private runtime-event-schema
   (into [:multi {:dispatch :event-type}]
         (map (fn [event-type] [event-type (event-schema event-type)])
              runtime-event-types)))

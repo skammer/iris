@@ -4,12 +4,12 @@
    [clojure.test :refer :all]))
 
 (def tools
-  [{:name :fs_read :category :system}
-   {:name :fs_list :category :system}
-   {:name :fs_write :category :system}
-   {:name :shell :category :system}
-   {:name :http :category :system}
-   {:name :telegram_send_document :category :messaging}])
+  [{:name :fs_read :category :system :operation :read :routing-categories #{:read}}
+   {:name :fs_list :category :system :operation :read :routing-categories #{:read :search}}
+   {:name :fs_write :category :system :operation :act :routing-categories #{:write}}
+   {:name :shell :category :system :operation :act :routing-categories #{:run}}
+   {:name :http :category :api :operation :act :routing-categories #{:web :read}}
+   {:name :telegram_send_document :category :messaging :operation :act :routing-categories #{:messaging}}])
 
 (deftest route-tools-adds-respond-and-shrinks-schema-test
   (let [routed (tool-router/route-tools

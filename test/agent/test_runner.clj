@@ -29,6 +29,7 @@
    [agent.runtime.context-pack-test]
    [agent.runs.registry-test]
    [agent.runtime.loop-test]
+   [agent.runtime.messages-test]
    [agent.runtime.nudge-test]
    [agent.runtime.schema-test]
    [agent.runtime.tool-router-test]
@@ -80,6 +81,7 @@
     agent.runtime.context-pack-test
     agent.runs.registry-test
     agent.runtime.loop-test
+    agent.runtime.messages-test
     agent.runtime.nudge-test
     agent.runtime.schema-test
     agent.runtime.tool-router-test

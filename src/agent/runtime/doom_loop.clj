@@ -8,8 +8,7 @@
 (def default-config
   {:enabled? true
    :threshold 3
-   :window-size 16
-   :action :stop})
+   :window-size 16})
 
 (defn normalize-config
   [config]

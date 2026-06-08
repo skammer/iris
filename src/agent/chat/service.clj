@@ -4,13 +4,13 @@
    [agent.chat.util :as chat-util]
    [agent.config :as config]
    [agent.loop :as loop-support]
-   [agent.runtime.loop :as runtime-loop])
+   [agent.runtime.messages :as runtime-messages])
   (:import
    (java.util UUID)
    (java.util.concurrent Callable Executors ThreadFactory TimeUnit)
    (java.util.concurrent.atomic AtomicLong)))
 
-(def stopped-content runtime-loop/stopped-content)
+(def stopped-content runtime-messages/stopped-content)
 
 (defn request-id []
   (str (UUID/randomUUID)))

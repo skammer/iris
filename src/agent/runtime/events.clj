@@ -105,9 +105,4 @@
                                        :content-blocks (:content tool-msg)
                                        :tool-call-id (:tool-call-id tool-result)
                                        :tool-turn? true})))
-    (doseq [[tool-call receipt] (map vector tool-calls receipts)]
-      (emit! sink :tool-execution-end base {:tool-call tool-call
-                                            :receipt receipt
-                                            :tool-name (some-> (:tool-name receipt) name)
-                                            :status (some-> (:status receipt) name)}))
     protocol-messages))

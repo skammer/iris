@@ -212,6 +212,7 @@
         ends (filter #(= :tool-execution-end (:event-type %)) @events)]
     (is (= 1 (count starts)) "exactly one tool-execution-start")
     (is (= 1 (count ends)) "exactly one tool-execution-end")
+    (is (every? :timestamp (concat starts ends)))
     (is (= "tool-call-0" (get-in (first starts) [:payload :tool-call-id]))
         "retained event is the runtime layer's (has tool-call-id)")))
 

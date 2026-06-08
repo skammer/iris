@@ -2,6 +2,7 @@
   (:require
    [agent.kernel.schema :as kernel-schema]
    [agent.runtime.loop :as runtime-loop]
+   [agent.runtime.messages :as runtime-messages]
    [cheshire.core :as json]
    [clojure.test :refer :all]))
 
@@ -150,7 +151,7 @@
                                       (swap! execute-count inc)
                                       (execute-step step))})]
     (is (= 2 @execute-count))
-    (is (= runtime-loop/doom-loop-content (:content result)))
+    (is (= runtime-messages/doom-loop-content (:content result)))
     (is (= :doom-loop (:stop-reason result)))
     (is (some #(= :doom-loop-detected (get-in % [:payload :kind])) @events))
     (is (= :doom-loop (get-in (last @events) [:payload :stop-reason])))))
@@ -194,6 +195,56 @@
     (is (= "done" (:content result)))
     (is (= :completed (:stop-reason result)))))
 
+(deftest approval-reasons-align-by-tool-call-id-test
+  (let [step {:schema-version kernel-schema/current-step-schema-version
+              :state {}
+              :directives [{:type :tool-call
+                            :payload {:tool-name :shell
+                                      :input {:value 1}
+                                      :context {:provider-tool-call-id "call_a"}}}
+                           {:type :tool-call
+                            :payload {:tool-name :fs_write
+                                      :input {:value 2}
+                                      :context {:provider-tool-call-id "call_b"}}}]
+              :receipts []
+              :llm-response {:content ""
+                             :tool-calls [{:id "call_a"
+                                           :type "function"
+                                           :function {:name "shell"
+                                                      :arguments (json/generate-string {:value 1})}}
+                                          {:id "call_b"
+                                           :type "function"
+                                           :function {:name "fs_write"
+                                                      :arguments (json/generate-string {:value 2})}}]}}
+        {:keys [events]}
+        (run-loop {:planner-fn (fn [_ _] step)
+                   :execute-step-fn (fn [_]
+                                      {:receipts [{:directive :tool-call
+                                                   :status :approval-required
+                                                   :tool-name :shell
+                                                   :tool-call-id "call_a"
+                                                   :input {:value 1}}
+                                                  {:directive :tool-call
+                                                   :status :approval-required
+                                                   :tool-name :fs_write
+                                                   :tool-call-id "call_b"
+                                                   :input {:value 2}}]})
+                   :approval-fn (fn [_]
+                                  [{:id "approval-b"
+                                    :tool-name :fs_write
+                                    :tool-call-id "call_b"
+                                    :input {:value 2}
+                                    :reason "write reason"}
+                                   {:id "approval-a"
+                                    :tool-name :shell
+                                    :tool-call-id "call_a"
+                                    :input {:value 1}
+                                    :reason "shell reason"}])})
+        approval-event (some #(when (= :approval-required (get-in % [:payload :kind])) %)
+                             @events)
+        receipts (get-in approval-event [:payload :receipts])]
+    (is (= ["shell reason" "write reason"] (mapv :reason receipts)))))
+
 (deftest context-pack-runs-before-planner-test
   (let [requests (atom [])
         pack-input (atom nil)
@@ -221,68 +272,12 @@
     (is (some #(= :context-warning (get-in % [:payload :kind])) @events))
     (is (some #(= :context-compacted (get-in % [:payload :kind])) @events))))
 
-(deftest normalize-chat-history-inserts-missing-tool-result-test
-  (let [{:keys [messages repairs]}
-        (runtime-loop/normalize-chat-history
-         [{:role "assistant"
-           :content [{:type :tool-call
-                      :id "call_1"
-                      :name "fs_list"
-                      :arguments {:path "."}}]}
-          {:role "user" :content "next"}])]
-    (is (= 1 (:inserted-tool-results repairs)))
-    (is (= ["assistant" "tool" "user"] (mapv :role messages)))
-    (is (= "call_1" (get-in messages [1 :content 0 :tool-call-id])))))
-
-(deftest normalize-chat-history-removes-orphan-tool-result-test
-  (let [{:keys [messages repairs]}
-        (runtime-loop/normalize-chat-history
-         [{:role "tool"
-           :content [{:type :tool-result
-                      :tool-call-id "orphan"
-                      :content "late"}]}
-          {:role "user" :content "next"}])]
-    (is (= 1 (:removed-tool-results repairs)))
-    (is (= ["user"] (mapv :role messages)))))
-
-(deftest normalize-chat-history-preserves-valid-tool-order-test
-  (let [input [{:role "assistant"
-                :content [{:type :tool-call
-                           :id "call_1"
-                           :name "fs_list"
-                           :arguments {:path "."}}]}
-               {:role "tool"
-                :content [{:type :tool-result
-                           :tool-call-id "call_1"
-                           :content "ok"}]}
-               {:role "user" :content [{:type :text :text "next"}]}]
-        normalized (runtime-loop/normalize-chat-history input)]
-    (is (= {} (:repairs normalized)))
-    (is (= input (:messages normalized)))))
-
-(deftest normalize-chat-history-adds-empty-assistant-placeholder-test
-  (let [{:keys [messages repairs]}
-        (runtime-loop/normalize-chat-history
-         [{:role "assistant" :content []}
-          {:role "user" :content "next"}])]
-    (is (= 1 (:placeholder-assistant-messages repairs)))
-    (is (= runtime-loop/empty-assistant-content
-           (get-in messages [0 :content 0 :text])))))
-
-(deftest normalize-chat-history-removes-internal-stop-assistant-test
-  (let [{:keys [messages repairs]}
-        (runtime-loop/normalize-chat-history
-         [{:role "assistant" :content "Stopped: guardrail retry budget exhausted."}
-          {:role "user" :content "next"}])]
-    (is (= 1 (:removed-internal-stop-messages repairs)))
-    (is (= ["user"] (mapv :role messages)))))
-
 (deftest cancellation-test
   (let [cancelled? (atom true)
         {:keys [result events]} (run-loop {:cancellation-token cancelled?
                                            :planner-fn (fn [_ _] (complete-step "late"))})]
     (is (:cancelled? result))
-    (is (= runtime-loop/stopped-content (:content result)))
+    (is (= runtime-messages/stopped-content (:content result)))
     (is (= :cancelled (get-in (last @events) [:payload :stop-reason])))))
 
 (deftest provider-error-fallback-test
@@ -293,12 +288,15 @@
                                    :fallback? true})})]
     (is (= "fallback: provider down" (:content result)))
     (is (:fallback? result))
-    (is (some #(= :planner-error (get-in % [:payload :stop-reason])) @events))))
+    (is (= [:completed]
+           (->> @events
+                (filter #(= :agent-end (:event-type %)))
+                (mapv #(get-in % [:payload :stop-reason])))))))
 
 (deftest max-step-stop-test
   (let [{:keys [result]} (run-loop {:max-steps 1
                                     :planner-fn (fn [_ _] (tool-step))})]
-    (is (= runtime-loop/max-steps-content (:content result)))
+    (is (= runtime-messages/max-steps-content (:content result)))
     (is (= :max-steps (:stop-reason result)))))
 
 (deftest max-token-truncation-stops-turn-test
@@ -313,9 +311,9 @@
                                                  :tool-calls []
                                                  :usage {:tokens 9}
                                                  :stop-reason "length"}})})]
-    (is (= runtime-loop/max-tokens-content (:content result)))
+    (is (= runtime-messages/max-tokens-content (:content result)))
     (is (= :max-tokens (:stop-reason result)))
-    (is (= ["partial" runtime-loop/max-tokens-content]
+    (is (= ["partial" runtime-messages/max-tokens-content]
            (->> @events
                 (filter #(= :message-end (:event-type %)))
                 (mapv #(get-in % [:payload :content])))))

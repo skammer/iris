@@ -63,13 +63,36 @@
     (is (= turn (runtime-schema/validate-assistant-turn! turn)))))
 
 (deftest validates-all-canonical-runtime-events-test
-  (doseq [event-type runtime-schema/runtime-event-types]
-    (is (= event-type
+  (doseq [event [{:event-type :agent-start :payload {:message-count 1 :stream false}}
+                 {:event-type :agent-end :payload {:stop-reason :completed :steps 1 :stream false}}
+                 {:event-type :turn-start :payload {:step 0}}
+                 {:event-type :turn-end :payload {:step 0 :directives [] :receipts []}}
+                 {:event-type :message-start :payload {:role "assistant" :step 0}}
+                 {:event-type :message-update :payload {:role "assistant" :delta "x" :append? true}}
+                 {:event-type :message-end :payload {:role "assistant" :content "x" :final? true}}
+                 {:event-type :nudge-injected :payload {:step 0 :reason "bare-text" :content "retry"}}
+                 {:event-type :guardrail-blocked :payload {:step 0 :action "retry" :reason "bare-text"}}
+                 {:event-type :tool-execution-start :payload {:tool-name "fs_list" :tool-call-id "call_1"}}
+                 {:event-type :tool-execution-update :payload {:tool-name "fs_list" :tool-call-id "call_1" :progress 1}}
+                 {:event-type :tool-execution-end :payload {:tool-name "fs_list" :tool-call-id "call_1" :status "ok" :duration-ms 1.0}}]]
+    (is (= (:event-type event)
            (:event-type
             (runtime-schema/validate-runtime-event!
-             {:event-type event-type
-              :entity-type :session
-              :entity-id "session-1"
-              :request-id "request-1"
-              :timestamp "2026-05-19T00:00:00Z"
-              :payload {:ok true}}))))))
+             (merge {:entity-type :session
+                     :entity-id "session-1"
+                     :request-id "request-1"
+                     :timestamp "2026-05-19T00:00:00Z"}
+                    event)))))))
+
+(deftest rejects-invalid-runtime-event-payload-test
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo
+       #"runtime-event failed schema validation"
+       (runtime-schema/validate-runtime-event!
+        {:event-type :tool-execution-end
+         :entity-type :session
+         :entity-id "session-1"
+         :request-id "request-1"
+         :timestamp "2026-05-19T00:00:00Z"
+         :payload {:tool-name "fs_list"
+                   :status "ok"}}))))

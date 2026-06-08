@@ -74,11 +74,13 @@
               :summary-max-chars 1200
               :validation-max-chars 12000}
              (:loop cfg)))
-      (is (= {:enabled? true
-              :threshold 3
-              :window-size 16
-              :action :stop}
-             (get-in cfg [:chat :guardrails :doom-loop])))
+	      (is (= {:enabled? true
+	              :threshold 3
+	              :window-size 16}
+	             (get-in cfg [:chat :guardrails :doom-loop])))
+	      (is (empty? (select-keys (:guardrails (:chat cfg))
+	                                [:enabled? :max-retries :respond-tool? :force-tool-choice? :tool-routing?])))
+	      (is (not (contains? (get-in cfg [:chat :guardrails :doom-loop]) :action)))
       (is (false? (get-in cfg [:tools :yolo?])))
       (is (= 6 (get-in cfg [:tools :max-parallelism])))
       (is (= [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write]

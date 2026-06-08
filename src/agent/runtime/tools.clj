@@ -2,14 +2,15 @@
   "Batch tool execution over agent.tools.core registries."
   (:require
    [agent.runtime.cancel :as cancel]
+   [agent.runtime.events :as runtime-events]
    [agent.tools.core :as tools]
    [agent.util :as util]
    [clojure.set :as set])
   (:import
    (java.util.concurrent Callable ExecutorCompletionService Executors TimeUnit)))
 
-(def default-mode :policy)
-(def default-max-parallelism 6)
+(def ^:private default-mode :policy)
+(def ^:private default-max-parallelism 6)
 
 (defn- now-ns [] (System/nanoTime))
 
@@ -27,7 +28,7 @@
 
 (def ^:private cancelled? cancel/cancelled?)
 
-(def ^:private event! util/emit!)
+(def ^:private event! runtime-events/emit!)
 
 (defn- error-result [preflight ex]
   (let [data (ex-data ex)]
@@ -39,6 +40,32 @@
      :error (.getMessage ex)
      :input (:input preflight)
      :terminate? false}))
+
+(defn- event-base [preflight]
+  (let [context (:context preflight)]
+    (if-let [session-id (:session-id context)]
+      {:entity-type :session
+       :entity-id session-id
+       :request-id (:request-id context)}
+      {:entity-type :tool
+       :entity-id (some-> (:tool-name preflight) name)
+       :request-id (:request-id context)})))
+
+(defn- receipt-payload [result status]
+  (cond-> {:tool-name (name (or (:tool-name result) :unknown))
+           :tool-call-id (:tool-call-id result)
+           :status status
+           :tool-call (:call result)
+           :receipt result}
+    (:duration-ms result) (assoc :duration-ms (:duration-ms result))
+    (:error result) (assoc :error (:error result))
+    (:error-type result) (assoc :error-type (:error-type result))))
+
+(defn- error-event-status [result]
+  (if (contains? #{:tool-blocked :permission-denied :path-not-allowed}
+                 (:error-type result))
+    "denied"
+    "error"))
 
 (defn- tool-result-message [result]
   {:role "tool"
@@ -61,7 +88,7 @@
     (when-not (set/subset? required actual)
       (throw (tools/permission-error required actual)))))
 
-(defn preflight-tool-call
+(defn- preflight-tool-call
   [registry call context opts source-index]
   (cancel/throw-if-cancelled! opts)
   (let [tool-name (normalize-tool-name (or (:tool-name call) (:name call)))
@@ -110,13 +137,12 @@
 
 (defn- update-fn [sink preflight]
   (fn [payload]
-    (event! sink {:event-type :tool-execution-update
-                  :entity-type :tool
-                  :entity-id (name (:tool-name preflight))
-                  :request-id (get-in preflight [:context :request-id])
-                  :payload (merge {:tool-name (name (:tool-name preflight))
-                                   :tool-call-id (:tool-call-id preflight)}
-                                  (if (map? payload) payload {:value payload}))})))
+    (event! sink
+            :tool-execution-update
+            (event-base preflight)
+            (merge {:tool-name (name (:tool-name preflight))
+                    :tool-call-id (:tool-call-id preflight)}
+                   (if (map? payload) payload {:value payload})))))
 
 (defn- execute-preflight! [registry preflight opts]
   (cancel/throw-if-cancelled! opts)
@@ -130,13 +156,12 @@
                         :preflighted? true
                         :on-tool-update (update-fn sink preflight)
                         :tool-update! (update-fn sink preflight))]
-    (event! sink {:event-type :tool-execution-start
-                  :entity-type :tool
-                  :entity-id (name (:tool-name preflight))
-                  :request-id (:request-id context*)
-                  :payload {:tool-name (name (:tool-name preflight))
-                            :tool-call-id (:tool-call-id preflight)
-                            :source-index (:source-index preflight)}})
+    (event! sink
+            :tool-execution-start
+            (event-base (assoc preflight :context context*))
+            {:tool-name (name (:tool-name preflight))
+             :tool-call-id (:tool-call-id preflight)
+             :source-index (:source-index preflight)})
     (try
       (let [raw-result (tools/execute-tool registry (:tool-name preflight) (:input preflight) context*)
             result* {:source-index (:source-index preflight)
@@ -157,28 +182,25 @@
                      (contains? override :status) (assoc :status (:status override))
                      (contains? override :terminate?) (assoc :terminate? (:terminate? override))
                      (contains? override :terminate) (assoc :terminate? (:terminate override)))]
-        (event! sink {:event-type :tool-execution-end
-                      :entity-type :tool
-                      :entity-id (name (:tool-name preflight))
-                      :request-id (:request-id context*)
-                      :payload {:tool-name (name (:tool-name preflight))
-                                :tool-call-id (:tool-call-id preflight)
-                                :status (name (:status result))
-                                :duration-ms (:duration-ms result)}})
+        (event! sink
+                :tool-execution-end
+                (event-base (assoc result :context context*))
+                (receipt-payload (assoc result :call (:call preflight)) (name (:status result))))
         result)
       (catch Exception e
         (let [result (assoc (error-result preflight e)
                             :duration-ms (util/duration-ms start))]
-          (event! sink {:event-type :tool-execution-end
-                        :entity-type :tool
-                        :entity-id (name (:tool-name preflight))
-                        :request-id (:request-id context*)
-                        :payload {:tool-name (name (:tool-name preflight))
-                                  :tool-call-id (:tool-call-id preflight)
-                                  :status "error"
-                                  :error (.getMessage e)
-                                  :duration-ms (:duration-ms result)}})
+          (event! sink
+                  :tool-execution-end
+                  (event-base (assoc result :context context*))
+                  (receipt-payload (assoc result :call (:call preflight)) "error"))
           result)))))
+
+(defn- emit-preflight-error! [sink preflight result]
+  (event! sink
+          :tool-execution-end
+          (event-base preflight)
+          (receipt-payload result (error-event-status result))))
 
 (defn- execution-mode-for [preflight opts]
   (normalize-tool-name
@@ -199,6 +221,7 @@
               :tool-call-id (call-id idx call)
               :tool-name (normalize-tool-name (or (:tool-name call) (:name call)))
               :input (call-input call)
+              :context (tools/create-execution-context (merge context (:context call)))
               :call call}
              (:preflight (ex-data e))
              {:preflight-error e}))))
@@ -213,7 +236,9 @@
   (mapv (fn [preflight]
           (cancel/throw-if-cancelled! opts)
           (if-let [error (:preflight-error preflight)]
-            (error-result preflight error)
+            (let [result (error-result preflight error)]
+              (emit-preflight-error! (:event-sink opts) preflight result)
+              result)
             (execute-preflight! registry preflight opts)))
         preflights))
 
@@ -232,13 +257,20 @@
         (swap! futures conj
                (.submit ecs ^Callable #(execute-preflight! registry preflight opts))))
       (loop [remaining (count ready)
-             results (mapv #(error-result % (:preflight-error %)) errors)]
+             results (mapv (fn [preflight]
+                             (let [result (error-result preflight (:preflight-error preflight))]
+                               (emit-preflight-error! (:event-sink opts) preflight result)
+                               result))
+                           errors)]
         (if (zero? remaining)
           results
-          (let [future (.take ecs)
-                _ (cancel/throw-if-cancelled! opts)
-                result (.get future)]
-            (recur (dec remaining) (conj results result)))))
+          (if-let [future (.poll ecs 100 TimeUnit/MILLISECONDS)]
+            (let [_ (cancel/throw-if-cancelled! opts)
+                  result (.get future)]
+              (recur (dec remaining) (conj results result)))
+            (do
+              (cancel/throw-if-cancelled! opts)
+              (recur remaining results)))))
       (catch Exception e
         (when (or (= :chat-cancelled (some-> e ex-data :type))
                   (cancelled? opts))
@@ -304,9 +336,10 @@
          preflights (mapv (fn [[idx call]]
                             (preflight-or-error registry call context opts* idx))
                           (map-indexed vector calls))
-         results (mapcat (fn [[mode batch]]
-                           (case mode
-                             :sequential (execute-sequential! registry batch opts*)
-                             :parallel (execute-parallel! registry batch opts*)))
-                         (batches preflights opts*))]
+         results (mapv identity
+                       (mapcat (fn [[mode batch]]
+                                 (case mode
+                                   :sequential (execute-sequential! registry batch opts*)
+                                   :parallel (execute-parallel! registry batch opts*)))
+                               (batches preflights opts*)))]
      (finalize-results results))))

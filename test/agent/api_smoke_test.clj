@@ -127,9 +127,9 @@
   (with-server nil
     (fn [{:keys [base-url]}]
       (let [run-resp (helpers/http-post (str base-url "/v1/runs")
-                                        {:agent_id "smoke-agent"
-                                         :name "smoke"
-                                         :substrate "docker"})
+	                                        {:agent_id "smoke-agent"
+	                                         :name "smoke"
+	                                         :substrate "external"})
             run-id (get-in (json/parse-string (:body run-resp) true) [:data :id])
             {:keys [status body]} (helpers/http-get
                                    (str base-url "/ui/run-detail-body?run_id=" run-id))]

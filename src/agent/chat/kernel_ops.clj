@@ -58,4 +58,5 @@
                                                        :tool-execution-modes
                                                        :max-parallelism
                                                        :cancellation-token
+                                                       :event-sink
                                                        :cancelled?])))))

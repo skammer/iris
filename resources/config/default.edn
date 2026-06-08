@@ -94,10 +94,9 @@
                                  :context-card-budgets {:nudges 2
                                                        :tool 2
                                                        :prereq 2}}}
-        :guardrails {:doom-loop {:enabled? true
-                                 :threshold 3
-                                 :window-size 16
-                                 :action :stop}}
+	        :guardrails {:doom-loop {:enabled? true
+	                                 :threshold 3
+	                                 :window-size 16}}
         ;; Keep context/output budgets aligned with active model limits.
         :compaction {:max-context-tokens 8192
                      :reserve-output-tokens 1024

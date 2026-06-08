@@ -137,7 +137,15 @@
                  (keyword? action) action
                  (string? action) (keyword (str/lower-case action))
                  :else nil))
-             actions)))
+	             actions)))
+
+(defn- routing-category-set [categories]
+  (set (keep (fn [category]
+               (cond
+                 (keyword? category) category
+                 (string? category) (keyword (str/lower-case category))
+                 :else nil))
+             categories)))
 
 (defn- act-permission? [permission]
   (let [value (str/lower-case (name permission))]
@@ -149,7 +157,24 @@
               (true? sensitive)
               (some act-permission? required-permissions))
         :act
-        :read)))
+	        :read)))
+
+(defn- derived-routing-categories [category operation]
+  (let [category* (cond
+                    (keyword? category) category
+                    (string? category) (keyword (str/lower-case category))
+                    :else category)]
+    (case category*
+      :respond #{:respond}
+      :messaging #{:messaging}
+      :api #{:web :read}
+      :memory (if (= :act operation) #{:write :plan} #{:read :search :plan})
+      :system (if (= :act operation) #{:write :run} #{:read :search})
+      :mcp (if (= :act operation) #{:write :run :web} #{:read :search :web})
+      (case operation
+        :act #{:write}
+        :read #{:read}
+        #{:read}))))
 
 (defn- action-value [input action-key]
   (let [value (get input action-key)]
@@ -163,6 +188,7 @@
   [description]
   (select-keys description
                [:operation
+                :routing-categories
                 :parallel-safe?
                 :approval-sensitive?
                 :activates-tools?
@@ -197,7 +223,7 @@
 
 (defn create-tool-description
   [name description & {:keys [version category input-schema required-permissions timeout-ms source source-details sensitive execution-mode prerequisites
-                              operation parallel-safe? approval-sensitive? activates-tools?
+                              operation routing-categories parallel-safe? approval-sensitive? activates-tools?
                               action-key read-only-actions parallel-safe-actions]
                        :or {version "1.0.0"
                             required-permissions #{}
@@ -210,7 +236,10 @@
         approval-sensitive?* (if (some? approval-sensitive?)
                                (boolean approval-sensitive?)
                                sensitive?)
-        required-permissions* (set required-permissions)]
+        required-permissions* (set required-permissions)
+        operation* (derived-operation operation approval-sensitive?* sensitive? required-permissions*)
+        routing-categories* (or (not-empty (routing-category-set routing-categories))
+                                (derived-routing-categories category operation*))]
     {:name name
      :description description
      :version version
@@ -223,7 +252,8 @@
      :source-details source-details
      :execution-mode execution-mode
      :prerequisites prerequisites
-     :operation (derived-operation operation approval-sensitive?* sensitive? required-permissions*)
+     :operation operation*
+     :routing-categories routing-categories*
      :parallel-safe? (boolean parallel-safe?)
      :approval-sensitive? approval-sensitive?*
      :activates-tools? (boolean activates-tools?)

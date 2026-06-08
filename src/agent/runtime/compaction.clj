@@ -2,32 +2,26 @@
   "Session entry compaction planning and deterministic summary storage."
   (:require
    [agent.persistence.sqlite :as sqlite]
+   [agent.runtime.tokens :as tokens]
    [clojure.string :as str]))
 
-(def default-thresholds
+(def ^:private default-thresholds
   {:max-context-tokens 8192
    :reserve-output-tokens 1024
    :keep-recent-tokens 2048
    :max-summary-input-tokens 8192})
 
-(defn estimate-tokens [value]
-  (let [s (cond
-            (string? value) value
-            (nil? value) ""
-            :else (pr-str value))]
-    (max 1 (long (Math/ceil (/ (count s) 4.0))))))
+(defn- entry-tokens [entry]
+  (tokens/estimate (:payload entry)))
 
-(defn entry-tokens [entry]
-  (estimate-tokens (:payload entry)))
-
-(defn total-tokens [entries]
+(defn- total-tokens [entries]
   (reduce + 0 (map entry-tokens entries)))
 
 (defn- message-role [entry]
   (or (get-in entry [:payload :role])
       (get-in entry [:payload :message :role])))
 
-(defn tool-result-entry? [entry]
+(defn- tool-result-entry? [entry]
   (and (= :message (:type entry))
        (= "tool" (message-role entry))))
 
@@ -41,7 +35,7 @@
           (inc idx)
           (recur (dec idx) tokens*))))))
 
-(defn safe-cut-index [entries thresholds]
+(defn- safe-cut-index [entries thresholds]
   (let [idx (recent-start-index entries (:keep-recent-tokens thresholds))]
     (loop [i idx]
       (cond
@@ -66,7 +60,7 @@
             (get-in entry [:payload :summary])))
         (reverse entries)))
 
-(defn prepare-compaction
+(defn- prepare-compaction
   ([entries] (prepare-compaction entries {}))
   ([entries thresholds]
    (let [thresholds* (merge default-thresholds thresholds)
@@ -90,7 +84,7 @@
           :oversized-single-turn? oversized?
           :thresholds thresholds*})))))
 
-(defn entry-summary-line [entry]
+(defn- entry-summary-line [entry]
   (let [payload (:payload entry)
         text (or (:content payload)
                  (:summary payload)
@@ -101,14 +95,7 @@
                0
                (min 180 (count (str/replace (str text) #"\s+" " ")))))))
 
-(defn compaction-prompt [plan]
-  (str "Summarize compacted Iris session entries.\n"
-       (when-let [summary (:previous-summary plan)]
-         (str "\nPrevious summary:\n" summary "\n"))
-       "\nEntries:\n"
-       (str/join "\n" (map entry-summary-line (:summary-input plan)))))
-
-(defn deterministic-summary [plan]
+(defn- deterministic-summary [plan]
   (let [lines (map entry-summary-line (:summary-input plan))]
     (str "Compacted " (count (:summary-input plan)) " entries; "
          "tokens before " (:tokens-before plan) "."
@@ -117,7 +104,7 @@
          (when (seq lines)
            (str "\n" (str/join "\n" (take 12 lines)))))))
 
-(defn file-history [entries]
+(defn- file-history [entries]
   (reduce (fn [acc entry]
             (let [details (or (get-in entry [:payload :details])
                               (get-in entry [:payload :metadata])
@@ -128,7 +115,7 @@
           {:files-read [] :files-touched []}
           entries))
 
-(defn store-compaction! [store session-id plan]
+(defn- store-compaction! [store session-id plan]
   (let [summary (or (:summary plan) (deterministic-summary plan))
         details (merge {:thresholds (:thresholds plan)
                         :oversized-single-turn? (:oversized-single-turn? plan)
@@ -150,7 +137,7 @@
             :plan (dissoc plan :summary-input :kept))
      {:compacted? false})))
 
-(defn common-ancestor-id [old-path new-path]
+(defn- common-ancestor-id [old-path new-path]
   (loop [old old-path
          new new-path
          common nil]
@@ -158,7 +145,7 @@
       (recur (rest old) (rest new) (:id (first old)))
       common)))
 
-(defn branch-summary [old-path new-path]
+(defn- branch-summary [old-path new-path]
   (let [ancestor (common-ancestor-id old-path new-path)
         after-ancestor (fn [path]
                          (->> path

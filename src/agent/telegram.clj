@@ -748,7 +748,8 @@
         chat-run! (or (:chat-fn opts) chat/run!)]
     (try
       (let [response (chat-run! system
-                                (cond-> {:messages messages
+                                (cond-> {:session-id session-id
+                                          :messages messages
                                           :context {:telegram-chat-id chat-id}
                                           :stream? true}
                                   (:on-delta stream-controls)
@@ -757,11 +758,16 @@
                                   (assoc :on-thinking-delta (:on-thinking-delta stream-controls))
                                   on-tool-call
                                   (assoc :on-tool-call on-tool-call)))
-            final (or (:content response) "")]
+            final (or (:content response) "")
+            approvals (seq (:approvals response))]
         (when-let [finalize-thinking! (:finalize-thinking! stream-controls)]
           (finalize-thinking!))
-        (when-not (str/blank? final)
-          (send! chat-id final))
+        (if (and (= :approval-required (keyword (:stop-reason response)))
+                 approvals)
+          (doseq [approval approvals]
+            (send-approval-card! system config opts chat-id approval))
+          (when-not (str/blank? final)
+            (send! chat-id final)))
         response)
       (finally
         (stop-typing!)))))

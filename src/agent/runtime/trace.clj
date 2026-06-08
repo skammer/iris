@@ -41,7 +41,8 @@
                               default-rolling-max-entries))]
     {:mode mode
      :path (resolve-trace-path (:path cfg) base-dir)
-     :rolling-max-entries (max 1 max-entries)}))
+     :rolling-max-entries (max 1 max-entries)
+     :lock (Object.)}))
 
 (defn enabled? [trace]
   (and (map? trace)
@@ -116,22 +117,23 @@
 (defn record-event!
   [trace {:keys [event-type turn-id provider model channel success error-message payload]}]
   (when (enabled? trace)
-    (let [event {:id (str (UUID/randomUUID))
-                 :timestamp (util/now-str)
-                 :event-type (name event-type)
-                 :turn-id turn-id
-                 :provider provider
-                 :model model
-                 :channel channel
-                 :success success
-                 :error-message error-message
-                 :payload (scrub (or payload {}))}
-          event* (into {}
-                       (remove (comp nil? val))
-                       event)]
-      (append-line! (:path trace) (json/generate-string event*))
-      (trim-rolling! trace)
-      event*)))
+    (locking (:lock trace)
+      (let [event {:id (str (UUID/randomUUID))
+                   :timestamp (util/now-str)
+                   :event-type (name event-type)
+                   :turn-id turn-id
+                   :provider provider
+                   :model model
+                   :channel channel
+                   :success success
+                   :error-message error-message
+                   :payload (scrub (or payload {}))}
+            event* (into {}
+                         (remove (comp nil? val))
+                         event)]
+        (append-line! (:path trace) (json/generate-string event*))
+        (trim-rolling! trace)
+        event*))))
 
 (defn load-events
   ([trace] (load-events trace {}))

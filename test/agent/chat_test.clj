@@ -8,8 +8,9 @@
    [agent.loop :as loop]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
-   [agent.runtime.loop :as runtime-loop]
    [agent.runtime.compaction :as compaction]
+   [agent.runtime.loop :as runtime-loop]
+   [agent.runtime.messages :as runtime-messages]
    [agent.sessions.service :as sessions]
    [agent.system :as system]
    [agent.system.components :as components]
@@ -765,14 +766,14 @@
             next-result (chat/run! system {:session-id (:id session)
                                            :messages [{:role "user" :content "smaller"}]})
             next-request-messages (get-in (second @requests) [:request :messages])]
-        (is (= runtime-loop/max-tokens-content (:content first-result)))
-        (is (= ["too big" "partial output" runtime-loop/max-tokens-content]
+        (is (= runtime-messages/max-tokens-content (:content first-result)))
+        (is (= ["too big" "partial output" runtime-messages/max-tokens-content]
                (mapv :content first-messages)))
         (is (true? (:excluded-from-context? (second first-messages))))
         (is (true? (get-in (second first-messages) [:metadata :truncated])))
         (is (= "next answer" (:content next-result)))
         (is (not-any? #(= "partial output" (message-text %)) next-request-messages))
-        (is (some #(= runtime-loop/max-tokens-content (message-text %)) next-request-messages)))
+        (is (some #(= runtime-messages/max-tokens-content (message-text %)) next-request-messages)))
       (finally
         (io/delete-file path true)))))
 
@@ -956,10 +957,10 @@
 
 (deftest tool-output-content-truncates-large-results-test
   (let [large-result (apply str (repeat 9000 "x"))
-        content (runtime-loop/tool-output-content {:status :completed
-                                                   :tool-name :memory_search
-                                                   :result large-result
-                                                   :input {:query "x"}})]
+        content (runtime-messages/tool-output-content {:status :completed
+                                                       :tool-name :memory_search
+                                                       :result large-result
+                                                       :input {:query "x"}})]
     (is (str/includes? content "[truncated "))
     (is (not (str/includes? content "\"result\"")))
     (is (< (count content) (count large-result)))
