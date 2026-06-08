@@ -6,6 +6,7 @@
    [agent.chat :as chat]
    [agent.config :as config]
    [agent.health :as health]
+   [agent.llm.registry :as llm-registry]
    [agent.llm.service :as llm-service]
    [agent.logging :as logging]
    [agent.persistence.sqlite :as sqlite]
@@ -65,6 +66,53 @@
 (defn- running-adapter? [service]
   (true? (get-in (channel-adapters/adapter-health-check service) [:running])))
 
+(defn- attach-telegram-service
+  [system]
+  (let [health-registry (:health-registry system)
+        telegram-service (telegram/create-service system)]
+    (assoc system
+           :telegram-service telegram-service
+           :channel-adapter-registry
+           (system-health/with-component-health health-registry :channel-adapters
+             #(components/create-channel-adapter-registry
+               (get-in system [:config :channel-adapters])
+               telegram-service)))))
+
+(defn- replace-running-telegram!
+  [old-system new-system]
+  (let [health-registry (:health-registry old-system)
+        old-service (:telegram-service old-system)
+        running? (some-> old-service running-adapter?)]
+    (if-not running?
+      new-system
+      (do
+        (health/bump-restart! health-registry :channel-adapters)
+        (try
+          (channel-adapters/stop-adapter! old-service)
+          (let [started (system-health/with-component-health health-registry :channel-adapters
+                          #(channel-adapters/start-adapter! (:telegram-service new-system)))]
+            (assoc new-system :telegram-service started))
+          (catch Exception e
+            (try
+              (channel-adapters/start-adapter! old-service)
+              (catch Exception restart-error
+                (logging/log-error! :agent.system.lifecycle/telegram-restart-failed
+                                    restart-error
+                                    {})))
+            (throw e)))))))
+
+(defn- stop-api-server!
+  [system]
+  (when-let [server (:api-server system)]
+    (logging/log! :agent.api/stopping {})
+    (api/stop-server! server)))
+
+(defn- stop-runtime-edges!
+  [system]
+  (some-> (:chat-service system) chat/stop!)
+  (some-> (:telegram-service system) channel-adapters/stop-adapter!)
+  (stop-api-server! system))
+
 (defn- rebuild-hot-system [old-system new-cfg]
   (let [health-registry (:health-registry old-system)
         memory-service (system-health/with-component-health health-registry :memory
@@ -75,6 +123,7 @@
         trace (components/create-trace new-cfg)
         base (assoc old-system
                     :config new-cfg
+                    :llm-registry (llm-registry/create-registry (config/llm-config new-cfg))
                     :chat-service (system-health/with-component-health health-registry :chat
                                     #(chat/create-service))
                     :llm-provider (system-health/with-component-health health-registry :llm-provider
@@ -85,34 +134,20 @@
                     :trace trace
                     :memory-service memory-service
                     :skills-registry (components/create-skills-registry (:skills new-cfg)))
-        telegram-running? (some-> (:telegram-service old-system) running-adapter?)
-        _ (when telegram-running?
-            (health/bump-restart! health-registry :channel-adapters))
-        _ (try
-            (some-> (:telegram-service old-system) channel-adapters/stop-adapter!)
-            (catch Exception e
-              (health/mark-error! health-registry :channel-adapters e)
-              (throw e)))
-        telegram-service (telegram/create-service base)
-        telegram-service* (if telegram-running?
-                            (system-health/with-component-health health-registry :channel-adapters
-                              #(channel-adapters/start-adapter! telegram-service))
-                            telegram-service)]
-    (assoc base
-           :telegram-service telegram-service*
-           :tool-registry (system-health/with-component-health health-registry :tools
-                            #(tool-service/create-tool-registry (:tools new-cfg)
-                                                               (:event-sink old-system)
-                                                               (:store old-system)
-                                                               (:telemetry old-system)
-                                                               memory-service
-                                                               (:channel-adapters new-cfg)
-                                                               (:system-control old-system)
-                                                               observer
-                                                               trace))
-           :channel-adapter-registry (system-health/with-component-health health-registry :channel-adapters
-                                       #(components/create-channel-adapter-registry (:channel-adapters new-cfg)
-                                                                                   telegram-service*)))))
+        system-with-tools (assoc base
+                                 :tool-registry
+                                 (system-health/with-component-health health-registry :tools
+                                   #(tool-service/create-tool-registry (:tools new-cfg)
+                                                                      (:event-sink old-system)
+                                                                      (:store old-system)
+                                                                      (:telemetry old-system)
+                                                                      memory-service
+                                                                      (:channel-adapters new-cfg)
+                                                                      (:system-control old-system)
+                                                                      observer
+                                                                      trace)))]
+    (->> (attach-telegram-service system-with-tools)
+         (replace-running-telegram! old-system))))
 
 (defn- soft-reload! [system opts]
   (let [system* (current-system system)
@@ -138,7 +173,7 @@
 (defn close-system!
   [system]
   (try
-    (chat/stop! (:chat-service system))
+    (some-> (:chat-service system) chat/stop!)
     (catch Exception e
       (logging/log-error! :agent.system.lifecycle/chat-stop-failed e {})))
   (try
@@ -189,26 +224,30 @@
                                                                   (:system-control new-system**)
                                                                   (:observer new-system**)
                                                                   (:trace new-system**))))
-        new-system (if api-running?
-                     (start-api! new-system***)
-                     new-system***)
-        result (reload-result :full old-cfg (:config new-system) :reloaded)]
-    (chat/stop! (:chat-service old-system))
-    (doseq [component [:llm-provider :sqlite :broker :telemetry :runtime :chat
-                       :tools :memory :channel-adapters]]
-      (health/mark-ok! health-registry component))
-    (reset! system-ref new-system)
-    (reset! reload-state
-            (assoc result
-                   :source (:source opts)
-                   :reloaded-at (util/now-str)))
-    ((:event-sink new-system)
-     {:event-type :system.config.reloaded
-      :entity-type :system
-      :entity-id "runtime"
-      :payload result})
-    (close-system! old-system)
-    result))
+        new-system-ready (attach-telegram-service new-system***)
+        result (reload-result :full old-cfg (:config new-system-ready) :reloaded)]
+    (stop-runtime-edges! old-system)
+    (let [new-system (if api-running?
+                       (start-api! new-system-ready)
+                       new-system-ready)]
+      (doseq [component [:llm-provider :sqlite :broker :telemetry :runtime :chat
+                         :tools :memory :channel-adapters]]
+        (health/mark-ok! health-registry component))
+      (reset! system-ref new-system)
+      (reset! reload-state
+              (assoc result
+                     :source (:source opts)
+                     :reloaded-at (util/now-str)))
+      ((:event-sink new-system)
+       {:event-type :system.config.reloaded
+        :entity-type :system
+        :entity-id "runtime"
+        :payload result})
+      (close-system! (assoc old-system
+                            :chat-service nil
+                            :telegram-service nil
+                            :api-server nil))
+      result)))
 
 (defn- schedule-full-reload! [system opts]
   (let [system* (current-system system)
@@ -280,12 +319,3 @@
       (when-let [system-ref (:system-ref system*)]
         (reset! system-ref system*))
       system*)))
-
-(defn stop-api!
-  [system]
-  (some-> (:telegram-service system)
-          channel-adapters/stop-adapter!)
-  (when-let [server (:api-server system)]
-    (logging/log! :agent.api/stopping {})
-    (api/stop-server! server))
-  (dissoc system :api-server))

@@ -108,9 +108,10 @@
                      (assoc :usage (openai-style-usage (get-in result-value [:result :usage])))))
                   (streaming/send-sse-done! ctx))]
     (streaming/managed-response
-     request
-     {:name :chat-completions-stream
-      :on-error (fn [ctx _error]
+	     request
+	     {:name :chat-completions-stream
+          :metrics (:sse-metrics system)
+	      :on-error (fn [ctx _error]
                   (streaming/send-sse-error! ctx "stream_error" "Stream failed")
                   (streaming/send-sse-done! ctx))}
      (fn [ctx]

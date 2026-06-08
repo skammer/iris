@@ -14,6 +14,7 @@
    [agent.runs.service :as runs-service]
    [agent.runtime.trace :as runtime-trace]
    [agent.skills :as skills]
+   [agent.streaming.metrics :as streaming-metrics]
    [agent.system.events :as events]
    [agent.system.health :as system-health]
    [agent.telegram :as telegram]
@@ -129,6 +130,7 @@
                        :fact-llm-provider fact-llm-provider
                        :store store
                        :telemetry telemetry-collector
+                       :sse-metrics (streaming-metrics/create-store)
                        :observer observer
                        :trace trace
                        :broker broker-instance

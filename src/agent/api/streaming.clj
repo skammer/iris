@@ -24,12 +24,18 @@
     (true? @(:open? target))
     true))
 
+(defn- record! [target k]
+  (metrics/record! (when (context? target) (:metrics target)) k))
+
+(defn- add-count! [target k n]
+  (metrics/add-count! (when (context? target) (:metrics target)) k n))
+
 (defn close! [target]
   (when-let [channel (target-channel target)]
     (when (or (not (context? target))
               (compare-and-set! (:open? target) true false))
       (when (context? target)
-        (metrics/record! :closed))
+        (record! target :closed))
       (http-kit/close channel))))
 
 (defn- cleanup! [ctx]
@@ -39,7 +45,7 @@
       (try
         (cleanup)
         (catch Throwable _
-          (metrics/record! :cleanup-errors))))))
+          (record! ctx :cleanup-errors))))))
 
 (defn register-cleanup! [ctx cleanup]
   (when (context? ctx)
@@ -54,9 +60,9 @@
      (register-cleanup!
       ctx
       (fn []
-        (metrics/add-count! :dropped-events (some-> subscription :dropped-count deref))
+        (add-count! ctx :dropped-events (some-> subscription :dropped-count deref))
         (broker/unsubscribe! broker-instance subscription)
-        (metrics/record! :unsubscribed)))
+        (record! ctx :unsubscribed)))
      subscription)))
 
 (defn take! [ctx ch]
@@ -113,13 +119,13 @@
     (try
       (let [sent? (true? (http-kit/send! (target-channel channel) text false))]
         (when-not sent?
-          (metrics/record! :dropped-events))
+          (record! channel :dropped-events))
         sent?)
       (catch Throwable _
-        (metrics/record! :send-errors)
+        (record! channel :send-errors)
         false))
     (do
-      (metrics/record! :dropped-events)
+      (record! channel :dropped-events)
       false)))
 
 (defn send-sse-chunk!
@@ -144,7 +150,7 @@
 (defn managed-response
   ([request stream-fn]
    (managed-response request {} stream-fn))
-  ([request {:keys [initial-body on-error close? name]
+  ([request {:keys [initial-body on-error close? name metrics]
              :or {initial-body ":\n\n"
                   close? true}} stream-fn]
    (let [ctx* (atom nil)
@@ -152,21 +158,22 @@
      (sse-response
       request
       (fn [channel]
-        (let [ctx {:name name
-                   :channel channel
-                   :open? (atom true)
-                   :cleaned? (atom false)
-                   :cleanups (atom [])}]
-          (reset! ctx* ctx)
-          (metrics/record! :opened)
+	                 (let [ctx {:name name
+	                   :channel channel
+	                   :open? (atom true)
+	                   :cleaned? (atom false)
+                       :metrics metrics
+	                   :cleanups (atom [])}]
+	          (reset! ctx* ctx)
+	          (record! ctx :opened)
           (reset!
            worker*
            (future
              (try
-               (stream-fn ctx)
-               (metrics/record! :completed)
-               (catch Throwable t
-                 (metrics/record! :errors)
+	               (stream-fn ctx)
+	               (record! ctx :completed)
+	               (catch Throwable t
+	                 (record! ctx :errors)
                  (logging/log-error! :agent.api.streaming/stream-failed t
                                      (cond-> {}
                                        name (assoc :name name)))
@@ -176,16 +183,19 @@
                  (when close?
                    (close! ctx))))))))
       (fn [_ _status]
-        (when-let [ctx @ctx*]
-          (when (compare-and-set! (:open? ctx) true false)
-            (metrics/record! :closed))
+	        (when-let [ctx @ctx*]
+	          (when (compare-and-set! (:open? ctx) true false)
+	            (record! ctx :closed))
           (cleanup! ctx))
         (when-let [worker @worker*]
           (future-cancel worker)))
       initial-body))))
 
-(defn once-response [request send-fn]
-  (managed-response request
-                    {:name :once}
-                    (fn [ctx]
-                      (send-fn ctx))))
+(defn once-response
+  ([request send-fn]
+   (once-response request {} send-fn))
+  ([request opts send-fn]
+   (managed-response request
+                     (merge {:name :once} opts)
+                     (fn [ctx]
+                       (send-fn ctx)))))

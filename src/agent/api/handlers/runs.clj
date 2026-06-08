@@ -140,9 +140,10 @@
                                         {:after-id after_id
                                          :limit replay-limit})]
     (streaming/managed-response
-     request
-     {:name :run-events-stream
-      :on-error (fn [ctx _error]
+	     request
+	     {:name :run-events-stream
+          :metrics (:sse-metrics system)
+	      :on-error (fn [ctx _error]
                   (streaming/send-sse-error! ctx "stream_error" "Stream failed"))}
      (fn [ctx]
        (let [subscription (streaming/subscribe! ctx

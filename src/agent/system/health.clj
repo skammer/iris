@@ -72,8 +72,8 @@
      :trace (runtime-trace/health-check (:trace system))
      :runtime (checked-component-health registry :runtime
                 #(runtime/runtime-health (:runtime-service system)))
-     :sse {:healthy true
-           :metrics (streaming-metrics/metrics)}
+	     :sse {:healthy true
+	           :metrics (streaming-metrics/snapshot (:sse-metrics system))}
      :chat (checked-component-health registry :chat
              #(chat/health-check (:chat-service system)))
      :channel-adapters (checked-component-health registry :channel-adapters

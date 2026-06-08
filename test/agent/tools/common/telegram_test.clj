@@ -1,6 +1,6 @@
 (ns agent.tools.common.telegram-test
   (:require
-   [agent.telegram :as telegram]
+   [agent.telegram.api :as telegram-api]
    [agent.tools.common.telegram :as t-tool]
    [agent.tools.core :as tools]
    [clojure.test :refer [deftest is]]))
@@ -18,7 +18,7 @@
 
 (deftest send-photo-tool-calls-api
   (let [calls (atom [])]
-    (with-redefs [telegram/api-request! (fn [token method body]
+    (with-redefs [telegram-api/request! (fn [token method body]
                                           (swap! calls conj {:token token :method method :body body})
                                           {:ok true})]
       (let [tool (t-tool/create-send-photo-tool {:bot-token "t"})
@@ -37,7 +37,7 @@
 
 (deftest send-document-tool-calls-api
   (let [calls (atom [])]
-    (with-redefs [telegram/api-request! (fn [_ method body]
+    (with-redefs [telegram-api/request! (fn [_ method body]
                                           (swap! calls conj {:method method :body body})
                                           {:ok true})]
       (let [tool (t-tool/create-send-document-tool {:bot-token "t"})]
@@ -51,7 +51,7 @@
 
 (deftest send-document-tool-defaults-sample-document
   (let [calls (atom [])]
-    (with-redefs [telegram/api-request! (fn [_ method body]
+    (with-redefs [telegram-api/request! (fn [_ method body]
                                           (swap! calls conj {:method method :body body})
                                           {:ok true})]
       (let [tool (t-tool/create-send-document-tool {:bot-token "t"})]
@@ -63,7 +63,7 @@
 
 (deftest ask-tool-sends-reply-keyboard
   (let [calls (atom [])]
-    (with-redefs [telegram/send-message-with-reply-markup!
+    (with-redefs [telegram-api/send-message-with-reply-markup!
                   (fn [token chat-id text reply-markup]
                     (swap! calls conj {:token token
                                        :chat-id chat-id
@@ -93,7 +93,7 @@
         file (.resolve tmp "sample.txt")
         calls (atom [])]
     (spit (.toFile file) "hello")
-    (with-redefs [telegram/send-document-file! (fn [_ chat-id document caption]
+    (with-redefs [telegram-api/send-document-file! (fn [_ chat-id document caption]
                                                  (swap! calls conj {:chat-id chat-id
                                                                     :document document
                                                                     :caption caption})

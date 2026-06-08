@@ -1,11 +1,14 @@
 (ns agent.system-test
   (:require
    [agent.channels.core :as channel-adapters]
+   [agent.api :as api]
+   [agent.chat :as chat]
    [agent.config :as config]
    [agent.health :as health]
    [agent.kernel]
    [agent.kernel.service :as kernel-service]
    [agent.llm.core :as llm-core]
+   [agent.llm.registry :as llm-registry]
    [agent.llm.service :as llm-service]
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
@@ -14,7 +17,9 @@
    [agent.runs.registry :as runtime]
    [agent.skills :as skills]
    [agent.system :as system]
+   [agent.system.components :as components]
    [agent.system.health :as system-health]
+   [agent.telegram :as telegram]
    [agent.tools.service :as tool-service]
    [clojure.java.io :as io]
    [clojure.test :refer [deftest is]]))
@@ -78,6 +83,97 @@
     (is (= 0 (get-in system-health [:orchestrator :agent-count])))
     (is (= "ok" (get-in system-health [:health-snapshot :components "sqlite" :status])))
     (is (= "ok" (get-in system-health [:health-snapshot :components "runtime" :status])))))
+
+(deftest soft-reload-refreshes-llm-registry-and-telegram-system
+  (let [events (atom [])
+        stopped (atom [])
+        health-registry (health/create-registry)
+        old-cfg config/default-config
+        new-cfg (assoc-in old-cfg [:llm :providers :ollama :model] "fresh-model")
+        system-ref (atom nil)
+        reload-state (atom {:status :idle})
+        old-system {:config old-cfg
+                    :config-path "test-config.edn"
+                    :system-ref system-ref
+                    :reload-state reload-state
+                    :system-control {:reload! :reload}
+                    :health-registry health-registry
+                    :store ::store
+                    :telemetry ::telemetry
+                    :event-sink #(swap! events conj %)
+                    :chat-service ::old-chat
+                    :telegram-service nil}]
+    (reset! system-ref old-system)
+    (with-redefs [config/load-config (fn [_] new-cfg)
+                  llm-registry/create-registry (fn [llm-cfg] {:fresh? true :llm-cfg llm-cfg})
+                  components/create-memory-service (fn [& _] ::memory)
+                  components/create-observer (fn [& _] ::observer)
+                  components/create-trace (fn [& _] ::trace)
+                  components/create-skills-registry (fn [_] ::skills)
+                  llm-service/create-llm-provider (fn [_] ::llm)
+                  llm-service/create-fact-llm-provider (fn [_] ::fact-llm)
+                  tool-service/create-tool-registry (fn [& _] ::tools)
+                  telegram/create-service (fn [system] {:telegram-system system})
+                  components/create-channel-adapter-registry (fn [_ service] {:service service})
+                  chat/create-service (fn [] ::new-chat)
+                  chat/stop! (fn [service] (swap! stopped conj service))]
+      (let [result (system/reload! old-system {:mode :soft})
+            new-system @system-ref]
+        (is (= :reloaded (:status result)))
+        (is (= {:fresh? true :llm-cfg (config/llm-config new-cfg)}
+               (:llm-registry new-system)))
+        (is (= new-cfg (:config (get-in new-system [:telegram-service :telegram-system]))))
+        (is (= ::tools (get-in new-system [:telegram-service :telegram-system :tool-registry])))
+        (is (= [::old-chat] @stopped))
+        (is (= :system.config.reloaded (:event-type (last @events))))))))
+
+(deftest full-reload-stops-old-api-before-starting-new-api
+  (let [order (atom [])
+        events (atom [])
+        health-registry (health/create-registry)
+        system-ref (atom nil)
+        reload-state (atom {:status :idle})
+        old-system {:config config/default-config
+                    :config-path "test-config.edn"
+                    :system-ref system-ref
+                    :reload-state reload-state
+                    :system-control {:reload! :reload}
+                    :health-registry health-registry
+                    :store ::old-store
+                    :telemetry ::old-telemetry
+                    :event-sink #(swap! events conj %)
+                    :chat-service ::old-chat
+                    :api-server ::old-api
+                    :telegram-service nil}
+        new-base {:config config/default-config
+                  :config-path "test-config.edn"
+                  :store ::new-store
+                  :telemetry ::new-telemetry
+                  :event-sink #(swap! events conj %)
+                  :memory-service ::new-memory
+                  :observer ::new-observer
+                  :trace ::new-trace
+                  :chat-service ::new-chat}]
+    (reset! system-ref old-system)
+    (with-redefs [system/create-system (fn [_] new-base)
+                  system/start-api! (fn [new-system]
+                                      (swap! order conj :start-new-api)
+                                      (assoc new-system :api-server ::new-api))
+                  api/stop-server! (fn [_] (swap! order conj :stop-old-api))
+                  chat/stop! (fn [_] (swap! order conj :stop-old-chat))
+                  sqlite/close-store! (fn [_] (swap! order conj :close-old-store))
+                  tool-service/create-tool-registry (fn [& _] ::new-tools)
+                  telegram/create-service (fn [system] {:telegram-system system})
+                  components/create-channel-adapter-registry (fn [_ service] {:service service})]
+      (let [result (#'system/full-reload-now! old-system {:source "test"})
+            new-system @system-ref]
+        (is (= :reloaded (:status result)))
+        (is (= [:stop-old-chat :stop-old-api :start-new-api :close-old-store] @order))
+        (is (= ::new-api (:api-server new-system)))
+        (is (= ::new-tools (:tool-registry new-system)))
+        (is (= system-ref (:system-ref new-system)))
+        (is (= ::new-tools (get-in new-system [:telegram-service :telegram-system :tool-registry])))
+        (is (= :system.config.reloaded (:event-type (last @events))))))))
 
 (deftest retry-run-bumps-runtime-restart-count-test
   (let [path (temp-db-path)

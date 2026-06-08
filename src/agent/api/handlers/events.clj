@@ -38,9 +38,10 @@
         fallback-id (atom 0)
         broker-instance (or (:event-bus system) (:broker system))]
     (streaming/managed-response
-     request
-     {:name :events-stream
-      :on-error (fn [ctx _error]
+	     request
+	     {:name :events-stream
+          :metrics (:sse-metrics system)
+	      :on-error (fn [ctx _error]
                   (streaming/send-sse-error! ctx "stream_error" "Stream failed"))}
      (fn [ctx]
        (let [subscription (streaming/subscribe! ctx

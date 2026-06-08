@@ -87,9 +87,10 @@
   (let [body (h/read-form-body request)
         title (:title body)
         session (session-service/create-session! system (not-empty title))]
-    (streaming/once-response
-     request
-     (fn [ctx]
+	    (streaming/once-response
+	     request
+         {:metrics (:sse-metrics system)}
+	     (fn [ctx]
        (streaming/send-datastar-patch!
         ctx
         (str (ui/sessions-fragment system (:id session))
@@ -156,10 +157,11 @@
   (let [session-id (-> request :parameters :query :session_id)
         broker-instance (or (:event-bus system) (:broker system))]
     (v/ensure-session-exists! system session-id)
-    (streaming/managed-response
-     request
-     {:name :ui-session-live
-      :on-error (fn [_ _] nil)}
+	    (streaming/managed-response
+	     request
+	     {:name :ui-session-live
+          :metrics (:sse-metrics system)
+	      :on-error (fn [_ _] nil)}
      (fn [ctx]
        (let [subscription (streaming/subscribe! ctx
                                                 broker-instance
@@ -180,10 +182,11 @@
   (let [{:keys [session_id prompt image]} (h/read-form-body request)
         content (chat-content prompt image)]
     (v/ensure-session-exists! system session_id)
-    (streaming/managed-response
-     request
-     {:name :ui-chat
-      :on-error (fn [ctx _]
+	    (streaming/managed-response
+	     request
+	     {:name :ui-chat
+          :metrics (:sse-metrics system)
+	      :on-error (fn [ctx _]
                   (streaming/send-datastar-patch!
                    ctx
                    (ui/session-messages-fragment system session_id)))}
@@ -301,10 +304,11 @@
   [system request]
   (let [run-id (-> request :parameters :query :run_id)
         broker-instance (or (:event-bus system) (:broker system))]
-    (streaming/managed-response
-     request
-     {:name :ui-run-detail-live
-      :on-error (fn [_ _] nil)}
+	    (streaming/managed-response
+	     request
+	     {:name :ui-run-detail-live
+          :metrics (:sse-metrics system)
+	      :on-error (fn [_ _] nil)}
      (fn [ctx]
        (let [subscription (streaming/subscribe! ctx
                                                 broker-instance
@@ -328,10 +332,11 @@
 (defn events-live-response
   [system request]
   (let [broker-instance (or (:event-bus system) (:broker system))]
-    (streaming/managed-response
-     request
-     {:name :ui-events-live
-      :on-error (fn [_ _] nil)}
+	    (streaming/managed-response
+	     request
+	     {:name :ui-events-live
+          :metrics (:sse-metrics system)
+	      :on-error (fn [_ _] nil)}
      (fn [ctx]
        (let [subscription (streaming/subscribe! ctx
                                                 broker-instance

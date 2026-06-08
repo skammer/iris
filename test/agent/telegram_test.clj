@@ -3,6 +3,9 @@
    [agent.channels.core :as channels]
    [agent.persistence.sqlite :as sqlite]
    [agent.telegram :as telegram]
+   [agent.telegram.api :as telegram-api]
+   [agent.telegram.approvals :as telegram-approvals]
+   [agent.telegram.streaming :as telegram-streaming]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.service :as tool-service]
    [clojure.java.io :as io]
@@ -268,10 +271,10 @@
 
 (deftest telegram-get-updates-includes-callback-queries
   (let [calls (atom [])]
-    (with-redefs [telegram/api-request! (fn [_ method body]
-                                          (swap! calls conj {:method method :body body})
-                                          [])]
-      (telegram/get-updates! "token" {:offset 10 :timeout 1 :limit 2})
+    (with-redefs [telegram-api/request! (fn [_ method body]
+	                                          (swap! calls conj {:method method :body body})
+	                                          [])]
+      (telegram-api/get-updates! "token" {:offset 10 :timeout 1 :limit 2})
       (is (= [{:method "getUpdates"
                :body {:timeout 1
                       :limit 2
@@ -284,7 +287,7 @@
                   :tool-name "shell"
                   :reason "Agent requested shell"
                   :input {:argv ["tavily.sh" "weather <x>"]}}
-        html (#'telegram/approval-card-html approval)]
+        html (telegram-approvals/card-html approval)]
     (is (str/includes? html "Tool approval required"))
     (is (str/includes? html "Reason: Agent requested shell"))
     (is (str/includes? html "<blockquote expandable>details"))
@@ -702,12 +705,12 @@
 
 (deftest telegram-send-chat-action-calls-api
   (let [calls (atom [])]
-    (with-redefs [telegram/api-request! (fn [token method body]
-                                          (swap! calls conj {:token token
-                                                             :method method
-                                                             :body body})
-                                          {:ok true})]
-      (telegram/send-chat-action! "token" 100 "typing")
+    (with-redefs [telegram-api/request! (fn [token method body]
+	                                          (swap! calls conj {:token token
+	                                                             :method method
+	                                                             :body body})
+	                                          {:ok true})]
+      (telegram-api/send-chat-action! "token" 100 "typing")
       (is (= [{:token "token"
                :method "sendChatAction"
                :body {:chat_id 100
@@ -716,12 +719,12 @@
 
 (deftest telegram-send-html-message-uses-html-parse-mode
   (let [calls (atom [])]
-    (with-redefs [telegram/api-request! (fn [token method body]
-                                          (swap! calls conj {:token token
-                                                             :method method
-                                                             :body body})
-                                          {:ok true})]
-      (telegram/send-html-message! "token" 100 "<blockquote expandable>x</blockquote>")
+    (with-redefs [telegram-api/request! (fn [token method body]
+	                                          (swap! calls conj {:token token
+	                                                             :method method
+	                                                             :body body})
+	                                          {:ok true})]
+      (telegram-api/send-html-message! "token" 100 "<blockquote expandable>x</blockquote>")
       (is (= [{:token "token"
                :method "sendMessage"
                :body {:chat_id 100
@@ -874,9 +877,9 @@
         (io/delete-file path true)))))
 
 (deftest draft-id-stays-positive
-  (let [next-draft-id @#'telegram/next-draft-id
-        rotate-draft-id @#'telegram/rotate-draft-id
-        max-id @#'telegram/max-draft-id]
+  (let [next-draft-id @#'telegram-streaming/next-draft-id
+        rotate-draft-id @#'telegram-streaming/rotate-draft-id
+        max-id @#'telegram-streaming/max-draft-id]
     (testing "generated ids are in [1, max]"
       (let [id (next-draft-id)]
         (is (pos? id))

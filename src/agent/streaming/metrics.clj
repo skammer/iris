@@ -11,17 +11,17 @@
    :unsubscribed 0
    :cleanup-errors 0})
 
-(defonce ^:private metrics* (atom initial-metrics))
+(defn create-store []
+  (atom initial-metrics))
 
-(defn metrics []
-  @metrics*)
+(defn snapshot [store]
+  (or (some-> store deref) initial-metrics))
 
-(defn reset-metrics! []
-  (reset! metrics* initial-metrics))
+(defn record! [store k]
+  (when store
+    (swap! store update k (fnil inc 0))))
 
-(defn record! [k]
-  (swap! metrics* update k (fnil inc 0)))
-
-(defn add-count! [k n]
+(defn add-count! [store k n]
   (when (pos? (long (or n 0)))
-    (swap! metrics* update k (fnil + 0) n)))
+    (when store
+      (swap! store update k (fnil + 0) n))))

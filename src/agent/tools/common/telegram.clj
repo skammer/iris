@@ -4,7 +4,7 @@
    Telegram adapter when invoking chat/run!). Bot token is closed over
    at registration time."
   (:require
-   [agent.telegram :as telegram]
+   [agent.telegram.api :as telegram-api]
    [agent.tools.core :as tools]
    [clojure.java.io :as io]
    [clojure.string :as str]))
@@ -72,7 +72,7 @@
             photo (:photo input)
             caption (:caption input)]
         (require-non-blank! :telegram_send_photo :photo photo)
-        (telegram/send-photo! bot-token chat-id photo caption)
+        (telegram-api/send-photo! bot-token chat-id photo caption)
         {:sent true :chat-id chat-id :photo photo :caption caption}))}))
 
 (defn create-send-document-tool
@@ -105,10 +105,10 @@
                                          {:path (.getCanonicalPath file)
                                           :size (.length file)
                                           :max-document-bytes max-document-bytes})))
-              (telegram/send-document-file! bot-token chat-id file caption)
+              (telegram-api/send-document-file! bot-token chat-id file caption)
               {:sent true :chat-id chat-id :document (.getCanonicalPath file) :caption caption :uploaded? true})
             (do
-              (telegram/send-document! bot-token chat-id document caption)
+              (telegram-api/send-document! bot-token chat-id document caption)
               {:sent true :chat-id chat-id :document document :caption caption}))))})))
 
 (defn- keyboard-rows [choices]
@@ -147,7 +147,7 @@
         (require-non-blank! :telegram_ask :question question)
         (doseq [choice choices]
           (require-non-blank! :telegram_ask :choices choice))
-        (telegram/send-message-with-reply-markup!
+        (telegram-api/send-message-with-reply-markup!
          bot-token
          chat-id
          question

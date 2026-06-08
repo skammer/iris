@@ -199,16 +199,6 @@
     (md->markdown-v2 s)
     (catch Throwable _ nil)))
 
-(defn md->html
-  "Deprecated compatibility alias for md->markdown-v2."
-  [s]
-  (md->markdown-v2 s))
-
-(defn safe-md->html
-  "Deprecated compatibility alias for safe-md->markdown-v2."
-  [s]
-  (safe-md->markdown-v2 s))
-
 (defn chunk-markdown
   "Splits raw markdown into chunks ≤ max-len characters, preferring
    paragraph (\\n\\n) then line then word boundaries. The post-render
