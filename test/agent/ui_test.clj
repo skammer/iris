@@ -1,9 +1,14 @@
 (ns agent.ui-test
   (:require
    [agent.chat :as chat]
+   [agent.channels.core :as channel-adapters]
    [agent.memory.core :as memory]
+   [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
+   [agent.runs.registry :as runtime]
    [agent.runtime.trace :as trace]
+   [agent.tools.approvals :as tool-approvals]
+   [agent.tools.core :as tools]
    [agent.ui :as ui]
    [agent.ui.render :as ui-render]
    [clojure.java.io :as io]
@@ -23,6 +28,26 @@
 (deftest index-page-deep-link-loads-route-fragment
   (let [html (ui/index-page "/runs/run-1")]
     (is (str/includes? html "/ui/shell?tab=runs&amp;run_id=run-1"))))
+
+(deftest dashboard-fragment-shows-active-model
+  (with-redefs [sqlite/health-check (constantly {:details {:session-count 0
+                                                           :event-count 0
+                                                           :schema-version 1
+                                                           :tool-approval-count 0}})
+                tools/registry-health (constantly {:count 0})
+                memory/health-check (constantly {:facts {:count 0}})
+                channel-adapters/registry-health (constantly {:count 0})
+                orchestrator/health-check (constantly {:agent-count 0})
+                orchestrator/list-federated-peers (constantly [])
+                runtime/list-runs (constantly [])
+                tool-approvals/list-requests (constantly [])]
+    (let [html (ui/dashboard-fragment
+                {:config {:llm {:active-provider :openai-compatible
+                                :providers {:openai-compatible {:type :openai-compatible
+                                                                 :model "gpt-4o-mini"}}}}
+                 :reload-state (atom {:status :idle})})]
+      (is (str/includes? html ">model</span>"))
+      (is (str/includes? html ">gpt-4o-mini</span>")))))
 
 (deftest create-session-form-posts-explicit-form-and-clears-on-success
   (let [path (temp-db-path)

@@ -188,6 +188,7 @@
 
 (defn dashboard-fragment [system]
   (let [storage (sqlite/health-check (:store system))
+        llm-config (get-in system [:config :llm])
         tools-health (tools/registry-health (:tool-registry system))
         memory-health (memory/health-check (:memory-service system))
         adapter-health (channel-adapters/registry-health (:channel-adapter-registry system))
@@ -212,7 +213,8 @@
       {"data-on-interval__duration.10s.leading" "@get('/ui/dashboard')"}
       [:h2 "Runtime Snapshot"]
       [:div.stats
-       [:div.stat.stat--wide [:span.label "provider"] [:span.value.provider-value (name (config/active-provider-key (get-in system [:config :llm])))]]
+       [:div.stat.stat--wide [:span.label "provider"] [:span.value.provider-value (name (config/active-provider-key llm-config))]]
+       [:div.stat.stat--wide [:span.label "model"] [:span.value (or (config/active-model llm-config) "-")]]
        [:div.stat [:span.label "sessions"] [:span.value (get-in storage [:details :session-count] 0)]]
        [:div.stat [:span.label "events"] [:span.value (get-in storage [:details :event-count] 0)]]
        [:div.stat [:span.label "tools"] [:span.value (:count tools-health)]]
