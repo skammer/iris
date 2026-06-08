@@ -24,12 +24,7 @@
 (def ^:private ui-create-run-form
   [:map
    [:agent_id {:optional true} :string]
-   [:name {:optional true} :string]
-   [:substrate {:optional true} :string]
-   [:command {:optional true} :string]
-   [:working_dir {:optional true} :string]
-   [:image {:optional true} :string]
-   [:share_network {:optional true} :string]])
+   [:name {:optional true} :string]])
 
 (def ^:private ui-tool-approval-request-form
   [:map
@@ -98,8 +93,6 @@
                                  :parameters {:query run-id-query}}}]
    ["/ui/run-detail/live" {:get {:handler/id :ui-run-detail-live
                                  :parameters {:query run-id-query}}}]
-   ["/ui/runs/:run-id/launch" {:post {:handler/id :ui-run-launch}}]
-   ["/ui/runs/:run-id/signal" {:post {:handler/id :ui-run-signal}}]
    ["/ui/tools" {:get {:handler/id :ui-tools}}]
    ["/ui/system/reload" {:post {:handler/id :ui-system-reload}}]
    ["/ui/tool-approvals" {:get {:handler/id :ui-tool-approvals}}]

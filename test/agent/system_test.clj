@@ -60,7 +60,6 @@
         tools (tool-service/list-tools system)
         tool-names (set (map :name tools))
         adapters (channel-adapters/list-adapters (:channel-adapter-registry system))
-        runner-keys (-> system :runner-registry keys set)
         system-health (system-health/health-check system)]
     (is (every? tool-names [:fs_read :fs_write :fs_create :fs_replace :fs_list
 	                            :fs_delete :fs_mkdir :http
@@ -69,11 +68,6 @@
 	                            :message_search :shell :system_reload
                             :todo_write :todo_get :todo_list :todo_search]))
     (is (= ["Telegram"] (mapv :display-name adapters)))
-    (is (contains? runner-keys :local-unsandboxed))
-    (is (contains? runner-keys :bubblewrap))
-    (is (contains? runner-keys :docker))
-    (is (contains? runner-keys :podman))
-    (is (contains? runner-keys :seatbelt))
     (is (empty? (skills/list-skills system)))
 	    (is (= 4 (count (memory/list-surfaces system))))
     (is (false? (get-in system-health [:logging :enabled])))
@@ -232,32 +226,6 @@
         (io/delete-file target true)
         (sqlite/close-store! store)
         (io/delete-file path true)))))
-
-(deftest prepare-runner-options-adds-container-child-defaults
-  (let [system {:config {:storage {:sqlite {:path "data/agent.db"}}
-                         :api {:port 8689}
-                         :runners {:docker {:image "clojure:temurin-21-alpine"
-                                            :container-working-dir "/workspace"
-                                            :container-data-dir "/agent-data"
-                                            :container-home-dir "/root"
-                                            :host-working-dir "."
-                                            :share-network? true}}}}
-        prepared (runs/prepare-runner-options
-                  system
-                  {:substrate "docker"
-                   :runner-options {}})]
-    (is (= "clojure:temurin-21-alpine" (:image prepared)))
-    (is (= ["clojure" "-M" "-m" "agent.runs.child"] (:command prepared)))
-    (is (= "/workspace" (:container-working-dir prepared)))
-    (is (= "/tmp/iris/home" (:container-home-dir prepared)))
-    (is (= "65532:65532" (:user prepared)))
-    (is (= "http://host.docker.internal:8689" (get (:env prepared) "AGENT_CONTROL_URL")))
-    (is (= "/agent-data/child.db" (get (:env prepared) "AGENT_CHILD_SQLITE_PATH")))
-    (is (= "/tmp/iris/home" (get (:env prepared) "HOME")))
-    (is (<= 1 (count (:mounts prepared))))
-    (is (every? #{:rw :ro} (map :mode (:mounts prepared))))
-    (is (contains? (set (map :target (:mounts prepared))) "/workspace"))
-    (is (not (contains? (set (map :target (:mounts prepared))) "/agent-data")))))
 
 (deftest spawn-task-worker-produces-scoped-worker
   (let [system (assoc-in (system/create-system) [:orchestrator :enabled?] true)

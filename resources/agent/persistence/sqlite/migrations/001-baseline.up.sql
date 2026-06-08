@@ -90,10 +90,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   status TEXT NOT NULL,
   capabilities_json TEXT,
   network_identity_json TEXT,
-  bootstrap_token TEXT,
-  bootstrap_spec_json TEXT,
   runner_metadata_json TEXT,
-  runner_options_json TEXT,
+  run_options_json TEXT,
   requested_by TEXT,
   last_error TEXT,
   created_at TEXT NOT NULL,
@@ -469,7 +467,7 @@ BEGIN
                       'lease-id', NEW.lease_id,
                       'requested-by', NEW.requested_by,
                       'capabilities', json(NEW.capabilities_json),
-                      'runner-options', json(NEW.runner_options_json)),
+                      'run-options', json(NEW.run_options_json)),
           NEW.created_at);
 END;
 

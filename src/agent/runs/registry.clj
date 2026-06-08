@@ -4,7 +4,6 @@
    [agent.broker.core :as broker]
    [agent.defaults :as defaults]
    [agent.persistence.sqlite :as sqlite]
-   [agent.runners.core :as runners]
    [agent.util :as util]
    [clojure.core.async :as async])
   (:import
@@ -14,8 +13,16 @@
 
 (def default-lease-duration-seconds 60)
 (def default-stale-grace-seconds 30)
+(def default-substrate :external)
 (def terminal-statuses #{"completed" "failed" "cancelled" "expired"})
 (def terminal-command-statuses #{"completed" "failed" "cancelled"})
+(def run-transitions
+  {"requested" #{"running" "completed" "failed" "cancelled" "expired"}
+   "running" #{"completed" "failed" "cancelled" "expired"}
+   "completed" #{}
+   "failed" #{}
+   "cancelled" #{}
+   "expired" #{}})
 
 (declare get-run)
 
@@ -36,8 +43,10 @@
 (defn- event-watermark [runtime]
   (sqlite/latest-event-id (:store runtime)))
 
-(defn- publish-events-after! [runtime after-id]
+(defn- publish-run-events-after! [runtime run-id after-id]
   (doseq [event (reverse (sqlite/list-events (:store runtime) {:after-id after-id
+                                                               :entity-type :agent_run
+                                                               :entity-id run-id
                                                                :limit 1000}))]
     (emit-recorded-event! runtime event)))
 
@@ -50,21 +59,16 @@
    :event-sink event-sink})
 
 (defn create-run-request
-  [{:keys [idempotency-key agent-id parent-run-id name substrate capabilities network-identity runner-options requested-by]
+  [{:keys [idempotency-key agent-id parent-run-id name substrate capabilities network-identity run-options requested-by]
     :or {capabilities []}}]
-  (when-not substrate
-    (throw (ex-info "Run substrate is required"
-                    {:type :runner-substrate-required
-                     :safe-defaults {:macos :seatbelt
-                                     :linux :bubblewrap}})))
   {:idempotency-key idempotency-key
    :agent-id (or agent-id (str "agent-" (UUID/randomUUID)))
    :parent-run-id parent-run-id
    :name name
-   :substrate substrate
+   :substrate (or substrate default-substrate)
    :capabilities (vec capabilities)
    :network-identity network-identity
-   :runner-options runner-options
+   :run-options run-options
    :requested-by (or requested-by "system")})
 
 (defn request-run!
@@ -80,16 +84,7 @@
       (assoc (get-run runtime (:id existing)) :lease lease))
     (let [before-event-id (event-watermark runtime)
           run-id (str "run-" (UUID/randomUUID))
-        lease-id (str "lease-" (UUID/randomUUID))
-        bootstrap-token (runners/random-token)
-        bootstrap-spec (runners/create-bootstrap-spec
-                        {:run-id run-id
-                         :agent-id (:agent-id request)
-                         :parent-run-id (:parent-run-id request)
-                         :lease-id lease-id
-                         :capabilities (:capabilities request)
-                         :network-identity (:network-identity request)
-                         :checkpoint-seq (or (get-in request [:recovery :checkpoint-seq]) 0)})
+          lease-id (str "lease-" (UUID/randomUUID))
         run (sqlite/create-agent-run! (:store runtime)
                                       {:id run-id
                                        :idempotency-key (:idempotency-key request)
@@ -101,9 +96,7 @@
                                        :status :requested
                                        :capabilities (:capabilities request)
                                        :network-identity (:network-identity request)
-                                       :runner-options (:runner-options request)
-                                       :bootstrap-token bootstrap-token
-                                       :bootstrap-spec bootstrap-spec
+                                       :run-options (:run-options request)
                                        :requested-by (:requested-by request)})
         created? (= run-id (:id run))
         persisted-lease-id (or (:lease-id run) lease-id)
@@ -113,8 +106,8 @@
                                                    :run-id (:id run)
                                                    :holder-id "control-plane"
                                                    :expires-at (plus-seconds default-lease-duration-seconds)}))]
-    (when created?
-      (publish-events-after! runtime before-event-id))
+	    (when created?
+	      (publish-run-events-after! runtime (:id run) before-event-id))
     (assoc run :lease lease))))
 
 (defn list-runs
@@ -131,17 +124,76 @@
            :checkpoint (sqlite/latest-agent-run-checkpoint (:store runtime) run-id)
            :pending-commands (sqlite/list-agent-run-commands (:store runtime) run-id {:status "pending"}))))
 
+(defn- normalize-status [status]
+  (name status))
+
+(defn- terminal-run? [run]
+  (contains? terminal-statuses (:status run)))
+
+(defn- assert-run-transition! [run status]
+  (let [from (:status run)
+        to (normalize-status status)]
+    (cond
+      (= from to)
+      nil
+
+      (terminal-run? run)
+      (throw (ex-info "Illegal terminal run transition"
+                      {:type :illegal-run-transition
+                       :run-id (:id run)
+                       :from from
+                       :to to}))
+
+      (contains? (get run-transitions from #{}) to)
+      nil
+
+      :else
+      (throw (ex-info "Illegal run transition"
+                      {:type :illegal-run-transition
+                       :run-id (:id run)
+                       :from from
+                       :to to}))))
+  true)
+
+(defn- transition-updates [status opts]
+  (cond-> {:status status}
+    (contains? opts :last-error)
+    (assoc :last-error (:last-error opts))
+    (contains? opts :runner-metadata)
+    (assoc :runner-metadata (:runner-metadata opts))))
+
+(defn- apply-run-transition!
+  [runtime run-id status updates]
+  (let [status* (normalize-status status)
+        current (or (sqlite/get-agent-run (:store runtime) run-id)
+                    (throw (ex-info "Run not found" {:type :run-not-found
+                                                     :run-id run-id})))]
+    (assert-run-transition! current status*)
+    (if (and (= status* (:status current)) (empty? updates))
+      current
+      (let [before-event-id (event-watermark runtime)
+            run (sqlite/update-agent-run! (:store runtime)
+                                          run-id
+                                          (assoc updates :status status*))]
+        (when-let [lease-id (:lease-id run)]
+          (when (and (not (contains? terminal-statuses (:status current)))
+                     (contains? terminal-statuses status*))
+            (sqlite/release-agent-run-lease! (:store runtime) lease-id)))
+        (publish-run-events-after! runtime run-id before-event-id)
+        run))))
+
 (defn register-run!
-  [runtime run-id {:keys [capabilities network-identity runner-metadata]}]
-  (let [before-event-id (event-watermark runtime)
-        run (sqlite/update-agent-run! (:store runtime) run-id
-                                      {:status :running
-                                       :capabilities capabilities
-                                       :network-identity network-identity
-                                       :runner-metadata runner-metadata
-                                       :started-at (now)})]
-    (publish-events-after! runtime before-event-id)
-    run))
+  [runtime run-id registration]
+  (apply-run-transition! runtime
+                         run-id
+                         :running
+                         (cond-> {:started-at (now)}
+                           (contains? registration :capabilities)
+                           (assoc :capabilities (:capabilities registration))
+                           (contains? registration :network-identity)
+                           (assoc :network-identity (:network-identity registration))
+                           (contains? registration :runner-metadata)
+                           (assoc :runner-metadata (:runner-metadata registration)))))
 
 (defn heartbeat!
   [runtime run-id {:keys [sequence-no status metrics lease-id]
@@ -159,7 +211,7 @@
       (sqlite/renew-agent-run-lease! (:store runtime) lease-id
                                      (plus-seconds default-lease-duration-seconds)))
     (when-not existing
-      (publish-events-after! runtime before-event-id))
+      (publish-run-events-after! runtime run-id before-event-id))
     heartbeat))
 
 (defn checkpoint!
@@ -178,7 +230,7 @@
                                                              :checkpoint-type checkpoint-type
                                                              :state state}))]
     (when-not existing
-      (publish-events-after! runtime before-event-id))
+      (publish-run-events-after! runtime run-id before-event-id))
     checkpoint))
 
 (defn enqueue-command!
@@ -198,7 +250,7 @@
                                                     :payload payload
                                                     :request-id request-id*}))]
     (when-not existing
-      (publish-events-after! runtime before-event-id))
+      (publish-run-events-after! runtime run-id before-event-id))
     command))
 
 (defn pending-commands
@@ -220,31 +272,7 @@
   ([runtime run-id opts]
    (sqlite/list-agent-run-checkpoints (:store runtime) run-id opts)))
 
-(defn run-history
-  [runtime run-id]
-  (when-let [run (sqlite/get-agent-run (:store runtime) run-id)]
-    {:run run
-     :lease (sqlite/latest-agent-run-lease (:store runtime) run-id)
-     :heartbeats (sqlite/list-agent-run-heartbeats (:store runtime) run-id {:limit 1000})
-     :checkpoints (sqlite/list-agent-run-checkpoints (:store runtime) run-id {:limit 1000})
-     :commands (sqlite/list-agent-run-commands (:store runtime) run-id {:limit 1000})}))
-
-(defn replay-run
-  [history]
-  (when history
-    (let [latest-by (fn [key rows]
-                      (last (sort-by (juxt #(or (key %) 0) :created-at :observed-at) rows)))
-          heartbeat (latest-by :sequence-no (:heartbeats history))
-          checkpoint (latest-by :sequence-no (:checkpoints history))
-          pending (filterv #(= "pending" (:status %)) (:commands history))]
-      (assoc (:run history)
-             :lease (:lease history)
-             :heartbeat heartbeat
-             :checkpoint checkpoint
-             :pending-commands pending
-             :commands (:commands history)))))
-
-(defn make-activity-key
+(defn- make-activity-key
   [{:keys [run-id command-id activity-name]}]
   (str run-id ":" (or command-id "run") ":" (name activity-name)))
 
@@ -299,53 +327,39 @@
                   (contains? terminal-command-statuses (:status existing)))
       (let [before-event-id (event-watermark runtime)]
         (sqlite/update-agent-run-command! (:store runtime) command-id {:status :acknowledged})
-        (publish-events-after! runtime before-event-id))))
+        (publish-run-events-after! runtime run-id before-event-id))))
   command-id)
 
 (defn complete-command!
   ([runtime run-id command-id status error]
    (complete-command! runtime run-id command-id status error nil))
   ([runtime run-id command-id status error response]
-   (let [existing (command-for-run! runtime run-id command-id)
+   (let [status* (name status)
+         _ (when-not (contains? terminal-command-statuses status*)
+             (throw (ex-info "Command completion status must be terminal"
+                             {:type :invalid-command-transition
+                              :run-id run-id
+                              :command-id command-id
+                              :status status
+                              :allowed terminal-command-statuses})))
+         existing (command-for-run! runtime run-id command-id)
          before-event-id (when-not (contains? terminal-command-statuses (:status existing))
                            (event-watermark runtime))
          command (if (contains? terminal-command-statuses (:status existing))
                    existing
-                   (sqlite/update-agent-run-command! (:store runtime) command-id {:status status
+                   (sqlite/update-agent-run-command! (:store runtime) command-id {:status status*
                                                                                   :error error
                                                                                   :response response}))]
      (when-not (contains? terminal-command-statuses (:status existing))
-       (publish-events-after! runtime before-event-id))
+       (publish-run-events-after! runtime run-id before-event-id))
      command)))
 
 (defn transition-run!
-  [runtime run-id status & [{:keys [last-error runner-metadata]}]]
-  (let [status* (name status)
-        current (or (sqlite/get-agent-run (:store runtime) run-id)
-                    (throw (ex-info "Run not found" {:type :run-not-found
-                                                     :run-id run-id})))]
-    (cond
-      (= status* (:status current))
-      current
-
-      (contains? terminal-statuses (:status current))
-      (throw (ex-info "Illegal terminal run transition"
-                      {:type :illegal-run-transition
-                       :run-id run-id
-                       :from (:status current)
-                       :to status*}))
-
-      :else
-      (let [before-event-id (event-watermark runtime)
-            run (sqlite/update-agent-run! (:store runtime) run-id
-                                          {:status status
-                                           :last-error last-error
-                                           :runner-metadata runner-metadata})]
-        (when-let [lease-id (:lease-id run)]
-          (when (contains? terminal-statuses status*)
-            (sqlite/release-agent-run-lease! (:store runtime) lease-id)))
-        (publish-events-after! runtime before-event-id)
-        run))))
+  [runtime run-id status & [opts]]
+  (apply-run-transition! runtime
+                         run-id
+                         status
+                         (transition-updates status (or opts {}))))
 
 (defn log-run-output!
   [runtime run-id {:keys [stream line captured-at]}]
@@ -368,7 +382,7 @@
   ([runtime run] (stale-run? runtime run {}))
   ([runtime run {:keys [grace-seconds]
                  :or {grace-seconds default-stale-grace-seconds}}]
-   (let [active? (contains? #{"requested" "launched" "running"} (:status run))]
+   (let [active? (contains? #{"requested" "running"} (:status run))]
      (if-not active?
        false
        (let [lease (or (:lease run)
@@ -398,11 +412,8 @@
        :last-heartbeat-status (:status heartbeat)
        :pending-command-count (count pending)
        :pending-command-ids (mapv :id pending)
-       :runner-options (:runner-options run)
-       :recoverable? (contains? #{"requested" "launched" "running" "expired" "failed" "cancelled"} (:status run))})))
-
-(defn- terminal-run? [run]
-  (contains? terminal-statuses (:status run)))
+       :run-options (:run-options run)
+       :recoverable? (contains? #{"requested" "running" "expired" "failed" "cancelled"} (:status run))})))
 
 (defn- terminal-run-event? [message run-id]
   (let [event (:payload message)]
@@ -446,7 +457,7 @@
                 (throw (ex-info "Run not found" {:type :run-not-found
                                                  :run-id run-id})))
         checkpoint (:checkpoint run)
-        attempt (inc (long (or (get-in run [:runner-options :recovery :attempt]) 0)))
+        attempt (inc (long (or (get-in run [:run-options :recovery :attempt]) 0)))
         next-run (request-run! runtime
                                (create-run-request
                                 {:agent-id (:agent-id run)
@@ -456,13 +467,13 @@
                                  :capabilities (:capabilities run)
                                  :network-identity (:network-identity run)
                                  :requested-by "recovery"
-                                 :runner-options (assoc (:runner-options run)
-                                                        :recovery {:attempt attempt
-                                                                   :retry-on-stale? (true? (get-in run [:runner-options :recovery :retry-on-stale?]))
-                                                                   :max-attempts (or (get-in run [:runner-options :recovery :max-attempts]) 1)})
-                                 :recovery {:checkpoint-seq (or (:sequence-no checkpoint) 0)
-                                            :checkpoint (:state checkpoint)
-                                            :previous-run-id run-id}}))]
+                                 :run-options (assoc (:run-options run)
+                                                     :recovery {:attempt attempt
+                                                                :retry-on-stale? (true? (get-in run [:run-options :recovery :retry-on-stale?]))
+                                                                :max-attempts (or (get-in run [:run-options :recovery :max-attempts]) 1)
+                                                                :checkpoint-seq (or (:sequence-no checkpoint) 0)
+                                                                :checkpoint-state (:state checkpoint)
+                                                                :previous-run-id run-id})}))]
     (emit-event! runtime
                  {:event-type :agent.run.retry.requested
                   :entity-type :agent_run
@@ -492,44 +503,15 @@
        (if-not (stale-run? runtime run)
          acc
          (let [reclaimed (reclaim-run! runtime (:id run))
-               retry-on-stale? (true? (get-in run [:runner-options :recovery :retry-on-stale?]))
-               max-attempts (long (or (get-in run [:runner-options :recovery :max-attempts]) 1))
-               attempt (long (or (get-in run [:runner-options :recovery :attempt]) 0))
+               retry-on-stale? (true? (get-in run [:run-options :recovery :retry-on-stale?]))
+               max-attempts (long (or (get-in run [:run-options :recovery :max-attempts]) 1))
+               attempt (long (or (get-in run [:run-options :recovery :attempt]) 0))
                replacement (when (and retry-on-stale? (< attempt max-attempts))
                              (retry-run! runtime (:id run)))]
            (conj acc {:reclaimed reclaimed
                       :replacement replacement}))))
      []
      runs)))
-
-(defn request-command!
-  ([runtime run-id command]
-   (request-command! runtime run-id command {}))
-  ([runtime run-id command {:keys [timeout-ms]
-                            :or {timeout-ms 10000}}]
-   (let [request-id (str (UUID/randomUUID))
-         broker-instance (:broker runtime)
-         response (when broker-instance
-                    (future
-                      (broker/request! broker-instance
-                                       (broker/run-commands-subject run-id)
-                                       {:run-id run-id
-                                        :request-id request-id
-                                        :command-type (:command-type command)
-                                        :payload (:payload command)}
-                                       {:timeout-ms timeout-ms
-                                        :wait? false})))
-         command* (enqueue-command! runtime run-id (assoc command :request-id request-id))
-         waited (wait-for-run! runtime run-id {:timeout-ms timeout-ms
-                                               :interval-ms 250})
-         command-state (first (sqlite/list-agent-run-commands (:store runtime) run-id {:request-id request-id
-                                                                                       :limit 1}))]
-     {:request-id request-id
-      :command command*
-      :run waited
-      :response-subject (broker/reply-subject request-id)
-      :completed-command command-state
-      :broker-request (some-> response deref)})))
 
 (defn runtime-health
   [runtime]

@@ -30,7 +30,6 @@
     :approval-required (api-error 403 "approval_required" (.getMessage error) (dissoc (ex-data error) :type))
     :tool-blocked (api-error 403 "tool_blocked" (.getMessage error) (dissoc (ex-data error) :type))
     :run-not-found (api-error 404 "run_not_found" (.getMessage error) (dissoc (ex-data error) :type))
-    :runner-not-found (api-error 404 "runner_not_found" (.getMessage error) (dissoc (ex-data error) :type))
     :agent-not-found (api-error 404 "agent_not_found" (.getMessage error) (dissoc (ex-data error) :type))
     :channel-not-found (api-error 404 "channel_not_found" (.getMessage error) (dissoc (ex-data error) :type))
     :peer-not-found (api-error 404 "peer_not_found" (.getMessage error) (dissoc (ex-data error) :type))

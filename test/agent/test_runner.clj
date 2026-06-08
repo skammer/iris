@@ -25,12 +25,6 @@
    [agent.persistence.sqlite-test]
    [agent.planner-test]
    [agent.release-smoke-test]
-   [agent.runners.bubblewrap-test]
-   [agent.runners.docker-podman-e2e-test]
-   [agent.runners.docker-podman-test]
-   [agent.runners.local-unsandboxed-test]
-   [agent.runners.seatbelt-test]
-   [agent.runs.child-test]
    [agent.runtime.compaction-test]
    [agent.runtime.context-pack-test]
    [agent.runs.registry-test]
@@ -82,12 +76,6 @@
     agent.persistence.sqlite-test
     agent.planner-test
     agent.release-smoke-test
-    agent.runners.bubblewrap-test
-    agent.runners.docker-podman-e2e-test
-    agent.runners.docker-podman-test
-    agent.runners.local-unsandboxed-test
-    agent.runners.seatbelt-test
-    agent.runs.child-test
     agent.runtime.compaction-test
     agent.runtime.context-pack-test
     agent.runs.registry-test

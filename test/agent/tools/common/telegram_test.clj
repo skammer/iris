@@ -3,7 +3,7 @@
    [agent.telegram :as telegram]
    [agent.tools.common.telegram :as t-tool]
    [agent.tools.core :as tools]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (deftest enabled-only-when-token-set
   (is (false? (t-tool/enabled? {})))
@@ -60,6 +60,33 @@
         (is (= 200 (-> @calls first :body :chat_id)))
         (is (= "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
                (-> @calls first :body :document)))))))
+
+(deftest ask-tool-sends-reply-keyboard
+  (let [calls (atom [])]
+    (with-redefs [telegram/send-message-with-reply-markup!
+                  (fn [token chat-id text reply-markup]
+                    (swap! calls conj {:token token
+                                       :chat-id chat-id
+                                       :text text
+                                       :reply-markup reply-markup})
+                    {:ok true})]
+      (let [tool (t-tool/create-ask-tool {:bot-token "t"})
+            result (tools/execute tool
+                                  {:question "Deploy?"
+                                   :choices ["Yes" "No" "Later"]
+                                   :input-placeholder "Pick option"}
+                                  {:telegram-chat-id 200})]
+        (is (= true (:sent result)))
+        (is (= true (:awaiting-reply result)))
+        (is (= [{:token "t"
+                 :chat-id 200
+                 :text "Deploy?"
+                 :reply-markup {:keyboard [[{:text "Yes"} {:text "No"}]
+                                           [{:text "Later"}]]
+                                :resize_keyboard true
+                                :one_time_keyboard true
+                                :input_field_placeholder "Pick option"}}]
+               @calls))))))
 
 (deftest send-document-tool-uploads-local-file-inside-root
   (let [tmp (java.nio.file.Files/createTempDirectory "iris-telegram-doc" (make-array java.nio.file.attribute.FileAttribute 0))

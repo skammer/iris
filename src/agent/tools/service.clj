@@ -172,7 +172,8 @@
 
        (telegram-tool/enabled? telegram-cfg)
        (-> (tools/register-tool (telegram-tool/create-send-photo-tool telegram-cfg))
-           (tools/register-tool (telegram-tool/create-send-document-tool telegram-cfg)))
+           (tools/register-tool (telegram-tool/create-send-document-tool telegram-cfg))
+           (tools/register-tool (telegram-tool/create-ask-tool telegram-cfg)))
 
        system-control
        (tools/register-tool (reload-tool system-control))))))

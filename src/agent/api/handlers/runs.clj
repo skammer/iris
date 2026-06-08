@@ -8,10 +8,7 @@
    [agent.broker.core :as broker]
    [agent.defaults :as defaults]
    [agent.persistence.sqlite :as sqlite]
-   [agent.runners.options :as runner-options]
-   [agent.runs.service :as runs]
-   [agent.security :as security]
-   [clojure.string :as str]))
+   [agent.runs.service :as runs]))
 
 (defn- not-found!
   [code message]
@@ -27,68 +24,16 @@
   (runs/get-run system run-id))
 
 (defn request-run! [system req]
-  (runs/request-run! system
-                     (update req :substrate #(or % (runner-options/default-substrate system)))))
+  (runs/request-run! system req))
 
-(defn- runner-status [system run-id]
-  (runs/runner-status system run-id))
-
-(defn launch-run! [system run-id]
-  (try
-    (runs/launch-run! system run-id)
-    (catch clojure.lang.ExceptionInfo e
-      (case (:type (ex-data e))
-        :run-not-found (not-found! "run_not_found" "Run not found")
-        :runner-not-found (not-found! "runner_not_found" "Runner not found")
-        :validation-failed (throw (errors/api-error 400 "bad_request" (.getMessage e) (ex-data e)))
-        (throw e)))))
-
-(defn signal-run! [system run-id command]
-  (try
-    (runs/signal-run! system run-id command)
-    (catch clojure.lang.ExceptionInfo e
-      (case (:type (ex-data e))
-        :run-not-found (not-found! "run_not_found" "Run not found")
-        :runner-not-found (not-found! "runner_not_found" "Runner not found")
-        (throw e)))))
-
-(def ^:private default-api-selectable-substrates
-  #{:seatbelt :bubblewrap :docker :podman})
-
-(defn- api-selectable-substrates [system]
-  (set (or (get-in system [:config :runners :api-selectable-substrates])
-           default-api-selectable-substrates)))
-
-(defn- assert-api-substrate! [system substrate]
-  (when (and substrate
-             (not (contains? (api-selectable-substrates system) substrate)))
-    (throw (errors/api-error 400 "bad_request"
-                             (str "Substrate not selectable via API: " (name substrate))
-                             {:substrate substrate
-                              :allowed (vec (sort (api-selectable-substrates system)))}))))
-
-(defn- runner-option-key-label [k]
-  (if (keyword? k) (name k) (str k)))
-
-(defn- reject-api-runner-options! [runner-options]
-  ;; API callers choose a substrate, not execution details. Server config
-  ;; supplies command, image, mounts, env, profiles, network, and control URL.
-  (when (and (map? runner-options) (seq runner-options))
-    (throw (errors/api-error 400 "bad_request"
-                             "runner_options is closed on the run API"
-                             {:rejected-keys (vec (sort (map runner-option-key-label
-                                                             (keys runner-options))))}))))
-
-(defn- runner-options-present? [body]
-  (or (contains? body :runner_options)
-      (contains? body "runner_options")))
-
-(defn- runner-options-value [body]
-  (h/body-value body :runner_options "runner_options"))
-
-(defn- normalize-run-request [system body]
-  (let [substrate (some-> (:substrate body) keyword)]
-    (assert-api-substrate! system substrate)
+(defn- normalize-run-request [_system body]
+  (let [substrate (or (some-> (:substrate body) keyword)
+                      :external)]
+    (when (not= :external substrate)
+      (throw (errors/api-error 400 "bad_request"
+                               "Only external runs are supported"
+                               {:substrate substrate
+                                :allowed ["external"]})))
     {:agent-id (:agent_id body)
      :parent-run-id (:parent_run_id body)
      :idempotency-key (:idempotency_key body)
@@ -96,11 +41,16 @@
      :substrate substrate
      :capabilities (or (:capabilities body) [])
      :network-identity (:network_identity body)
-     :runner-options (do
-                       (reject-api-runner-options! (:runner_options body))
-                       nil)
-     :requested-by (or (:requested_by body) "api")
-     :auto-launch? (true? (:auto_launch body))}))
+     :requested-by (or (:requested_by body) "api")}))
+
+(defn- reject-run-options! [raw-body]
+  (let [rejected (->> [:run_options "run_options" :runner_options "runner_options"]
+                      (filter #(contains? raw-body %))
+                      seq)]
+    (when rejected
+      (throw (errors/api-error 400 "bad_request"
+                               "Run creation does not accept execution options"
+                               {:rejected-keys (mapv name rejected)})))))
 
 (defn list-runs [system _request]
   (responses/json-response 200 {:data (mapv ser/run->response (list-runs* system))}))
@@ -109,37 +59,21 @@
   (if-let [run (get-run* system run-id)]
     (responses/json-response 200
                              {:data (assoc (ser/run->response run)
-                                           :runner_status (runner-status system run-id)
-                                           :recovery (run-recovery system run-id)
-                                           :container_contract (runs/container-image-contract system run-id))})
+                                           :recovery (run-recovery system run-id))})
     (not-found! "run_not_found" "Run not found")))
 
 (defn create [system request]
-  ;; Use the Malli-coerced body (request :parameters :body), not raw JSON, so the
-  ;; route schema gates input. Preserve raw runner_options presence because
-  ;; Reitit coercion can drop closed-map extra keys; API must reject them.
   (let [raw-body (h/read-json-body request)
-        body (cond-> (or (-> request :parameters :body) raw-body)
-               (runner-options-present? raw-body)
-               (assoc :runner_options (runner-options-value raw-body)))
+        _ (reject-run-options! raw-body)
+        body (or (-> request :parameters :body)
+                 raw-body)
         req (cond-> (normalize-run-request system body)
               (and (nil? (:idempotency_key body))
                    (h/header request "Idempotency-Key"))
               (assoc :idempotency-key (h/header request "Idempotency-Key")))
-        run (request-run! system req)
-        launched-run (when (:auto-launch? req)
-                       (launch-run! system (:id run)))]
+        run (request-run! system req)]
     (responses/json-response 201
-                             {:data (ser/run->response (or launched-run (get-run* system (:id run))))})))
-
-(defn launch [system _request run-id]
-  (responses/json-response 200 {:data (ser/run->response (launch-run! system run-id))}))
-
-(defn signal [system request run-id]
-  (let [{:keys [command_type]} (or (-> request :parameters :body)
-                                   (h/read-json-body request))]
-    (responses/json-response 200
-                             {:data (signal-run! system run-id {:command-type command_type})})))
+                             {:data (ser/run->response (get-run* system (:id run)))})))
 
 (defn heartbeats [system request run-id]
   (let [{:keys [limit since_sequence]} (-> request :parameters :query)]
@@ -168,88 +102,6 @@
                                                                     limit (assoc :limit limit)
                                                                     request_id (assoc :request-id request_id)
                                                                     status (assoc :status status))))})))
-
-(defn- ensure-run-control! [system request run-id]
-  (let [run (or (get-run* system run-id)
-                (not-found! "run_not_found" "Run not found"))
-        token (h/control-token request)]
-    (when-not (and (not (str/blank? token))
-                   (not (str/blank? (:bootstrap-token run)))
-                   (security/constant-time= token (:bootstrap-token run)))
-      (throw (errors/api-error 401 "unauthorized" "Invalid run control token")))
-    run))
-
-(defn control-register [system request run-id]
-  (ensure-run-control! system request run-id)
-  (let [body (h/read-json-body request)
-        run (runs/register-run! system
-                                run-id
-                                {:capabilities (or (:capabilities body) [])
-                                 :network-identity (h/body-value body :network-identity :network_identity)
-                                 :runner-metadata (h/body-value body :runner-metadata :runner_metadata)})]
-    (responses/json-response 200 {:data (ser/run->response run)})))
-
-(defn control-heartbeat [system request run-id]
-  (ensure-run-control! system request run-id)
-  (let [body (h/read-json-body request)
-        heartbeat (runs/heartbeat-run! system
-                                       run-id
-                                       {:sequence-no (h/body-value body :sequence-no :sequence_no)
-                                        :status (keyword (or (:status body) "running"))
-                                        :metrics (:metrics body)
-                                        :lease-id (h/body-value body :lease-id :lease_id)})]
-    (responses/json-response 200 {:data (ser/heartbeat->response heartbeat)})))
-
-(defn control-checkpoint [system request run-id]
-  (ensure-run-control! system request run-id)
-  (let [body (h/read-json-body request)
-        checkpoint (runs/checkpoint-run! system
-                                         run-id
-                                         {:sequence-no (h/body-value body :sequence-no :sequence_no)
-                                          :checkpoint-type (keyword (or (h/body-value body :checkpoint-type :checkpoint_type)
-                                                                        "state"))
-                                          :state (:state body)})]
-    (responses/json-response 200 {:data (ser/checkpoint->response checkpoint)})))
-
-(defn control-commands [system request run-id]
-  (ensure-run-control! system request run-id)
-  (responses/json-response 200
-                           {:data (mapv ser/run-command->response
-                                        (runs/pending-run-commands system run-id))}))
-
-(defn control-command-ack [system request run-id command-id]
-  (ensure-run-control! system request run-id)
-  (try
-    (runs/acknowledge-run-command! system run-id command-id)
-    (responses/json-response 200 {:data {:id command-id :status "acknowledged"}})
-    (catch clojure.lang.ExceptionInfo e
-      (throw (errors/domain-error->api-error e)))))
-
-(defn control-command-complete [system request run-id command-id]
-  (ensure-run-control! system request run-id)
-  (let [body (h/read-json-body request)
-        status (keyword (or (:status body) "completed"))]
-    (try
-      (let [command (runs/complete-run-command! system
-                                                run-id
-                                                command-id
-                                                status
-                                                (:error body)
-                                                (:response body))]
-        (responses/json-response 200 {:data (ser/run-command->response command)}))
-      (catch clojure.lang.ExceptionInfo e
-        (throw (errors/domain-error->api-error e))))))
-
-(defn control-transition [system request run-id]
-  (ensure-run-control! system request run-id)
-  (let [body (h/read-json-body request)
-        status (keyword (or (:status body) "running"))
-        run (runs/transition-run! system
-                                  run-id
-                                  status
-                                  {:last-error (h/body-value body :last-error :last_error)
-                                   :runner-metadata (h/body-value body :runner-metadata :runner_metadata)})]
-    (responses/json-response 200 {:data (ser/run->response run)})))
 
 (defn run-events [system request run-id]
   (let [{:keys [limit after_id]} (-> request :parameters :query)]
@@ -322,8 +174,7 @@
                                       :interval-ms interval-ms})]
       (responses/json-response 200
                                {:data (assoc (ser/run->response run)
-                                             :recovery (run-recovery system run-id)
-                                             :container_contract (runs/container-image-contract system run-id))})
+                                             :recovery (run-recovery system run-id))})
       (not-found! "run_not_found" "Run not found"))))
 
 (defn recover [system _request run-id]

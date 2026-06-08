@@ -139,7 +139,6 @@
                        :skills-registry (create-skills-registry (:skills cfg))
                        :memory-service memory-service
                        :runtime-service runtime-service
-                       :runner-registry (runs-service/create-runner-registry runtime-service)
                        :orchestrator (create-orchestrator (:orchestrator cfg)
                                                           event-sink
                                                           telemetry-collector

@@ -71,7 +71,6 @@
                       :tool-registry (tool-service/create-tool-registry (:tools config) event-sink store)
                       :memory-service (memory/create-memory-service (:memory config) store)
                       :runtime-service runtime-service
-                      :runner-registry (runs/create-runner-registry runtime-service)
                       :orchestrator (components/create-orchestrator (:orchestrator config) event-sink)
                       :config config)
         server (api/start-server! system {:host "127.0.0.1" :port port})]

@@ -3,6 +3,8 @@
    [agent.channels.core :as channels]
    [agent.persistence.sqlite :as sqlite]
    [agent.telegram :as telegram]
+   [agent.tools.approvals :as tool-approvals]
+   [agent.tools.service :as tool-service]
    [clojure.java.io :as io]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]))
@@ -19,6 +21,17 @@
                     :type "private"
                     :first_name "Test"}
              :text text}})
+
+(defn callback-update-for
+  [update-id chat-id user-id message-id data]
+  {:update_id update-id
+   :callback_query {:id (str "callback-" update-id)
+                    :from {:id user-id}
+                    :message {:message_id message-id
+                              :chat {:id chat-id
+                                     :type "private"
+                                     :first_name "Test"}}
+                    :data data}})
 
 (defn photo-update-for
   [update-id chat-id user-id caption]
@@ -249,6 +262,124 @@
              (telegram/process-update! system config opts (update-for 1 100 8 "hi"))))
       (is (empty? @sent))
       (is (= :telegram.blocked (:event-type (first @events))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-get-updates-includes-callback-queries
+  (let [calls (atom [])]
+    (with-redefs [telegram/api-request! (fn [_ method body]
+                                          (swap! calls conj {:method method :body body})
+                                          [])]
+      (telegram/get-updates! "token" {:offset 10 :timeout 1 :limit 2})
+      (is (= [{:method "getUpdates"
+               :body {:timeout 1
+                      :limit 2
+                      :allowed_updates ["message" "callback_query"]
+                      :offset 10}}]
+             @calls)))))
+
+(deftest telegram-approval-card-puts-details-in-expandable-quote
+  (let [approval {:id "app-1"
+                  :tool-name "shell"
+                  :reason "Agent requested shell"
+                  :input {:argv ["tavily.sh" "weather <x>"]}}
+        html (#'telegram/approval-card-html approval)]
+    (is (str/includes? html "Tool approval required"))
+    (is (str/includes? html "Reason: Agent requested shell"))
+    (is (str/includes? html "<blockquote expandable>details"))
+    (is (str/includes? html "approval_id: app-1"))
+    (is (str/includes? html "&lt;x&gt;"))))
+
+(deftest telegram-approval-callback-approves-and-runs-tool
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        registry (tool-service/create-tool-registry
+                  {:shell {:roots ["."]
+                           :working-dir "."
+                           :default-decision :ask
+                           :rules []}}
+                  (fn [_] nil)
+                  store)
+        sent (atom [])
+        answers (atom [])
+        edits (atom [])
+        continuation-messages (atom [])
+        continuation-context (atom nil)
+        approval (tool-approvals/create-request!
+                  store
+                  {:tool-name :shell
+                   :input {:argv ["printf" "ok"]}
+                   :requested-by "telegram-session"
+                   :reason "test"})
+        system {:store store
+                :tool-registry registry
+                :config {:tools {:yolo? false}}
+                :event-sink (fn [_] nil)}
+        config {:bot-token "token"
+                :allowlist {:allow-all? true}}
+        opts {:send-message-fn (fn [chat-id text]
+                                 (swap! sent conj {:chat-id chat-id :text text}))
+              :answer-callback-query-fn (fn [callback-id body]
+                                          (swap! answers conj {:callback-id callback-id :body body}))
+              :edit-message-reply-markup-fn (fn [chat-id message-id reply-markup]
+                                              (swap! edits conj {:chat-id chat-id
+                                                                 :message-id message-id
+                                                                 :reply-markup reply-markup}))
+              :send-chat-action-fn (fn [_ _] nil)
+              :chat-fn (fn [_ {:keys [messages context]}]
+                         (reset! continuation-messages messages)
+                         (reset! continuation-context context)
+                         {:content "agent continued"})}]
+    (try
+      (is (= :processed
+             (telegram/process-update! system config opts
+                                       (callback-update-for 1 100 7 55 (str "ta:run:" (:id approval))))))
+      (is (= "approved" (:status (tool-approvals/get-request store (:id approval)))))
+      (is (= [{:callback-id "callback-1" :body {:text "Running."}}] @answers))
+      (is (= [{:chat-id 100 :message-id 55 :reply-markup nil}] @edits))
+      (is (= [{:chat-id 100 :text "shell status: ok"}
+              {:chat-id 100 :text "agent continued"}]
+             @sent))
+      (is (str/includes? (:content (last @continuation-messages)) "stdout:\nok"))
+      (is (= {:telegram-chat-id 100} @continuation-context))
+      (is (not (some #(str/includes? (:text %) "Tool executed") @sent)))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-approval-callback-denies-tool
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        sent (atom [])
+        answers (atom [])
+        edits (atom [])
+        approval (tool-approvals/create-request!
+                  store
+                  {:tool-name :shell
+                   :input {:argv ["printf" "ok"]}
+                   :requested-by "telegram-session"
+                   :reason "test"})
+        system {:store store
+                :event-sink (fn [_] nil)}
+        config {:bot-token "token"
+                :allowlist {:allow-all? true}}
+        opts {:send-message-fn (fn [chat-id text]
+                                 (swap! sent conj {:chat-id chat-id :text text}))
+              :answer-callback-query-fn (fn [callback-id body]
+                                          (swap! answers conj {:callback-id callback-id :body body}))
+              :edit-message-reply-markup-fn (fn [chat-id message-id reply-markup]
+                                              (swap! edits conj {:chat-id chat-id
+                                                                 :message-id message-id
+                                                                 :reply-markup reply-markup}))}]
+    (try
+      (is (= :processed
+             (telegram/process-update! system config opts
+                                       (callback-update-for 1 100 7 55 (str "ta:deny:" (:id approval))))))
+      (is (= "denied" (:status (tool-approvals/get-request store (:id approval)))))
+      (is (= [{:callback-id "callback-1" :body {:text "Denied."}}] @answers))
+      (is (= [{:chat-id 100 :message-id 55 :reply-markup nil}] @edits))
+      (is (= [{:chat-id 100 :text "Tool denied."}] @sent))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))

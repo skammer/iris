@@ -45,6 +45,13 @@
   (str (.plusSeconds (Instant/now)
                      (long (get-in system [:config :tools :approvals :ttl-seconds] 900)))))
 
+(defn- approval-reason [tool-name input]
+  (or (some-> (or (:reason input) (get input "reason") (:purpose input) (get input "purpose"))
+              str
+              str/trim
+              not-empty)
+      (str "Agent requested " (name tool-name))))
+
 (defn- request-approval! [system session-id receipt]
   (let [tool-name (keyword (:tool-name receipt))]
     (tool-approvals/create-request!
@@ -52,7 +59,7 @@
      {:tool-name tool-name
       :input (:input receipt)
       :requested-by (or session-id "chat")
-      :reason "chat tool call"
+      :reason (approval-reason tool-name (:input receipt))
       :expires-at (approval-expires-at system)})))
 
 (defn- error-content [error]

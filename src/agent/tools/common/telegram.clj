@@ -1,5 +1,5 @@
 (ns agent.tools.common.telegram
-  "Telegram outbound media tools (sendPhoto, sendDocument).
+  "Telegram outbound tools.
    Tools read :telegram-chat-id from execution context (set by the
    Telegram adapter when invoking chat/run!). Bot token is closed over
    at registration time."
@@ -110,6 +110,52 @@
             (do
               (telegram/send-document! bot-token chat-id document caption)
               {:sent true :chat-id chat-id :document document :caption caption}))))})))
+
+(defn- keyboard-rows [choices]
+  (mapv (fn [row]
+          (mapv (fn [choice] {:text choice}) row))
+        (partition-all 2 choices)))
+
+(defn- reply-keyboard
+  [{:keys [choices one-time-keyboard resize-keyboard input-placeholder]}]
+  (cond-> {:keyboard (keyboard-rows choices)
+           :resize_keyboard (not (false? resize-keyboard))
+           :one_time_keyboard (not (false? one-time-keyboard))}
+    (not (str/blank? input-placeholder))
+    (assoc :input_field_placeholder input-placeholder)))
+
+(defn create-ask-tool
+  [{:keys [bot-token]}]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :telegram_ask
+     "Ask the current Telegram user a question with a custom reply keyboard. Use when you need the user's choice; their tap arrives as the next chat message."
+     :category :messaging
+     :input-schema [:map {:closed true}
+                    [:question :string]
+                    [:choices [:vector {:min 1 :max 12} :string]]
+                    [:one-time-keyboard {:optional true} :boolean]
+                    [:resize-keyboard {:optional true} :boolean]
+                    [:input-placeholder {:optional true} :string]]
+     :operation :act)
+    :execute-fn
+    (fn [input context]
+      (let [chat-id (require-chat-id! context :telegram_ask)
+            question (:question input)
+            choices (mapv str (:choices input))]
+        (require-non-blank! :telegram_ask :question question)
+        (doseq [choice choices]
+          (require-non-blank! :telegram_ask :choices choice))
+        (telegram/send-message-with-reply-markup!
+         bot-token
+         chat-id
+         question
+         (reply-keyboard (assoc input :choices choices)))
+        {:sent true
+         :chat-id chat-id
+         :awaiting-reply true
+         :choices choices}))}))
 
 (defn enabled?
   [{:keys [bot-token]}]

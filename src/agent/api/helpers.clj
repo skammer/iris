@@ -90,9 +90,3 @@
 (defn bearer-token [value]
   (when value
     (second (re-matches #"(?i)^Bearer\s+(.+)$" value))))
-
-(defn control-token
-  "Extract the run-control bearer token (Authorization: Bearer or X-Agent-Bootstrap-Token)."
-  [request]
-  (or (bearer-token (header request "authorization"))
-      (header request "x-agent-bootstrap-token")))

@@ -1,20 +1,20 @@
 -- :name create-agent-run :! :n
-insert or ignore into agent_runs (id, idempotency_key, agent_id, parent_run_id, lease_id, name, substrate, status, capabilities_json, network_identity_json, bootstrap_token, bootstrap_spec_json, runner_metadata_json, runner_options_json, requested_by, last_error, created_at, started_at, finished_at)
-values (:id, :idempotency_key, :agent_id, :parent_run_id, :lease_id, :name, :substrate, :status, :capabilities_json, :network_identity_json, :bootstrap_token, :bootstrap_spec_json, :runner_metadata_json, :runner_options_json, :requested_by, :last_error, :created_at, null, null)
+insert or ignore into agent_runs (id, idempotency_key, agent_id, parent_run_id, lease_id, name, substrate, status, capabilities_json, network_identity_json, runner_metadata_json, run_options_json, requested_by, last_error, created_at, started_at, finished_at)
+values (:id, :idempotency_key, :agent_id, :parent_run_id, :lease_id, :name, :substrate, :status, :capabilities_json, :network_identity_json, :runner_metadata_json, :run_options_json, :requested_by, :last_error, :created_at, null, null)
 
 -- :name get-agent-run :? :1
-select id, idempotency_key, agent_id, parent_run_id, lease_id, name, substrate, status, capabilities_json, network_identity_json, bootstrap_token, bootstrap_spec_json, runner_metadata_json, runner_options_json, requested_by, last_error, created_at, started_at, finished_at
+select id, idempotency_key, agent_id, parent_run_id, lease_id, name, substrate, status, capabilities_json, network_identity_json, runner_metadata_json, run_options_json, requested_by, last_error, created_at, started_at, finished_at
 from agent_runs
 where id = :id
 
 -- :name get-agent-run-by-idempotency-key :? :1
-select id, idempotency_key, agent_id, parent_run_id, lease_id, name, substrate, status, capabilities_json, network_identity_json, bootstrap_token, bootstrap_spec_json, runner_metadata_json, runner_options_json, requested_by, last_error, created_at, started_at, finished_at
+select id, idempotency_key, agent_id, parent_run_id, lease_id, name, substrate, status, capabilities_json, network_identity_json, runner_metadata_json, run_options_json, requested_by, last_error, created_at, started_at, finished_at
 from agent_runs
 where idempotency_key = :idempotency_key
 limit 1
 
 -- :name list-agent-runs :? :*
-select id, idempotency_key, agent_id, parent_run_id, lease_id, name, substrate, status, capabilities_json, network_identity_json, bootstrap_token, bootstrap_spec_json, runner_metadata_json, runner_options_json, requested_by, last_error, created_at, started_at, finished_at
+select id, idempotency_key, agent_id, parent_run_id, lease_id, name, substrate, status, capabilities_json, network_identity_json, runner_metadata_json, run_options_json, requested_by, last_error, created_at, started_at, finished_at
 from agent_runs
 where (:status is null or status = :status)
   and (:parent_run_id is null or parent_run_id = :parent_run_id)
@@ -27,9 +27,8 @@ set status = case when :status_set = 1 then :status else status end,
     lease_id = case when :lease_id_set = 1 then :lease_id else lease_id end,
     network_identity_json = case when :network_identity_json_set = 1 then :network_identity_json else network_identity_json end,
     capabilities_json = case when :capabilities_json_set = 1 then :capabilities_json else capabilities_json end,
-    bootstrap_spec_json = case when :bootstrap_spec_json_set = 1 then :bootstrap_spec_json else bootstrap_spec_json end,
     runner_metadata_json = case when :runner_metadata_json_set = 1 then :runner_metadata_json else runner_metadata_json end,
-    runner_options_json = case when :runner_options_json_set = 1 then :runner_options_json else runner_options_json end,
+    run_options_json = case when :run_options_json_set = 1 then :run_options_json else run_options_json end,
     last_error = case when :last_error_set = 1 then :last_error else last_error end,
     started_at = case when :started_at_set = 1 then :started_at else started_at end,
     finished_at = case when :finished_at_set = 1 then :finished_at else finished_at end

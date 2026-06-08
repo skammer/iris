@@ -1118,6 +1118,7 @@
         (is (re-find #"approval_id=" (:content result)))
         (is (= 1 (count approvals)))
         (is (= "shell" (:tool-name (first approvals))))
+        (is (= "Agent requested shell" (:reason (first approvals))))
         (is (some #(and (= "tool-execution-update" (:event-type %))
                         (= "approval-required" (name (get-in % [:payload :kind]))))
                   events)))

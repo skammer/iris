@@ -17,7 +17,6 @@
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
    [agent.runs.service :as runs]
-   [agent.runs.registry :as runtime]
    [agent.system.components :as components]
    [agent.system.events :as events]
    [agent.tools.service :as tool-service]
@@ -222,7 +221,6 @@
                       :skills-registry (components/create-skills-registry (:skills config))
                       :memory-service (memory/create-memory-service (:memory config) store)
                       :runtime-service runtime-service
-                      :runner-registry (runs/create-runner-registry runtime-service)
                       :orchestrator (components/create-orchestrator (:orchestrator config) event-sink)
                       :config config)]
     {:system system
@@ -266,18 +264,6 @@
 	                                 (.encodeToString
 	                                  (java.util.Base64/getEncoder)
 	                                  (.getBytes "operator:secret" "UTF-8")))}))))
-	      (let [run (runtime/request-run!
-	                 (:runtime-service system)
-	                 (runtime/create-run-request {:agent-id "auth-child"
-	                                              :substrate :local-unsandboxed}))
-	            token (:bootstrap-token run)]
-	        (is (= 200 (:status (http-post-headers
-	                              (str base-url "/v1/runs/" (:id run) "/control/heartbeat")
-	                              {:sequence_no 1 :status "running"}
-	                              {"Authorization" (str "Bearer " token)}))))
-	        (is (= 401 (:status (http-get-headers
-	                              (str base-url "/v1/tools")
-	                              {"Authorization" (str "Bearer " token)})))))
 	      (is (= 401 (:status (http-get (str base-url "/ui/dashboard")))))
       (finally
         (when-let [stop! (some-> system :orchestrator :federation-forwarder :stop!)]
@@ -371,7 +357,6 @@
 
 (deftest api-domain-error-mapping-expanded-test
   (let [cases [[:run-not-found 404 "run_not_found"]
-               [:runner-not-found 404 "runner_not_found"]
                [:agent-not-found 404 "agent_not_found"]
                [:channel-not-found 404 "channel_not_found"]
                [:peer-not-found 404 "peer_not_found"]
@@ -645,45 +630,6 @@
         (io/delete-file write-path true)
         (io/delete-file path true)))))
 
-(deftest api-run-control-command-is-run-scoped-test
-  (let [path (temp-db-path)
-        port (free-port)
-        base-url (str "http://127.0.0.1:" port)
-        {:keys [system server]} (started-test-system path port identity)]
-    (try
-      (let [run-a (runs/request-run! system {:agent-id "run-a"
-                                             :substrate :local-unsandboxed})
-            run-b (runs/request-run! system {:agent-id "run-b"
-                                             :substrate :local-unsandboxed})
-            command-a (runs/enqueue-run-command! system (:id run-a) {:command-type :pause
-                                                                     :payload {}})
-            command-b (runs/enqueue-run-command! system (:id run-b) {:command-type :pause
-                                                                     :payload {}})
-            headers {"Authorization" (str "Bearer " (:bootstrap-token run-a))}
-            foreign-ack (http-post-headers
-                         (str base-url "/v1/runs/" (:id run-a) "/control/commands/" (:id command-b) "/ack")
-                         {}
-                         headers)
-            correct-ack (http-post-headers
-                         (str base-url "/v1/runs/" (:id run-a) "/control/commands/" (:id command-a) "/ack")
-                         {}
-                         headers)
-            foreign-complete (http-post-headers
-                              (str base-url "/v1/runs/" (:id run-a) "/control/commands/" (:id command-b) "/complete")
-                              {:status "completed"}
-                              headers)
-            correct-complete (http-post-headers
-                              (str base-url "/v1/runs/" (:id run-a) "/control/commands/" (:id command-a) "/complete")
-                              {:status "completed"}
-                              headers)]
-        (is (= 404 (:status foreign-ack)))
-        (is (= 200 (:status correct-ack)))
-        (is (= 404 (:status foreign-complete)))
-        (is (= 200 (:status correct-complete))))
-      (finally
-        (api/stop-server! server)
-        (io/delete-file path true)))))
-
 (deftest api-domain-errors-and-normalized-provider-models-test
   (let [path (temp-db-path)
         port (free-port)
@@ -767,15 +713,14 @@
                       :store store
                       :event-bus event-bus
                       :event-sink event-sink
-                      :tool-registry (tool-service/create-tool-registry (assoc-in (:tools config)
-                                                                           [:http :allow-private?]
-                                                                           true)
-                                                                  event-sink
-                                                                  store)
-                      :memory-service (memory/create-memory-service (:memory config) store)
-                      :runtime-service runtime-service
-                      :runner-registry (runs/create-runner-registry runtime-service)
-                      :orchestrator (components/create-orchestrator (:orchestrator config)
+	                      :tool-registry (tool-service/create-tool-registry (assoc-in (:tools config)
+	                                                                           [:http :allow-private?]
+	                                                                           true)
+	                                                                  event-sink
+	                                                                  store)
+	                      :memory-service (memory/create-memory-service (:memory config) store)
+	                      :runtime-service runtime-service
+	                      :orchestrator (components/create-orchestrator (:orchestrator config)
                                                                     event-sink
                                                                     nil
                                                                     store)
@@ -787,37 +732,27 @@
       (let [bad-session (http-post (str base-url "/v1/sessions") {:title 42})
             bad-chat (http-post (str base-url "/v1/chat/completions")
                                 {:messages [{:role "bogus" :content "hello"}]})
-            created-docker-run (http-post (str base-url "/v1/runs")
-                                          {:agent_id "docker-agent"
-                                           :name "docker-run"
-                                           :substrate "docker"})
-            created-docker-run-body (json/parse-string (:body created-docker-run) true)
-            docker-run-id (get-in created-docker-run-body [:data :id])
-            ;; API runner_options is closed; raw-body guard prevents silent coercion drops.
-            rejected-runner-options (http-post (str base-url "/v1/runs")
-                                               {:agent_id "evil"
-                                                :name "evil"
-                                                :substrate "docker"
-                                                :runner_options {:command ["sh" "-lc" "touch pwned"]}})
-            ;; The run API must reject the unsandboxed substrate outright (RCE guard).
-            rejected-unsandboxed (http-post (str base-url "/v1/runs")
-                                            {:agent_id "evil"
-                                             :name "evil"
-                                             :substrate "local-unsandboxed"
-                                             :runner_options {}
-                                             :auto_launch true})
-            ;; Drive the lifecycle endpoints with a real launched run created via
-            ;; the trusted internal path (system-initiated runs are unrestricted).
-            created-run (runs/request-run! system {:agent-id "runner-agent"
-                                                   :name "runner"
-                                                   :substrate :local-unsandboxed
-                                                   :runner-options {:command ["sh" "-lc" "sleep 30"]
-                                                                    :working-dir "."}})
-            run-id (:id created-run)
-            _ (runs/launch-run! system run-id)
-            _ (runs/register-run! system run-id
-                                  {:capabilities [:chat]
-                                   :network-identity {:logical-id "agent://runner"}
+	            created-external-run (http-post (str base-url "/v1/runs")
+	                                            {:agent_id "external-agent"
+	                                             :name "external-run"})
+	            created-external-run-body (json/parse-string (:body created-external-run) true)
+	            external-run-id (get-in created-external-run-body [:data :id])
+	            rejected-run-options (http-post (str base-url "/v1/runs")
+	                                            {:agent_id "evil"
+	                                             :name "evil"
+	                                             :run_options {:command ["sh" "-lc" "touch pwned"]}})
+	            ;; Runs are external only now; execution substrates are not accepted.
+	            rejected-unsandboxed (http-post (str base-url "/v1/runs")
+	                                            {:agent_id "evil"
+	                                             :name "evil"
+	                                             :substrate "local-unsandboxed"})
+	            created-run (runs/request-run! system {:agent-id "runner-agent"
+	                                                   :name "runner"
+	                                                   :substrate :external})
+	            run-id (:id created-run)
+	            _ (runs/register-run! system run-id
+	                                  {:capabilities [:chat]
+	                                   :network-identity {:logical-id "agent://runner"}
                                    :runner-metadata {:pid 100}})
             _ (runs/heartbeat-run! system run-id
                                    {:sequence-no 1
@@ -839,8 +774,8 @@
                                           :line "boot ok"}})
             fetched-run (http-get (str base-url "/v1/runs/" run-id))
             fetched-run-body (json/parse-string (:body fetched-run) true)
-            fetched-docker-run (http-get (str base-url "/v1/runs/" docker-run-id))
-            fetched-docker-run-body (json/parse-string (:body fetched-docker-run) true)
+	            fetched-external-run (http-get (str base-url "/v1/runs/" external-run-id))
+	            fetched-external-run-body (json/parse-string (:body fetched-external-run) true)
             waited-run (http-get (str base-url "/v1/runs/" run-id "/wait?timeout_ms=5&interval_ms=1"))
             waited-run-body (json/parse-string (:body waited-run) true)
             run-heartbeats (http-get (str base-url "/v1/runs/" run-id "/heartbeats?since_sequence=1"))
@@ -851,9 +786,7 @@
             run-commands-body (json/parse-string (:body run-commands) true)
             run-events (http-get (str base-url "/v1/runs/" run-id "/events?limit=20"))
             run-events-body (json/parse-string (:body run-events) true)
-            signaled-run (http-post (str base-url "/v1/runs/" run-id "/signal")
-                                    {:command_type "cancel"})
-            recovered-run (http-post (str base-url "/v1/runs/" run-id "/recover") {})
+	            recovered-run (http-post (str base-url "/v1/runs/" run-id "/recover") {})
             recovered-run-body (json/parse-string (:body recovered-run) true)
             reclaimed-runs (http-post (str base-url "/v1/runs/reclaim-stale") {})
             reclaimed-runs-body (json/parse-string (:body reclaimed-runs) true)
@@ -861,7 +794,7 @@
             list-runs-body (json/parse-string (:body list-runs) true)
             ui-runs (http-get (str base-url "/ui/runs"))
             ui-run-detail (http-get (str base-url "/ui/run-detail?run_id=" run-id))
-            ui-docker-run-detail (http-get (str base-url "/ui/run-detail?run_id=" docker-run-id))
+	            ui-external-run-detail (http-get (str base-url "/ui/run-detail?run_id=" external-run-id))
             ui-index (http-get base-url)
             ui-run-page (http-get (str base-url "/runs/" run-id))
             ui-dashboard (http-get (str base-url "/ui/dashboard"))
@@ -1059,18 +992,17 @@
             messages-body (json/parse-string (:body messages) true)]
         (is (= 400 (:status bad-session)))
         (is (= 400 (:status bad-chat)))
-        (is (= 201 (:status created-docker-run)))
-        (is (= "docker" (get-in created-docker-run-body [:data :substrate])))
-        (is (= "mounted-dev" (get-in fetched-docker-run-body [:data :container_contract :image-mode])))
-        (is (= 400 (:status rejected-runner-options))
-            "API runner_options is closed; execution keys must not reach handlers")
-        (is (= 400 (:status rejected-unsandboxed))
-            "local-unsandboxed is not selectable via the API")
-        (is (some? run-id))
-        (is (= 200 (:status fetched-run)))
-        (is (= true (get-in fetched-run-body [:data :runner_status :alive])))
-        (is (number? (get-in fetched-run-body [:data :runner_status :pid])))
-        (is (map? (get-in fetched-run-body [:data :recovery])))
+	        (is (= 201 (:status created-external-run)))
+	        (is (= "external" (get-in created-external-run-body [:data :substrate])))
+	        (is (= 200 (:status fetched-external-run)))
+	        (is (= "external" (get-in fetched-external-run-body [:data :substrate])))
+	        (is (= 400 (:status rejected-run-options))
+	            "Run creation rejects execution options")
+	        (is (= 400 (:status rejected-unsandboxed))
+	            "Execution substrates are not selectable via the API")
+	        (is (some? run-id))
+	        (is (= 200 (:status fetched-run)))
+	        (is (map? (get-in fetched-run-body [:data :recovery])))
         (is (= 200 (:status waited-run)))
         (is (= run-id (get-in waited-run-body [:data :id])))
         (is (= 200 (:status run-heartbeats)))
@@ -1083,23 +1015,21 @@
         (is (= [(:id command-entry)] (mapv :id (:data run-commands-body))))
         (is (= 200 (:status run-events)))
         (is (some #{"agent.run.heartbeat"} (map :event_type (:data run-events-body))))
-        (is (= 200 (:status signaled-run)))
-        (is (= 202 (:status recovered-run)))
+	        (is (= 202 (:status recovered-run)))
         (is (string? (get-in recovered-run-body [:data :replacement_run :id])))
         (is (= 200 (:status reclaimed-runs)))
         (is (vector? (:data reclaimed-runs-body)))
         (is (= 200 (:status list-runs)))
         (is (contains? (set (map :id (:data list-runs-body))) run-id))
-        (is (contains? (set (map :id (:data list-runs-body))) docker-run-id))
+	        (is (contains? (set (map :id (:data list-runs-body))) external-run-id))
         (is (= 200 (:status ui-runs)))
         (is (str/includes? (:body ui-runs) "Create Run"))
-        (is (str/includes? (:body ui-runs) "seatbelt"))
+        (is (str/includes? (:body ui-runs) "Create"))
         (is (= 200 (:status ui-run-detail)))
         (is (str/includes? (:body ui-run-detail) "Latest checkpoint"))
         (is (str/includes? (:body ui-run-detail) "Recovery"))
         (is (str/includes? (:body ui-run-detail) "Recent output"))
-        (is (= 200 (:status ui-docker-run-detail)))
-        (is (str/includes? (:body ui-docker-run-detail) "Container contract"))
+        (is (= 200 (:status ui-external-run-detail)))
         (is (str/includes? (:body ui-run-detail) "boot ok"))
         (is (str/includes? (:body ui-run-detail) "agent-run-panel"))
         (is (str/includes? (:body ui-run-detail) "data-run-output-tail"))
@@ -1284,11 +1214,10 @@
         system (assoc base-system
                       :llm-provider (->TestProvider (atom nil))
                       :store store
-                      :event-bus event-bus
-                      :event-sink event-sink
-                      :runtime-service runtime-service
-                      :runner-registry (runs/create-runner-registry runtime-service)
-                      :config (assoc (:config base-system)
+	                      :event-bus event-bus
+	                      :event-sink event-sink
+	                      :runtime-service runtime-service
+	                      :config (assoc (:config base-system)
                                      :api {:host "127.0.0.1" :port port}
                                      :storage {:sqlite {:path path}}))
         server (api/start-server! system {:host "127.0.0.1" :port port})]

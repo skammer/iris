@@ -8,9 +8,6 @@
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.trace :as runtime-trace]
-   [agent.runners.core :as runners]
-   [agent.runners.docker-podman :as docker-podman]
-   [agent.runners.options :as runner-options]
    [agent.runs.registry :as runtime]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
@@ -712,8 +709,7 @@
       [:div.empty "No tool approvals yet."])]))
 
 (defn runs-fragment [system]
-  (let [runs (runtime/list-runs (:runtime-service system) {:limit 50})
-        default-substrate (name (runner-options/default-substrate system))]
+  (let [runs (runtime/list-runs (:runtime-service system) {:limit 50})]
     (ui-render/render
      [:section#runs-panel.panel
       {"data-on-interval__duration.10s.leading" "@get('/ui/runs')"}
@@ -729,25 +725,14 @@
             [:div.session-meta.code (str agent-id " / " substrate)]
             [:div.session-meta (str status " / " created-at)]])]
         [:div.empty "No runs yet."])
-      [:form#create-run-form
-       [:h3 "Create Run"]
-       [:input {:type "text" :name "name" :placeholder "optional name"}]
-       [:input {:type "text" :name "agent_id" :placeholder "agent id"}]
-       [:select {:name "substrate"}
-        (for [substrate ["seatbelt" "bubblewrap" "docker" "podman" "local-unsandboxed"]]
-          [:option (cond-> {:value substrate}
-                     (= substrate default-substrate) (assoc :selected "selected"))
-           substrate])]
-       [:input {:type "text" :name "image" :placeholder "container image for docker/podman"}]
-       [:input {:type "text" :name "command" :placeholder "printf hello or leave blank for child shim"}]
-       [:input {:type "text" :name "working_dir" :value "." :placeholder "working dir"}]
-       [:label.meta
-        [:input {:type "checkbox" :name "share_network"}]
-        " share network"]
-       [:div.actions
-        [:button {:type "button"
-                  "data-on:click" "@post('/ui/runs', {contentType: 'form', selector: '#create-run-form'})"}
-         "Create + launch"]]]])))
+	      [:form#create-run-form
+	       [:h3 "Create Run"]
+	       [:input {:type "text" :name "name" :placeholder "optional name"}]
+	       [:input {:type "text" :name "agent_id" :placeholder "agent id"}]
+	       [:div.actions
+	        [:button {:type "button"
+	                  "data-on:click" "@post('/ui/runs', {contentType: 'form', selector: '#create-run-form'})"}
+	         "Create"]]]])))
 
 (defn- run-detail-target [system run-id]
   (let [runs (runtime/list-runs (:runtime-service system) {:limit 50})]
@@ -767,14 +752,8 @@
 
 (defn run-detail-body [system run-id]
   (let [run (run-detail-target system run-id)
-        runner-status (when run
-                        (when-let [runner (get (:runner-registry system) (keyword (:substrate run)))]
-                          (runners/status runner (:id run))))
         recovery (when run
                    (runtime/recovery-plan (:runtime-service system) (:id run)))
-        container-contract (when (and run (#{"docker" "podman"} (:substrate run)))
-                             (docker-podman/image-contract
-                              (runner-options/prepare-runner-options system run)))
         output-events (when run
                         (->> (sqlite/list-events (:store system)
                                                 {:entity-type :agent_run
@@ -818,18 +797,13 @@
           [:div.result.diagnostic-result
            [:strong "Failure diagnostics"]
            [:div.code (:last-error run)]])
-        (when recovery
-          [:div.result
-           [:strong "Recovery"]
-           [:div.code (json/generate-string recovery {:pretty true})]])
-        (when container-contract
-          [:div.result
-           [:strong "Container contract"]
-           [:div.code (json/generate-string container-contract {:pretty true})]])
-        [:div.run-grid
-         (json-result "Runner" runner-status)
-         (when-let [heartbeat (:heartbeat run)]
-           (json-result "Latest heartbeat" heartbeat))
+	        (when recovery
+	          [:div.result
+	           [:strong "Recovery"]
+	           [:div.code (json/generate-string recovery {:pretty true})]])
+	        [:div.run-grid
+	         (when-let [heartbeat (:heartbeat run)]
+	           (json-result "Latest heartbeat" heartbeat))
          (when-let [checkpoint (:checkpoint run)]
            (json-result "Latest checkpoint" checkpoint))
          (when-let [commands (seq (:pending-commands run))]
@@ -860,19 +834,11 @@
                [:strong event-type]
                [:div.code (json/generate-string payload)]
                [:div.meta created-at]])]])
-        [:div.actions
-         [:form {:id (str "run-launch-" (:id run))}
-          [:button {:type "button"
-                    "data-on:click" (str "@post('/ui/runs/" (:id run) "/launch', {contentType: 'form', selector: '#run-launch-" (:id run) "'})")}
-           "Launch"]]
-         [:form {:id (str "run-recover-" (:id run))}
-          [:button {:type "button"
-                    "data-on:click" (str "@post('/v1/runs/" (:id run) "/recover')")}
-           "Recover"]]
-         [:form {:id (str "run-cancel-" (:id run))}
-          [:button {:type "button"
-                    "data-on:click" (str "@post('/ui/runs/" (:id run) "/signal', {contentType: 'form', selector: '#run-cancel-" (:id run) "'})")}
-           "Cancel"]]]
+	        [:div.actions
+	         [:form {:id (str "run-recover-" (:id run))}
+	          [:button {:type "button"
+	                    "data-on:click" (str "@post('/v1/runs/" (:id run) "/recover')")}
+	           "Recover"]]]
         (json-result "Catch-up"
                      {:heartbeats (runtime/list-heartbeats (:runtime-service system) (:id run) {:limit 5})
                       :checkpoints (runtime/list-checkpoints (:runtime-service system) (:id run) {:limit 5})

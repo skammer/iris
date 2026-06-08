@@ -13,8 +13,7 @@
          list-agent-run-commands)
 
 (defn- row->run [{:keys [id idempotency_key agent_id parent_run_id lease_id name substrate status capabilities_json
-                         network_identity_json bootstrap_token bootstrap_spec_json
-                         runner_metadata_json runner_options_json requested_by last_error
+                         network_identity_json runner_metadata_json run_options_json requested_by last_error
                          created_at started_at finished_at]}]
   {:id id
    :idempotency-key idempotency_key
@@ -26,10 +25,8 @@
    :status status
    :capabilities (common/parse-json-string capabilities_json)
    :network-identity (common/parse-json-string network_identity_json)
-   :bootstrap-token bootstrap_token
-   :bootstrap-spec (common/parse-json-string bootstrap_spec_json)
    :runner-metadata (common/parse-json-string runner_metadata_json)
-   :runner-options (common/parse-json-string runner_options_json)
+   :run-options (common/parse-json-string run_options_json)
    :requested-by requested_by
    :last-error last_error
    :created-at created_at
@@ -87,7 +84,7 @@
    :created-at created_at
    :updated-at updated_at})
 
-(def ^:private run-statuses #{"requested" "launched" "running" "completed" "failed" "cancelled" "expired"})
+(def ^:private run-statuses #{"requested" "running" "completed" "failed" "cancelled" "expired"})
 (def ^:private command-statuses #{"pending" "acknowledged" "completed" "failed" "cancelled"})
 (def ^:private activity-statuses #{"running" "completed" "failed" "cancelled"})
 
@@ -117,12 +114,10 @@
           :network_identity_json nil
           :capabilities_json_set 0
           :capabilities_json nil
-          :bootstrap_spec_json_set 0
-          :bootstrap_spec_json nil
           :runner_metadata_json_set 0
           :runner_metadata_json nil
-          :runner_options_json_set 0
-          :runner_options_json nil
+          :run_options_json_set 0
+          :run_options_json nil
           :last_error_set 0
           :last_error nil
           :started_at_set 0
@@ -133,8 +128,7 @@
 
 (defn create-agent-run!
   [store {:keys [id idempotency-key agent-id parent-run-id lease-id name substrate status capabilities
-                 network-identity bootstrap-token bootstrap-spec runner-metadata
-                 runner-options requested-by last-error]
+                 network-identity runner-metadata run-options requested-by last-error]
           :or {status "requested"}}]
   (or (when idempotency-key
         (common/with-connection
@@ -155,10 +149,8 @@
              :status (valid-status! run-statuses :status status)
              :capabilities_json (common/json-string capabilities)
              :network_identity_json (common/json-string network-identity)
-             :bootstrap_token bootstrap-token
-             :bootstrap_spec_json (common/json-string bootstrap-spec)
              :runner_metadata_json (common/json-string runner-metadata)
-             :runner_options_json (common/json-string runner-options)
+             :run_options_json (common/json-string run-options)
              :requested_by requested-by
              :last_error last-error
              :created_at (common/now-str)}]
@@ -225,15 +217,12 @@
                                             :capabilities_json_set (present-flag updates :capabilities)
                                             :capabilities_json (when (contains? updates :capabilities)
                                                                  (common/json-string (:capabilities updates)))
-                                            :bootstrap_spec_json_set (present-flag updates :bootstrap-spec)
-                                            :bootstrap_spec_json (when (contains? updates :bootstrap-spec)
-                                                                   (common/json-string (:bootstrap-spec updates)))
                                             :runner_metadata_json_set (present-flag updates :runner-metadata)
                                             :runner_metadata_json (when (contains? updates :runner-metadata)
                                                                     (common/json-string (:runner-metadata updates)))
-                                            :runner_options_json_set (present-flag updates :runner-options)
-                                            :runner_options_json (when (contains? updates :runner-options)
-                                                                   (common/json-string (:runner-options updates)))
+                                            :run_options_json_set (present-flag updates :run-options)
+                                            :run_options_json (when (contains? updates :run-options)
+                                                               (common/json-string (:run-options updates)))
                                             :last_error_set (present-flag updates :last-error)
                                             :last_error (:last-error updates)
                                             :started_at_set (if started-at 1 0)

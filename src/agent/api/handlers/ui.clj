@@ -12,7 +12,6 @@
    [agent.chat :as chat]
    [agent.defaults :as defaults]
    [agent.memory.core :as memory]
-   [agent.runners.options :as runner-options]
    [agent.sessions.service :as session-service]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
@@ -22,9 +21,6 @@
   (:import
    (java.nio.file Files)
    (java.util Base64)))
-
-(defn- form-bool [value]
-  (contains? #{"1" "true" "yes" "on"} (str/lower-case (str value))))
 
 (defn- ui-tool-input [body]
   (tools-h/tool-input-from-map (keyword (:tool body)) body))
@@ -464,38 +460,14 @@
         run (runs/request-run! system
                                {:agent-id (not-empty (:agent_id body))
                                 :name (not-empty (:name body))
-                                :substrate (or (some-> (:substrate body) keyword)
-                                               (runner-options/default-substrate system))
-                                :runner-options (cond-> {:working-dir (or (:working_dir body) ".")}
-                                                  (tools-h/split-command-optional (:command body))
-                                                  (assoc :command (tools-h/split-command-optional (:command body)))
-                                                  (not-empty (:image body))
-                                                  (assoc :image (:image body))
-                                                  (form-bool (:share_network body))
-                                                  (assoc :share-network? true))
+                                :substrate :external
                                 :requested-by "ui"})
-        _ (runs/launch-run! system (:id run))]
+        run-id (:id run)]
     (responses/html-response 201
                              (str (ui/runs-fragment system)
-                                  (ui/run-detail-fragment system (:id run))
+                                  (ui/run-detail-fragment system run-id)
                                   (ui/router-state-fragment
-                                   (ui/run-route-path system (:id run)))))))
-
-(defn run-launch [system _request run-id]
-  (runs/launch-run! system run-id)
-  (responses/html-response 200
-                           (str (ui/runs-fragment system)
-                                (ui/run-detail-fragment system run-id)
-                                (ui/router-state-fragment
-                                 (ui/run-route-path system run-id)))))
-
-(defn run-signal [system _request run-id]
-  (runs/signal-run! system run-id {:command-type "cancel"})
-  (responses/html-response 200
-                           (str (ui/runs-fragment system)
-                                (ui/run-detail-fragment system run-id)
-                                (ui/router-state-fragment
-                                 (ui/run-route-path system run-id)))))
+                                   (ui/run-route-path system run-id))))))
 
 (defn list-tools [system _request]
   (responses/html-response 200 (ui/tools-fragment system)))
@@ -558,7 +530,8 @@
                                     :status (:status updated)})))))
 
 (defn tool-approval-run [system _request approval-id]
-  (let [{:keys [tool-name input]} (tool-approvals/resolve-approved-request (:store system) approval-id)]
+  (let [{:keys [tool-name input permissions approval]} (tool-approvals/resolve-approved-request (:store system) approval-id)
+        user (or (not-empty (:requested-by approval)) "ui")]
     (try
       (responses/html-response
        200
@@ -570,10 +543,10 @@
              {:result (tools/execute-tool (:tool-registry system)
                                           tool-name
                                           input
-                                          (tools-h/execution-context system :ui tool-name input
-                                                                     {:approval-id approval-id
-                                                                      :user "ui"
-                                                                      :activity (:activity input)}))})))
+                                          {:permissions permissions
+                                           :approval-id approval-id
+                                           :user user
+                                           :activity (:activity input)})})))
       (catch Exception e
         (let [api-e (errors/tool-error->api-error e)]
           (responses/html-response

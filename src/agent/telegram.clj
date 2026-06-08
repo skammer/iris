@@ -3,12 +3,14 @@
   (:require
    [agent.broker.core :as broker]
    [agent.chat :as chat]
+   [agent.chat.history :as chat-history]
    [agent.channels.core :as channels]
    [agent.defaults :as defaults]
    [agent.persistence.sqlite :as sqlite]
    [agent.prompts :as prompts]
    [agent.skills :as skills]
    [agent.telegram.format :as fmt]
+   [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [agent.tools.display :as tool-display]
    [cheshire.core :as json]
@@ -36,6 +38,18 @@
       (str/replace "&" "&amp;")
       (str/replace "<" "&lt;")
       (str/replace ">" "&gt;")))
+
+(defn- escape-html-truncated [s max-chars]
+  (loop [chars (seq (str s))
+         acc []
+         n 0]
+    (if-let [ch (first chars)]
+      (let [escaped (escape-html ch)
+            n* (+ n (count escaped))]
+        (if (<= n* max-chars)
+          (recur (next chars) (conj acc escaped) n*)
+          (apply str acc)))
+      (apply str acc))))
 
 (defn- thinking-quote-html [text]
   (let [source (str text)
@@ -117,7 +131,7 @@
   (api-request! token "getUpdates"
                 (cond-> {:timeout timeout
                          :limit limit
-                         :allowed_updates ["message"]}
+                         :allowed_updates ["message" "callback_query"]}
                   offset (assoc :offset offset))))
 
 (defn- text-payload
@@ -140,6 +154,28 @@
                         (assoc (text-payload chunk) :chat_id chat-id)))
         (fmt/chunk-markdown (str text) max-source-chars)))
 
+(defn send-message-with-reply-markup!
+  [token chat-id text reply-markup]
+  (let [s (str text)
+        clamped (if (> (count s) max-source-chars)
+                  (subs s 0 max-source-chars)
+                  s)]
+    (api-request! token "sendMessage"
+                  (assoc (text-payload clamped)
+                         :chat_id chat-id
+                         :reply_markup reply-markup))))
+
+(defn send-html-message-with-reply-markup!
+  [token chat-id text reply-markup]
+  (let [s (str text)]
+    (api-request! token "sendMessage"
+                  {:chat_id chat-id
+                   :text (if (> (count s) max-message-chars)
+                           (subs s 0 max-message-chars)
+                           s)
+                   :parse_mode "HTML"
+                   :reply_markup reply-markup})))
+
 (defn send-html-message!
   [token chat-id text]
   (let [s (str text)]
@@ -155,6 +191,19 @@
   (api-request! token "sendChatAction"
                 {:chat_id chat-id
                  :action action}))
+
+(defn answer-callback-query!
+  ([token callback-query-id] (answer-callback-query! token callback-query-id nil))
+  ([token callback-query-id opts]
+   (api-request! token "answerCallbackQuery"
+                 (merge {:callback_query_id callback-query-id} (or opts {})))))
+
+(defn edit-message-reply-markup!
+  [token chat-id message-id reply-markup]
+  (api-request! token "editMessageReplyMarkup"
+                (cond-> {:chat_id chat-id
+                         :message_id message-id}
+                  (some? reply-markup) (assoc :reply_markup reply-markup))))
 
 (defn send-message-draft!
   "Streams a partial message via Telegram Bot API 9.5 sendMessageDraft.
@@ -209,14 +258,22 @@
 (defn- id-set [ids]
   (set (map str (or ids []))))
 
+(defn- update-message [update]
+  (or (:message update)
+      (get-in update [:callback_query :message])))
+
+(defn- update-user-id [update]
+  (or (some-> update :message :from :id)
+      (some-> update :callback_query :from :id)))
+
 (defn allowed?
   [config update]
   (let [allowlist (:allowlist config)
         allow-all? (true? (:allow-all? allowlist))
         user-ids (id-set (:user-ids allowlist))
         chat-ids (id-set (:chat-ids allowlist))
-        message (:message update)
-        user-id (some-> message :from :id str)
+        message (update-message update)
+        user-id (some-> (update-user-id update) str)
         chat-id (some-> message :chat :id str)]
     (or allow-all?
         (contains? user-ids user-id)
@@ -555,6 +612,215 @@
       (telegram-operation-failed! system chat-id operation e)
       nil)))
 
+(def ^:private approval-callback-prefix "ta")
+(def ^:private approval-input-preview-chars 1800)
+(def ^:private approved-tool-context-chars 8000)
+
+(defn- callback-data [action approval-id]
+  (str approval-callback-prefix ":" (name action) ":" approval-id))
+
+(defn- parse-callback-data [data]
+  (let [[prefix action approval-id extra] (str/split (or data "") #":" 4)]
+    (when (and (= approval-callback-prefix prefix)
+               (contains? #{"run" "deny"} action)
+               (not (str/blank? approval-id))
+               (nil? extra))
+      {:action (keyword action)
+       :approval-id approval-id})))
+
+(defn- truncate [s max-chars]
+  (let [s* (str s)]
+    (if (> (count s*) max-chars)
+      (str (subs s* 0 max-chars) "\n[truncated]")
+      s*)))
+
+(defn- approval-reason [approval]
+  (or (some-> (:reason approval) str str/trim not-empty)
+      "Agent requested tool execution"))
+
+(defn- approval-details [approval]
+  (str "approval_id: " (:id approval) "\n"
+       "input:\n"
+       (truncate (json/generate-string (:input approval) {:pretty true})
+                 approval-input-preview-chars)))
+
+(defn- approval-card-html [approval]
+  (str "Tool approval required\n"
+       "Tool: " (escape-html (:tool-name approval)) "\n"
+       "Reason: " (escape-html (approval-reason approval)) "\n"
+       "<blockquote expandable>details\n\n"
+       (escape-html-truncated (approval-details approval) 3000)
+       "</blockquote>"))
+
+(defn- approval-keyboard [approval-id]
+  {:inline_keyboard [[{:text "Approve & run"
+                       :callback_data (callback-data :run approval-id)}
+                      {:text "Deny"
+                       :callback_data (callback-data :deny approval-id)}]]})
+
+(defn- send-approval-card!
+  [system config opts chat-id approval]
+  (let [token (:bot-token config)
+        send! (or (:send-html-message-with-reply-markup-fn opts)
+                  (fn [cid text reply-markup]
+                    (send-html-message-with-reply-markup! token cid text reply-markup)))]
+    (safe-telegram! system chat-id :approval-card
+                    #(send! chat-id
+                            (approval-card-html approval)
+                            (approval-keyboard (:id approval))))))
+
+(defn- approval-actor [callback-query]
+  (str "telegram:" (get-in callback-query [:from :id])))
+
+(defn- execute-approved-tool!
+  [system chat-id approval-id actor]
+  (let [{:keys [tool-name input permissions approval]}
+        (tool-approvals/resolve-approved-request (:store system) approval-id)
+        user (or (not-empty (:requested-by approval)) actor "telegram")]
+    {:tool-name tool-name
+     :input input
+     :approval approval
+     :result (tools/execute-tool
+              (:tool-registry system)
+              tool-name
+              input
+              {:permissions permissions
+               :approval-id approval-id
+               :telegram-chat-id chat-id
+               :user user
+               :request-id (str "telegram-approval-" approval-id)
+               :yolo? (true? (get-in system [:config :tools :yolo?]))})}))
+
+(defn- ensure-approved-for-run!
+  [store approval-id actor]
+  (try
+    (tool-approvals/approve! store approval-id actor "approved in telegram")
+    (catch clojure.lang.ExceptionInfo e
+      (let [data (ex-data e)]
+        (if (= :approval-decision-conflict (:type data))
+          (let [approval (tool-approvals/get-request store approval-id)]
+            (when-not (= "approved" (:status approval))
+              (throw e))
+            approval)
+          (throw e))))))
+
+(defn- approved-status-text [tool-name]
+  (str (name tool-name) " status: ok"))
+
+(defn- result-context-text [tool-name input result]
+  (str "Approved tool result. Use this result to continue answering the user's previous request.\n"
+       "Tool: " (name tool-name) "\n"
+       "Input:\n"
+       (json/generate-string input {:pretty true})
+       "\nResult:\n"
+       (truncate
+        (if (and (map? result)
+                 (or (contains? result :stdout)
+                     (contains? result :stderr)))
+          (str "stdout:\n" (or (:stdout result) "")
+               (when-not (str/blank? (:stderr result))
+                 (str "\nstderr:\n" (:stderr result)))
+               (when (contains? result :exit-code)
+                 (str "\nexit-code: " (:exit-code result))))
+          (json/generate-string result {:pretty true}))
+        approved-tool-context-chars)))
+
+(declare start-typing-indicator! build-stream-controls build-on-tool-call)
+
+(defn- session-history
+  [system session-id]
+  (if (and (not (str/blank? (or session-id "")))
+           (sqlite/get-session (:store system) session-id))
+    (chat-history/session-messages system session-id)
+    []))
+
+(defn- run-approved-continuation!
+  [system config opts chat chat-id session-id tool-name input result]
+  (let [token (:bot-token config)
+        send! (or (:send-message-fn opts)
+                  (fn [cid text] (send-message! token cid text)))
+        stop-typing! (start-typing-indicator! system config opts chat-id)
+        stream-controls (build-stream-controls system config opts chat chat-id)
+        on-tool-call (build-on-tool-call system opts chat-id stream-controls)
+        messages (conj (vec (session-history system session-id))
+                       {:role "user"
+                        :content (result-context-text tool-name input result)})
+        chat-run! (or (:chat-fn opts) chat/run!)]
+    (try
+      (let [response (chat-run! system
+                                (cond-> {:messages messages
+                                          :context {:telegram-chat-id chat-id}
+                                          :stream? true}
+                                  (:on-delta stream-controls)
+                                  (assoc :on-delta (:on-delta stream-controls))
+                                  (:on-thinking-delta stream-controls)
+                                  (assoc :on-thinking-delta (:on-thinking-delta stream-controls))
+                                  on-tool-call
+                                  (assoc :on-tool-call on-tool-call)))
+            final (or (:content response) "")]
+        (when-let [finalize-thinking! (:finalize-thinking! stream-controls)]
+          (finalize-thinking!))
+        (when-not (str/blank? final)
+          (send! chat-id final))
+        response)
+      (finally
+        (stop-typing!)))))
+
+(defn- remove-callback-keyboard!
+  [system config opts chat-id message-id]
+  (let [token (:bot-token config)
+        edit! (or (:edit-message-reply-markup-fn opts)
+                  (fn [cid mid reply-markup]
+                    (edit-message-reply-markup! token cid mid reply-markup)))]
+    (safe-telegram! system chat-id :approval-keyboard-clear
+                    #(edit! chat-id message-id nil))))
+
+(defn- answer-callback!
+  [system config opts callback-query text & [{:keys [alert?]}]]
+  (let [token (:bot-token config)
+        answer! (or (:answer-callback-query-fn opts)
+                    (fn [callback-query-id body]
+                      (answer-callback-query! token callback-query-id body)))]
+    (safe-telegram! system
+                    (get-in callback-query [:message :chat :id])
+                    :callback-answer
+                    #(answer! (:id callback-query)
+                              (cond-> {}
+                                (not (str/blank? text)) (assoc :text text)
+                                alert? (assoc :show_alert true))))))
+
+(defn- process-approval-callback!
+  [system config opts callback-query {:keys [action approval-id]}]
+  (let [chat-id (get-in callback-query [:message :chat :id])
+        message-id (get-in callback-query [:message :message_id])
+        send! (or (:send-message-fn opts)
+                  (fn [cid text] (send-message! (:bot-token config) cid text)))
+        actor (approval-actor callback-query)]
+    (case action
+      :deny
+      (do
+        (tool-approvals/deny! (:store system) approval-id actor "denied in telegram")
+        (remove-callback-keyboard! system config opts chat-id message-id)
+        (answer-callback! system config opts callback-query "Denied.")
+        (send! chat-id "Tool denied.")
+        :processed)
+
+      :run
+      (do
+        (ensure-approved-for-run! (:store system) approval-id actor)
+        (remove-callback-keyboard! system config opts chat-id message-id)
+        (answer-callback! system config opts callback-query "Running.")
+        (let [{:keys [tool-name input result approval]} (execute-approved-tool! system chat-id approval-id actor)]
+          (send! chat-id (approved-status-text tool-name))
+          (run-approved-continuation! system config opts
+                                      (get-in callback-query [:message :chat])
+                                      chat-id
+                                      (:requested-by approval)
+                                      tool-name
+                                      input
+                                      result))
+        :processed))))
+
 (defn- build-stream-controls
   "Returns `{:on-delta f :finalize! f}` for animating a partial reply via
    sendMessageDraft. `finalize!` promotes the accumulated draft to a real
@@ -663,7 +929,7 @@
      on-tool-call (assoc :on-tool-call on-tool-call))))
 
 (defn- run-chat-events!
-  [system chat-id session-id user-text stream-controls on-tool-call]
+  [system config opts chat-id session-id user-text stream-controls on-tool-call]
   (let [broker-instance (or (:event-bus system) (:broker system))
         subscription (broker/subscribe! broker-instance (broker/all-events-subject)
                                          {:buffer-strategy :sliding
@@ -672,6 +938,7 @@
         ch (:channel subscription)
         result-ch (async/chan 1)
         saw-delta? (atom false)
+        suppress-approval-final? (atom false)
         finalize! (:finalize! stream-controls)]
     (try
       (future
@@ -701,9 +968,11 @@
                 (when (and event
                            (session-event? event session-id "message-update")
                            (string? (:delta payload)))
-                  (reset! saw-delta? true)
-                  (when-let [on-delta (:on-delta stream-controls)]
-                    (on-delta (:delta payload))))
+                  (when-not (and @suppress-approval-final?
+                                 (:synthetic? payload))
+                    (reset! saw-delta? true)
+                    (when-let [on-delta (:on-delta stream-controls)]
+                      (on-delta (:delta payload)))))
                 (when (and event
                            (session-event? event session-id "message-update")
                            (string? (:thinking-delta payload)))
@@ -720,12 +989,22 @@
                 (when (and event
                            (session-event? event session-id "message-end")
                            (:final? payload))
-                  (when (and (not @saw-delta?)
-                             (not (str/blank? (:content payload))))
-                    (when-let [on-delta (:on-delta stream-controls)]
-                      (on-delta (:content payload))))
-                  (when finalize! (finalize!))
+                  (if (and @suppress-approval-final?
+                           (= :approval-required (keyword (:stop-reason payload))))
+                    (reset! suppress-approval-final? false)
+                    (do
+                      (when (and (not @saw-delta?)
+                                 (not (str/blank? (:content payload))))
+                        (when-let [on-delta (:on-delta stream-controls)]
+                          (on-delta (:content payload))))
+                      (when finalize! (finalize!))))
                   (reset! saw-delta? false))
+                (when (and event
+                           (session-event? event session-id "tool-execution-update")
+                           (= :approval-required (keyword (:kind payload))))
+                  (reset! suppress-approval-final? true)
+                  (doseq [approval (:approvals payload)]
+                    (send-approval-card! system config opts chat-id approval)))
                 (when (and event
                            (session-event? event session-id "tool-execution-end"))
                   (when on-tool-call
@@ -751,7 +1030,7 @@
         result (try
                  (if callback-path?
                    (run-chat-callbacks! system opts chat-id session-id user-text stream-controls on-tool-call)
-                   (run-chat-events! system chat-id session-id user-text stream-controls on-tool-call))
+                   (run-chat-events! system config opts chat-id session-id user-text stream-controls on-tool-call))
                  (finally
                    (stop-typing!)))
         final (or (:content result) "")]
@@ -783,11 +1062,28 @@
   [system config {:keys [send-message-fn] :as opts} update]
   (let [opts (cond-> opts
                (nil? (:active-tasks opts)) (assoc :active-tasks (atom {})))
+        callback-query (:callback_query update)
         message (:message update)
         chat (:chat message)
         chat-id (:id chat)
         text (:text message)]
-    (when (and chat-id (processable-message? message))
+    (cond
+      callback-query
+      (if-not (allowed? config update)
+        (do
+          (answer-callback! system config opts callback-query "Not allowed." {:alert? true})
+          :blocked)
+        (if-let [callback (parse-callback-data (:data callback-query))]
+          (try
+            (process-approval-callback! system config opts callback-query callback)
+            (catch Exception e
+              (answer-callback! system config opts callback-query (.getMessage e) {:alert? true})
+              (throw e)))
+          (do
+            (answer-callback! system config opts callback-query "Unknown action." {:alert? true})
+            :ignored)))
+
+      (and chat-id (processable-message? message))
       (if-not (allowed? config update)
         (do
           ((:event-sink system) {:event-type :telegram.blocked
@@ -824,22 +1120,24 @@
                                   (command-response system chat text))]
               (if builtin-reply
                 (do (send! chat-id builtin-reply) :processed)
-                (let [mapping (session-mapping! (:store system) chat)]
-                  (let [content (try
-                                  (user-content! config opts message)
-                                  (catch Exception e
-                                    (send! chat-id (str "Media processing failed: " (.getMessage e)))
-                                    ::media-processing-failed))]
-                    (when-not (= ::media-processing-failed content)
-                      (when-let [invoked (seq (invoked-skill-names system (or text "")))]
-                        (send! chat-id (str "Skills: "
-                                            (str/join ", " (map #(str "/" %) invoked)))))
-                      (if (:async-chat? opts)
-                        (run-chat-async! system config opts chat chat-id
-                                         (:session-id mapping) content)
-                        (run-chat! system config opts chat chat-id
-                                   (:session-id mapping) content))))
-                  :processed)))))))))
+                (let [mapping (session-mapping! (:store system) chat)
+                      content (try
+                                (user-content! config opts message)
+                                (catch Exception e
+                                  (send! chat-id (str "Media processing failed: " (.getMessage e)))
+                                  ::media-processing-failed))]
+                  (when-not (= ::media-processing-failed content)
+                    (when-let [invoked (seq (invoked-skill-names system (or text "")))]
+                      (send! chat-id (str "Skills: "
+                                          (str/join ", " (map #(str "/" %) invoked)))))
+                    (if (:async-chat? opts)
+                      (run-chat-async! system config opts chat chat-id
+                                       (:session-id mapping) content)
+                      (run-chat! system config opts chat chat-id
+                                 (:session-id mapping) content)))
+                  :processed))))))
+
+      :else nil)))
 
 (declare start! stop! health-check)
 
