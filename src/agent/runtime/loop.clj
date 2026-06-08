@@ -42,6 +42,9 @@
 (defn- approval-receipts [receipts]
   (filter #(= :approval-required (keyword (:status %))) receipts))
 
+(defn- approval-required? [receipt]
+  (= :approval-required (keyword (:status receipt))))
+
 (defn- complete-receipt [receipts]
   (some #(when (= :completed (keyword (:status %))) %) receipts))
 
@@ -51,6 +54,25 @@
                  (map (fn [approval]
                         (str (:tool-name approval) " approval_id=" (:id approval)))
                       approvals))))
+
+(defn- display-reason [approval]
+  (some-> (:reason approval) str str/trim not-empty))
+
+(defn- align-approval-reasons [receipts approvals]
+  (loop [remaining (seq receipts)
+         approvals* (seq approvals)
+         out []]
+    (if-not remaining
+      out
+      (let [receipt (first remaining)]
+        (if (and (approval-required? receipt) approvals*)
+          (let [approval (first approvals*)
+                reason (display-reason approval)]
+            (recur (next remaining)
+                   (next approvals*)
+                   (conj out (cond-> receipt
+                               reason (assoc :reason reason)))))
+          (recur (next remaining) approvals* (conj out receipt)))))))
 
 (defn- apply-context-injectors [messages injectors]
   (llm-messages/messages->internal
@@ -382,13 +404,20 @@
                       :else
                       (do
                         (flush-pending-deltas!)
-                        (event! event-sink :turn-end base {:step step-no
-                                                           :directives (:directives step*)
-                                                           :receipts receipts})
-                        (let [provider-tool-calls (seq (:tool-calls llm-response))
-                              protocol-messages (when provider-tool-calls
-                                                  (emit-tool-turn! event-sink base request-id llm-response
-                                                                   provider-tool-calls receipts tool-output-max-chars))
+                        (let [approval-needed (vec (approval-receipts receipts))
+                              approvals (when (seq approval-needed)
+                                          (if approval-fn (approval-fn approval-needed) approval-needed))
+                              receipts* (if (seq approvals)
+                                          (align-approval-reasons receipts approvals)
+                                          receipts)
+                              approval-needed* (vec (approval-receipts receipts*))]
+                          (event! event-sink :turn-end base {:step step-no
+                                                             :directives (:directives step*)
+                                                             :receipts receipts*})
+                          (let [provider-tool-calls (seq (:tool-calls llm-response))
+                                protocol-messages (when provider-tool-calls
+                                                    (emit-tool-turn! event-sink base request-id llm-response
+                                                                     provider-tool-calls receipts* tool-output-max-chars))
                               final-messages* (into final-messages protocol-messages)]
                           (if-let [receipt (complete-receipt receipts)]
                             (let [content (result-text (:result receipt))]
@@ -406,13 +435,11 @@
                               (terminal-result content request-id
                                                (conj final-messages* {:role "assistant" :content content})
                                                trace* usage* :completed stream?*))
-                            (let [approval-needed (vec (approval-receipts receipts))]
-                              (if (seq approval-needed)
-                                (let [approvals (if approval-fn (approval-fn approval-needed) approval-needed)
-                                      content (approval-message approvals)]
+                            (if (seq approval-needed*)
+                              (let [content (approval-message approvals)]
                                   (event! event-sink :tool-execution-update base {:kind :approval-required
                                                                                   :approvals approvals
-                                                                                  :receipts approval-needed})
+                                                                                  :receipts approval-needed*})
                                   (emit-terminal-message! event-sink base content {:stop-reason :approval-required
                                                                                    :approvals approvals})
                                   (event! event-sink :agent-end base {:steps (inc step-no)
@@ -422,14 +449,14 @@
                                                    (conj final-messages* {:role "assistant" :content content})
                                                    trace* usage* :approval-required stream?*
                                                    {:approvals approvals}))
-                                (recur (inc step-no)
-                                       (merge state (:state executed))
-                                       (into planner-messages* protocol-messages)
-                                       trace*
-                                       final-messages*
-                                       usage*
-                                       doom-loop-state*
-                                       (nudge/record-execution nudge-state executable-step receipts)))))))))))))))
+                              (recur (inc step-no)
+                                     (merge state (:state executed))
+                                     (into planner-messages* protocol-messages)
+                                     trace*
+                                     final-messages*
+                                     usage*
+                                     doom-loop-state*
+                                     (nudge/record-execution nudge-state executable-step receipts*)))))))))))))))
       (catch Exception e
         (if (or (cancelled? cancellation-token)
                 (= :chat-cancelled (some-> e ex-data :type)))

@@ -1112,16 +1112,26 @@
       (let [result (chat/run! system {:session-id (:id session)
                                       :messages [{:role "user" :content "run shell"}]})
             approvals (sqlite/list-tool-approvals (:store system) {:status "pending"})
+            approval-reason (:reason (first approvals))
+            messages (sqlite/list-messages (:store system) (:id session))
+            tool-message (some #(when (= "tool" (:role %)) %) messages)
+            tool-payload (json/parse-string (:content tool-message) true)
             events (sqlite/list-events (:store system) {:entity-type :session
                                                         :entity-id (:id session)
-                                                        :limit 20})]
+                                                        :limit 20})
+            approval-event (some #(when (and (= "tool-execution-update" (:event-type %))
+                                             (= "approval-required" (name (get-in % [:payload :kind]))))
+                                    %)
+                                 events)
+            event-approval (first (get-in approval-event [:payload :approvals]))
+            event-receipt (first (get-in approval-event [:payload :receipts]))]
         (is (re-find #"approval_id=" (:content result)))
         (is (= 1 (count approvals)))
         (is (= "shell" (:tool-name (first approvals))))
-        (is (= "Agent requested shell" (:reason (first approvals))))
-        (is (some #(and (= "tool-execution-update" (:event-type %))
-                        (= "approval-required" (name (get-in % [:payload :kind]))))
-                  events)))
+        (is (= "Agent requested shell" approval-reason))
+        (is (= approval-reason (:reason tool-payload)))
+        (is (= approval-reason (:reason event-approval)))
+        (is (= approval-reason (:reason event-receipt))))
       (finally
         (io/delete-file path true)))))
 

@@ -131,17 +131,35 @@
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})]
     (try
-      (let [session (sqlite/create-session! store "thinking")]
-        (sqlite/append-message! store
-                                (:id session)
-                                "assistant"
-                                "answer"
-                                {:metadata {:thinking "hidden reasoning"}})
-        (let [html (ui/session-messages-fragment {:store store} (:id session))]
-          (is (str/includes? html "message-thinking"))
-          (is (str/includes? html "hidden reasoning"))
-          (is (str/includes? html "chat-stream__bottom-anchor"))
-          (is (str/includes? html "id=\"chat-bottom-anchor\""))))
+      (let [session (sqlite/create-session! store "thinking")
+            message (sqlite/append-message! store
+                                            (:id session)
+                                            "assistant"
+                                            "answer"
+                                            {:metadata {:thinking "hidden reasoning"}})
+            html (ui/session-messages-fragment {:store store} (:id session))]
+        (is (str/includes? html "message-thinking"))
+        (is (str/includes? html "data-preserve-attr=\"open\""))
+        (is (str/includes? html (str "id=\"message-thinking-" (:id message) "\"")))
+        (is (str/includes? html "hidden reasoning"))
+        (is (str/includes? html "chat-stream__bottom-anchor"))
+        (is (str/includes? html "id=\"chat-bottom-anchor\"")))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest session-messages-render-streaming-thinking-with-preserved-open-state
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [session (sqlite/create-session! store "streaming-thinking")
+            html (ui/session-messages-fragment {:store store}
+                                               (:id session)
+                                               {:streaming {:thinking "live reasoning"}})]
+        (is (str/includes? html "message-thinking"))
+        (is (str/includes? html "data-preserve-attr=\"open\""))
+        (is (str/includes? html "id=\"message-thinking-streaming\""))
+        (is (str/includes? html "live reasoning")))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))

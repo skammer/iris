@@ -527,7 +527,7 @@
 (defn- streaming-message [{:keys [content thinking]}]
   [:article.message.message--streaming
    [:div.message-role {:class "assistant"} "assistant"]
-   (ui-render/thinking-content thinking)
+   (ui-render/thinking-content thinking "streaming")
    (when-not (str/blank? (str content))
      (ui-render/message-content content))
    [:div.meta "streaming…"]])

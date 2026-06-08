@@ -113,11 +113,20 @@
                       nil))
                   blocks)))))
 
-(defn thinking-content [content]
-  (when-not (str/blank? (str content))
-    [:details.message-thinking
-     [:summary "thinking"]
-     [:div.code (str content)]]))
+(defn- thinking-id [value]
+  (when-not (str/blank? (str value))
+    (str "message-thinking-"
+         (str/replace (str value) #"[^A-Za-z0-9_-]" "-"))))
+
+(defn thinking-content
+  ([content] (thinking-content content nil))
+  ([content id-value]
+   (when-not (str/blank? (str content))
+     [:details.message-thinking
+      (cond-> {"data-preserve-attr" "open"}
+        id-value (assoc :id (thinking-id id-value)))
+      [:summary "thinking"]
+      [:div.code (str content)]])))
 
 (defn- content-block-thinking [content-blocks]
   (not-empty
@@ -320,7 +329,7 @@
 
 (defn message
   ([msg] (message nil msg))
-  ([system {:keys [role content created-at content-blocks tool-calls metadata excluded-from-context?] :as msg}]
+  ([system {:keys [id role content created-at content-blocks tool-calls metadata excluded-from-context?] :as msg}]
    (let [meta-text (str created-at
                         (when (:queued metadata) " | queued")
                         (when excluded-from-context? " | out-of-context")
@@ -346,7 +355,7 @@
        [:article.message
         [:div.message-role {:class role} role]
         (when (= "assistant" role)
-          (thinking-content thinking))
+          (thinking-content thinking id))
         (rich-message-content role content* content-blocks)
         [:div.meta meta-text]]))))
 
