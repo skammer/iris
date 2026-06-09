@@ -52,7 +52,7 @@ Inputs: [[refactoring-2026-06-findings]], [[codebase-map]]. Status legend: ☐ p
 ## Phase 5 — Targeted structural wins (do as budget allows, riskiest last)
 
 - ☑ 5.1 history.clj copy-paste pairs + subscribers.clj identical branches (commit `21375a9`).
-- ☐ 5.2 Decompose `runtime.loop/run!` into phase fns + single terminal emitter (17 deftests guard it).
+- ☑ 5.2 Terminal emitters extracted from `runtime.loop/run!` (commit `3dc4eec`): one named fn per loop ending (max-steps/max-tokens/doom-loop/guardrail/completed/approval/cancelled); alias-def block deleted; file cljfmt'd. Deeper plan-phase extraction deliberately left — the loop/recur state threading is the remaining complexity and needs its own focused pass.
 - ☐ 5.3 LLM providers: make `invoke` the single execution path; `complete`/`stream` become wrappers (kills the triplicated dispatch); update provider tests.
 - ☐ 5.4 Telegram: delete the callback streaming path; single broker-event chat runner (telegram_test guards).
 
