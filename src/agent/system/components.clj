@@ -19,6 +19,7 @@
    [agent.system.health :as system-health]
    [agent.telegram :as telegram]
    [agent.telemetry :as telemetry]
+   [agent.telemetry.observer :as telemetry-observer]
    [agent.tools.service :as tool-service]))
 
 (defn create-store
@@ -31,7 +32,7 @@
 
 (defn create-observer
   [telemetry-collector cfg]
-  (telemetry/create-observer telemetry-collector cfg))
+  (telemetry-observer/create-observer telemetry-collector cfg))
 
 (defn create-trace
   [cfg]

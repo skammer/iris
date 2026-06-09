@@ -8,6 +8,7 @@
    [agent.runtime.trace :as runtime-trace]
    [agent.orchestrator :as orchestrator]
    [agent.telemetry :as telemetry]
+   [agent.telemetry.observer :as telemetry-observer]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.common.fs :as fs-tool]
    [agent.tools.common.http :as http-tool]
@@ -163,12 +164,12 @@
                                                         :user (:user context)}]
                                        (if observer
                                          (do
-                                           (telemetry/record-event! observer {:event-type :tool/call
-                                                                              :payload observation})
-                                           (telemetry/record-metric! observer {:metric-type :request-latency-ms
-                                                                               :component :tool
-                                                                               :tool-name (:name tool)
-                                                                               :value duration-ms}))
+                                           (telemetry-observer/record-event! observer {:event-type :tool/call
+                                                                                       :payload observation})
+                                           (telemetry-observer/record-metric! observer {:metric-type :request-latency-ms
+                                                                                        :component :tool
+                                                                                        :tool-name (:name tool)
+                                                                                        :value duration-ms}))
                                          (telemetry/record-tool! telemetry-collector observation))
                                        (runtime-trace/record-event!
                                         trace

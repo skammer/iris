@@ -13,6 +13,7 @@
    [agent.kernel.runtime :as kernel-runtime]
    [agent.kernel.schema :as kernel-schema]
    [agent.llm.core :as llm-core]
+   [agent.llm.instrumented :as llm-instrumented]
    [agent.llm.messages :as llm-messages]
    [agent.persistence.sqlite :as sqlite]
    [agent.planner :as planner]
@@ -21,7 +22,6 @@
    [agent.runtime.context-pack :as context-pack]
    [agent.runtime.loop :as runtime-loop]
    [agent.skills :as skills]
-   [agent.telemetry :as telemetry]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [agent.util :as util]
@@ -90,16 +90,16 @@
                                               {:model model
                                                :session-id session-id})]
                       (consume-llm-stream-with! ch emit-delta))
-                    (telemetry/complete-with-telemetry! (:telemetry system)
-                                                        (:llm-provider system)
-                                                        messages
-                                                        {}
-                                                        {:agent-id (or session-id "chat")
-                                                         :session-id session-id
-                                                         :observer (:observer system)
-                                                         :trace (:trace system)
-                                                         :request-id request-id
-                                                         :model model}))]
+                    (llm-instrumented/complete-with-telemetry! (:telemetry system)
+                                                               (:llm-provider system)
+                                                               messages
+                                                               {}
+                                                               {:agent-id (or session-id "chat")
+                                                                :session-id session-id
+                                                                :observer (:observer system)
+                                                                :trace (:trace system)
+                                                                :request-id request-id
+                                                                :model model}))]
       {:content content
        :fallback? true})
     (catch Exception fallback-error

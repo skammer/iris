@@ -2,8 +2,8 @@
   "Rewritten in-memory orchestrator/subagent runtime."
   (:require
    [agent.defaults :as defaults]
+   [agent.llm.instrumented :as llm-instrumented]
    [agent.mcp.core :as mcp]
-   [agent.telemetry :as telemetry]
    [agent.util :as util]
    [clojure.core.async :as async]
    [clojure.string :as str])
@@ -454,13 +454,13 @@
         agent-before (ensure-agent! orchestrator agent-id)
         agent-after-input (update agent-before :messages conj input-message)
         llm-messages (build-llm-messages agent-after-input)
-        completion (telemetry/complete-with-telemetry! (:telemetry orchestrator)
-                                                       llm-provider
-                                                       llm-messages
-                                                       {}
-                                                       {:agent-id agent-id
-                                                        :observer (:observer orchestrator)
-                                                        :trace (:trace orchestrator)})
+        completion (llm-instrumented/complete-with-telemetry! (:telemetry orchestrator)
+                                                              llm-provider
+                                                              llm-messages
+                                                              {}
+                                                              {:agent-id agent-id
+                                                               :observer (:observer orchestrator)
+                                                               :trace (:trace orchestrator)})
         assistant-message {:role "assistant"
                            :content completion
                            :created-at (now)}]
@@ -1021,13 +1021,13 @@
        :response nil}
       (let [agent-after-input (update agent :messages into drained)
             llm-messages (build-llm-messages agent-after-input)
-            completion (telemetry/complete-with-telemetry! (:telemetry orchestrator)
-                                                           llm-provider
-                                                           llm-messages
-                                                           {}
-                                                           {:agent-id agent-id
-                                                            :observer (:observer orchestrator)
-                                                            :trace (:trace orchestrator)})
+            completion (llm-instrumented/complete-with-telemetry! (:telemetry orchestrator)
+                                                                  llm-provider
+                                                                  llm-messages
+                                                                  {}
+                                                                  {:agent-id agent-id
+                                                                   :observer (:observer orchestrator)
+                                                                   :trace (:trace orchestrator)})
             assistant-message {:role "assistant"
                                :content completion
                                :created-at (now)}]

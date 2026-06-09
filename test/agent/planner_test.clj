@@ -3,7 +3,7 @@
    [agent.llm.core :as llm]
    [agent.planner :as planner]
    [agent.prompts :as prompts]
-   [agent.telemetry :as telemetry]
+   [agent.telemetry.observer :as telemetry-observer]
    [clojure.string :as str]
    [clojure.test :refer :all]))
 
@@ -95,7 +95,7 @@
 
 (deftest planner-llm-call-event-includes-cached-tokens-test
   (let [events (atom [])
-        observer (reify telemetry/IObserver
+        observer (reify telemetry-observer/IObserver
                    (record-event! [_ event] (swap! events conj event))
                    (record-metric! [_ _metric] nil)
                    (flush! [_] nil)

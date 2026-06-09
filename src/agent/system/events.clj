@@ -6,7 +6,8 @@
    [agent.logging :as logging]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.trace :as runtime-trace]
-   [agent.telemetry :as telemetry]))
+   [agent.telemetry :as telemetry]
+   [agent.telemetry.observer :as telemetry-observer]))
 
 (defn- replay-broker-messages
   [store pattern {:keys [limit after-id since-sequence request-id]
@@ -76,8 +77,8 @@
 (defn- observe-system-event!
   [telemetry-collector observer recorded]
   (if observer
-    (telemetry/record-event! observer {:event-type :system/event
-                                       :payload recorded})
+    (telemetry-observer/record-event! observer {:event-type :system/event
+                                                :payload recorded})
     (do
       (logging/log-system-event! recorded)
       (telemetry/record-system-event! telemetry-collector recorded))))

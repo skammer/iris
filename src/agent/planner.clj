@@ -6,6 +6,7 @@
    [agent.prompts :as prompts]
    [agent.runtime.trace :as runtime-trace]
    [agent.telemetry :as telemetry]
+   [agent.telemetry.observer :as telemetry-observer]
    [agent.util :as util]))
 
 (defn planner-system-prompt []
@@ -65,16 +66,16 @@
                                     :success? true
                                     :directive-count (count (:directives step))})
         (when observer
-          (telemetry/record-event! observer
-                                   {:event-type :llm/call
-                                    :payload {:agent-id agent-id
-                                              :model model
-                                              :duration-ms duration
-                                              :success? true
-                                              :tokens (get-in response [:usage :tokens])
-                                              :prompt-tokens (get-in response [:usage :prompt-tokens])
-                                              :completion-tokens (get-in response [:usage :completion-tokens])
-                                              :cached-tokens (get-in response [:usage :cached-tokens])}}))
+          (telemetry-observer/record-event! observer
+                                            {:event-type :llm/call
+                                             :payload {:agent-id agent-id
+                                                       :model model
+                                                       :duration-ms duration
+                                                       :success? true
+                                                       :tokens (get-in response [:usage :tokens])
+                                                       :prompt-tokens (get-in response [:usage :prompt-tokens])
+                                                       :completion-tokens (get-in response [:usage :completion-tokens])
+                                                       :cached-tokens (get-in response [:usage :cached-tokens])}}))
         (runtime-trace/record-event! trace
                                      {:event-type :llm.call
                                       :turn-id request-id
@@ -94,13 +95,13 @@
                                       :success? false
                                       :error e})
           (when observer
-            (telemetry/record-event! observer
-                                     {:event-type :llm/call
-                                      :payload {:agent-id agent-id
-                                                :model model
-                                                :duration-ms duration
-                                                :success? false
-                                                :error e}}))
+            (telemetry-observer/record-event! observer
+                                              {:event-type :llm/call
+                                               :payload {:agent-id agent-id
+                                                         :model model
+                                                         :duration-ms duration
+                                                         :success? false
+                                                         :error e}}))
           (runtime-trace/record-event! trace
                                        {:event-type :llm.call
                                         :turn-id request-id
