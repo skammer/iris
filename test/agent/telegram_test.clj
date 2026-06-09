@@ -1,7 +1,10 @@
 (ns agent.telegram-test
   (:require
+   [agent.broker.core :as broker]
    [agent.channels.core :as channels]
+   [agent.chat :as chat]
    [agent.persistence.sqlite :as sqlite]
+   [agent.system.events :as system-events]
    [agent.telegram :as telegram]
    [agent.telegram.api :as telegram-api]
    [agent.telegram.approvals :as telegram-approvals]
@@ -14,6 +17,27 @@
 
 (defn temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-telegram-" ".db")))
+
+(defn chat-stub
+  "`chat/run!` replacement for the broker-events chat runner. Calls
+   `(handler opts emit!)` where `emit!` publishes a session event (event-type +
+   payload) on the system :event-bus, then emits the terminal agent-end event
+   the runner waits for and returns the handler's result map. When the handler
+   throws, no agent-end is emitted — the runner must treat the error itself as
+   terminal."
+  [handler]
+  (fn [system {:keys [session-id] :as opts}]
+    (let [bus (or (:event-bus system) (:broker system))
+          emit! (fn [event-type payload]
+                  (doseq [message (broker/event->messages
+                                   {:event-type (name event-type)
+                                    :entity-type "session"
+                                    :entity-id session-id
+                                    :payload payload})]
+                    (broker/publish! bus message)))
+          result (handler opts emit!)]
+      (emit! :agent-end {:stop-reason (or (:stop-reason result) :completed)})
+      result)))
 
 (defn update-for
   [update-id chat-id user-id text]
@@ -75,6 +99,7 @@
         sent (atom [])
         calls (atom [])
         system {:store store
+                :event-bus (system-events/create-event-bus)
                 :event-sink #(swap! events conj %)}
         config {:bot-token "token"
                 :allowlist {:allow-all? true
@@ -83,17 +108,21 @@
         opts {:send-message-fn (fn [chat-id text]
                                  (swap! sent conj {:chat-id chat-id
                                                    :text text}))
-              :chat-fn (fn [_ {:keys [session-id messages]}]
-                             (swap! calls conj {:session-id session-id
-                                                :messages messages})
-                             {:content "pong"})}]
+              :send-message-draft-fn (fn [& _] nil)
+              :send-chat-action-fn (fn [& _] nil)}]
     (try
-      (is (= :processed
-             (telegram/process-update! system config opts (update-for 1 100 7 "hi"))))
-      (is (= :processed
-             (telegram/process-update! system config opts (update-for 2 100 7 "again"))))
-      (is (= :processed
-             (telegram/process-update! system config opts (update-for 3 200 8 "other"))))
+      (with-redefs [chat/run! (chat-stub
+                               (fn [{:keys [session-id messages]} emit!]
+                                 (swap! calls conj {:session-id session-id
+                                                    :messages messages})
+                                 (emit! :message-end {:content "pong" :final? true})
+                                 {:content "pong"}))]
+        (is (= :processed
+               (telegram/process-update! system config opts (update-for 1 100 7 "hi"))))
+        (is (= :processed
+               (telegram/process-update! system config opts (update-for 2 100 7 "again"))))
+        (is (= :processed
+               (telegram/process-update! system config opts (update-for 3 200 8 "other")))))
       (is (= [100 100 200] (mapv :chat-id @sent)))
       (is (= ["pong" "pong" "pong"] (mapv :text @sent)))
       (is (= 3 (count @calls)))
@@ -171,19 +200,22 @@
         prompts (atom [])
         system {:store store
                 :skills-registry {:dirs [(.getAbsolutePath root)]}
+                :event-bus (system-events/create-event-bus)
                 :event-sink (fn [_] nil)}
         config {:bot-token "token"
                 :allowlist {:allow-all? true}}
         opts {:send-message-fn (fn [chat-id text]
                                  (swap! sent conj {:chat-id chat-id :text text}))
               :send-chat-action-fn (fn [& _] nil)
-              :send-message-draft-fn (fn [& _] nil)
-              :chat-fn (fn [_ opts]
-                         (swap! prompts conj (get-in opts [:messages 0 :content]))
-                         {:content "ok"})}]
+              :send-message-draft-fn (fn [& _] nil)}]
     (try
-      (telegram/process-update! system config opts (update-for 1 100 7 "/skills rev"))
-      (telegram/process-update! system config opts (update-for 2 100 7 "/review this"))
+      (with-redefs [chat/run! (chat-stub
+                               (fn [chat-opts emit!]
+                                 (swap! prompts conj (get-in chat-opts [:messages 0 :content]))
+                                 (emit! :message-end {:content "ok" :final? true})
+                                 {:content "ok"}))]
+        (telegram/process-update! system config opts (update-for 1 100 7 "/skills rev"))
+        (telegram/process-update! system config opts (update-for 2 100 7 "/review this")))
       (is (str/includes? (:text (first @sent)) "/review - Review code"))
       (is (= "Skills: /review" (:text (second @sent))))
       (is (= "/review this" (first @prompts)))
@@ -319,6 +351,7 @@
         system {:store store
                 :tool-registry registry
                 :config {:tools {:yolo? false}}
+                :event-bus (system-events/create-event-bus)
                 :event-sink (fn [_] nil)}
         config {:bot-token "token"
                 :allowlist {:allow-all? true}}
@@ -331,15 +364,18 @@
                                                                  :message-id message-id
                                                                  :reply-markup reply-markup}))
               :send-chat-action-fn (fn [_ _] nil)
-              :chat-fn (fn [_ {:keys [session-id messages context]}]
-                         (reset! continuation-session-id session-id)
-                         (reset! continuation-messages messages)
-                         (reset! continuation-context context)
-                         {:content "agent continued"})}]
+              :send-message-draft-fn (fn [& _] nil)}]
     (try
-      (is (= :processed
-             (telegram/process-update! system config opts
-                                       (callback-update-for 1 100 7 55 (str "ta:run:" (:id approval))))))
+      (with-redefs [chat/run! (chat-stub
+                               (fn [{:keys [session-id messages context]} emit!]
+                                 (reset! continuation-session-id session-id)
+                                 (reset! continuation-messages messages)
+                                 (reset! continuation-context context)
+                                 (emit! :message-end {:content "agent continued" :final? true})
+                                 {:content "agent continued"}))]
+        (is (= :processed
+               (telegram/process-update! system config opts
+                                         (callback-update-for 1 100 7 55 (str "ta:run:" (:id approval)))))))
       (is (= "approved" (:status (tool-approvals/get-request store (:id approval)))))
       (is (= [{:callback-id "callback-1" :body {:text "Running."}}] @answers))
       (is (= [{:chat-id 100 :message-id 55 :reply-markup nil}] @edits))
@@ -383,6 +419,7 @@
         system {:store store
                 :tool-registry registry
                 :config {:tools {:yolo? false}}
+                :event-bus (system-events/create-event-bus)
                 :event-sink (fn [_] nil)}
         config {:bot-token "token"
                 :allowlist {:allow-all? true}}
@@ -399,16 +436,24 @@
                                               (swap! edits conj {:chat-id chat-id
                                                                  :message-id message-id
                                                                  :reply-markup reply-markup}))
-              :send-chat-action-fn (fn [_ _] nil)
-              :chat-fn (fn [_ {:keys [session-id]}]
-                         {:content (str "Tool approval required: shell approval_id=" (:id nested-approval))
-                          :session-id session-id
-                          :stop-reason :approval-required
-                          :approvals [nested-approval]})}]
+              :send-chat-action-fn (fn [_ _] nil)}]
     (try
-      (is (= :processed
-             (telegram/process-update! system config opts
-                                       (callback-update-for 1 100 7 55 (str "ta:run:" (:id first-approval))))))
+      (with-redefs [chat/run! (chat-stub
+                               (fn [{:keys [session-id]} emit!]
+                                 (let [content (str "Tool approval required: shell approval_id="
+                                                    (:id nested-approval))]
+                                   (emit! :tool-execution-update {:kind :approval-required
+                                                                  :approvals [nested-approval]})
+                                   (emit! :message-end {:content content
+                                                        :final? true
+                                                        :stop-reason :approval-required})
+                                   {:content content
+                                    :session-id session-id
+                                    :stop-reason :approval-required
+                                    :approvals [nested-approval]})))]
+        (is (= :processed
+               (telegram/process-update! system config opts
+                                         (callback-update-for 1 100 7 55 (str "ta:run:" (:id first-approval)))))))
       (is (= [{:chat-id 100 :text "shell status: ok"}] @sent))
       (is (= 1 (count @html-sent)))
       (is (str/includes? (:text (first @html-sent)) "Tool approval required"))
@@ -480,6 +525,7 @@
                                                        :poll-timeout-seconds 0
                                                        :poll-limit 1
                                                        :allowlist {:allow-all? true}}}}
+                :event-bus (system-events/create-event-bus)
                 :event-sink #(swap! events conj %)}
         service (telegram/create-service
                  system
@@ -490,15 +536,20 @@
                                       (= 42 offset) [follow-up]
                                       :else []))
                   :send-message-fn (fn [_ _] nil)
-                  :async-chat? false
-                  :chat-fn (fn [_ _]
-                             (if (= 1 (swap! attempts inc))
-                               (throw (ex-info "boom" {}))
-                               {:content "ok"}))})]
+                  :send-message-draft-fn (fn [& _] nil)
+                  :send-chat-action-fn (fn [& _] nil)
+                  :async-chat? false})]
     (try
-      (telegram/start! service)
-      (Thread/sleep 2500)
-      (telegram/stop! service 1000)
+      (with-redefs [chat/run! (chat-stub
+                               (fn [_ emit!]
+                                 (if (= 1 (swap! attempts inc))
+                                   (throw (ex-info "boom" {}))
+                                   (do
+                                     (emit! :message-end {:content "ok" :final? true})
+                                     {:content "ok"}))))]
+        (telegram/start! service)
+        (Thread/sleep 2500)
+        (telegram/stop! service 1000))
       (is (= [nil 42 43] (take 3 @polls)))
       (is (= 2 @attempts))
       (is (= 43 (:next_offset (sqlite/get-channel-offset store :telegram))))
@@ -517,6 +568,7 @@
         drafts (atom [])
         deltas ["hello" " " "world" "!"]
         system {:store store
+                :event-bus (system-events/create-event-bus)
                 :event-sink #(swap! events conj %)}
         config {:bot-token "token"
                 :allowlist {:allow-all? true}}
@@ -526,16 +578,19 @@
                                        (swap! drafts conj {:chat-id chat-id
                                                            :draft-id draft-id
                                                            :text text}))
-              :chat-fn (fn [_ {:keys [session-id on-delta]}]
-                                (doseq [d deltas]
-                                  (Thread/sleep 700) ;; force flush throttle
-                                  (on-delta d))
-                                {:content (apply str deltas)
-                                 :session-id session-id
-                                 :stream? true})}]
+              :send-chat-action-fn (fn [& _] nil)}]
     (try
-      (is (= :processed
-             (telegram/process-update! system config opts (update-for 1 100 7 "hi"))))
+      (with-redefs [chat/run! (chat-stub
+                               (fn [{:keys [session-id]} emit!]
+                                 (doseq [d deltas]
+                                   (Thread/sleep 700) ;; force flush throttle
+                                   (emit! :message-update {:delta d}))
+                                 (emit! :message-end {:content (apply str deltas)
+                                                      :final? true})
+                                 {:content (apply str deltas)
+                                  :session-id session-id}))]
+        (is (= :processed
+               (telegram/process-update! system config opts (update-for 1 100 7 "hi")))))
       (is (= [{:chat-id 100 :text "hello world!"}] @sent))
       (is (pos? (count @drafts)))
       (is (every? #(= 100 (:chat-id %)) @drafts))
@@ -552,6 +607,7 @@
         sent (atom [])
         html-sent (atom [])
         system {:store store
+                :event-bus (system-events/create-event-bus)
                 :event-sink (fn [_] nil)}
         config {:bot-token "token"
                 :allowlist {:allow-all? true}}
@@ -560,15 +616,17 @@
               :send-message-draft-fn (fn [_ _ _] nil)
               :send-html-message-fn (fn [chat-id text]
                                       (swap! html-sent conj {:chat-id chat-id :text text}))
-              :chat-fn (fn [_ {:keys [session-id on-delta on-thinking-delta]}]
-                         (on-thinking-delta "think <x>")
-                         (on-delta "answer")
-                         {:content "answer"
-                          :session-id session-id
-                          :stream? true})}]
+              :send-chat-action-fn (fn [& _] nil)}]
     (try
-      (is (= :processed
-             (telegram/process-update! system config opts (update-for 1 100 7 "hi"))))
+      (with-redefs [chat/run! (chat-stub
+                               (fn [{:keys [session-id]} emit!]
+                                 (emit! :message-update {:thinking-delta "think <x>"})
+                                 (emit! :message-update {:delta "answer"})
+                                 (emit! :message-end {:content "answer" :final? true})
+                                 {:content "answer"
+                                  :session-id session-id}))]
+        (is (= :processed
+               (telegram/process-update! system config opts (update-for 1 100 7 "hi")))))
       (is (= [{:chat-id 100 :text "answer"}] @sent))
       (is (= [{:chat-id 100
                :text "<blockquote expandable>thinking\n\nthink &lt;x&gt;</blockquote>"}]
@@ -583,6 +641,7 @@
         events (atom [])
         sent (atom [])
         system {:store store
+                :event-bus (system-events/create-event-bus)
                 :event-sink #(swap! events conj %)}
         config {:bot-token "token"
                 :allowlist {:allow-all? true}}
@@ -590,12 +649,15 @@
                                  (swap! sent conj {:chat-id chat-id :text text}))
               :send-message-draft-fn (fn [_ _ _]
                                        (throw (ex-info "draft failed" {:type :draft-down})))
-              :chat-fn (fn [_ {:keys [on-delta]}]
-                         (on-delta "hello")
-                         {:content "hello"})}]
+              :send-chat-action-fn (fn [& _] nil)}]
     (try
-      (is (= :processed
-             (telegram/process-update! system config opts (update-for 1 100 7 "hi"))))
+      (with-redefs [chat/run! (chat-stub
+                               (fn [_ emit!]
+                                 (emit! :message-update {:delta "hello"})
+                                 (emit! :message-end {:content "hello" :final? true})
+                                 {:content "hello"}))]
+        (is (= :processed
+               (telegram/process-update! system config opts (update-for 1 100 7 "hi")))))
       (is (= [{:chat-id 100 :text "hello"}] @sent))
       (let [failure (first (filter #(= :telegram.operation.failed (:event-type %)) @events))]
         (is (= :draft-update (get-in failure [:payload :operation])))
@@ -610,6 +672,7 @@
         store (sqlite/create-store {:path path :evict-on-close? true})
         typing-failure (promise)
         system {:store store
+                :event-bus (system-events/create-event-bus)
                 :event-sink (fn [event]
                               (when (= :telegram.operation.failed (:event-type event))
                                 (deliver typing-failure event)))}
@@ -617,13 +680,14 @@
                 :allowlist {:allow-all? true}}
         opts {:send-message-fn (fn [_ _] nil)
               :send-chat-action-fn (fn [_ _]
-                                     (throw (ex-info "typing failed" {:type :typing-down})))
-              :chat-fn (fn [_ _]
-                         (is (some? (deref typing-failure 1000 nil)))
-                         {:content "pong"})}]
+                                     (throw (ex-info "typing failed" {:type :typing-down})))}]
     (try
-      (is (= :processed
-             (telegram/process-update! system config opts (update-for 1 100 7 "hi"))))
+      (with-redefs [chat/run! (chat-stub
+                               (fn [_ _emit!]
+                                 (is (some? (deref typing-failure 1000 nil)))
+                                 {:content "pong"}))]
+        (is (= :processed
+               (telegram/process-update! system config opts (update-for 1 100 7 "hi")))))
       (let [failure (deref typing-failure 1000 nil)]
         (is (= :typing (get-in failure [:payload :operation])))
         (is (= "typing failed" (get-in failure [:payload :message])))
@@ -642,6 +706,7 @@
         sent (atom [])
         drafts (atom [])
         system {:store store
+                :event-bus (system-events/create-event-bus)
                 :event-sink (fn [_] nil)
                 :config {:tools {:display {:telegram {:show-tool-calls? true
                                                       :preview-chars 1600
@@ -657,24 +722,28 @@
                                        (swap! drafts conj {:chat-id chat-id
                                                            :draft-id draft-id
                                                            :text text}))
-              :chat-fn (fn [_ {:keys [session-id on-delta on-tool-call]}]
-                         (doseq [d step1-deltas]
-                           (Thread/sleep 700)
-                           (on-delta d))
-                         (on-tool-call {:tool-call {:id "c1" :function {:name "list_dir"}}
-                                        :receipt {:status :completed
-                                                  :tool-name "list_dir"
-                                                  :input {:path "./obsidian"}
-                                                  :result {:files ["a.md"]}}})
-                         (doseq [d step2-deltas]
-                           (Thread/sleep 700)
-                           (on-delta d))
-                         {:content (apply str step2-deltas)
-                          :session-id session-id
-                          :stream? true})}]
+              :send-chat-action-fn (fn [& _] nil)}]
     (try
-      (is (= :processed
-             (telegram/process-update! system config opts (update-for 1 100 7 "hi"))))
+      (with-redefs [chat/run! (chat-stub
+                               (fn [{:keys [session-id]} emit!]
+                                 (doseq [d step1-deltas]
+                                   (Thread/sleep 700)
+                                   (emit! :message-update {:delta d}))
+                                 (emit! :tool-execution-end
+                                        {:tool-call {:id "c1" :function {:name "list_dir"}}
+                                         :receipt {:status :completed
+                                                   :tool-name "list_dir"
+                                                   :input {:path "./obsidian"}
+                                                   :result {:files ["a.md"]}}})
+                                 (doseq [d step2-deltas]
+                                   (Thread/sleep 700)
+                                   (emit! :message-update {:delta d}))
+                                 (emit! :message-end {:content (apply str step2-deltas)
+                                                      :final? true})
+                                 {:content (apply str step2-deltas)
+                                  :session-id session-id}))]
+        (is (= :processed
+               (telegram/process-update! system config opts (update-for 1 100 7 "hi")))))
       (let [texts (mapv :text @sent)]
         (is (some #(= "cherry paragraph" %) texts)
             "streamed pre-tool-call text must be promoted to a real message")
@@ -697,6 +766,7 @@
         actions (atom [])
         typing-seen (promise)
         system {:store store
+                :event-bus (system-events/create-event-bus)
                 :event-sink (fn [_] nil)}
         config {:bot-token "token"
                 :allowlist {:allow-all? true}}
@@ -704,13 +774,14 @@
               :send-chat-action-fn (fn [chat-id action]
                                      (swap! actions conj {:chat-id chat-id
                                                           :action action})
-                                     (deliver typing-seen true))
-              :chat-fn (fn [_ _]
-                         (is (true? (deref typing-seen 1000 false)))
-                         {:content "pong"})}]
+                                     (deliver typing-seen true))}]
     (try
-      (is (= :processed
-             (telegram/process-update! system config opts (update-for 1 100 7 "hi"))))
+      (with-redefs [chat/run! (chat-stub
+                               (fn [_ _emit!]
+                                 (is (true? (deref typing-seen 1000 false)))
+                                 {:content "pong"}))]
+        (is (= :processed
+               (telegram/process-update! system config opts (update-for 1 100 7 "hi")))))
       (is (some #(= {:chat-id 100 :action "typing"} %) @actions))
       (finally
         (sqlite/close-store! store)
@@ -778,12 +849,15 @@
         sent (atom [])
         calls (atom [])
         system {:store store
+                :event-bus (system-events/create-event-bus)
                 :event-sink (fn [_] nil)}
         config {:bot-token "token"
                 :allowlist {:allow-all? true}
                 :max-download-bytes 1024}
         opts {:send-message-fn (fn [chat-id text]
                                  (swap! sent conj {:chat-id chat-id :text text}))
+              :send-message-draft-fn (fn [& _] nil)
+              :send-chat-action-fn (fn [& _] nil)
               :get-file-fn (fn [token file-id]
                              (swap! calls conj {:op :get-file
                                                 :token token
@@ -794,15 +868,17 @@
                                   (swap! calls conj {:op :download
                                                      :token token
                                                      :file-path file-path})
-                                  (.getBytes "image-bytes" "UTF-8"))
-              :chat-fn (fn [_ {:keys [messages]}]
-                         (swap! calls conj {:op :chat
-                                            :messages messages})
-                         {:content "ok"})}]
+                                  (.getBytes "image-bytes" "UTF-8"))}]
     (try
-      (is (= :processed
-             (telegram/process-update! system config opts
-                                       (photo-update-for 1 100 7 "what is this?"))))
+      (with-redefs [chat/run! (chat-stub
+                               (fn [{:keys [messages]} emit!]
+                                 (swap! calls conj {:op :chat
+                                                    :messages messages})
+                                 (emit! :message-end {:content "ok" :final? true})
+                                 {:content "ok"}))]
+        (is (= :processed
+               (telegram/process-update! system config opts
+                                         (photo-update-for 1 100 7 "what is this?")))))
       (let [content (->> @calls (filter #(= :chat (:op %))) first :messages first :content)]
         (is (= [{:type :text :text "what is this?"}
                 {:type :image
@@ -825,21 +901,25 @@
         store (sqlite/create-store {:path path :evict-on-close? true})
         seen (atom nil)
         system {:store store
+                :event-bus (system-events/create-event-bus)
                 :event-sink (fn [_] nil)}
         config {:bot-token "token"
                 :allowlist {:allow-all? true}
                 :max-download-bytes 1024}
         opts {:send-message-fn (fn [_ _] nil)
+              :send-message-draft-fn (fn [& _] nil)
+              :send-chat-action-fn (fn [& _] nil)
               :get-file-fn (fn [_ _] {:file_path "voice/file.ogg"
                                       :file_size 12})
-              :download-file-fn (fn [_ _] (.getBytes "ogg" "UTF-8"))
-              :chat-fn (fn [_ {:keys [messages]}]
-                         (reset! seen (-> messages first :content))
-                         {:content "ok"})}]
+              :download-file-fn (fn [_ _] (.getBytes "ogg" "UTF-8"))}]
     (try
-      (is (= :processed
-             (telegram/process-update! system config opts
-                                       (voice-update-for 2 100 7))))
+      (with-redefs [chat/run! (chat-stub
+                               (fn [{:keys [messages]} _emit!]
+                                 (reset! seen (-> messages first :content))
+                                 {:content "ok"}))]
+        (is (= :processed
+               (telegram/process-update! system config opts
+                                         (voice-update-for 2 100 7)))))
       (is (= [{:type :text :text "Analyze attached audio."}
               {:type :audio
                :source {:type :base64

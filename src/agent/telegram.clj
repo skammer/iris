@@ -74,44 +74,6 @@
     (chat-history/session-messages system session-id)
     []))
 
-(defn- run-approved-continuation!
-  [system config opts chat chat-id session-id tool-name input result]
-  (let [token (:bot-token config)
-        send! (or (:send-message-fn opts)
-                  (fn [cid text] (tg-api/send-message! token cid text)))
-        stop-typing! (tg-streaming/start-typing-indicator! safe-telegram! system config opts chat-id)
-        stream-controls (tg-streaming/build-controls safe-telegram! system config opts chat chat-id)
-        on-tool-call (tg-streaming/build-on-tool-call safe-telegram! system opts chat-id stream-controls)
-        messages (conj (vec (session-history system session-id))
-	                       {:role "user"
-	                        :content (tg-approvals/result-context-text tool-name input result)})
-        chat-run! (or (:chat-fn opts) chat/run!)]
-    (try
-      (let [response (chat-run! system
-                                (cond-> {:session-id session-id
-                                          :messages messages
-                                          :context {:telegram-chat-id chat-id}
-                                          :stream? true}
-                                  (:on-delta stream-controls)
-                                  (assoc :on-delta (:on-delta stream-controls))
-                                  (:on-thinking-delta stream-controls)
-                                  (assoc :on-thinking-delta (:on-thinking-delta stream-controls))
-                                  on-tool-call
-                                  (assoc :on-tool-call on-tool-call)))
-            final (or (:content response) "")
-            approvals (seq (:approvals response))]
-        (when-let [finalize-thinking! (:finalize-thinking! stream-controls)]
-          (finalize-thinking!))
-        (if (and (= :approval-required (keyword (:stop-reason response)))
-                 approvals)
-	          (doseq [approval approvals]
-	            (tg-approvals/send-card! safe-telegram! system config opts chat-id approval))
-          (when-not (str/blank? final)
-            (send! chat-id final)))
-        response)
-      (finally
-        (stop-typing!)))))
-
 (defn- session-event? [event session-id event-type]
   (and (= "session" (:entity-type event))
        (= session-id (:entity-id event))
@@ -122,19 +84,8 @@
        (= session-id (:entity-id event))
        (= "agent-end" (:event-type event))))
 
-(defn- run-chat-callbacks!
-  [system opts chat-id session-id user-text stream-controls on-tool-call]
-  ((or (:chat-fn opts) chat/run!)
-   system
-   (cond-> {:session-id session-id
-            :messages [{:role "user" :content user-text}]
-            :context {:telegram-chat-id chat-id}}
-     (:on-delta stream-controls) (assoc :on-delta (:on-delta stream-controls))
-     (:on-thinking-delta stream-controls) (assoc :on-thinking-delta (:on-thinking-delta stream-controls))
-     on-tool-call (assoc :on-tool-call on-tool-call))))
-
 (defn- run-chat-events!
-  [system config opts chat-id session-id user-text stream-controls on-tool-call]
+  [system config opts chat-id session-id messages stream-controls on-tool-call]
   (let [broker-instance (or (:event-bus system) (:broker system))
         subscription (broker/subscribe! broker-instance (broker/all-events-subject)
                                          {:buffer-strategy :sliding
@@ -151,7 +102,7 @@
           (async/>!! result-ch
                      {:result (chat/run! system
                                          {:session-id session-id
-                                          :messages [{:role "user" :content user-text}]
+                                          :messages messages
                                           :context {:telegram-chat-id chat-id}
                                           :stream? true})})
           (catch Throwable t
@@ -225,30 +176,36 @@
       (finally
         (broker/unsubscribe! broker-instance subscription)))))
 
-(defn- run-chat!
-  [system config opts chat chat-id session-id user-text]
+(defn- run-turn!
+  "Shared chat-turn runner: typing indicator, draft streaming controls,
+   tool-call summaries, approval cards, and final reply delivery."
+  [system config opts chat chat-id session-id messages]
   (let [token (:bot-token config)
         send! (or (:send-message-fn opts)
                   (fn [cid text] (tg-api/send-message! token cid text)))
         stop-typing! (tg-streaming/start-typing-indicator! safe-telegram! system config opts chat-id)
         stream-controls (tg-streaming/build-controls safe-telegram! system config opts chat chat-id)
         on-tool-call (tg-streaming/build-on-tool-call safe-telegram! system opts chat-id stream-controls)
-        callback-path? (or (:chat-fn opts)
-                           (nil? (or (:event-bus system) (:broker system))))
         result (try
-                 (if callback-path?
-                   (run-chat-callbacks! system opts chat-id session-id user-text stream-controls on-tool-call)
-                   (run-chat-events! system config opts chat-id session-id user-text stream-controls on-tool-call))
+                 (run-chat-events! system config opts chat-id session-id messages stream-controls on-tool-call)
                  (finally
                    (stop-typing!)))
         final (or (:content result) "")]
-    (when (or callback-path?
-              (nil? (:finalize! stream-controls)))
-      (when callback-path?
-        (when-let [finalize-thinking! (:finalize-thinking! stream-controls)]
-          (finalize-thinking!)))
+    (when (nil? (:finalize! stream-controls))
       (send! chat-id (if (str/blank? final) "(no response)" final)))
     final))
+
+(defn- run-chat!
+  [system config opts chat chat-id session-id user-content]
+  (run-turn! system config opts chat chat-id session-id
+             [{:role "user" :content user-content}]))
+
+(defn- run-approved-continuation!
+  [system config opts chat chat-id session-id tool-name input result]
+  (run-turn! system config opts chat chat-id session-id
+             (conj (vec (session-history system session-id))
+                   {:role "user"
+                    :content (tg-approvals/result-context-text tool-name input result)})))
 
 (defn- run-chat-async!
   [system config opts chat chat-id session-id user-text]
