@@ -43,6 +43,71 @@
     (.delete skill-dir)
     (.delete root)))
 
+(defn- spit-skill [root dir-name description]
+  (let [skill-dir (io/file root dir-name)]
+    (.mkdirs skill-dir)
+    (spit (io/file skill-dir "SKILL.md")
+          (str "---\nname: " dir-name "\ndescription: " description "\n---\n# " dir-name "\n"))
+    skill-dir))
+
+(defn- delete-skill-dir [skill-dir]
+  (io/delete-file (io/file skill-dir "SKILL.md") true)
+  (.delete skill-dir))
+
+(deftest cache-picks-up-new-skill-dir-test
+  (let [root (temp-dir)
+        alpha (spit-skill root "alpha" "Alpha work")
+        registry (skills/create-registry {:dirs [(.getAbsolutePath root)]})]
+    (is (= ["alpha"] (mapv :name (skills/skill-catalog registry))))
+    (let [beta (spit-skill root "beta" "Beta work")]
+      (is (= ["alpha" "beta"] (mapv :name (skills/skill-catalog registry))))
+      (delete-skill-dir beta))
+    (delete-skill-dir alpha)
+    (.delete root)))
+
+(deftest cache-picks-up-edited-skill-test
+  (let [root (temp-dir)
+        skill-dir (spit-skill root "alpha" "Old description")
+        skill-file (io/file skill-dir "SKILL.md")
+        registry (skills/create-registry {:dirs [(.getAbsolutePath root)]})]
+    (is (= "Old description" (:description (first (skills/skill-catalog registry)))))
+    (let [stamp (.lastModified skill-file)]
+      (spit-skill root "alpha" "New description")
+      ;; Set lastModified explicitly so the stamp differs even when the
+      ;; rewrite lands within filesystem mtime granularity.
+      (is (.setLastModified skill-file (+ stamp 5000))))
+    (is (= "New description" (:description (first (skills/skill-catalog registry)))))
+    (delete-skill-dir skill-dir)
+    (.delete root)))
+
+(deftest cache-picks-up-deleted-skill-dir-test
+  (let [root (temp-dir)
+        alpha (spit-skill root "alpha" "Alpha work")
+        beta (spit-skill root "beta" "Beta work")
+        registry (skills/create-registry {:dirs [(.getAbsolutePath root)]})]
+    (is (= ["alpha" "beta"] (mapv :name (skills/skill-catalog registry))))
+    (delete-skill-dir beta)
+    (is (= ["alpha"] (mapv :name (skills/skill-catalog registry))))
+    (delete-skill-dir alpha)
+    (.delete root)))
+
+(deftest cache-skips-rescan-when-unchanged-test
+  (let [root (temp-dir)
+        skill-dir (spit-skill root "cached" "Cached skill")
+        registry (skills/create-registry {:dirs [(.getAbsolutePath root)]})
+        scans (atom 0)
+        original-load skills/load-skills-from-dir]
+    (with-redefs [skills/load-skills-from-dir
+                  (fn [dir source]
+                    (swap! scans inc)
+                    (original-load dir source))]
+      (is (= ["cached"] (mapv :name (skills/skill-catalog registry))))
+      (is (= 1 @scans))
+      (is (= ["cached"] (mapv :name (skills/skill-catalog registry))))
+      (is (= 1 @scans) "unchanged dir must be served from cache without re-parsing"))
+    (delete-skill-dir skill-dir)
+    (.delete root)))
+
 (deftest slash-command-catalog-filters-and-pages-test
   (let [root (temp-dir)]
     (doseq [[dir desc] [["alpha" "Alpha work"] ["beta" "Beta work"]]]

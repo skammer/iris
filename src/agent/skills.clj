@@ -84,17 +84,52 @@
          vec)
     []))
 
+(defn- dir-fingerprint
+  "Cheap staleness stamp for one skills dir: the set of [SKILL.md path,
+  lastModified] pairs found by a shallow listing. Covers existence (new or
+  deleted skill dirs change the set) and edits (mtime changes); never reads
+  file contents."
+  [dir]
+  (if-let [root (existing-dir dir)]
+    (->> (.listFiles root)
+         (filter #(.isDirectory %))
+         (keep (fn [skill-dir]
+                 (let [skill-file (io/file skill-dir "SKILL.md")]
+                   (when (.isFile skill-file)
+                     [(.getAbsolutePath skill-file) (.lastModified skill-file)]))))
+         set)
+    #{}))
+
+(defn- registry-fingerprint [registry]
+  (mapv dir-fingerprint (:dirs registry)))
+
 (defn create-registry
   [{:keys [dirs]
     :or {dirs ["skills"]}}]
-  {:dirs (vec dirs)})
+  {:dirs (vec dirs)
+   ;; Registry-scoped scan cache: {:fingerprint <registry-fingerprint>
+   ;;                              :skills <list-skills result>}.
+   :cache (atom nil)})
 
-(defn list-skills
-  [registry]
+(defn- scan-skills [registry]
   (->> (:dirs registry)
        (mapcat #(load-skills-from-dir % :filesystem))
        (sort-by :name)
        vec))
+
+(defn list-skills
+  [registry]
+  (if-let [cache (:cache registry)]
+    (let [fingerprint (registry-fingerprint registry)
+          cached @cache]
+      (if (and cached (= fingerprint (:fingerprint cached)))
+        (:skills cached)
+        (let [skills (scan-skills registry)]
+          ;; Concurrent rescans may race; the single atomic reset! keeps the
+          ;; cache consistent (last writer wins) without locking.
+          (reset! cache {:fingerprint fingerprint :skills skills})
+          skills)))
+    (scan-skills registry)))
 
 (defn- dedupe-by-name [skills]
   (->> skills
