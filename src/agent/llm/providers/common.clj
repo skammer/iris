@@ -3,7 +3,6 @@
   (:require
    [agent.llm.core :as llm-core]
    [clj-http.client :as http]
-   [clojure.core.async :as async]
    [clojure.string :as str]))
 
 (defn trim-trailing-slash [value]
@@ -77,14 +76,3 @@
                          :throw-exceptions false
                          :as :stream))
    error-fn))
-
-(defn stream-channel [f]
-  (let [ch (async/chan)]
-    (async/thread
-      (try
-        (f #(async/>!! ch %))
-        (catch Exception e
-          (async/>!! ch (llm-core/stream-error-event e)))
-        (finally
-          (async/close! ch))))
-    ch))

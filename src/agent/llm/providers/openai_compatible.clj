@@ -49,24 +49,18 @@
   (provider-common/post-stream url request retryable-http-error))
 
 (defn- post-stream-turn
-  ([url request] (post-stream-turn url request nil))
-  ([url request on-content-delta]
-   (post-stream-turn url request on-content-delta nil))
-  ([url request on-content-delta on-thinking-delta]
-   (stream/stream->turn
-    (:body (post-stream url request))
-    on-content-delta
-    on-thinking-delta)))
+  [url request on-content-delta on-thinking-delta]
+  (stream/stream->turn
+   (:body (post-stream url request))
+   on-content-delta
+   on-thinking-delta))
 
 (defn- post-responses-stream-turn
-  ([url request] (post-responses-stream-turn url request nil))
-  ([url request on-content-delta]
-   (post-responses-stream-turn url request on-content-delta nil))
-  ([url request on-content-delta on-thinking-delta]
-   (stream/responses-stream->turn
-    (:body (post-stream url request))
-    on-content-delta
-    on-thinking-delta)))
+  [url request on-content-delta on-thinking-delta]
+  (stream/responses-stream->turn
+   (:body (post-stream url request))
+   on-content-delta
+   on-thinking-delta))
 
 (defn- current-api-key [provider]
   (or (when-let [resolver (:api-key-resolver provider)]
@@ -82,89 +76,10 @@
 (defrecord OpenAICompatibleProvider [base-url api-key default-model site-url app-name extra-headers config api-key-resolver]
   llm-core/ILLMProvider
   (complete [this messages opts]
-    (let [request (provider-common/with-transport-options {:headers (provider-headers this)}
-                                                          config
-                                                          opts)
-          responses? (request/responses-api? config opts)
-          stream? (or (request/request-stream? config opts)
-                      (provider-common/stream-structured-output? config opts))]
-      (cond
-        (and responses? stream?)
-        (:content (post-responses-stream-turn
-                   (responses-url base-url)
-                   (assoc request
-                          :body (json/generate-string
-                                 (request/responses-stream-body base-url
-                                                               default-model
-                                                               config
-                                                               messages
-                                                               opts)))))
-
-        responses?
-        (let [response (post-json (responses-url base-url)
-                                  (assoc request
-                                         :body (json/generate-string
-                                                (request/responses-body base-url
-                                                                       default-model
-                                                                       config
-                                                                       messages
-                                                                       opts))
-                                         :as :json))]
-          (:content (parse/responses->turn (:body response))))
-
-        stream?
-        (:content (post-stream-turn
-                   (chat-url base-url)
-                   (assoc request
-                          :body (json/generate-string
-                                 (request/stream-body base-url
-                                                      default-model
-                                                      config
-                                                      messages
-                                                      opts)))))
-
-        :else
-        (let [response (post-json (chat-url base-url)
-                                  (assoc request
-                                         :body (json/generate-string
-                                                (request/completion-body base-url
-                                                                         default-model
-                                                                         config
-                                                                         messages
-                                                                         opts))
-                                         :as :json))]
-          (:content (parse/message->turn (:body response)))))))
+    (llm-core/complete-via-invoke this messages opts))
 
   (stream [this messages opts]
-    (provider-common/stream-channel
-     (fn [emit!]
-       (if (request/responses-api? config opts)
-         (let [response (post-stream
-                         (responses-url base-url)
-                         (provider-common/with-transport-options
-                          {:headers (provider-headers this)
-                           :body (json/generate-string
-                                  (request/responses-stream-body base-url
-                                                                default-model
-                                                                config
-                                                                messages
-                                                                opts))}
-                          config
-                          opts))]
-           (stream/responses-stream->turn (:body response) emit!))
-         (let [response (post-stream
-                         (chat-url base-url)
-                         (provider-common/with-transport-options
-                          {:headers (provider-headers this)
-                           :body (json/generate-string
-                                  (request/stream-body base-url
-                                                       default-model
-                                                       config
-                                                       messages
-                                                       opts))}
-                          config
-                          opts))]
-           (stream/stream->turn (:body response) emit!))))))
+    (llm-core/stream-via-invoke this messages opts))
 
   (embed [this text opts]
     (let [input (if (string? text) [text] text)

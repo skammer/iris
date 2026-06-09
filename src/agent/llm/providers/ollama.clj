@@ -38,86 +38,55 @@
   (provider-common/post-stream url request ollama-http-error))
 
 (defn- stream-response->turn
-  ([body-stream] (stream-response->turn body-stream nil nil))
-  ([body-stream on-content-delta on-thinking-delta]
-   (with-open [reader (io/reader body-stream)]
-     (loop [content []
-            thinking []
-            tool-calls []
-            prompt-tokens 0
-            completion-tokens 0
-            raw []]
-       (if-let [line (.readLine reader)]
-         (if (str/blank? line)
-           (recur content thinking tool-calls prompt-tokens completion-tokens raw)
-           (let [event (json/parse-string line true)
-                 message (:message event)
-                 chunk (:content message)
-                 thinking* (llm-messages/reasoning-text message)
-                 tool-calls* (or (:tool_calls message)
-                                 (:tool-calls message))]
-             (when (and on-content-delta (string? chunk) (not= "" chunk))
-               (on-content-delta chunk))
-             (when (and on-thinking-delta (string? thinking*) (not= "" thinking*))
-               (on-thinking-delta thinking*))
-             (recur (cond-> content
-                      (string? chunk) (conj chunk))
-                    (cond-> thinking
-                      (string? thinking*) (conj thinking*))
-                    (cond-> tool-calls
-                      (seq tool-calls*) (into tool-calls*))
-                    (or (:prompt_eval_count event) prompt-tokens)
-                    (or (:eval_count event) completion-tokens)
-                    (conj raw event))))
+  [body-stream on-content-delta on-thinking-delta]
+  (with-open [reader (io/reader body-stream)]
+    (loop [content []
+           thinking []
+           tool-calls []
+           prompt-tokens 0
+           completion-tokens 0
+           raw []]
+      (if-let [line (.readLine reader)]
+        (if (str/blank? line)
+          (recur content thinking tool-calls prompt-tokens completion-tokens raw)
+          (let [event (json/parse-string line true)
+                message (:message event)
+                chunk (:content message)
+                thinking* (llm-messages/reasoning-text message)
+                tool-calls* (or (:tool_calls message)
+                                (:tool-calls message))]
+            (when (and on-content-delta (string? chunk) (not= "" chunk))
+              (on-content-delta chunk))
+            (when (and on-thinking-delta (string? thinking*) (not= "" thinking*))
+              (on-thinking-delta thinking*))
+            (recur (cond-> content
+                     (string? chunk) (conj chunk))
+                   (cond-> thinking
+                     (string? thinking*) (conj thinking*))
+                   (cond-> tool-calls
+                     (seq tool-calls*) (into tool-calls*))
+                   (or (:prompt_eval_count event) prompt-tokens)
+                   (or (:eval_count event) completion-tokens)
+                   (conj raw event))))
         {:role "assistant"
          :content (apply str content)
          :reasoning-content (when (seq thinking)
                               (apply str thinking))
          :tool-calls tool-calls
          :usage {:prompt-tokens prompt-tokens
-                  :completion-tokens completion-tokens
-                  :cached-tokens 0
-                  :tokens (+ prompt-tokens completion-tokens)
-                  :cost-usd 0.0}
-          :raw raw})))))
+                 :completion-tokens completion-tokens
+                 :cached-tokens 0
+                 :tokens (+ prompt-tokens completion-tokens)
+                 :cost-usd 0.0}
+         :raw raw}))))
 
 (defrecord OllamaProvider [base-url default-model embedding-model keep-alive config]
   llm-core/ILLMProvider
-  (complete [_ messages opts]
-    (let [opts* (merge config opts)
-          stream? (provider-common/stream-structured-output? config opts*)
-          request (provider-common/with-transport-options
-                   {:body (json/generate-string (structured-chat-body default-model keep-alive messages opts* stream?))
-                    :content-type :json
-                    :accept :json}
-                   config
-                   opts*)]
-      (if stream?
-        (let [response (post-stream (provider-common/endpoint base-url "/api/chat")
-                                    request)]
-          (:content (stream-response->turn (:body response))))
-        (let [response (post-json (provider-common/endpoint base-url "/api/chat")
-                                  (assoc request :as :json))]
-          (-> response :body :message :content)))))
+  (complete [this messages opts]
+    (llm-core/complete-via-invoke this messages opts))
 
-  (stream [_ messages opts]
-    (provider-common/stream-channel
-     (fn [emit!]
-       (let [opts* (merge config opts)]
-         (with-open [reader (io/reader
-                             (:body (post-stream
-                                     (provider-common/endpoint base-url "/api/chat")
-                                     (provider-common/with-transport-options
-                                      {:body (json/generate-string (structured-chat-body default-model keep-alive messages opts* true))
-                                       :content-type :json
-                                       :accept :json}
-                                      config
-                                      opts*))))]
-           (doseq [line (line-seq reader)]
-             (when-not (str/blank? line)
-               (let [event (json/parse-string line true)]
-                 (when-let [content (-> event :message :content)]
-                   (emit! content))))))))))
+  (stream [this messages opts]
+    (llm-core/stream-via-invoke this messages opts))
 
   (embed [_ text opts]
     (let [input (if (string? text) text (vec text))

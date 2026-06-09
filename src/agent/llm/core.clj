@@ -4,6 +4,7 @@
   (:require
    [agent.llm.messages :as llm-messages]
    [cheshire.core :as json]
+   [clojure.core.async :as async]
    [clojure.string :as str])
   (:import
    [java.time ZonedDateTime]
@@ -14,14 +15,17 @@
 ;; ======================
 
 (defprotocol ILLMProvider
-  "Protocol for LLM providers with extended capabilities."
-  
+  "Protocol for LLM providers with extended capabilities.
+  `complete` and `stream` are convenience surfaces; providers should route
+  them through ILLMProviderInvoke `invoke` via `complete-via-invoke` and
+  `stream-via-invoke`."
+
   (complete [this messages opts]
     "Send messages to LLM and get completion.
     messages: vector of message maps with :role and :content
     opts: map with :model, :temperature, :max-tokens, etc.
     Returns: string completion")
-  
+
   (stream [this messages opts]
     "Stream completion from LLM.
     Returns: core.async channel that will receive streaming chunks")
@@ -107,7 +111,7 @@
         (assoc :assistant-turn turn)
         (assoc :raw (or (:raw response*) response)))))
 
-(declare llm-error)
+(declare llm-error stream-error-event)
 
 (defn- parse-tool-arguments [arguments]
   (cond
@@ -150,6 +154,38 @@
     (default-invoke this request))
   (generate [this messages opts]
     (invoke this (assoc opts :messages messages))))
+
+(defn stream-channel
+  "Run f on a worker thread, passing it an emit! callback.
+  Returns a core.async channel that receives emitted values, receives an
+  :error event if f throws, and closes when f returns."
+  [f]
+  (let [ch (async/chan)]
+    (async/thread
+      (try
+        (f #(async/>!! ch %))
+        (catch Exception e
+          (async/>!! ch (stream-error-event e)))
+        (finally
+          (async/close! ch))))
+    ch))
+
+(defn complete-via-invoke
+  "Canonical `complete` implementation: routes through `invoke` and returns
+  the assistant content string."
+  [provider messages opts]
+  (:content (invoke provider (assoc opts :messages messages :opts opts))))
+
+(defn stream-via-invoke
+  "Canonical `stream` implementation: routes through `invoke`, emitting
+  content deltas onto the returned core.async channel."
+  [provider messages opts]
+  (stream-channel
+   (fn [emit!]
+     (invoke provider (assoc opts
+                             :messages messages
+                             :opts opts
+                             :on-content-delta emit!)))))
 
 ;; ======================
 ;; Error Handling
