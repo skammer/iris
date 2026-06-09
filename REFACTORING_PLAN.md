@@ -117,16 +117,16 @@ Baseline before refactor: 500 tests / 1859 assertions, 1 pre-existing flaky fail
 - ☑ 3.8 `agent.runtime.calls` — shared tool-call accessors (`tool-name-of`, `call-id`, `call-input` with malformed sentinel, `fs-mutation-tools`); duplicates in nudge/runtime.tools deleted.
 - ☑ 3.9 Malli validators precompiled in `runtime.schema` (per-streaming-delta hot path).
 
-### Phase 4 — Construction & error-path cleanup (next)
+### Phase 4 — Construction & error-path cleanup ✅ (commits `1cc39b6` + `fe4c779`)
 
-- ☐ 4.1 `create-tool-registry` takes a single options map; delete the 6-arity ladder; collapse the 3 duplicated call sites.
-- ☐ 4.2 `system.clj`: shared safe-stop! teardown; move attach-telegram-service into components.clj; single component-id list.
-- ☐ 4.3 Full reload built on `create-system-components` with injected refs (no build-discard-rebuild).
-- ☐ 4.4 `api.errors`: table-driven domain-error mapping; centralize translation in the error boundary; strip per-handler catch ladders incrementally.
+- ☑ 4.1 `create-tool-registry` single options-map arity; `components/build-tool-registry` is the one construction site.
+- ☑ 4.2 `safe-stop!` unifies teardown semantics; attach-telegram-service single copy; :chat in health defaults.
+- ☑ 4.3 Full reload builds via `create-system-components` with live refs injected; build-discard-rebuild deleted.
+- ☑ 4.4 `api.errors` table-driven; boundary translates domain errors centrally; equivalent handler catch ladders removed (custom ones kept).
 
 ### Phase 5 — Targeted structural wins (as budget allows)
 
-- ☐ 5.1 history.clj copy-paste pairs + subscribers.clj identical branches.
+- ☑ 5.1 history.clj copy-paste pairs + subscribers.clj identical branches (commit `21375a9`).
 - ☐ 5.2 Decompose `runtime.loop/run!` into phase fns + single terminal emitter.
 - ☐ 5.3 LLM providers: `invoke` as the single execution path; `complete`/`stream` become wrappers.
 - ☐ 5.4 Telegram: delete the callback streaming path; single broker-event chat runner.

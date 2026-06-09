@@ -42,16 +42,16 @@ Inputs: [[refactoring-2026-06-findings]], [[codebase-map]]. Status legend: ☐ p
 - ☑ 3.8 `agent.runtime.calls`: shared tool-call accessors (tool-name-of, call-id, call-input with malformed sentinel, fs-mutation-tools); drifted copies in nudge/runtime.tools deleted. doom-loop's string-name normalize kept (different fingerprint contract).
 - ☑ 3.9 Malli validators precompiled in `runtime.schema` (per-streaming-delta hot path).
 
-## Phase 4 — Construction & error-path cleanup
+## Phase 4 — Construction & error-path cleanup — ✅ done, commits `1cc39b6` + `fe4c779`
 
-- ☐ 4.1 `create-tool-registry` takes a single options map; delete the 6-arity ladder; `components/build-tool-registry` helper; collapse the 3 duplicated call sites.
-- ☐ 4.2 `system.clj`: shared safe-stop! teardown (unify close-system!/stop-runtime-edges! semantics); move attach-telegram-service into components.clj (single copy); single component-id list.
-- ☐ 4.3 Full reload: pass old system-ref/reload-state/health-registry/control into `create-system-components` instead of build-discard-rebuild. (Covered by system_test.)
-- ☐ 4.4 `api.errors`: table-driven domain-error mapping; extend error boundary to translate domain ex-data centrally; strip the ~15 per-handler try/catch ladders incrementally (api_test as the net).
+- ☑ 4.1 `create-tool-registry` single options-map arity; 6-arity ladder deleted; `components/build-tool-registry` is the one construction site (3 drifting call sites collapsed).
+- ☑ 4.2 `safe-stop!` unifies close-system!/stop-runtime-edges! failure semantics; attach-telegram-service single copy in components.clj; :chat added to health/default-components.
+- ☑ 4.3 Full reload builds via `create-system-components` with live refs injected — build-discard-rebuild chain deleted (second tool registry, orphaned telegram service, re-mark doseq). system_test's full-reload test re-stubbed at the new construction point.
+- ☑ 4.4 `api.errors` table-driven; error boundary translates domain ex-data centrally; exactly-equivalent handler catch ladders removed (memory vault, providers, sessions, tools execute, approvals decide); custom ladders kept (agents, ui HTML fragments).
 
 ## Phase 5 — Targeted structural wins (do as budget allows, riskiest last)
 
-- ☐ 5.1 history.clj copy-paste pairs + subscribers.clj identical branches (low risk, behind chat facade).
+- ☑ 5.1 history.clj copy-paste pairs + subscribers.clj identical branches (commit `21375a9`).
 - ☐ 5.2 Decompose `runtime.loop/run!` into phase fns + single terminal emitter (17 deftests guard it).
 - ☐ 5.3 LLM providers: make `invoke` the single execution path; `complete`/`stream` become wrappers (kills the triplicated dispatch); update provider tests.
 - ☐ 5.4 Telegram: delete the callback streaming path; single broker-event chat runner (telegram_test guards).
