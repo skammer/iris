@@ -56,16 +56,22 @@ Inputs: [[refactoring-2026-06-findings]], [[codebase-map]]. Status legend: ☐ p
 - ☑ 5.3 LLM providers: `invoke` is the single execution path. Per-provider `complete`/`stream` bodies deleted (−131 LOC); core gained `complete-via-invoke`/`stream-via-invoke`; ollama's channel stream now routes through `stream-response->turn`, fixing its silent thinking/tool-call/usage drops. Protocol methods kept (several test fakes implement them); `default-invoke` Object-extension kept (adapts complete-only fakes).
 - ◐ 5.4 Telegram: the real bug fixed — `run-chat-events!` treats a result-ch `:error` as terminal, so an early chat/run! failure no longer spins the loop + typing indicator forever. The 3-way path collapse (callback/events/continuation) is deferred: most telegram tests drive the callback path via `:chat-fn`, so the collapse requires rewriting the test harness onto a broker — should be its own pass, not piggybacked on this one.
 
-## Explicitly dropped (this round) — with reasons
+## Phase 6 — Deferred items, second round (2026-06-10, owner-approved)
 
-- ✗ **MCP delete-or-wire**: product decision; left unwired, documented in findings.
-- ✗ **Orchestrator races/durability** (lost-update, federation result handlers): subsystem is env-gated experimental and documented as non-durable; fixing the race properly means per-agent CAS loops — separate effort.
-- ✗ **session_entries as single source of truth for messages**: data migration, high risk, needs its own design note.
-- ✗ **Ragtime → hand-rolled migration runner**: working code, low pain; not worth the churn now.
-- ✗ **`chat.turn/run-turn!` decomposition**: facade-only coverage; needs characterization tests first (follow-up).
-- ✗ **Telemetry 3-way split**: high blast radius (every subsystem requires it); deferred to its own pass.
-- ✗ **Serializers/handler-map table-driving, route-coerced body adoption**: worthwhile but mechanical-large; queued behind this round.
-- ✗ **Skills registry caching**: behavior change (mtime invalidation) — needs a decision on staleness tolerance.
+- ☑ 6.1 **MCP wired in** (owner decision, commit `b675610`): `{:tools {:mcp {:enabled false :servers [...]}}}`, `AGENT_MCP_ENABLED`; remote tools register as `:<server>__<tool>` with `#{:mcp-call}` permission; failing servers logged + skipped, never crash boot.
+- ☑ 6.2 **Telegram chat-runner collapse** (commit `c35babc`): one broker-event runner parameterized on the message list; callback path + `:chat-fn` seam deleted; approval continuation folded in; 13 tests rewired onto a real event bus with assertions unchanged.
+- ☑ 6.3 **`run-turn!` characterized + decomposed** (commit `41b218e`): 13 direct characterization tests (`test/agent/chat/turn_test.clj`) pin the turn contract; `prepare-turn-env` + `runtime-loop-options` extracted; body 113 → 33 lines.
+- ☑ 6.4 **Telemetry 3-way split** (commit `811486b`): `agent.telemetry` (collector only, no llm/runtime deps), `agent.telemetry.observer` (IObserver + observers), `agent.llm.instrumented` (`complete-with-telemetry!`). swap!-pattern ×5 consolidated; `record-system-event!` race fixed.
+- ☑ 6.5 **Serializers data-driven** (commit `b2db46e`): one field-spec interpreter; all 22 converted; providers' local serializers absorbed; output byte-identical.
+- ☑ 6.6 **Skills catalog cached** (commit `b052547`): stat-only mtime fingerprint, factory-scoped atom; rescans only on add/edit/delete.
+- ☑ 6.7 **Orchestrator lost-update fixed**: `complete-agent-turn!` swap!s only the turn's deltas (`:messages` append, `:status`) into the live agent value — concurrent mutations survive an LLM-call-length window; deleted-mid-turn agents are not resurrected. Regression tests fail on the old code.
+- ☐ 6.8 **session_entries unification**: deferred by owner decision (zero data risk now); full migration plan in [[session-entries-unification]].
+
+## Still dropped — with reasons
+
+- ✗ **Federation result-handler durability** (in-memory handlers vs durable outbox): needs persisted result correlation; its own effort.
+- ✗ **Ragtime → hand-rolled migration runner**: working code, low pain; also contradicts the no-DB-risk decision this round.
+- ✗ **Route-coerced body adoption / handler-map flattening**: mechanical-large; next candidate queue.
 
 ## Verification protocol
 

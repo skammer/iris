@@ -131,16 +131,22 @@ Baseline before refactor: 500 tests / 1859 assertions, 1 pre-existing flaky fail
 - ☑ 5.3 LLM providers: `invoke` is the single execution path; per-provider `complete`/`stream` dispatch deleted (−131 LOC); ollama channel-stream drift (dropped thinking/tool calls) fixed.
 - ◐ 5.4 Telegram: `run-chat-events!` early-failure hang fixed; the callback/events/continuation 3-way collapse is deferred (requires rewriting the `:chat-fn`-based test harness onto a broker — its own pass).
 
-### Explicitly dropped (this round) — with reasons
+### Phase 6 — Deferred items, second round ✅ (2026-06-10, owner-approved)
 
-- ✗ **MCP delete-or-wire**: product decision; left unwired, documented.
-- ✗ **Orchestrator races/durability**: env-gated experimental, documented as non-durable; needs its own effort.
-- ✗ **session_entries as single source of truth for messages**: data migration, needs its own design note.
-- ✗ **Ragtime → hand-rolled migration runner**: working code, low pain.
-- ✗ **`chat.turn/run-turn!` decomposition**: facade-only coverage; characterization tests first.
-- ✗ **Telemetry 3-way split**: high blast radius; deferred to its own pass.
-- ✗ **Serializer/handler-map table-driving, route-coerced body adoption**: mechanical-large; queued.
-- ✗ **Skills registry caching**: behavior change; needs a staleness-tolerance decision.
+- ☑ 6.1 MCP wired in behind `{:tools {:mcp ...}}` config (owner decision); failing servers skipped, never crash boot (`b675610`).
+- ☑ 6.2 Telegram: one broker-event chat runner; callback path + `:chat-fn` seam deleted; continuation folded in (`c35babc`).
+- ☑ 6.3 `run-turn!`: 13 direct characterization tests, then decomposed (body 113 → 33 lines) (`41b218e`).
+- ☑ 6.4 Telemetry split: collector / observer / `agent.llm.instrumented`; layering inversion + record race gone (`811486b`).
+- ☑ 6.5 Serializers data-driven: one field-spec interpreter, all 22 converted, output byte-identical (`b2db46e`).
+- ☑ 6.6 Skills catalog cached via stat-only mtime fingerprint (`b052547`).
+- ☑ 6.7 Orchestrator lost-update fixed: `complete-agent-turn!` merges only turn deltas into live state; regression tests fail on old code.
+- ☐ 6.8 session_entries unification: deferred by owner decision; migration design note in `obsidian/architecture/session-entries-unification.md`.
+
+### Still dropped — with reasons
+
+- ✗ **Federation result-handler durability**: needs persisted result correlation; its own effort.
+- ✗ **Ragtime replacement**: working code, low pain; contradicts the no-DB-risk decision.
+- ✗ **Route-coerced body adoption / handler-map flattening**: mechanical-large; next queue.
 
 ### Verification protocol
 
