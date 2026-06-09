@@ -113,7 +113,6 @@
             output-items (sorted-map)
             final-response nil
             failed-response nil
-            raw []
             event-count 0]
        (if-let [line (.readLine reader)]
          (if-let [event (parse-sse-line line)]
@@ -141,9 +140,8 @@
                             (= "error" event-type))
                       (or (:response event) event)
                       failed-response)
-                    (conj raw event)
                     (inc event-count)))
-           (recur content reasoning output-items final-response failed-response raw event-count))
+           (recur content reasoning output-items final-response failed-response event-count))
          (let [body (cond
                       final-response final-response
                       failed-response failed-response
@@ -167,7 +165,6 @@
                          (assoc body :output [{:type "message"
                                                :role "assistant"
                                                :content [{:type "output_text"
-                                                          :text (apply str content)}]}]))
-                 turn (cond-> (parse/responses->turn body*)
-                        (seq reasoning) (assoc :reasoning-content (apply str reasoning)))]
-             (assoc turn :stream-events raw))))))))
+                                                          :text (apply str content)}]}]))]
+             (cond-> (parse/responses->turn body*)
+               (seq reasoning) (assoc :reasoning-content (apply str reasoning))))))))))

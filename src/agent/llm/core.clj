@@ -4,7 +4,6 @@
   (:require
    [agent.llm.messages :as llm-messages]
    [cheshire.core :as json]
-   [clojure.spec.alpha :as s]
    [clojure.string :as str])
   (:import
    [java.time ZonedDateTime]
@@ -56,72 +55,12 @@
   (generate [this messages opts]
     "Generate one assistant turn from messages and opts. Returns normalized response map."))
 
-(defprotocol ILLMProviderWithConfig
-  "Protocol for providers that support configuration updates."
-  
-  (update-config [this new-config]
-    "Update provider configuration.
-    new-config: map with updated configuration values
-    Returns: updated provider instance")
-  
-  (get-config [this]
-    "Get current provider configuration.
-    Returns: configuration map"))
-
 (defprotocol ILLMProviderWithHealth
   "Protocol for providers that support health checking."
-  
+
   (health-check [this]
     "Check provider health.
-    Returns: map with :healthy boolean and :details")
-  
-  (get-metrics [this]
-    "Get provider metrics.
-    Returns: map with :requests, :errors, :avg-latency, etc."))
-
-;; ======================
-;; Common Types and Specs
-;; ======================
-
-(s/def ::role #(contains? #{"system" "user" "assistant" "tool"}
-                          (if (keyword? %) (name %) (str %))))
-(s/def ::content any?)
-(s/def ::message (s/keys :req-un [::role ::content]))
-(s/def ::messages (s/coll-of ::message :min-count 1))
-
-(s/def ::model string?)
-(s/def ::temperature (s/and double? #(<= 0.0 % 2.0)))
-(s/def ::max-tokens pos-int?)
-(s/def ::top-p (s/and double? #(<= 0.0 % 1.0)))
-(s/def ::frequency-penalty (s/and double? #(<= -2.0 % 2.0)))
-(s/def ::presence-penalty (s/and double? #(<= -2.0 % 2.0)))
-
-(s/def ::completion-opts
-  (s/keys :opt-un [::model ::temperature ::max-tokens ::top-p
-                   ::frequency-penalty ::presence-penalty]))
-
-(s/def ::embedding-opts
-  (s/keys :opt-un [::model]))
-
-(s/def ::model-info
-  (s/keys :req-un [::model ::name ::description]
-          :opt-un [::max-tokens ::supports-embedding ::supports-streaming]))
-
-(s/def ::capabilities
-  (s/keys :opt-un [::max-tokens ::supports-embedding ::supports-streaming
-                   ::supports-tools ::supports-vision ::supports-audio]))
-
-(s/def ::cost-estimate
-  (s/keys :req-un [::tokens ::cost-usd]
-          :opt-un [::prompt-tokens ::completion-tokens]))
-
-(s/def ::health-status
-  (s/keys :req-un [::healthy]
-          :opt-un [::latency-ms ::error-rate ::last-checked]))
-
-(s/def ::provider-metrics
-  (s/keys :opt-un [::total-requests ::successful-requests ::failed-requests
-                   ::avg-latency-ms ::total-tokens ::total-cost-usd]))
+    Returns: map with :healthy boolean and :details"))
 
 ;; ======================
 ;; Common Utilities

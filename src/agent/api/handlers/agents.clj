@@ -5,11 +5,19 @@
    [agent.api.helpers :as h]
    [agent.api.responses :as responses]
    [agent.api.serializers :as ser]
-   [agent.api.validation :as v]
    [agent.kernel.schema :as kernel-schema]
    [agent.kernel.service :as kernel-service]
    [agent.orchestrator :as orchestrator]
    [clojure.string :as str]))
+
+(defn- normalize-trust-policies-body [policies]
+  (reduce-kv (fn [acc peer-ref policy]
+               (assoc acc (if (keyword? peer-ref) (name peer-ref) (str peer-ref))
+                      {:message-types (vec (:message_types policy []))
+                       :routes (vec (:routes policy []))
+                       :required-capabilities (vec (:required_capabilities policy []))}))
+             {}
+             (or policies {})))
 
 (defn create [system request]
   (let [body (h/read-json-body request)
@@ -25,7 +33,7 @@
         task (:task body)
         allow-direct? (boolean (:allow_direct body))
         trusted-peers (or (:trusted_peers body) [])
-        trust-policies (v/normalize-trust-policies-body (:trust_policies body))
+        trust-policies (normalize-trust-policies-body (:trust_policies body))
         rate-limit-per-minute (:rate_limit_per_minute body)]
     (responses/json-response 201
                              (ser/agent->response
@@ -201,7 +209,7 @@
         budgets (or (:budgets body) {})
         allow-direct? (boolean (:allow_direct body))
         trusted-peers (or (:trusted_peers body) [])
-        trust-policies (v/normalize-trust-policies-body (:trust_policies body))
+        trust-policies (normalize-trust-policies-body (:trust_policies body))
         rate-limit-per-minute (:rate_limit_per_minute body)]
     (try
       (responses/json-response

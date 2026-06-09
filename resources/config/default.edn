@@ -1,5 +1,4 @@
 {:iris/config-version 1
- :iris/context-files ["SOUL.md" "AGENTS.md" "USER.md" "TOOLS.md" "BOOT.md" "HEARTBEAT.md"]
  :llm {:active-provider :ollama
        :stream-content? true
        :providers {:ollama {:type :ollama

@@ -6,7 +6,6 @@
    capped-height body; telegram sends a short summary as a separate message; the
    API hands over the full payload untouched."
   (:require
-   [cheshire.core :as json]
    [clojure.string :as str]))
 
 (def default-channel-config
@@ -81,12 +80,6 @@
                        (str/join " "))
     :else (value->string params)))
 
-(defn- result->string [result]
-  (cond
-    (nil? result) ""
-    (string? result) result
-    :else (json/generate-string result)))
-
 (defn- escape-html-char [ch]
   (case ch
     \& "&amp;"
@@ -106,38 +99,17 @@
           (apply str acc)))
       (apply str acc))))
 
-(defn- pretty-value [value]
-  (cond
-    (nil? value) ""
-    (string? value) value
-    :else (json/generate-string value {:pretty true})))
-
 (defn args-preview
   "Single-line, length-capped representation of tool arguments."
   [args max-chars]
   (-> args params->string single-line (truncate max-chars)))
-
-(defn result-preview
-  "Single-line, length-capped representation of a tool result."
-  [result max-chars]
-  (-> result result->string single-line (truncate max-chars)))
-
-(defn block-preview
-  "Multi-line, length-capped representation of a value."
-  [value max-chars]
-  (-> value pretty-value (truncate max-chars)))
-
-(defn params-preview
-  "Human-readable, non-JSON, single-line representation of tool parameters."
-  [params max-chars]
-  (args-preview params max-chars))
 
 (defn telegram-summary
   "Compact one-message summary of a tool turn for Telegram."
   [system {:keys [tool-name input status]}]
   (let [cfg (channel-config system :telegram tool-name)
         args-cap (:args-preview-chars cfg 1200)
-        args (params-preview input args-cap)
+        args (args-preview input args-cap)
         status-text (label status)
         line (str "🔧 " (or (not-empty (label tool-name)) "tool")
                   (when-not (str/blank? status-text)

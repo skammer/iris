@@ -19,17 +19,13 @@
    details))
 
 (defn throw-empty-content!
-  ([content tool-calls finish-reason reasoning?]
-   (throw-empty-content! content tool-calls
-                         {:finish-reason finish-reason
-                          :reasoning-content? (boolean reasoning?)}))
-  ([content tool-calls {:keys [finish-reason reasoning-content?] :as details}]
-   (when (and (blank-content? content)
-              (empty? tool-calls)
-              (or (= "length" finish-reason) reasoning-content?))
-     (throw (empty-content-error (assoc details
-                                        :content-chars (count (or content ""))
-                                        :tool-call-count (count tool-calls)))))))
+  [content tool-calls {:keys [finish-reason reasoning-content?] :as details}]
+  (when (and (blank-content? content)
+             (empty? tool-calls)
+             (or (= "length" finish-reason) reasoning-content?))
+    (throw (empty-content-error (assoc details
+                                       :content-chars (count (or content ""))
+                                       :tool-call-count (count tool-calls))))))
 
 (defn message->turn [body]
   (let [choice (-> body :choices first)

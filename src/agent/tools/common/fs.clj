@@ -130,7 +130,6 @@
         :category :system
         :input-schema [:map {:closed true}
                        [:path :string]]
-        :prerequisites {:mutations [:read-same-path :list-parent-or-same-path]}
         :operation :read
         :parallel-safe? true
         :source :builtin)
@@ -157,7 +156,6 @@
         :input-schema [:map {:closed true}
                        [:path :string]
                        [:content {:optional true} [:maybe :string]]]
-        :prerequisites {:mutations [:read-same-path :list-parent-or-same-path]}
         :sensitive true
         :operation :act
         :approval-sensitive? false
@@ -181,7 +179,6 @@
         :input-schema [:map {:closed true}
                        [:path :string]
                        [:content {:optional true} [:maybe :string]]]
-        :prerequisites {:mutations [:read-same-path :list-parent-or-same-path]}
         :sensitive true
         :operation :act
         :approval-sensitive? false
@@ -209,7 +206,6 @@
                        [:old-string :string]
                        [:new-string :string]
                        [:replace-all? {:optional true} [:maybe :boolean]]]
-        :prerequisites {:mutations [:read-same-path :list-parent-or-same-path]}
         :sensitive true
         :operation :act
         :approval-sensitive? false
@@ -255,7 +251,6 @@
         :category :system
         :input-schema [:map {:closed true}
                        [:path :string]]
-        :prerequisites {:mutations [:read-same-path :list-parent-or-same-path]}
         :operation :read
         :parallel-safe? true
         :source :builtin)
@@ -284,7 +279,6 @@
         :category :system
         :input-schema [:map {:closed true}
                        [:path :string]]
-        :prerequisites {:mutations [:read-same-path :list-parent-or-same-path]}
         :sensitive true
         :operation :act
         :approval-sensitive? false
@@ -309,7 +303,6 @@
         :category :system
         :input-schema [:map {:closed true}
                        [:path :string]]
-        :prerequisites {:mutations [:read-same-path :list-parent-or-same-path]}
         :sensitive true
         :operation :act
         :approval-sensitive? false

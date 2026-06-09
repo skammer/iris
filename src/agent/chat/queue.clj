@@ -15,13 +15,11 @@
 (defn- empty-queue []
   clojure.lang.PersistentQueue/EMPTY)
 
-(defn- active-turn [request-id cancelled? stream? result]
+(defn- active-turn [request-id cancelled? result]
   {:request-id request-id
    :started-at (util/now-str)
    :cancelled? cancelled?
-   :result result
-   :stream? (boolean stream?)
-   :stream-state (atom {})})
+   :result result})
 
 (defn- enqueue-item [state item]
   (update (or state {:queue (empty-queue)})
@@ -57,7 +55,6 @@
                                           (swap! (:session-runtimes service) assoc session-id
                                                  {:active (active-turn (:request-id item)
                                                                        (:cancelled? item)
-                                                                       (get-in item [:opts :stream?])
                                                                        (:result item))
                                                   :queue queue*})
                                           {:item item})
@@ -102,7 +99,7 @@
       (finally
         (start-next-queued! system (:session-id opts) request-id @terminal-reason)))))
 
-(defn- begin-managed-run! [system {:keys [session-id stream?] :as opts} request-id cancelled? result]
+(defn- begin-managed-run! [system {:keys [session-id] :as opts} request-id cancelled? result]
   (let [service (service/require-service system)]
     (locking (:manager-lock service)
       (service/ensure-running! service)
@@ -125,7 +122,7 @@
           :queued)
         (do
           (swap! (:session-runtimes service) assoc-in [session-id :active]
-                 (active-turn request-id cancelled? stream? result))
+                 (active-turn request-id cancelled? result))
           (service/emit-session-state! system session-id :start)
           :active)))))
 

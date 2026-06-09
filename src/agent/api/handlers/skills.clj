@@ -2,26 +2,17 @@
   (:require
    [agent.api.responses :as responses]
    [agent.api.serializers :as ser]
-   [agent.skills :as skills]
-   [clojure.string :as str]))
+   [agent.skills :as skills]))
 
 (defn list-skills [system _request]
   (responses/json-response 200
                            {:data (mapv ser/skill->response
                                         (skills/list-skills (:skills-registry system)))}))
 
-(defn- parse-long* [value]
-  (cond
-    (integer? value) value
-    (number? value) (long value)
-    (string? value) (when-not (str/blank? value)
-                      (Long/parseLong value))
-    :else nil))
-
 (defn slash-commands [system request]
   (let [query (get-in request [:parameters :query])
-        page (parse-long* (:page query))
-        page-size (parse-long* (or (:page_size query) (:page-size query)))
+        page (:page query)
+        page-size (:page_size query)
         result (skills/slash-commands-page
                 (:skills-registry system)
                 {:prefix (:prefix query)

@@ -203,10 +203,6 @@
       :read
       (:operation metadata))))
 
-(defn read-only-call?
-  [description input]
-  (= :read (call-operation (tool-execution-metadata description) input)))
-
 (defn parallel-safe-call?
   [description input]
   (let [metadata (tool-execution-metadata description)
@@ -222,7 +218,7 @@
                   (contains? #{:read :act} operation))))))
 
 (defn create-tool-description
-  [name description & {:keys [version category input-schema required-permissions timeout-ms source source-details sensitive execution-mode prerequisites
+  [name description & {:keys [version category input-schema required-permissions timeout-ms source source-details sensitive execution-mode
                               operation routing-categories parallel-safe? approval-sensitive? activates-tools?
                               action-key read-only-actions parallel-safe-actions]
                        :or {version "1.0.0"
@@ -251,7 +247,6 @@
      :source source
      :source-details source-details
      :execution-mode execution-mode
-     :prerequisites prerequisites
      :operation operation*
      :routing-categories routing-categories*
      :parallel-safe? (boolean parallel-safe?)
@@ -320,10 +315,6 @@
   ([{:keys [tools before-execute after-execute event-sink approval-check activity-executor]
      :or {tools {}}}]
    (->ToolRegistry tools before-execute after-execute event-sink approval-check activity-executor)))
-
-(defn with-approval
-  [registry approval-check]
-  (assoc registry :approval-check approval-check))
 
 (defn- emit-event!
   [registry event]

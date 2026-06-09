@@ -8,7 +8,7 @@
    [agent.api.routes :as api-routes]
    [agent.api.schemas :as api-schemas]
    [agent.config :as cfg]
-   [agent.federation.http :as federation-http]
+   [agent.federation.crypto :as federation-crypto]
    [agent.logging :as logging]
    [agent.system :as system]
    [agent.llm.core :as llm-core]
@@ -693,7 +693,7 @@
         base-url (str "http://127.0.0.1:" port)
         base-system (system/create-system)
         messages* (atom nil)
-        fed-keys (federation-http/generate-ed25519-keypair)
+        fed-keys (federation-crypto/generate-ed25519-keypair)
         store (sqlite/create-store {:path path})
         event-bus (events/create-event-bus)
         event-sink (events/create-event-sink store event-bus)

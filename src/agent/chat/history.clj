@@ -123,12 +123,6 @@
                               :response content})
      assistant-message)))
 
-(defn persist-final-assistant!
-  ([system session-id prompt content request-id]
-   (persist-final-assistant! system session-id prompt content request-id nil))
-  ([system session-id prompt content request-id extra]
-   (persist-completion! system session-id prompt content request-id extra)))
-
 (defn message-extra
   ([payload]
    (select-keys payload [:content-blocks :tool-calls :tool-call-id :metadata :excluded-from-context?]))

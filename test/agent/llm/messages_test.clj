@@ -136,11 +136,7 @@
                             :type "function"
                             :function {:name "fs_list"
                                        :arguments "{\"path\":\".\"}"}}
-        internal-call (llm-messages/provider-tool-call->internal provider-tool-call)
-        provider-result {:role "tool"
-                         :tool_call_id "call-1"
-                         :content "{\"status\":\"ok\"}"}
-        internal-result (llm-messages/provider-tool-result->internal provider-result)]
+        internal-call (llm-messages/provider-tool-call->internal provider-tool-call)]
     (is (= {:type :tool-call
             :id "call-1"
             :name "fs_list"
@@ -149,12 +145,10 @@
            internal-call))
     (is (= provider-tool-call
            (llm-messages/internal-tool-call->provider-tool-call internal-call)))
-    (is (= {:type :tool-result
-            :tool-call-id "call-1"
-            :name nil
-            :status :ok
-            :content {:status "ok"}
-            :raw provider-result}
-           internal-result))
-    (is (= provider-result
-           (llm-messages/internal-tool-result->provider-tool-result internal-result)))))
+    (is (= {:role "tool"
+            :tool_call_id "call-1"
+            :content "{\"status\":\"ok\"}"}
+           (llm-messages/internal-tool-result->provider-tool-result
+            {:type :tool-result
+             :tool-call-id "call-1"
+             :content {:status "ok"}})))))

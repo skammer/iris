@@ -262,7 +262,7 @@
 (defn- tool-call [{:keys [id function]}]
   (let [{:keys [name arguments]} function
         params (parse-json-or-value arguments)
-        args (tool-display/params-preview params 800)
+        args (tool-display/args-preview params 800)
         detail-id (safe-dom-id "tool-call-detail" (or id (str name "-" (hash arguments))))]
     [:div.tool-call
      [:button.tool-row
@@ -296,10 +296,10 @@
   (let [tool-name (or (:tool-name parsed) "tool")
         status (some-> (:status parsed) name)
         cfg (tool-display/channel-config system :web tool-name)
-        args (tool-display/params-preview (:input parsed)
-                                          (or (:args-preview-chars cfg)
-                                              (:preview-chars cfg)
-                                              800))]
+        args (tool-display/args-preview (:input parsed)
+                                        (or (:args-preview-chars cfg)
+                                            (:preview-chars cfg)
+                                            800))]
     [:span.tool-result__summary
      [:span.tool-result__summary-head
       [:span.tool-result__name tool-name]

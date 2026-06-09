@@ -17,15 +17,6 @@
 (defn- run-recovery [system run-id]
   (runs/recovery-plan system run-id))
 
-(defn list-runs* [system]
-  (runs/list-runs system))
-
-(defn get-run* [system run-id]
-  (runs/get-run system run-id))
-
-(defn request-run! [system req]
-  (runs/request-run! system req))
-
 (defn- normalize-run-request [_system body]
   (let [substrate (or (some-> (:substrate body) keyword)
                       :external)]
@@ -53,10 +44,10 @@
                                {:rejected-keys (mapv name rejected)})))))
 
 (defn list-runs [system _request]
-  (responses/json-response 200 {:data (mapv ser/run->response (list-runs* system))}))
+  (responses/json-response 200 {:data (mapv ser/run->response (runs/list-runs system))}))
 
 (defn get-run [system _request run-id]
-  (if-let [run (get-run* system run-id)]
+  (if-let [run (runs/get-run system run-id)]
     (responses/json-response 200
                              {:data (assoc (ser/run->response run)
                                            :recovery (run-recovery system run-id))})
@@ -71,9 +62,9 @@
               (and (nil? (:idempotency_key body))
                    (h/header request "Idempotency-Key"))
               (assoc :idempotency-key (h/header request "Idempotency-Key")))
-        run (request-run! system req)]
+        run (runs/request-run! system req)]
     (responses/json-response 201
-                             {:data (ser/run->response (get-run* system (:id run)))})))
+                             {:data (ser/run->response (runs/get-run system (:id run)))})))
 
 (defn heartbeats [system request run-id]
   (let [{:keys [limit since_sequence]} (-> request :parameters :query)]
@@ -153,7 +144,7 @@
                                                  :buffer-strategy :sliding
                                                  :slow-client :drop-new})
              ch (:channel subscription)]
-         (when-let [run (get-run* system run-id)]
+         (when-let [run (runs/get-run system run-id)]
            (streaming/send-sse-chunk! ctx
                                       {:type "snapshot"
                                        :run (ser/run->response run)}))
@@ -179,7 +170,7 @@
       (not-found! "run_not_found" "Run not found"))))
 
 (defn recover [system _request run-id]
-  (if-let [_ (get-run* system run-id)]
+  (if-let [_ (runs/get-run system run-id)]
     (let [replacement (runs/retry-run! system run-id)]
       (responses/json-response 202
                                {:data {:recovery (run-recovery system run-id)

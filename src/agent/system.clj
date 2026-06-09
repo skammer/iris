@@ -16,13 +16,12 @@
    [agent.tools.service :as tool-service]
    [agent.util :as util]))
 
-(declare reload! start-api! current-system reload-status)
+(declare reload! start-api! current-system)
 
 (defn- system-control
   [system-ref]
   {:system-ref system-ref
    :current-system current-system
-   :reload-status reload-status
    :reload! reload!
    :health-check system-health/health-check})
 
@@ -46,11 +45,6 @@
   (if-let [system-ref (:system-ref system)]
     (or @system-ref system)
     system))
-
-(defn reload-status
-  [system]
-  (or (some-> system current-system :reload-state deref)
-      {:status :unavailable}))
 
 (defn- provider-summary [cfg]
   (let [provider-cfg (config/active-provider-config (:llm cfg))]

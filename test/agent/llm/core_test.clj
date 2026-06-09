@@ -21,13 +21,8 @@
 
 (deftest test-configuration-protocols
   (testing "Configuration protocols exist"
-    (is (some? llm-core/ILLMProviderWithConfig))
     (is (some? llm-core/ILLMProviderWithHealth))
-    
-    (let [config-methods (keys (:sigs llm-core/ILLMProviderWithConfig))]
-      (is (some #{:update-config} config-methods))
-      (is (some #{:get-config} config-methods)))
-    
+
     (let [health-methods (keys (:sigs llm-core/ILLMProviderWithHealth))]
       (is (some #{:health-check} health-methods)))))
 

@@ -1,6 +1,8 @@
 (ns agent.federation.http-test
   (:require
-   [agent.federation.http :as federation-http]
+   [agent.federation.auth :as auth]
+   [agent.federation.crypto :as crypto]
+   [agent.federation.forwarder :as forwarder]
    [agent.persistence.sqlite :as sqlite]
    [cheshire.core :as json]
    [clj-http.client :as http]
@@ -16,24 +18,24 @@
 
 (deftest signed-request-verifies-and-rejects-bad-signatures
   (let [store (temp-store)
-        keys (federation-http/generate-ed25519-keypair)
+        keys (crypto/generate-ed25519-keypair)
         request {:peer_id "peer-a"
                  :to_agent_ref "agent-1"
                  :envelope {:id "msg-1" :content "hello"}}
-        signed (federation-http/sign-request request {:key-id "k1"
-                                                      :private-key (:private-key keys)
-                                                      :nonce "n1"})
+        signed (crypto/sign-request request {:key-id "k1"
+                                             :private-key (:private-key keys)
+                                             :nonce "n1"})
         tampered (assoc-in signed [:envelope :content] "bye")]
     (sqlite/upsert-federation-peer-key! store {:peer-id "peer-a"
                                                :key-id "k1"
                                                :public-key (:public-key keys)})
-    (is (true? (federation-http/verify-request! {:store store} signed)))
+    (is (true? (auth/verify-request! {:store store} signed)))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"Federation nonce replay"
-                          (federation-http/verify-request! {:store store} signed)))
+                          (auth/verify-request! {:store store} signed)))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"Federation signature invalid"
-                          (federation-http/verify-request! {:store store} tampered)))
+                          (auth/verify-request! {:store store} tampered)))
     (sqlite/close-store! store)
     (io/delete-file (:path store) true)))
 
@@ -45,7 +47,7 @@
     (testing "missing auth fields are rejected even with no key on file"
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"Federation auth missing"
-                            (federation-http/verify-request!
+                            (auth/verify-request!
                              {:store store}
                              {:peer_id "peer-x"
                               :to_agent_ref "agent-1"
@@ -53,7 +55,7 @@
     (testing "a fully-formed request from a peer with no resolvable key is rejected"
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"signing key not found"
-                            (federation-http/verify-request!
+                            (auth/verify-request!
                              {:store store}
                              {:peer_id "peer-x"
                               :to_agent_ref "agent-1"
@@ -68,31 +70,31 @@
 
 (deftest verify-request-rejects-missing-store-and-inactive-keys
   (let [store (temp-store)
-        keys (federation-http/generate-ed25519-keypair)
+        keys (crypto/generate-ed25519-keypair)
         request {:peer_id "peer-a"
                  :to_agent_ref "agent-1"
                  :envelope {:id "msg-1"}}
-        signed (federation-http/sign-request request {:key-id "k1"
-                                                      :private-key (:private-key keys)
-                                                      :nonce "n1"})]
+        signed (crypto/sign-request request {:key-id "k1"
+                                             :private-key (:private-key keys)
+                                             :nonce "n1"})]
     (sqlite/upsert-federation-peer-key! store {:peer-id "peer-a"
                                                :key-id "k1"
                                                :public-key (:public-key keys)
                                                :status "revoked"})
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"nonce store missing"
-                          (federation-http/verify-request! {} signed)))
+                          (auth/verify-request! {} signed)))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"signing key inactive"
-                          (federation-http/verify-request! {:store store} signed)))
+                          (auth/verify-request! {:store store} signed)))
     (sqlite/close-store! store)
     (io/delete-file (:path store) true)))
 
 (deftest forwarder-retries-retryable-statuses
   (let [store (temp-store)
-        keys (federation-http/generate-ed25519-keypair)
+        keys (crypto/generate-ed25519-keypair)
         calls (atom [])
-        forwarder (federation-http/create-forwarder
+        forwarder (forwarder/create-forwarder
                    {:store store
                     :key-id "k1"
                     :private-key (:private-key keys)
@@ -123,10 +125,10 @@
 (deftest forwarder-does-not-retry-nonretryable-statuses
   (let [store (temp-store)
         calls (atom 0)
-        forwarder (federation-http/create-forwarder
+        forwarder (forwarder/create-forwarder
                    {:store store
                     :key-id "k1"
-                    :private-key (:private-key (federation-http/generate-ed25519-keypair))
+                    :private-key (:private-key (crypto/generate-ed25519-keypair))
                     :auto-start? false
                     :retry-policy {:max-attempts 3
                                    :base-delay-ms 0
@@ -150,10 +152,10 @@
 (deftest forwarder-opens-peer-circuit
   (let [store (temp-store)
         calls (atom 0)
-        forwarder (federation-http/create-forwarder
+        forwarder (forwarder/create-forwarder
                    {:store store
                     :key-id "k1"
-                    :private-key (:private-key (federation-http/generate-ed25519-keypair))
+                    :private-key (:private-key (crypto/generate-ed25519-keypair))
                     :auto-start? false
                     :retry-policy {:max-attempts 1}
                     :peer-policy {:failure-threshold 1

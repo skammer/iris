@@ -43,17 +43,6 @@
                                       (initial-component updated-at)]))
                               components))})))
 
-(defn register!
-  [registry component]
-  (when registry
-    (let [updated-at (now)
-          id (component-id component)]
-      (get (swap! (:components registry)
-                  #(if (contains? % id)
-                     %
-                     (assoc % id (initial-component updated-at))))
-           id))))
-
 (defn- update-component!
   [registry component f]
   (when registry

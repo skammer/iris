@@ -14,11 +14,6 @@
       (throw (errors/api-error 400 "bad_request" "command must be a non-blank string")))
     (vec (remove str/blank? (str/split trimmed #"\s+")))))
 
-(defn split-command-optional [command]
-  (let [trimmed (str/trim (or command ""))]
-    (when-not (str/blank? trimmed)
-      (split-command-plain trimmed))))
-
 (defn tool-input-from-map [tool-name body]
   (case tool-name
     (:fs_read :fs_list :fs_delete :fs_mkdir) {:path (:path body)}

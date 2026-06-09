@@ -3,7 +3,6 @@
   (:require
    [agent.defaults :as defaults]
    [agent.llm.messages :as llm-messages]
-   [agent.llm.providers.common :as provider-common]
    [clojure.string :as str]))
 
 (defn structured-output-format [{:keys [name schema strict?]}]
@@ -83,9 +82,6 @@
         {:prompt_cache_retention retention}
 
         :else {}))))
-
-(defn stream-structured-output? [config opts]
-  (provider-common/stream-structured-output? config opts))
 
 (defn request-stream? [config opts]
   (true? (cond

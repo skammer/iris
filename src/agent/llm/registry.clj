@@ -153,7 +153,7 @@
 
 (defn create-registry
   ([llm-cfg] (create-registry llm-cfg {}))
-  ([llm-cfg {:keys [api-key-resolver provider-health]}]
+  ([llm-cfg {:keys [api-key-resolver]}]
    (let [llm-cfg* (config/llm-config {:llm llm-cfg})
          active-provider (config/active-provider-key llm-cfg*)
          providers (into {}
@@ -171,8 +171,7 @@
                          (:providers llm-cfg*))]
      {:active-provider active-provider
       :providers providers
-      :api-key-resolver api-key-resolver
-      :provider-health provider-health})))
+      :api-key-resolver api-key-resolver})))
 
 (defn provider
   [registry provider-key]
@@ -205,11 +204,9 @@
 
 (defn enrich-provider
   [registry provider-key]
-  (let [{:keys [key config metadata models] :as provider*} (provider registry provider-key)]
+  (let [{:keys [key config] :as provider*} (provider registry provider-key)]
     (assoc provider*
            :api-key-configured? (boolean (resolve-api-key registry key))
-           :metadata metadata
-           :models models
            :options (normalize-options registry key config))))
 
 (defn list-providers

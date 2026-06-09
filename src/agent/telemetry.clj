@@ -10,27 +10,6 @@
 
 (def terminal-run-statuses #{"completed" "failed" "cancelled" "expired"})
 
-(def observer-event-types
-  #{:system/event
-    :llm/request
-    :llm/call
-    :tool/call
-    :turn/start
-    :turn/end
-    :channel/message
-    :runtime/transition
-    :error
-    :cache/hit
-    :deployment/recovery})
-
-(def observer-metric-types
-  #{:request-latency-ms
-    :tokens
-    :active-sessions
-    :queue-depth
-    :run-duration-ms
-    :tool-success-rate})
-
 (defprotocol IObserver
   (record-event! [this event])
   (record-metric! [this metric])

@@ -60,12 +60,12 @@
                                                  :thinking thinking)))]
           (cond
             (and (= "assistant" role) final?)
-            (let [message (history/persist-final-assistant! system
-                                                            session-id
-                                                            prompt
-                                                            content
-                                                            request-id
-                                                            (history/message-extra payload* request-id))]
+            (let [message (history/persist-completion! system
+                                                       session-id
+                                                       prompt
+                                                       content
+                                                       request-id
+                                                       (history/message-extra payload* request-id))]
               (swap! persisted dissoc :thinking)
               (swap! persisted assoc :assistant-message message))
 

@@ -10,9 +10,6 @@
    [clojure.java.io :as io]
    [clojure.string :as str]))
 
-(defn- endpoint [base-url path]
-  (provider-common/endpoint base-url path))
-
 (defn- chat-body [default-model keep-alive messages opts stream?]
   (cond-> {:model (or (:model opts) default-model)
            :messages (llm-messages/internal->ollama messages)
@@ -29,9 +26,6 @@
   (cond-> (chat-body default-model keep-alive messages opts stream?)
     (:structured-output opts) (assoc :format (get-in opts [:structured-output :schema]))
     (:response-format opts) (assoc :format (:response-format opts))))
-
-(defn- stream-structured-output? [config opts]
-  (provider-common/stream-structured-output? config opts))
 
 (defn- ollama-http-error [response]
   (provider-common/http-error (str "Ollama request failed: " (:status response))
@@ -51,7 +45,6 @@
 
 (defn- stream-response->turn
   ([body-stream] (stream-response->turn body-stream nil nil))
-  ([body-stream on-content-delta] (stream-response->turn body-stream on-content-delta nil))
   ([body-stream on-content-delta on-thinking-delta]
    (with-open [reader (io/reader body-stream)]
      (loop [content []
@@ -98,7 +91,7 @@
   llm-core/ILLMProvider
   (complete [_ messages opts]
     (let [opts* (merge config opts)
-          stream? (stream-structured-output? config opts*)
+          stream? (provider-common/stream-structured-output? config opts*)
           request (provider-common/with-transport-options
                    {:body (json/generate-string (structured-chat-body default-model keep-alive messages opts* stream?))
                     :content-type :json
@@ -106,10 +99,10 @@
                    config
                    opts*)]
       (if stream?
-        (let [response (post-stream (endpoint base-url "/api/chat")
+        (let [response (post-stream (provider-common/endpoint base-url "/api/chat")
                                     request)]
           (:content (stream-response->turn (:body response))))
-        (let [response (post-json (endpoint base-url "/api/chat")
+        (let [response (post-json (provider-common/endpoint base-url "/api/chat")
                                   (assoc request :as :json))]
           (-> response :body :message :content)))))
 
@@ -119,7 +112,7 @@
        (let [opts* (merge config opts)]
          (with-open [reader (io/reader
                              (:body (post-stream
-                                     (endpoint base-url "/api/chat")
+                                     (provider-common/endpoint base-url "/api/chat")
                                      (provider-common/with-transport-options
                                       {:body (json/generate-string (structured-chat-body default-model keep-alive messages opts* true))
                                        :content-type :json
@@ -134,7 +127,7 @@
 
   (embed [_ text opts]
     (let [input (if (string? text) text (vec text))
-          response (post-json (endpoint base-url "/api/embed")
+          response (post-json (provider-common/endpoint base-url "/api/embed")
                               (provider-common/with-transport-options
                                {:body (json/generate-string {:model (or (:model opts)
                                                                         (:embedding-model opts)
@@ -155,7 +148,7 @@
                                                            :as :json}
                                                           config
                                                           {})
-          response (http/get (endpoint base-url "/api/tags")
+          response (http/get (provider-common/endpoint base-url "/api/tags")
                              (provider-common/http-request-options request))]
       (vec (or (-> response :body :models) []))))
 
@@ -178,7 +171,7 @@
                       (llm-core/request->completion-opts request))
           stream? (or (some? (:on-content-delta opts))
                       (some? (:on-thinking-delta opts))
-                      (stream-structured-output? (:config this) opts))
+                      (provider-common/stream-structured-output? (:config this) opts))
           request* (provider-common/with-transport-options
                     {:body (json/generate-string
                             (structured-chat-body (:default-model this)
@@ -191,7 +184,7 @@
                     (:config this)
                     opts)]
       (if stream?
-        (let [response (post-stream (endpoint (:base-url this) "/api/chat")
+        (let [response (post-stream (provider-common/endpoint (:base-url this) "/api/chat")
                                     request*)]
           (llm-core/normalize-llm-response
            (stream-response->turn (:body response)
@@ -199,7 +192,7 @@
                                                             (:tools opts))
                                   (:on-thinking-delta opts))
            {}))
-        (let [response (post-json (endpoint (:base-url this) "/api/chat")
+        (let [response (post-json (provider-common/endpoint (:base-url this) "/api/chat")
                                   (assoc request* :as :json))
               body (:body response)
               message (:message body)]
@@ -220,27 +213,10 @@
     (llm-core/invoke this (assoc opts :messages messages))))
 
 (extend-type OllamaProvider
-  llm-core/ILLMProviderWithConfig
-  (update-config [this new-config]
-    (->OllamaProvider
-     (or (:base-url new-config) (:base-url this))
-     (or (:default-model new-config) (:default-model this))
-     (or (:embedding-model new-config) (:embedding-model this))
-     (or (:keep-alive new-config) (:keep-alive this))
-     (merge (:config this) new-config)))
-
-  (get-config [this]
-    {:base-url (:base-url this)
-     :default-model (:default-model this)
-     :embedding-model (:embedding-model this)
-     :keep-alive (:keep-alive this)
-     :config (:config this)}))
-
-(extend-type OllamaProvider
   llm-core/ILLMProviderWithHealth
   (health-check [this]
     (try
-      (let [response (http/get (endpoint (:base-url this) "/api/tags")
+      (let [response (http/get (provider-common/endpoint (:base-url this) "/api/tags")
                                (let [request (provider-common/with-transport-options
                                               {:throw-exceptions false
                                                :accept :json
@@ -252,10 +228,7 @@
          :details {:status (:status response)}})
       (catch Exception e
         {:healthy false
-         :details {:error (.getMessage e)}})))
-
-  (get-metrics [_]
-    {:provider :ollama}))
+         :details {:error (.getMessage e)}}))))
 
 (defn create-ollama-provider
   [{:keys [base-url model default-model embedding-model keep-alive config]

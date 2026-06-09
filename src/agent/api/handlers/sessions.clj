@@ -4,7 +4,6 @@
    [agent.api.helpers :as h]
    [agent.api.responses :as responses]
    [agent.api.serializers :as ser]
-   [agent.api.validation :as v]
    [agent.chat :as chat]
    [agent.sessions.service :as session-service]))
 
@@ -24,14 +23,14 @@
                                              (session-service/list-sessions system)))}))
 
 (defn get-session [system _request session-id]
-  (v/ensure-session-exists! system session-id)
+  (h/ensure-session-exists! system session-id)
   (responses/json-response 200
                            {:data (ser/session->response
                                    (with-state system
                                      (session-service/get-session system session-id)))}))
 
 (defn set-mode [system request session-id]
-  (v/ensure-session-exists! system session-id)
+  (h/ensure-session-exists! system session-id)
   (let [mode (:mode (h/read-json-body request))]
     (try
       (responses/json-response
@@ -43,13 +42,13 @@
         (throw (errors/domain-error->api-error e))))))
 
 (defn list-messages [system _request session-id]
-  (v/ensure-session-exists! system session-id)
+  (h/ensure-session-exists! system session-id)
   (responses/json-response 200
                            {:data (mapv ser/message->response
                                         (session-service/list-messages system session-id))}))
 
 (defn append-entry [system request session-id]
-  (v/ensure-session-exists! system session-id)
+  (h/ensure-session-exists! system session-id)
   (let [body (h/read-json-body request)
         entry (session-service/append-entry! system
                                              session-id
@@ -61,19 +60,19 @@
     (responses/json-response 201 {:data entry})))
 
 (defn list-entries [system _request session-id]
-  (v/ensure-session-exists! system session-id)
+  (h/ensure-session-exists! system session-id)
   (responses/json-response 200 {:data (session-service/list-entries system session-id)}))
 
 (defn current-path [system _request session-id]
-  (v/ensure-session-exists! system session-id)
+  (h/ensure-session-exists! system session-id)
   (responses/json-response 200 {:data (session-service/current-path system session-id)}))
 
 (defn tree [system _request session-id]
-  (v/ensure-session-exists! system session-id)
+  (h/ensure-session-exists! system session-id)
   (responses/json-response 200 {:data (session-service/tree system session-id)}))
 
 (defn select-leaf [system request session-id]
-  (v/ensure-session-exists! system session-id)
+  (h/ensure-session-exists! system session-id)
   (let [body (h/read-json-body request)
         new-leaf (:entry_id body)
         result (try
@@ -89,7 +88,7 @@
                                (assoc :branch_summary (:branch-summary result))))))
 
 (defn compact [system _request session-id]
-  (v/ensure-session-exists! system session-id)
+  (h/ensure-session-exists! system session-id)
   (responses/json-response
    200
    {:data (session-service/compact! system session-id)}))

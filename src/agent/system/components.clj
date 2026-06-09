@@ -40,8 +40,6 @@
 (defn create-orchestrator
   ([_cfg event-sink]
    (create-orchestrator _cfg event-sink nil nil nil nil))
-  ([_cfg event-sink telemetry-collector]
-   (create-orchestrator _cfg event-sink telemetry-collector nil nil nil))
   ([cfg event-sink telemetry-collector store]
    (create-orchestrator cfg event-sink telemetry-collector store nil nil))
   ([cfg event-sink telemetry-collector store observer trace]

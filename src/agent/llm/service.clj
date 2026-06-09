@@ -2,10 +2,8 @@
   "LLM provider factory and small runtime helpers."
   (:require
    [agent.config :as config]
-   [agent.llm.core :as llm-core]
    [agent.llm.providers.ollama :as ollama]
-   [agent.llm.providers.openai-compatible :as openai-compatible]
-   [agent.telemetry :as telemetry]))
+   [agent.llm.providers.openai-compatible :as openai-compatible]))
 
 (defn create-llm-provider
   [cfg]
@@ -47,27 +45,3 @@
                                          (config/active-provider-key (:llm cfg)))
                           :model]
                          model))))))
-
-(defn complete
-  ([system prompt]
-   (complete system [{:role "user" :content prompt}] {}))
-  ([system messages opts]
-   (telemetry/complete-with-telemetry! (:telemetry system)
-                                       (:llm-provider system)
-                                       messages
-                                       opts
-                                       {:agent-id "system"
-                                        :observer (:observer system)
-                                        :trace (:trace system)
-                                        :model (or (:model opts)
-                                                   (config/active-model (get-in system [:config :llm])))})))
-
-(defn stream
-  ([system prompt]
-   (stream system [{:role "user" :content prompt}] {}))
-  ([system messages opts]
-   (llm-core/stream (:llm-provider system) messages opts)))
-
-(defn embed
-  [system text opts]
-  (llm-core/embed (:llm-provider system) text opts))

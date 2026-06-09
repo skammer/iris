@@ -14,7 +14,6 @@
    [clojure.java.io :as io]))
 
 (def latest-schema-version migrations/latest-schema-version)
-(def default-busy-timeout-ms common/default-busy-timeout-ms)
 
 (defn jdbc-url [path]
   (common/jdbc-url path))
@@ -45,7 +44,7 @@
   [{:keys [path busy-timeout-ms] :as config}]
   (Class/forName "org.sqlite.JDBC")
   (let [store {:path path
-               :busy-timeout-ms (or busy-timeout-ms default-busy-timeout-ms)
+               :busy-timeout-ms (or busy-timeout-ms common/default-busy-timeout-ms)
                :datasource (common/create-datasource config)
                :tx-lock (Object.)
                :evict-on-close? (true? (:evict-on-close? config))
@@ -58,7 +57,7 @@
         (common/close-store! store)
         (throw e)))))
 
-(defn init-store!
+(defn create-store
   [{:keys [path destructive-reset-on-drift?] :as config}]
   (try
     (open-store! config)
@@ -70,9 +69,6 @@
             (open-store! config))
           (throw (drift-recovery-error path e)))
         (throw e)))))
-
-(defn create-store [config]
-  (init-store! config))
 
 (defn close-store! [store]
   (common/close-store! store))
@@ -148,9 +144,6 @@
 
 (defn get-channel-session-mapping [store source external-chat-id]
   (sessions/get-channel-session-mapping store source external-chat-id))
-
-(defn upsert-channel-session-mapping! [store mapping]
-  (sessions/upsert-channel-session-mapping! store mapping))
 
 (defn ensure-channel-session! [store mapping]
   (sessions/ensure-channel-session! store mapping))

@@ -4,7 +4,7 @@
    [agent.api.helpers :as h]
    [agent.api.responses :as responses]
    [agent.api.serializers :as ser]
-   [agent.api.validation :as v]
+   [agent.system.events :as events]
    [agent.tools.approvals :as tool-approvals])
   (:import
    (java.time Instant)))
@@ -31,14 +31,14 @@
                    :requested-by (or (:requested_by body) "api")
                    :reason (:reason body)
                    :expires-at (approval-expires-at system)})]
-    (v/emit-system-event! system
-                          {:event-type :tool.approval.requested
-                           :entity-type :tool_approval
-                           :entity-id (:id approval)
-                           :payload {:tool-name (name tool-name)
-                                     :requested-by (:requested-by approval)
-                                     :requested-permissions (mapv name (:requested-permissions approval))
-                                     :expires-at (:expires-at approval)}})
+    (events/log-event! system
+                       {:event-type :tool.approval.requested
+                        :entity-type :tool_approval
+                        :entity-id (:id approval)
+                        :payload {:tool-name (name tool-name)
+                                  :requested-by (:requested-by approval)
+                                  :requested-permissions (mapv name (:requested-permissions approval))
+                                  :expires-at (:expires-at approval)}})
     (responses/json-response 201 {:data (ser/approval->response approval)})))
 
 (defn decide [system request approval-id status]
@@ -51,12 +51,12 @@
                     :denied (tool-approvals/deny! (:store system) approval-id actor reason))
                   (catch clojure.lang.ExceptionInfo e
                     (throw (errors/tool-error->api-error e))))]
-    (v/emit-system-event! system
-                          {:event-type (keyword (str "tool.approval." (name status)))
-                           :entity-type :tool_approval
-                           :entity-id approval-id
-                           :payload {:tool-name (:tool-name updated)
-                                     :actor actor
-                                     :decision status
-                                     :reason reason}})
+    (events/log-event! system
+                       {:event-type (keyword (str "tool.approval." (name status)))
+                        :entity-type :tool_approval
+                        :entity-id approval-id
+                        :payload {:tool-name (:tool-name updated)
+                                  :actor actor
+                                  :decision status
+                                  :reason reason}})
     (responses/json-response 200 {:data (ser/approval->response updated)})))

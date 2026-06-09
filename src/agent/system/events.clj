@@ -117,32 +117,14 @@
        recorded))))
 
 (defn create-recorded-event-sink
-  ([broker-instance]
-   (create-recorded-event-sink broker-instance nil))
-  ([broker-instance telemetry-collector]
-   (create-recorded-event-sink broker-instance telemetry-collector nil nil))
-  ([broker-instance telemetry-collector observer trace]
-   (fn [recorded]
-     (observe-system-event! telemetry-collector observer recorded)
-     (trace-system-event! trace recorded)
-     (doseq [message (broker/event->messages recorded)]
-       (broker/publish! broker-instance message))
-     recorded)))
-
-(defn subscribe-events
-  ([system] (subscribe-events system (broker/all-events-subject)))
-  ([system pattern]
-   (broker/subscribe! (:broker system) pattern)))
-
-(defn unsubscribe-events
-  [system subscription]
-  (broker/unsubscribe! (:broker system) subscription))
+  [broker-instance telemetry-collector observer trace]
+  (fn [recorded]
+    (observe-system-event! telemetry-collector observer recorded)
+    (trace-system-event! trace recorded)
+    (doseq [message (broker/event->messages recorded)]
+      (broker/publish! broker-instance message))
+    recorded))
 
 (defn log-event!
   [system event]
   ((:event-sink system) event))
-
-(defn list-events
-  ([system] (list-events system {}))
-  ([system opts]
-   (sqlite/list-events (:store system) opts)))

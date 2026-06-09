@@ -3,11 +3,12 @@
   helpers (json/html/bytes responses) live in agent.api.responses."
   (:require
    [agent.api.errors :as errors]
+   [agent.sessions.service :as session-service]
    [cheshire.core :as json]
-   [clojure.string :as str])
+   [clojure.string :as str]
+   [ring.util.codec :as codec])
   (:import
    (com.fasterxml.jackson.core JsonProcessingException)
-   (java.net URLDecoder)
    (java.nio.charset StandardCharsets)))
 
 (defn content-type-for-path [path]
@@ -19,28 +20,6 @@
     (str/ends-with? path ".ttf") "font/ttf"
     (str/ends-with? path ".otf") "font/otf"
     :else "application/octet-stream"))
-
-(defn- decode-url-component [value]
-  (URLDecoder/decode (or value "") StandardCharsets/UTF_8))
-
-(defn- merge-param [m key value]
-  (let [existing (get m key)]
-    (cond
-      (nil? existing) (assoc m key value)
-      (vector? existing) (assoc m key (conj existing value))
-      :else (assoc m key [existing value]))))
-
-(defn parse-urlencoded [value]
-  (if (str/blank? value)
-    {}
-    (reduce
-     (fn [acc pair]
-       (let [[raw-k raw-v] (str/split pair #"=" 2)
-             key (keyword (decode-url-component raw-k))
-             val (decode-url-component raw-v)]
-         (merge-param acc key val)))
-     {}
-     (str/split value #"&"))))
 
 (defn- body-string [request]
   (when-let [body (:body request)]
@@ -71,21 +50,20 @@
    back to slurping/parsing the raw body when middleware isn't in front. Always
    returns a keyword-keyed map."
   [request]
-  (if-let [form-params (or (not-empty (:multipart-params request))
-                           (:form-params request))]
-    (reduce-kv (fn [acc k v] (assoc acc (keyword k) v)) {} form-params)
-    (parse-urlencoded (body-string request))))
+  (let [form-params (or (not-empty (:multipart-params request))
+                        (:form-params request)
+                        (let [decoded (codec/form-decode (or (body-string request) ""))]
+                          (when (map? decoded) decoded)))]
+    (reduce-kv (fn [acc k v] (assoc acc (keyword k) v)) {} form-params)))
 
 (defn header
-  "Look up a request header (case-insensitive on standard ring lower-cased keys)."
+  "Look up a request header (ring stores header names lower-cased)."
   [request name]
-  (let [headers (:headers request)
-        lower (str/lower-case name)]
-    (or (get headers lower)
-        (get headers name))))
+  (get (:headers request) (str/lower-case name)))
 
-(defn body-value [body & ks]
-  (some #(get body %) ks))
+(defn ensure-session-exists! [system session-id]
+  (when (and session-id (not (session-service/session-exists? system session-id)))
+    (throw (errors/api-error 404 "session_not_found" "Session not found"))))
 
 (defn bearer-token [value]
   (when value

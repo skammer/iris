@@ -87,7 +87,7 @@
                                                           opts)
           responses? (request/responses-api? config opts)
           stream? (or (request/request-stream? config opts)
-                      (request/stream-structured-output? config opts))]
+                      (provider-common/stream-structured-output? config opts))]
       (cond
         (and responses? stream?)
         (:content (post-responses-stream-turn
@@ -217,7 +217,7 @@
           stream-with-delta? (or (some? (:on-content-delta opts))
                                  (some? (:on-thinking-delta opts)))
           stream-request? (or (request/request-stream? (:config this) opts)
-                              (request/stream-structured-output? (:config this) opts))
+                              (provider-common/stream-structured-output? (:config this) opts))
           on-content-delta (dsml/guard-content-delta (:on-content-delta opts)
                                                      (:tools opts))
           on-thinking-delta (:on-thinking-delta opts)
@@ -283,28 +283,6 @@
     (llm-core/invoke this (assoc opts :messages messages))))
 
 (extend-type OpenAICompatibleProvider
-  llm-core/ILLMProviderWithConfig
-  (update-config [this new-config]
-    (->OpenAICompatibleProvider
-     (or (:base-url new-config) (:base-url this))
-     (or (:api-key new-config) (:api-key this))
-     (or (:default-model new-config) (:default-model this))
-     (or (:site-url new-config) (:site-url this))
-     (or (:app-name new-config) (:app-name this))
-     (or (:extra-headers new-config) (:extra-headers this))
-     (merge (:config this) new-config)
-     (or (:api-key-resolver new-config) (:api-key-resolver this))))
-
-  (get-config [this]
-    {:base-url (:base-url this)
-     :default-model (:default-model this)
-     :site-url (:site-url this)
-     :app-name (:app-name this)
-     :api-key (when (:api-key this) "***REDACTED***")
-     :api-key-resolver? (boolean (:api-key-resolver this))
-     :config (:config this)}))
-
-(extend-type OpenAICompatibleProvider
   llm-core/ILLMProviderWithHealth
   (health-check [this]
     (try
@@ -320,10 +298,7 @@
          :details {:status (:status response)}})
       (catch Exception e
         {:healthy false
-         :details {:error (.getMessage e)}})))
-
-  (get-metrics [_]
-    {:provider :openai-compatible}))
+         :details {:error (.getMessage e)}}))))
 
 (defn create-openai-compatible-provider
   [{:keys [base-url api-key default-model model site-url app-name extra-headers config api-key-resolver]

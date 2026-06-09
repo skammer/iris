@@ -7,7 +7,6 @@
    [agent.health :as health]
    [agent.kernel]
    [agent.kernel.service :as kernel-service]
-   [agent.llm.core :as llm-core]
    [agent.llm.registry :as llm-registry]
    [agent.llm.service :as llm-service]
    [agent.memory.core :as memory]
@@ -42,7 +41,7 @@
                                             :max-tokens 2048
                                             :api-key "or-key"}}})]
     (is (instance? agent.llm.providers.openai_compatible.OpenAICompatibleProvider provider))
-    (is (= 2048 (get-in (llm-core/get-config provider) [:config :max-tokens])))))
+    (is (= 2048 (get-in provider [:config :max-tokens])))))
 
 (deftest create-llm-provider-keeps-openai-compatible-request-defaults
   (let [provider (llm-service/create-llm-provider
@@ -53,12 +52,11 @@
                                             :api-key "nd-key"
                                             :max-tokens 6384
                                             :extra-body {:chat_template_kwargs
-                                                         {:enable_thinking false}}}}})
-        provider-config (llm-core/get-config provider)]
-    (is (= "qwen3.6-35b-a3b" (:default-model provider-config)))
-    (is (= 6384 (get-in provider-config [:config :max-tokens])))
+                                                         {:enable_thinking false}}}}})]
+    (is (= "qwen3.6-35b-a3b" (:default-model provider)))
+    (is (= 6384 (get-in provider [:config :max-tokens])))
     (is (= {:chat_template_kwargs {:enable_thinking false}}
-           (get-in provider-config [:config :extra-body])))))
+           (get-in provider [:config :extra-body])))))
 
 (deftest create-system-registers-default-tools
   (let [system (system/create-system)

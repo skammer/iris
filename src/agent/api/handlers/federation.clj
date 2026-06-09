@@ -4,7 +4,7 @@
    [agent.api.helpers :as h]
    [agent.api.responses :as responses]
    [agent.api.serializers :as ser]
-   [agent.federation.http :as federation-http]
+   [agent.federation.auth :as federation-auth]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]))
 
@@ -50,7 +50,7 @@
         to-agent-ref (:to_agent_ref body)
         envelope (:envelope body)]
     (try
-      (federation-http/verify-request!
+      (federation-auth/verify-request!
        {:store (:store system)
         :peer (orchestrator/get-federated-peer (:orchestrator system) peer-id)}
        body)

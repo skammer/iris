@@ -297,18 +297,6 @@
   [:llm :storage :tools :skills :memory :channel-adapters :runners
    :orchestrator :telemetry :observer :trace :logging :api :chat :loop])
 
-(def default-config-edn
-  {:iris/config-version 1
-   :iris/context-files markdown-file-names})
-
-(def default-markdown-content
-  {"SOUL.md" "# SOUL\n\n"
-   "AGENTS.md" "# AGENTS\n\n"
-   "USER.md" "# USER\n\n"
-   "TOOLS.md" "# TOOLS\n\n"
-   "BOOT.md" "# BOOT\n\n"
-   "HEARTBEAT.md" "# HEARTBEAT\n\n"})
-
 (defn- getenv [name]
   (*env* name))
 
@@ -388,11 +376,9 @@
 
 (defn- default-file-content [name]
   (or (resource-template-content name)
-      (if (= config-file-name name)
-        (str (binding [*print-namespace-maps* false]
-               (pr-str default-config-edn))
-             "\n")
-        (get default-markdown-content name ""))))
+      (throw (ex-info (str "Missing classpath template for config file: " name)
+                      {:type :missing-config-template
+                       :name name}))))
 
 (defn- warn!
   [message attrs]

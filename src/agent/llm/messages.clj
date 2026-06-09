@@ -188,23 +188,6 @@
                          :arguments (json/generate-string (or (:arguments block*) {}))}}
        (:id block*) (assoc :id (:id block*))))))
 
-(defn provider-tool-result->internal
-  [message]
-  (runtime-schema/validate-message-block!
-   {:type :tool-result
-    :tool-call-id (or (:tool-call-id message)
-                      (:tool_call_id message))
-    :name (:name message)
-    :status (or (:status message) :ok)
-    :content (let [content (:content message)]
-               (if (string? content)
-                 (try
-                   (json/parse-string content true)
-                   (catch Exception _
-                     content))
-                 content))
-    :raw message}))
-
 (defn internal-tool-result->provider-tool-result
   ([block] (internal-tool-result->provider-tool-result :openai-compatible block))
   ([_provider block]

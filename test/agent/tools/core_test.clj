@@ -155,7 +155,8 @@
                :execute-fn (fn [input _context] input)})
         registry (-> (tools/create-registry)
                      (tools/register-tool tool))
-        approved-registry (tools/with-approval registry (fn [_] {:allow true}))]
+        approved-registry (-> (tools/create-registry {:approval-check (fn [_] {:allow true})})
+                              (tools/register-tool tool))]
     (is (re-find #"requires approval policy"
                  (thrown-message #(tools/execute-tool registry :sensitive-echo {:message "hi"}
                                                       {:permissions #{:echo}}))))

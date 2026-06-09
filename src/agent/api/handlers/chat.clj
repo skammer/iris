@@ -1,15 +1,16 @@
 (ns agent.api.handlers.chat
   (:require
+   [agent.api.errors :as errors]
    [agent.api.helpers :as h]
    [agent.api.responses :as responses]
    [agent.api.serializers :as ser]
    [agent.api.streaming :as streaming]
-   [agent.api.validation :as v]
    [agent.broker.core :as broker]
    [agent.chat :as chat]
    [agent.config :as config]
    [agent.defaults :as defaults]
-   [clojure.core.async :as async]))
+   [clojure.core.async :as async]
+   [clojure.string :as str]))
 
 (defn- complete! [system messages {:keys [session-id]}]
   (chat/run! system {:messages messages :session-id session-id}))
@@ -171,12 +172,36 @@
                    (when result-value
                      (finish! ctx result-value))))))))))))
 
+(defn- normalize-chat-request [body]
+  (let [messages (:messages body)
+        prompt (:prompt body)
+        session-id (:session_id body)
+        stream? (true? (:stream body))]
+    (when (and messages prompt)
+      (throw (errors/api-error 400 "bad_request" "Provide either messages or prompt, not both")))
+    (cond
+      (some? messages)
+      {:messages messages
+       :session-id session-id
+       :stream? stream?}
+
+      (some? prompt)
+      (do
+        (when (str/blank? prompt)
+          (throw (errors/api-error 400 "bad_request" "prompt must not be blank")))
+        {:messages [{:role "user" :content prompt}]
+         :session-id session-id
+         :stream? stream?})
+
+      :else
+      (throw (errors/api-error 400 "bad_request" "Expected messages vector or prompt string")))))
+
 (defn completions-response
   "Ring-style handler for POST /v1/chat/completions."
   [system request]
   (let [{:keys [messages session-id stream?]}
-        (v/normalize-chat-request (h/read-json-body request))]
-    (v/ensure-session-exists! system session-id)
+        (normalize-chat-request (h/read-json-body request))]
+    (h/ensure-session-exists! system session-id)
     (if stream?
       (stream-response system request messages session-id)
       (let [result (complete! system messages {:session-id session-id})]
@@ -190,6 +215,6 @@
   [system request]
   (let [body (h/read-json-body request)
         session-id (:session_id body)]
-    (v/ensure-session-exists! system session-id)
+    (h/ensure-session-exists! system session-id)
     (responses/json-response 200
                              {:data (chat/cancel-session! system session-id)})))

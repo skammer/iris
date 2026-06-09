@@ -64,23 +64,19 @@
       (throw error))))
 
 (defn post-json
-  ([url request error-fn] (post-json url request error-fn {}))
-  ([url request error-fn transport-opts]
-   (let [request* (merge transport-opts request)]
-     (apply llm-core/retry-with-backoff
-            #(checked-response (http/post url (assoc (http-request-options request*) :throw-exceptions false))
-                               error-fn)
-            (retry-args request*)))))
+  [url request error-fn]
+  (apply llm-core/retry-with-backoff
+         #(checked-response (http/post url (assoc (http-request-options request) :throw-exceptions false))
+                            error-fn)
+         (retry-args request)))
 
 (defn post-stream
-  ([url request error-fn] (post-stream url request error-fn {}))
-  ([url request error-fn transport-opts]
-   (let [request* (merge transport-opts request)]
-     (checked-response
-      (http/post url (assoc (http-request-options request*)
-                            :throw-exceptions false
-                            :as :stream))
-      error-fn))))
+  [url request error-fn]
+  (checked-response
+   (http/post url (assoc (http-request-options request)
+                         :throw-exceptions false
+                         :as :stream))
+   error-fn))
 
 (defn stream-channel [f]
   (let [ch (async/chan)]

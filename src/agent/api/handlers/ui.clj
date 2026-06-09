@@ -1,18 +1,18 @@
 (ns agent.api.handlers.ui
   (:require
    [agent.api.errors :as errors]
-   [agent.api.handlers.runs :as runs]
+   [agent.runs.service :as runs]
    [agent.api.handlers.tool-approvals :as approvals]
    [agent.api.handlers.tools :as tools-h]
    [agent.api.helpers :as h]
    [agent.api.responses :as responses]
    [agent.api.streaming :as streaming]
-   [agent.api.validation :as v]
    [agent.broker.core :as broker]
    [agent.chat :as chat]
    [agent.defaults :as defaults]
    [agent.memory.core :as memory]
    [agent.sessions.service :as session-service]
+   [agent.system.events :as events]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [agent.ui :as ui]
@@ -108,7 +108,7 @@
 
 (defn session-messages [system request]
   (let [session-id (-> request :parameters :query :session_id)]
-    (v/ensure-session-exists! system session-id)
+    (h/ensure-session-exists! system session-id)
     (responses/html-response 200
                              (ui/session-messages-fragment system session-id))))
 
@@ -156,7 +156,7 @@
   [system request]
   (let [session-id (-> request :parameters :query :session_id)
         broker-instance (or (:event-bus system) (:broker system))]
-    (v/ensure-session-exists! system session-id)
+    (h/ensure-session-exists! system session-id)
 	    (streaming/managed-response
 	     request
 	     {:name :ui-session-live
@@ -181,7 +181,7 @@
 (defn chat-action [system request]
   (let [{:keys [session_id prompt image]} (h/read-form-body request)
         content (chat-content prompt image)]
-    (v/ensure-session-exists! system session_id)
+    (h/ensure-session-exists! system session_id)
 	    (streaming/managed-response
 	     request
 	     {:name :ui-chat
@@ -277,7 +277,7 @@
 
 (defn chat-stop [system request]
   (let [{:keys [session_id]} (h/read-form-body request)]
-    (v/ensure-session-exists! system session_id)
+    (h/ensure-session-exists! system session_id)
     (chat/cancel-session! system session_id)
     (responses/html-response 200
                              (str (ui/session-messages-fragment system session_id)
@@ -493,14 +493,14 @@
                    :requested-by "ui"
                    :reason (:reason body)
                    :expires-at (approvals/approval-expires-at system)})]
-    (v/emit-system-event! system
-                          {:event-type :tool.approval.requested
-                           :entity-type :tool_approval
-                           :entity-id (:id approval)
-                           :payload {:tool-name (name tool-name)
-                                     :requested-by (:requested-by approval)
-                                     :requested-permissions (mapv name (:requested-permissions approval))
-                                     :expires-at (:expires-at approval)}})
+    (events/log-event! system
+                       {:event-type :tool.approval.requested
+                        :entity-type :tool_approval
+                        :entity-id (:id approval)
+                        :payload {:tool-name (name tool-name)
+                                  :requested-by (:requested-by approval)
+                                  :requested-permissions (mapv name (:requested-permissions approval))
+                                  :expires-at (:expires-at approval)}})
     (responses/html-response 201
                              (str (ui/tool-approvals-fragment
                                    (tool-approvals/list-requests (:store system) {:limit 50}))
@@ -517,14 +517,14 @@
         updated (case status
                   :approved (tool-approvals/approve! (:store system) approval-id actor reason)
                   :denied (tool-approvals/deny! (:store system) approval-id actor reason))]
-    (v/emit-system-event! system
-                          {:event-type (keyword (str "tool.approval." (name status)))
-                           :entity-type :tool_approval
-                           :entity-id approval-id
-                           :payload {:tool-name (:tool-name updated)
-                                     :actor actor
-                                     :decision status
-                                     :reason reason}})
+    (events/log-event! system
+                       {:event-type (keyword (str "tool.approval." (name status)))
+                        :entity-type :tool_approval
+                        :entity-id approval-id
+                        :payload {:tool-name (:tool-name updated)
+                                  :actor actor
+                                  :decision status
+                                  :reason reason}})
     (responses/html-response 200
                              (str (ui/tool-approvals-fragment
                                    (tool-approvals/list-requests (:store system) {:limit 50}))

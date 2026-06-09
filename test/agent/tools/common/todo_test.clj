@@ -104,8 +104,8 @@
         write-description (tools/describe write-tool)
         search-description (tools/describe search-tool)]
     (try
-      (is (tools/read-only-call? search-description {:query "x"}))
-      (is (not (tools/read-only-call? write-description {:todos []})))
+      (is (tools/parallel-safe-call? search-description {:query "x"}))
+      (is (not (tools/parallel-safe-call? write-description {:todos []})))
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"Insufficient permissions"
                             (tools/execute-tool registry*
