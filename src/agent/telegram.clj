@@ -165,7 +165,10 @@
           (let [[value port] (async/alts!! [result-ch ch])]
             (cond
               (= port result-ch)
-              (recur value terminal?)
+              ;; An error from chat/run! means the runtime loop may never have
+              ;; started, so no terminal agent-end event is coming — waiting
+              ;; for one would spin this loop (and the typing indicator) forever.
+              (recur value (or terminal? (some? (:error value))))
 
               (= port ch)
               (let [event (:payload value)
