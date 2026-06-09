@@ -53,8 +53,8 @@ Inputs: [[refactoring-2026-06-findings]], [[codebase-map]]. Status legend: ☐ p
 
 - ☑ 5.1 history.clj copy-paste pairs + subscribers.clj identical branches (commit `21375a9`).
 - ☑ 5.2 Terminal emitters extracted from `runtime.loop/run!` (commit `3dc4eec`): one named fn per loop ending (max-steps/max-tokens/doom-loop/guardrail/completed/approval/cancelled); alias-def block deleted; file cljfmt'd. Deeper plan-phase extraction deliberately left — the loop/recur state threading is the remaining complexity and needs its own focused pass.
-- ☐ 5.3 LLM providers: make `invoke` the single execution path; `complete`/`stream` become wrappers (kills the triplicated dispatch); update provider tests.
-- ☐ 5.4 Telegram: delete the callback streaming path; single broker-event chat runner (telegram_test guards).
+- ☑ 5.3 LLM providers: `invoke` is the single execution path. Per-provider `complete`/`stream` bodies deleted (−131 LOC); core gained `complete-via-invoke`/`stream-via-invoke`; ollama's channel stream now routes through `stream-response->turn`, fixing its silent thinking/tool-call/usage drops. Protocol methods kept (several test fakes implement them); `default-invoke` Object-extension kept (adapts complete-only fakes).
+- ◐ 5.4 Telegram: the real bug fixed — `run-chat-events!` treats a result-ch `:error` as terminal, so an early chat/run! failure no longer spins the loop + typing indicator forever. The 3-way path collapse (callback/events/continuation) is deferred: most telegram tests drive the callback path via `:chat-fn`, so the collapse requires rewriting the test harness onto a broker — should be its own pass, not piggybacked on this one.
 
 ## Explicitly dropped (this round) — with reasons
 

@@ -128,8 +128,8 @@ Baseline before refactor: 500 tests / 1859 assertions, 1 pre-existing flaky fail
 
 - ☑ 5.1 history.clj copy-paste pairs + subscribers.clj identical branches (commit `21375a9`).
 - ☑ 5.2 Terminal emitters extracted from `runtime.loop/run!` (commit `3dc4eec`); deeper plan-phase extraction left for a focused follow-up.
-- ☐ 5.3 LLM providers: `invoke` as the single execution path; `complete`/`stream` become wrappers.
-- ☐ 5.4 Telegram: delete the callback streaming path; single broker-event chat runner.
+- ☑ 5.3 LLM providers: `invoke` is the single execution path; per-provider `complete`/`stream` dispatch deleted (−131 LOC); ollama channel-stream drift (dropped thinking/tool calls) fixed.
+- ◐ 5.4 Telegram: `run-chat-events!` early-failure hang fixed; the callback/events/continuation 3-way collapse is deferred (requires rewriting the `:chat-fn`-based test harness onto a broker — its own pass).
 
 ### Explicitly dropped (this round) — with reasons
 
