@@ -1,6 +1,7 @@
 (ns agent.orchestrator-test
   (:require
    [agent.llm.core :as llm-core]
+   [agent.llm.instrumented :as llm-instrumented]
    [agent.orchestrator :as orchestrator]
    [clojure.core.async :as async]
    [clojure.test :refer [deftest is]]))
@@ -187,6 +188,65 @@
       (is (= 66 (count inbox-drops)))
       (is (= 68 (count drops)))
       (is (= 64 (:consumed consumed))))))
+
+(deftest concurrent-mutation-survives-send-agent-message-turn-test
+  ;; Regression: the turn used to write back a whole agent snapshot taken
+  ;; before the LLM call, losing any mutation made while the call ran.
+  (let [runtime (orchestrator/create-orchestrator)
+        agent (orchestrator/spawn-agent! runtime {:name "Racer"})
+        agent-id (:id agent)
+        result (with-redefs [llm-instrumented/complete-with-telemetry!
+                             (fn [& _]
+                               ;; interleaved mutation while the turn's LLM call is in flight
+                               (orchestrator/patch-agent-state! runtime agent-id {:concurrent true})
+                               "race-response")]
+                 (orchestrator/send-agent-message! runtime (->TestProvider) agent-id {:content "hello"}))]
+    (is (= "race-response" (get-in result [:response :content])))
+    (is (= {:concurrent true}
+           (:state (orchestrator/describe-agent-interop runtime agent-id)))
+        "mutation applied during the LLM call survives turn completion")
+    (is (= ["hello" "race-response"]
+           (mapv :content (orchestrator/list-agent-messages runtime agent-id))))
+    (is (= "idle" (:status (orchestrator/get-agent runtime agent-id))))))
+
+(deftest concurrent-mutation-survives-inbox-consume-turn-test
+  (let [runtime (orchestrator/create-orchestrator)
+        sender (orchestrator/spawn-agent! runtime {:name "Sender"})
+        worker (orchestrator/spawn-agent! runtime {:name "Worker"})
+        channel (orchestrator/create-channel! runtime {:name "coord"
+                                                       :participants [(:id sender) (:id worker)]})
+        _ (orchestrator/post-channel-message! runtime (:id channel)
+                                              {:sender-id (:id sender) :content "do task"})
+        consumed (with-redefs [llm-instrumented/complete-with-telemetry!
+                               (fn [& _]
+                                 ;; interleaved mutation while the turn's LLM call is in flight
+                                 (orchestrator/patch-agent-state! runtime (:id worker)
+                                                                  {:interrupted true})
+                                 "consumed-response")]
+                   (orchestrator/consume-agent-inbox! runtime (->TestProvider) (:id worker)))]
+    (is (= 1 (:consumed consumed)))
+    (is (= "consumed-response" (get-in consumed [:response :content])))
+    (is (= {:interrupted true}
+           (:state (orchestrator/describe-agent-interop runtime (:id worker))))
+        "mutation applied during the LLM call survives turn completion")
+    (is (= 2 (count (orchestrator/list-agent-messages runtime (:id worker)))))))
+
+(deftest agent-deleted-mid-turn-is-not-resurrected-test
+  ;; Documented behavior: when the agent disappears from state while its LLM
+  ;; call is in flight, completing the turn is a no-op — the turn's output is
+  ;; discarded and the deleted agent is never re-created. There is no public
+  ;; delete API yet, so deletion is simulated against the state atom directly.
+  (let [runtime (orchestrator/create-orchestrator)
+        agent (orchestrator/spawn-agent! runtime {:name "Doomed"})
+        agent-id (:id agent)
+        result (with-redefs [llm-instrumented/complete-with-telemetry!
+                             (fn [& _]
+                               (swap! (:state runtime) update :agents dissoc agent-id)
+                               "ghost-response")]
+                 (orchestrator/send-agent-message! runtime (->TestProvider) agent-id {:content "hello"}))]
+    (is (nil? (:agent result)))
+    (is (= "ghost-response" (get-in result [:response :content])))
+    (is (empty? (orchestrator/list-agents runtime)) "deleted agent stays deleted")))
 
 (deftest disabled-orchestrator-allows-reads-and-blocks-mutators-test
   (let [runtime (orchestrator/create-orchestrator {:enabled? false})]

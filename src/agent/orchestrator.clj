@@ -440,6 +440,27 @@
   [orchestrator agent-id]
   (:messages (ensure-agent! orchestrator agent-id)))
 
+(defn- complete-agent-turn!
+  "Merges a finished turn's deltas into the agent's CURRENT value via a single
+  swap!: `messages` are appended to the live :messages vector and `status`
+  (when provided) replaces :status. No other keys are written, so mutations
+  made concurrently while the turn's slow LLM call was in flight (state
+  patches, capability updates, status changes, inbox deliveries) survive.
+  If the agent was deleted mid-turn the swap! is a no-op: the turn's output
+  is discarded rather than resurrecting the agent, and nil is returned.
+  Otherwise returns the agent's post-merge value."
+  [orchestrator agent-id {:keys [messages status]}]
+  (-> (swap-state! orchestrator
+                   update :agents
+                   (fn [agents]
+                     (if (contains? agents agent-id)
+                       (update agents agent-id
+                               (fn [agent]
+                                 (cond-> (update agent :messages into messages)
+                                   status (assoc :status status))))
+                       agents)))
+      (get-in [:agents agent-id])))
+
 (defn send-agent-message!
   [orchestrator llm-provider agent-id {:keys [role content]
                                        :or {role "user"}}]
@@ -452,8 +473,7 @@
                        :content content
                        :created-at (now)}
         agent-before (ensure-agent! orchestrator agent-id)
-        agent-after-input (update agent-before :messages conj input-message)
-        llm-messages (build-llm-messages agent-after-input)
+        llm-messages (build-llm-messages (update agent-before :messages conj input-message))
         completion (llm-instrumented/complete-with-telemetry! (:telemetry orchestrator)
                                                               llm-provider
                                                               llm-messages
@@ -463,19 +483,18 @@
                                                                :trace (:trace orchestrator)})
         assistant-message {:role "assistant"
                            :content completion
-                           :created-at (now)}]
-    (swap-state! orchestrator
-                 assoc-in [:agents agent-id]
-                 (-> agent-after-input
-                     (assoc :status "idle")
-                     (update :messages conj assistant-message)))
-    (emit-event! orchestrator
-                 {:event-type :agent.message.processed
-                  :entity-type :agent
-                  :entity-id agent-id
-                  :payload {:input-role role
-                            :response-role "assistant"}})
-    {:agent (agent-view (get (agents-map orchestrator) agent-id))
+                           :created-at (now)}
+        agent-after (complete-agent-turn! orchestrator agent-id
+                                          {:messages [input-message assistant-message]
+                                           :status "idle"})]
+    (when agent-after
+      (emit-event! orchestrator
+                   {:event-type :agent.message.processed
+                    :entity-type :agent
+                    :entity-id agent-id
+                    :payload {:input-role role
+                              :response-role "assistant"}}))
+    {:agent (some-> agent-after agent-view)
      :input input-message
      :response assistant-message}))
 
@@ -1030,17 +1049,16 @@
                                                                    :trace (:trace orchestrator)})
             assistant-message {:role "assistant"
                                :content completion
-                               :created-at (now)}]
-        (swap-state! orchestrator
-                     assoc-in [:agents agent-id]
-                     (-> agent-after-input
-                         (assoc :status "idle")
-                         (update :messages conj assistant-message)))
-        (emit-event! orchestrator
-                     {:event-type :agent.inbox.consumed
-                      :entity-type :agent
-                      :entity-id agent-id
-                      :payload {:consumed (count drained)}})
-        {:agent (agent-view (get (agents-map orchestrator) agent-id))
+                               :created-at (now)}
+            agent-after (complete-agent-turn! orchestrator agent-id
+                                              {:messages (conj drained assistant-message)
+                                               :status "idle"})]
+        (when agent-after
+          (emit-event! orchestrator
+                       {:event-type :agent.inbox.consumed
+                        :entity-type :agent
+                        :entity-id agent-id
+                        :payload {:consumed (count drained)}}))
+        {:agent (some-> agent-after agent-view)
          :consumed (count drained)
          :response assistant-message}))))
