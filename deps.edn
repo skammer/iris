@@ -6,6 +6,8 @@
         com.brunobonacci/mulog-opentelemetry {:mvn/version "0.10.1"}
         clj-http/clj-http {:mvn/version "3.13.1"}
         cheshire/cheshire {:mvn/version "5.11.0"}
+        org.commonmark/commonmark {:mvn/version "0.24.0"}
+        org.jsoup/jsoup {:mvn/version "1.18.3"}
         metosin/malli {:mvn/version "0.20.1"}
         hiccup/hiccup {:mvn/version "2.0.0"}
         http-kit/http-kit {:mvn/version "2.8.0"}

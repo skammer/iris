@@ -78,19 +78,20 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
-(deftest session-message-content-is-escaped
+(deftest session-message-content-renders-markdown-and-sanitizes-html
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})]
     (try
       (let [session (sqlite/create-session! store "xss")
-            payload "<script>alert(1)</script><img src=\"x\" onerror=\"alert(2)\"> **bold**"]
+            payload "<script>alert(1)</script><img src=\"x\" onerror=\"alert(2)\"> **bold** [ok](https://example.com) [bad](javascript:alert(3))"]
         (sqlite/append-message! store (:id session) "user" payload)
         (let [html (ui/session-messages-fragment {:store store} (:id session))]
           (is (str/includes? html "&lt;script&gt;alert(1)&lt;/script&gt;"))
-          (is (str/includes? html "**bold**"))
+          (is (str/includes? html "<strong>bold</strong>"))
+          (is (str/includes? html "href=\"https://example.com\""))
           (is (not (str/includes? html "<script")))
           (is (not (str/includes? html "<img")))
-          (is (not (str/includes? html "onerror=\"alert(2)\"")))))
+          (is (not (str/includes? html "javascript:alert")))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
@@ -234,11 +235,11 @@
                            :content payload
                            :created-at "2026-04-19T00:00:00Z"}]
                :events []})]
-    (is (str/includes? html "&lt;img src=&quot;x&quot; onerror=&quot;alert(1)&quot;&gt;"))
-    (is (str/includes? html "[link](javascript:alert(1))"))
+    (is (str/includes? html "&lt;img src=\"x\" onerror=\"alert(1)\"&gt;"))
+    (is (str/includes? html "<a>link</a>"))
     (is (not (str/includes? html "<script")))
     (is (not (str/includes? html "<img")))
-    (is (not (str/includes? html "onerror=\"alert(1)\"")))))
+    (is (not (str/includes? html "href=\"javascript")))))
 
 (deftest trusted-fragment-requires-rendered-html
   (is (thrown-with-msg? clojure.lang.ExceptionInfo

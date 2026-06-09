@@ -784,6 +784,100 @@ textarea {
   gap: 8px;
 }
 
+.message-content {
+  color: var(--text-primary);
+  font: 12px/1.5 "IoskeleyMono", "Space Mono", "JetBrains Mono", "SF Mono", monospace;
+  overflow-wrap: anywhere;
+}
+
+.message-content > :first-child {
+  margin-top: 0;
+}
+
+.message-content > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown blockquote,
+.markdown pre,
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  margin: 0 0 8px;
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: 22px;
+}
+
+.markdown blockquote {
+  padding-left: 10px;
+  border-left: 2px solid var(--border-visible);
+  color: var(--text-secondary);
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  color: var(--text-display);
+  font-family: "IoskeleyMono", "Space Mono", "JetBrains Mono", "SF Mono", monospace;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.markdown h1 {
+  font-size: 13px;
+}
+
+.markdown h2,
+.markdown h3 {
+  font-size: 12px;
+}
+
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.markdown code {
+  padding: 1px 3px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+}
+
+.markdown pre {
+  overflow-x: auto;
+  padding: 8px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+}
+
+.markdown pre code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.markdown a {
+  color: var(--text-display);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+}
+
 .message-media {
   margin: 0;
   display: grid;

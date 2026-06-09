@@ -8,7 +8,12 @@
   (:import
    (java.net URLEncoder)
    (java.time Instant)
-   (java.util ArrayDeque IdentityHashMap)))
+   (java.util ArrayDeque IdentityHashMap)
+   (org.commonmark.parser Parser)
+   (org.commonmark.renderer.html HtmlRenderer)
+   (org.jsoup Jsoup)
+   (org.jsoup.nodes Document$OutputSettings)
+   (org.jsoup.safety Safelist)))
 
 (def ^:private max-trusted-fragments 4096)
 (defonce ^:private trusted-fragments (IdentityHashMap.))
@@ -38,9 +43,38 @@
                     {:type :untrusted-html-fragment})))
   (h/raw html))
 
+(defonce ^:private markdown-parser
+  (.build (Parser/builder)))
+
+(defonce ^:private markdown-renderer
+  (-> (HtmlRenderer/builder)
+      (.escapeHtml true)
+      (.build)))
+
+(defonce ^:private markdown-safelist
+  (doto (Safelist/none)
+    (.addTags (into-array String ["a" "blockquote" "br" "code" "del" "em" "h1" "h2"
+                                  "h3" "h4" "h5" "h6" "hr" "li" "ol" "p" "pre"
+                                  "strong" "ul"]))
+    (.addAttributes "a" (into-array String ["href" "title"]))
+    (.addAttributes "code" (into-array String ["class"]))
+    (.addProtocols "a" "href" (into-array String ["http" "https" "mailto"]))))
+
+(defonce ^:private markdown-output-settings
+  (doto (Document$OutputSettings.)
+    (.prettyPrint false)))
+
+(defn- markdown-input [content]
+  (-> (str content)
+      (str/replace "<" "&lt;")
+      (str/replace ">" "&gt;")))
+
+(defn- markdown-html [content]
+  (let [html (.render markdown-renderer (.parse markdown-parser (markdown-input content)))]
+    (Jsoup/clean html "" markdown-safelist markdown-output-settings)))
+
 (defn message-content [content]
-  ;; Markdown intentionally disabled; Hiccup escapes LLM/user text here.
-  [:div.code (str content)])
+  [:div.message-content.markdown (h/raw (markdown-html content))])
 
 (defn- source-url [{:keys [type value media-type]}]
   (case (keyword type)
