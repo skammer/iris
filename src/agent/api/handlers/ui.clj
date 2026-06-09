@@ -552,7 +552,7 @@
                                            :user user
                                            :activity (:activity input)})})))
       (catch Exception e
-        (let [api-e (errors/tool-error->api-error e)]
+        (let [api-e (errors/domain-error->api-error e)]
           (responses/html-response
            (:status (ex-data api-e))
            (ui/tool-results-fragment

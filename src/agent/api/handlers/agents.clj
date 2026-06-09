@@ -109,7 +109,7 @@
           (case (:type data)
             :agent-not-found (throw (errors/api-error 404 "agent_not_found" "Agent not found"))
             :tool-blocked (throw (errors/api-error 403 "tool_blocked" (.getMessage e) (dissoc data :type)))
-            (throw (errors/tool-error->api-error e))))))))
+            (throw (errors/domain-error->api-error e))))))))
 
 (defn orchestrator-spawn-worker [system request agent-id]
   (let [body (h/read-json-body request)

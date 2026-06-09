@@ -1,6 +1,5 @@
 (ns agent.api.handlers.sessions
   (:require
-   [agent.api.errors :as errors]
    [agent.api.helpers :as h]
    [agent.api.responses :as responses]
    [agent.api.serializers :as ser]
@@ -32,14 +31,11 @@
 (defn set-mode [system request session-id]
   (h/ensure-session-exists! system session-id)
   (let [mode (:mode (h/read-json-body request))]
-    (try
-      (responses/json-response
-       200
-       {:data (ser/session->response
-               (with-state system
-                 (session-service/set-mode! system session-id mode)))})
-      (catch clojure.lang.ExceptionInfo e
-        (throw (errors/domain-error->api-error e))))))
+    (responses/json-response
+     200
+     {:data (ser/session->response
+             (with-state system
+               (session-service/set-mode! system session-id mode)))})))
 
 (defn list-messages [system _request session-id]
   (h/ensure-session-exists! system session-id)
@@ -75,13 +71,10 @@
   (h/ensure-session-exists! system session-id)
   (let [body (h/read-json-body request)
         new-leaf (:entry_id body)
-        result (try
-                 (session-service/select-leaf! system
-                                               session-id
-                                               new-leaf
-                                               {:branch-summary? (true? (:branch_summary body))})
-                (catch clojure.lang.ExceptionInfo e
-                  (throw (errors/domain-error->api-error e))))]
+        result (session-service/select-leaf! system
+                                             session-id
+                                             new-leaf
+                                             {:branch-summary? (true? (:branch_summary body))})]
     (responses/json-response 200
                              (cond-> {:data (:entry result)}
                                (:branch-summary result)

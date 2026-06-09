@@ -58,16 +58,10 @@
 
 (defn vault-read [system request]
   (let [{:keys [path]} (h/read-json-body request)]
-    (try
-      (responses/json-response 200
-                               {:data (memory/read-vault-file (:memory-service system) path)})
-      (catch clojure.lang.ExceptionInfo e
-        (throw (errors/domain-error->api-error e))))))
+    (responses/json-response 200
+                             {:data (memory/read-vault-file (:memory-service system) path)})))
 
 (defn vault-write [system request]
   (let [{:keys [path content]} (h/read-json-body request)]
-    (try
-      (responses/json-response 201
-                               {:data (memory/write-vault-file! (:memory-service system) path content)})
-      (catch clojure.lang.ExceptionInfo e
-        (throw (errors/domain-error->api-error e))))))
+    (responses/json-response 201
+                             {:data (memory/write-vault-file! (:memory-service system) path content)})))

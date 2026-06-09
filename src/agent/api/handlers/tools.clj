@@ -62,15 +62,12 @@
         input (:input body)
         approval-id (:approval_id body)
         tool-key (keyword tool-name)]
-    (try
-      (responses/json-response 200
-                               {:data (tool-service/execute-tool
-                                       system
-                                       tool-key
-                                       input
-                                       (execution-context system :api tool-key input
-                                                          {:approval-id approval-id
-                                                           :user "api"
-                                                           :activity (:activity body)}))})
-      (catch Exception e
-        (throw (errors/tool-error->api-error e))))))
+    (responses/json-response 200
+                             {:data (tool-service/execute-tool
+                                     system
+                                     tool-key
+                                     input
+                                     (execution-context system :api tool-key input
+                                                        {:approval-id approval-id
+                                                         :user "api"
+                                                         :activity (:activity body)}))})))

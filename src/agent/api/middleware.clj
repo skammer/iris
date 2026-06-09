@@ -1,5 +1,6 @@
 (ns agent.api.middleware
-  (:require [agent.api.helpers :as h]
+  (:require [agent.api.errors :as errors]
+            [agent.api.helpers :as h]
             [agent.api.responses :as responses]
             [agent.logging :as logging]
             [agent.security :as security]
@@ -30,7 +31,9 @@
                             {:method (some-> (:request-method request) name)
                              :path (:uri request)
                              :request-id (:request-id request)})
-        (responses/error-response e request)))))
+        ;; Domain errors that escape handlers map to their canonical HTTP
+        ;; shape here, so handlers don't need per-call catch ladders.
+        (responses/error-response (errors/domain-error->api-error e) request)))))
 
 (defn wrap-request-logging
   [handler]

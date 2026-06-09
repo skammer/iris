@@ -1,6 +1,5 @@
 (ns agent.api.handlers.tool-approvals
   (:require
-   [agent.api.errors :as errors]
    [agent.api.helpers :as h]
    [agent.api.responses :as responses]
    [agent.api.serializers :as ser]
@@ -39,12 +38,9 @@
   (let [body (h/read-json-body request)
         actor (or (:actor body) "api")
         reason (:reason body)
-        updated (try
-                  (case status
-                    :approved (tool-approvals/approve! (:store system) approval-id actor reason)
-                    :denied (tool-approvals/deny! (:store system) approval-id actor reason))
-                  (catch clojure.lang.ExceptionInfo e
-                    (throw (errors/tool-error->api-error e))))]
+        updated (case status
+                  :approved (tool-approvals/approve! (:store system) approval-id actor reason)
+                  :denied (tool-approvals/deny! (:store system) approval-id actor reason))]
     (events/log-event! system
                        {:event-type (keyword (str "tool.approval." (name status)))
                         :entity-type :tool_approval
