@@ -69,12 +69,7 @@
               (swap! persisted dissoc :thinking)
               (swap! persisted assoc :assistant-message message))
 
-            (and session-id (= "assistant" role) audit?)
-            (do
-              (history/append-message-record! system session-id "assistant" content (history/message-extra payload* request-id))
-              (swap! persisted dissoc :thinking))
-
-            (and session-id (= "assistant" role) tool-turn?)
+            (and session-id (= "assistant" role) (or audit? tool-turn?))
             (do
               (history/append-message-record! system session-id "assistant" content (history/message-extra payload* request-id))
               (swap! persisted dissoc :thinking))

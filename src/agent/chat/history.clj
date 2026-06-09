@@ -89,12 +89,20 @@
                                       {:include-entry-id? true}))
     (llm-messages/messages->internal [])))
 
-(defn persist-user-turn! [system session-id messages request-id]
+(defn- persist-latest-user-message!
+  "Persists the latest user message in `messages` when its content is non-blank
+   or `(persist-extra? extra)` is truthy, where `extra` is `(extra-fn message)`."
+  [system session-id messages extra-fn persist-extra?]
   (when-let [message (and session-id (latest-user-message messages))]
     (let [content (llm-messages/content-text message)
-          extra (with-request-metadata (content-blocks-extra message) request-id)]
-      (when (or (not (str/blank? content)) extra)
+          extra (extra-fn message)]
+      (when (or (not (str/blank? content)) (persist-extra? extra))
         (append-message-record! system session-id "user" content extra)))))
+
+(defn persist-user-turn! [system session-id messages request-id]
+  (persist-latest-user-message! system session-id messages
+                                #(with-request-metadata (content-blocks-extra %) request-id)
+                                identity))
 
 (defn persist-completion!
   ([system session-id prompt content request-id]
@@ -126,61 +134,48 @@
    :request-id request-id})
 
 (defn persist-queued-user-turn! [system session-id messages request-id]
-  (when-let [message (and session-id (latest-user-message messages))]
-    (let [content (llm-messages/content-text message)
-          extra (merge (content-blocks-extra message)
-                       {:metadata (queued-user-metadata request-id)
-                        :excluded-from-context? true
-                        :select-leaf? false})]
-      (when (or (not (str/blank? content)) (:content-blocks extra))
-        (append-message-record! system
-                                session-id
-                                "user"
-                                content
-                                extra)))))
+  (persist-latest-user-message! system session-id messages
+                                #(merge (content-blocks-extra %)
+                                        {:metadata (queued-user-metadata request-id)
+                                         :excluded-from-context? true
+                                         :select-leaf? false})
+                                :content-blocks))
+
+(defn- update-queued-message!
+  "Drops the queued flag from `queued-message`, merges `metadata-extra` into its
+   metadata, persists the runtime flags, and emits :message.updated."
+  [system queued-message request-id {:keys [metadata-extra excluded? runtime-flags]}]
+  (when queued-message
+    (let [metadata (-> (:metadata queued-message)
+                       (dissoc queued-message-metadata-key)
+                       (assoc :request-id request-id)
+                       (merge metadata-extra))]
+      (sqlite/update-message-runtime-flags! (:store system)
+                                            (:id queued-message)
+                                            (merge {:metadata metadata
+                                                    :excluded-from-context? excluded?
+                                                    :session-id (:session-id queued-message)}
+                                                   runtime-flags))
+      (chat-util/emit! system {:event-type :message.updated
+                               :entity-type :session
+                               :entity-id (:session-id queued-message)
+                               :request-id request-id
+                               :payload {:message-id (:id queued-message)
+                                         :role "user"
+                                         :metadata metadata
+                                         :excluded-from-context? excluded?}})
+      (assoc queued-message :metadata metadata :excluded-from-context? excluded?))))
 
 (defn activate-queued-message! [system {:keys [queued-message request-id]}]
-  (when queued-message
-    (let [metadata (-> (:metadata queued-message)
-                       (dissoc queued-message-metadata-key)
-                       (assoc :request-id request-id
-                              :activated-at (util/now-str)))]
-      (sqlite/update-message-runtime-flags! (:store system)
-                                            (:id queued-message)
-                                            {:metadata metadata
-                                             :excluded-from-context? false
-                                             :session-id (:session-id queued-message)
-                                             :reparent-to-current-leaf? true
-                                             :select-leaf? true})
-      (chat-util/emit! system {:event-type :message.updated
-                               :entity-type :session
-                               :entity-id (:session-id queued-message)
-                               :request-id request-id
-                               :payload {:message-id (:id queued-message)
-                                         :role "user"
-                                         :metadata metadata
-                                         :excluded-from-context? false}})
-      (assoc queued-message :metadata metadata :excluded-from-context? false))))
+  (update-queued-message! system queued-message request-id
+                          {:metadata-extra {:activated-at (util/now-str)}
+                           :excluded? false
+                           :runtime-flags {:reparent-to-current-leaf? true
+                                           :select-leaf? true}}))
 
 (defn mark-queued-message-cancelled! [system queued-message request-id]
-  (when queued-message
-    (let [metadata (-> (:metadata queued-message)
-                       (dissoc queued-message-metadata-key)
-                       (assoc :request-id request-id
-                              :cancelled? true
-                              :cancelled-at (util/now-str)))]
-      (sqlite/update-message-runtime-flags! (:store system)
-                                            (:id queued-message)
-                                            {:metadata metadata
-                                             :excluded-from-context? true
-                                             :session-id (:session-id queued-message)
-                                             :select-leaf? false})
-      (chat-util/emit! system {:event-type :message.updated
-                               :entity-type :session
-                               :entity-id (:session-id queued-message)
-                               :request-id request-id
-                               :payload {:message-id (:id queued-message)
-                                         :role "user"
-                                         :metadata metadata
-                                         :excluded-from-context? true}})
-      (assoc queued-message :metadata metadata :excluded-from-context? true))))
+  (update-queued-message! system queued-message request-id
+                          {:metadata-extra {:cancelled? true
+                                            :cancelled-at (util/now-str)}
+                           :excluded? true
+                           :runtime-flags {:select-leaf? false}}))
