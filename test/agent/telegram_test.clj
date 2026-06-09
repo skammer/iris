@@ -298,12 +298,12 @@
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path :evict-on-close? true})
         registry (tool-service/create-tool-registry
-                  {:shell {:roots ["."]
-                           :working-dir "."
-                           :default-decision :ask
-                           :rules []}}
-                  (fn [_] nil)
-                  store)
+                  {:cfg {:shell {:roots ["."]
+                                 :working-dir "."
+                                 :default-decision :ask
+                                 :rules []}}
+                   :event-sink (fn [_] nil)
+                   :store store})
         sent (atom [])
         answers (atom [])
         edits (atom [])
@@ -358,12 +358,12 @@
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path :evict-on-close? true})
         registry (tool-service/create-tool-registry
-                  {:shell {:roots ["."]
-                           :working-dir "."
-                           :default-decision :ask
-                           :rules []}}
-                  (fn [_] nil)
-                  store)
+                  {:cfg {:shell {:roots ["."]
+                                 :working-dir "."
+                                 :default-decision :ask
+                                 :rules []}}
+                   :event-sink (fn [_] nil)
+                   :store store})
         sent (atom [])
         html-sent (atom [])
         answers (atom [])

@@ -153,14 +153,21 @@
                   :trace ::new-trace
                   :chat-service ::new-chat}]
     (reset! system-ref old-system)
-    (with-redefs [system/create-system (fn [_] new-base)
+    (with-redefs [components/create-system-components
+                  (fn [_config-path sys-ref rel-state h-reg control]
+                    (components/attach-telegram-service
+                     (-> new-base
+                         (assoc :system-ref sys-ref
+                                :reload-state rel-state
+                                :health-registry h-reg
+                                :system-control control
+                                :tool-registry ::new-tools))))
                   system/start-api! (fn [new-system]
                                       (swap! order conj :start-new-api)
                                       (assoc new-system :api-server ::new-api))
                   api/stop-server! (fn [_] (swap! order conj :stop-old-api))
                   chat/stop! (fn [_] (swap! order conj :stop-old-chat))
                   sqlite/close-store! (fn [_] (swap! order conj :close-old-store))
-                  tool-service/create-tool-registry (fn [& _] ::new-tools)
                   telegram/create-service (fn [system] {:telegram-system system})
                   components/create-channel-adapter-registry (fn [_ service] {:service service})]
       (let [result (#'system/full-reload-now! old-system {:source "test"})
@@ -199,19 +206,19 @@
         store (sqlite/create-store {:path path})
         events (atom [])
         blocked-registry (tool-service/create-tool-registry
-                          (assoc-in (:tools config/default-config) [:policy :blocklist] [:fs])
-                          #(swap! events conj %)
-                          store)
+                          {:cfg (assoc-in (:tools config/default-config) [:policy :blocklist] [:fs])
+                           :event-sink #(swap! events conj %)
+                           :store store})
         yolo-registry (tool-service/create-tool-registry
-                       (assoc (:tools config/default-config) :yolo? true)
-                       #(swap! events conj %)
-                       store)
+                       {:cfg (assoc (:tools config/default-config) :yolo? true)
+                        :event-sink #(swap! events conj %)
+                        :store store})
         yolo-blocked-registry (tool-service/create-tool-registry
-                               (-> (:tools config/default-config)
-                                   (assoc :yolo? true)
-                                   (assoc-in [:policy :blocklist] [:shell]))
-                               #(swap! events conj %)
-                               store)]
+                               {:cfg (-> (:tools config/default-config)
+                                         (assoc :yolo? true)
+                                         (assoc-in [:policy :blocklist] [:shell]))
+                                :event-sink #(swap! events conj %)
+                                :store store})]
     (try
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"startup policy"
@@ -247,9 +254,9 @@
                    (assoc :store store
                           :config config/default-config
                           :tool-registry (tool-service/create-tool-registry
-                                          (:tools config/default-config)
-                                          (constantly nil)
-                                          store))
+                                          {:cfg (:tools config/default-config)
+                                           :event-sink (constantly nil)
+                                           :store store}))
                    (assoc-in [:orchestrator :enabled?] true))
         agent (orchestrator/spawn-agent! (:orchestrator system)
                                          {:name "Worker"
@@ -280,10 +287,12 @@
         scoped-tools (assoc-in (:tools config/default-config)
                                [:policy :tool-scopes]
                                {:fs [:workspace]})
-        scoped-registry (tool-service/create-tool-registry scoped-tools (constantly nil) store)
-        write-registry (tool-service/create-tool-registry (:tools config/default-config)
-                                                   (constantly nil)
-                                                   store)]
+        scoped-registry (tool-service/create-tool-registry
+                         {:cfg scoped-tools :event-sink (constantly nil) :store store})
+        write-registry (tool-service/create-tool-registry
+                        {:cfg (:tools config/default-config)
+                         :event-sink (constantly nil)
+                         :store store})]
     (try
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"Tool scope missing"

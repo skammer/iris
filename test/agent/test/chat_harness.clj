@@ -68,7 +68,7 @@
                       :store store
                       :event-bus event-bus
                       :event-sink event-sink
-                      :tool-registry (tool-service/create-tool-registry (:tools config) event-sink store)
+                      :tool-registry (tool-service/create-tool-registry {:cfg (:tools config) :event-sink event-sink :store store})
                       :memory-service (memory/create-memory-service (:memory config) store)
                       :runtime-service runtime-service
                       :orchestrator (components/create-orchestrator (:orchestrator config) event-sink)

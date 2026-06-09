@@ -91,17 +91,12 @@
     (fn [] {:healthy true})}))
 
 (defn create-tool-registry
-  ([cfg event-sink store]
-   (create-tool-registry cfg event-sink store nil nil nil nil nil nil))
-  ([cfg event-sink store telemetry-collector]
-   (create-tool-registry cfg event-sink store telemetry-collector nil nil nil nil nil))
-  ([cfg event-sink store telemetry-collector memory-service]
-   (create-tool-registry cfg event-sink store telemetry-collector memory-service nil nil nil nil))
-  ([cfg event-sink store telemetry-collector memory-service channel-adapters-cfg]
-   (create-tool-registry cfg event-sink store telemetry-collector memory-service channel-adapters-cfg nil nil nil))
-  ([cfg event-sink store telemetry-collector memory-service channel-adapters-cfg system-control]
-   (create-tool-registry cfg event-sink store telemetry-collector memory-service channel-adapters-cfg system-control nil nil))
-  ([cfg event-sink store telemetry-collector memory-service channel-adapters-cfg system-control observer trace]
+  "Build the production tool registry from a dependency map:
+   {:cfg <:tools config> :event-sink :store :telemetry :memory-service
+    :channel-adapters-cfg :system-control :observer :trace}"
+  [{:keys [cfg event-sink store memory-service channel-adapters-cfg
+           system-control observer trace]
+    telemetry-collector :telemetry}]
    (let [http-cfg (get cfg :http)
          fs-cfg (get cfg :fs)
          shell-cfg (get cfg :shell)
@@ -176,7 +171,7 @@
            (tools/register-tool (telegram-tool/create-ask-tool telegram-cfg)))
 
        system-control
-       (tools/register-tool (reload-tool system-control))))))
+       (tools/register-tool (reload-tool system-control)))))
 
 (defn list-tools
   [system]

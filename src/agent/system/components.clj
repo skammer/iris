@@ -76,6 +76,35 @@
                      registry)]
      registry*)))
 
+(defn build-tool-registry
+  "The one place that knows the tool registry's dependency list. `system`
+   must already carry event-sink/store/telemetry/memory-service/
+   system-control/observer/trace; `cfg` is the full config map."
+  [{:keys [health-registry] :as system} cfg]
+  (system-health/with-component-health health-registry :tools
+    #(tool-service/create-tool-registry
+      {:cfg (:tools cfg)
+       :event-sink (:event-sink system)
+       :store (:store system)
+       :telemetry (:telemetry system)
+       :memory-service (:memory-service system)
+       :channel-adapters-cfg (:channel-adapters cfg)
+       :system-control (:system-control system)
+       :observer (:observer system)
+       :trace (:trace system)})))
+
+(defn attach-telegram-service
+  "Create the Telegram adapter and channel-adapter registry for `system`.
+   The only copy of this wiring; used by construction and both reload paths."
+  [{:keys [health-registry config] :as system}]
+  (let [telegram-service (telegram/create-service system)]
+    (assoc system
+           :telegram-service telegram-service
+           :channel-adapter-registry
+           (system-health/with-component-health health-registry :channel-adapters
+             #(create-channel-adapter-registry (:channel-adapters config)
+                                               telegram-service)))))
+
 (defn create-system-components
   [config-path system-ref reload-state health-registry system-control]
   (let [cfg (config/load-config config-path)
@@ -100,16 +129,6 @@
                        #(llm-service/create-llm-provider llm-cfg))
         fact-llm-provider (system-health/with-component-health health-registry :llm-provider
                             #(llm-service/create-fact-llm-provider cfg))
-        tool-registry (system-health/with-component-health health-registry :tools
-                        #(tool-service/create-tool-registry (:tools cfg)
-                                                            event-sink
-                                                            store
-                                                            telemetry-collector
-                                                            memory-service
-                                                            (:channel-adapters cfg)
-                                                            system-control
-                                                            observer
-                                                            trace))
         chat-service (system-health/with-component-health health-registry :chat
                        #(chat/create-service))]
     (logging/log! :agent.system.lifecycle/created
@@ -134,7 +153,6 @@
                        :broker broker-instance
                        :event-sink event-sink
                        :recorded-event-sink recorded-event-sink
-                       :tool-registry tool-registry
                        :chat-service chat-service
                        :skills-registry (create-skills-registry (:skills cfg))
                        :memory-service memory-service
@@ -144,12 +162,7 @@
                                                           telemetry-collector
                                                           store
                                                           observer
-                                                          trace)}
-          telegram-service (telegram/create-service base-system)
-          system* (assoc base-system
-                         :telegram-service telegram-service
-                         :channel-adapter-registry
-                         (system-health/with-component-health health-registry :channel-adapters
-                           #(create-channel-adapter-registry (:channel-adapters cfg)
-                                                             telegram-service)))]
-      system*)))
+                                                          trace)}]
+      (-> base-system
+          (assoc :tool-registry (build-tool-registry base-system cfg))
+          attach-telegram-service))))

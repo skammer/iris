@@ -13,6 +13,7 @@
    :broker
    :telemetry
    :runtime
+   :chat
    :tools
    :memory
    :channel-adapters])
