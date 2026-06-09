@@ -9,14 +9,12 @@
 (def ^:private outbox-states #{"queued" "in_flight" "acked" "dead_letter"})
 
 (defn- valid-status! [allowed field value]
-  (let [value* (common/normalize-name value)]
-    (when-not (contains? allowed value*)
-      (throw (ex-info (str "Invalid federation " (name field))
-                      {:type :invalid-federation-state
+  (common/valid-enum! (common/normalize-name value) allowed
+                      {:message (str "Invalid federation " (name field))
+                       :type :invalid-federation-state
                        :field field
                        :value value
-                       :allowed allowed})))
-    value*))
+                       :allowed allowed}))
 
 (defn- row->peer-key
   [{:keys [peer_id key_id public_key status valid_from valid_until created_at]}]
@@ -178,13 +176,7 @@
               row->outbox))))
 
 (defn count-outbox [store]
-  (common/with-connection
-    store
-    (fn [conn]
-      (some-> (common/select-one conn (count-outbox-sqlvec) identity) :n int))))
+  (common/count-rows store (count-outbox-sqlvec)))
 
 (defn count-peer-keys [store]
-  (common/with-connection
-    store
-    (fn [conn]
-      (some-> (common/select-one conn (count-peer-keys-sqlvec) identity) :n int))))
+  (common/count-rows store (count-peer-keys-sqlvec)))

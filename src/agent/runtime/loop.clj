@@ -11,8 +11,8 @@
    [agent.runtime.messages :as runtime-messages]
    [agent.runtime.nudge :as nudge]
    [agent.runtime.tool-router :as tool-router]
+   [agent.security :as security]
    [agent.util :as util]
-   [cheshire.core :as json]
    [clojure.string :as str]))
 
 (def ^:private event! runtime-events/emit!)
@@ -52,15 +52,14 @@
 (defn- display-reason [approval]
   (some-> (:reason approval) str str/trim not-empty))
 
-(defn- canonical-input [input]
-  (json/generate-string input {:canonical true}))
-
 (defn- tool-call-key [value]
   (when-let [tool-call-id (:tool-call-id value)]
     [(some-> (:tool-name value) keyword) tool-call-id]))
 
 (defn- input-key [value]
-  [(some-> (:tool-name value) keyword) (canonical-input (:input value))])
+  ;; Same fingerprint as agent.tools.approvals/input-hash so approval
+  ;; alignment cannot drift from approval validation.
+  [(some-> (:tool-name value) keyword) (security/canonical-json (:input value))])
 
 (defn- align-approval-reasons [receipts approvals]
   (let [approvals-by-tool-call (group-by tool-call-key (filter :tool-call-id approvals))

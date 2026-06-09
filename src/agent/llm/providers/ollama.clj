@@ -37,12 +37,6 @@
 (defn- post-stream [url request]
   (provider-common/post-stream url request ollama-http-error))
 
-(defn- thinking-chunk [message]
-  (or (:thinking message)
-      (:reasoning message)
-      (:reasoning_content message)
-      (:reasoning-content message)))
-
 (defn- stream-response->turn
   ([body-stream] (stream-response->turn body-stream nil nil))
   ([body-stream on-content-delta on-thinking-delta]
@@ -59,7 +53,7 @@
            (let [event (json/parse-string line true)
                  message (:message event)
                  chunk (:content message)
-                 thinking* (thinking-chunk message)
+                 thinking* (llm-messages/reasoning-text message)
                  tool-calls* (or (:tool_calls message)
                                  (:tool-calls message))]
              (when (and on-content-delta (string? chunk) (not= "" chunk))
@@ -199,7 +193,7 @@
           (llm-core/normalize-llm-response
            {:role (:role message "assistant")
             :content (:content message)
-            :reasoning-content (thinking-chunk message)
+            :reasoning-content (llm-messages/reasoning-text message)
             :tool-calls (vec (or (:tool_calls message) []))
             :usage {:prompt-tokens (or (:prompt_eval_count body) 0)
                     :completion-tokens (or (:eval_count body) 0)

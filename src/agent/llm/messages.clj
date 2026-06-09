@@ -316,14 +316,15 @@
            (get-in response [:raw :tool_calls])
            [])))
 
+(defn reasoning-text [m]
+  (or (:thinking m)
+      (:reasoning_content m)
+      (:reasoning-content m)
+      (:reasoning m)))
+
 (defn- response-thinking [response]
-  (or (:thinking response)
-      (:reasoning-content response)
-      (:reasoning_content response)
-      (:reasoning response)
-      (get-in response [:raw :reasoning_content])
-      (get-in response [:raw :reasoning])
-      (get-in response [:raw :thinking])))
+  (or (reasoning-text response)
+      (reasoning-text (:raw response))))
 
 (defn provider-response->assistant-turn
   ([response] (provider-response->assistant-turn nil nil response))

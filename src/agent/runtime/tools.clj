@@ -1,6 +1,7 @@
 (ns agent.runtime.tools
   "Batch tool execution over agent.tools.core registries."
   (:require
+   [agent.runtime.calls :as calls]
    [agent.runtime.cancel :as cancel]
    [agent.runtime.events :as runtime-events]
    [agent.tools.core :as tools]
@@ -19,12 +20,6 @@
     (keyword? value) value
     (string? value) (keyword value)
     :else value))
-
-(defn- call-input [call]
-  (or (:input call) (:arguments call) (:args call) {}))
-
-(defn- call-id [idx call]
-  (str (or (:id call) (:tool-call-id call) (:tool_call_id call) (str "tool-call-" idx))))
 
 (def ^:private cancelled? cancel/cancelled?)
 
@@ -97,7 +92,7 @@
                                           (str "Unknown tool: " tool-name)
                                           {:tool-name tool-name})))
         description (tools/describe tool)
-        input (call-input call)
+        input (calls/call-input call)
         context* (tools/create-execution-context (merge context (:context call)))]
     (when-not (allowed-tool? context* tool-name)
       (throw (tools/tool-error :tool-blocked
@@ -107,7 +102,7 @@
     (enforce-permissions! description context*)
     (let [validated-input ((:validate-fn tool) input)
           preflight {:source-index source-index
-                     :tool-call-id (call-id source-index call)
+                     :tool-call-id (calls/call-id source-index call)
                      :tool-name tool-name
                      :tool tool
                      :description description
@@ -218,9 +213,9 @@
     (preflight-tool-call registry call context opts idx)
     (catch Exception e
       (merge {:source-index idx
-              :tool-call-id (call-id idx call)
+              :tool-call-id (calls/call-id idx call)
               :tool-name (normalize-tool-name (or (:tool-name call) (:name call)))
-              :input (call-input call)
+              :input (calls/call-input call)
               :context (tools/create-execution-context (merge context (:context call)))
               :call call}
              (:preflight (ex-data e))

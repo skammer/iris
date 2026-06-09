@@ -4,30 +4,14 @@
    [agent.telegram.api :as tg-api]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
+   [agent.tools.display :as tool-display]
+   [agent.util :as util]
    [cheshire.core :as json]
    [clojure.string :as str]))
 
 (def ^:private callback-prefix "ta")
 (def ^:private input-preview-chars 1800)
 (def ^:private tool-context-chars 8000)
-
-(defn- escape-html [s]
-  (-> (str s)
-      (str/replace "&" "&amp;")
-      (str/replace "<" "&lt;")
-      (str/replace ">" "&gt;")))
-
-(defn- escape-html-truncated [s max-chars]
-  (loop [chars (seq (str s))
-         acc []
-         n 0]
-    (if-let [ch (first chars)]
-      (let [escaped (escape-html ch)
-            n* (+ n (count escaped))]
-        (if (<= n* max-chars)
-          (recur (next chars) (conj acc escaped) n*)
-          (apply str acc)))
-      (apply str acc))))
 
 (defn- callback-data [action approval-id]
   (str callback-prefix ":" (name action) ":" approval-id))
@@ -42,10 +26,7 @@
        :approval-id approval-id})))
 
 (defn- truncate [s max-chars]
-  (let [s* (str s)]
-    (if (> (count s*) max-chars)
-      (str (subs s* 0 max-chars) "\n[truncated]")
-      s*)))
+  (util/truncate s max-chars (constantly "\n[truncated]")))
 
 (defn- approval-reason [approval]
   (or (some-> (:reason approval) str str/trim not-empty)
@@ -59,10 +40,10 @@
 
 (defn card-html [approval]
   (str "Tool approval required\n"
-       "Tool: " (escape-html (:tool-name approval)) "\n"
-       "Reason: " (escape-html (approval-reason approval)) "\n"
+       "Tool: " (tool-display/escape-html (:tool-name approval)) "\n"
+       "Reason: " (tool-display/escape-html (approval-reason approval)) "\n"
        "<blockquote expandable>details\n\n"
-       (escape-html-truncated (approval-details approval) 3000)
+       (tool-display/escape-html-truncated (approval-details approval) 3000)
        "</blockquote>"))
 
 (defn keyboard [approval-id]

@@ -4,6 +4,7 @@
    [agent.defaults :as defaults]
    [agent.llm.messages :as llm-messages]
    [agent.runtime.schema :as runtime-schema]
+   [agent.util :as util]
    [cheshire.core :as json]
    [clojure.string :as str]))
 
@@ -36,19 +37,11 @@
     {:role "assistant"
      :content (vec (concat text-blocks tool-blocks))}))
 
-(defn- truncate-text [text max-chars]
-  (let [text* (or text "")]
-    (if (> (count text*) max-chars)
-      (str (subs text* 0 max-chars)
-           "\n\n[truncated "
-           (- (count text*) max-chars)
-           " chars]")
-      text*)))
-
 (defn- memory-tool-output-content [receipt tool-output-max-chars]
   (let [status (keyword (:status receipt))]
     (case status
-      (:ok :completed) (truncate-text (:result receipt) tool-output-max-chars)
+      (:ok :completed) (util/truncate (:result receipt) tool-output-max-chars
+                                      #(str "\n\n[truncated " % " chars]"))
       :denied (str "Memory tool denied: " (:reason receipt))
       :approval-required (str "Memory tool approval required: " (:reason receipt))
       (str "Memory tool failed: " (or (:reason receipt) (:error-type receipt) "unknown error")))))

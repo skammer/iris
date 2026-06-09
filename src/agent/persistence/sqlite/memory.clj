@@ -180,7 +180,4 @@
                                    identity)))))))
 
 (defn count-facts [store]
-  (common/with-connection
-    store
-    (fn [conn]
-      (some-> (common/select-one conn (count-facts-sqlvec) identity) :n int))))
+  (common/count-rows store (count-facts-sqlvec)))

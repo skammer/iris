@@ -3,6 +3,7 @@
   (:require
    [agent.llm.core :as llm-core]
    [agent.llm.dsml :as dsml]
+   [agent.llm.messages :as llm-messages]
    [agent.llm.providers.openai-compatible.parse :as parse]
    [agent.llm.providers.openai-compatible.usage :as usage]
    [cheshire.core :as json]
@@ -14,12 +15,6 @@
     (let [payload (str/triml (subs line 5))]
       (when-not (= "[DONE]" payload)
         (json/parse-string payload true)))))
-
-(defn reasoning-delta [delta]
-  (or (:reasoning_content delta)
-      (:reasoning-content delta)
-      (:reasoning delta)
-      (:thinking delta)))
 
 (defn emit-thinking-delta! [on-thinking-delta chunk]
   (when (and on-thinking-delta (string? chunk) (not= "" chunk))
@@ -72,7 +67,7 @@
            (let [delta (-> event :choices first :delta)
                  choice (-> event :choices first)
                  chunk (:content delta)
-                 reasoning-chunk (reasoning-delta delta)]
+                 reasoning-chunk (llm-messages/reasoning-text delta)]
              (when (and on-content-delta (string? chunk) (not= "" chunk))
                (on-content-delta chunk))
              (emit-thinking-delta! on-thinking-delta reasoning-chunk)

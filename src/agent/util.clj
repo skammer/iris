@@ -11,6 +11,14 @@
 (defn duration-ms [start-ns]
   (/ (double (- (System/nanoTime) start-ns)) 1000000.0))
 
+(defn truncate
+  "Truncate text to max-chars, appending (marker-fn dropped-char-count)."
+  [text max-chars marker-fn]
+  (let [text* (str text)]
+    (if (> (count text*) max-chars)
+      (str (subs text* 0 max-chars) (marker-fn (- (count text*) max-chars)))
+      text*)))
+
 (defn result-content [value]
   (cond
     (string? value) value

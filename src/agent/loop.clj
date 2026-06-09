@@ -77,14 +77,9 @@
   (str "LOOP " iteration "/" (or max-iterations "∞")))
 
 (defn- truncate [text max-chars]
-  (let [text* (or text "")
-        max-chars* (long (or max-chars default-summary-max-chars))]
-    (if (> (count text*) max-chars*)
-      (str (subs text* 0 max-chars*)
-           "\n[truncated "
-           (- (count text*) max-chars*)
-           " chars]")
-      text*)))
+  (util/truncate text
+                 (or max-chars default-summary-max-chars)
+                 #(str "\n[truncated " % " chars]")))
 
 (defn summarize [text]
   (truncate (str/trim (or text "")) 500))

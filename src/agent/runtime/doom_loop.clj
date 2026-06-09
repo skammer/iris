@@ -1,9 +1,8 @@
 (ns agent.runtime.doom-loop
   "Per-run repeated tool-call guard."
   (:require
-   [clojure.string :as str])
-  (:import
-   (java.security MessageDigest)))
+   [agent.security :as security]
+   [clojure.string :as str]))
 
 (def default-config
   {:enabled? true
@@ -49,11 +48,6 @@
 (defn canonical-input [input]
   (pr-str (canonical-value input)))
 
-(defn- sha-256 [s]
-  (let [digest (.digest (MessageDigest/getInstance "SHA-256")
-                        (.getBytes (str s) "UTF-8"))]
-    (apply str (map #(format "%02x" (bit-and % 0xff)) digest))))
-
 (defn normalize-tool-name [tool-name]
   (cond
     (keyword? tool-name) (name tool-name)
@@ -62,8 +56,8 @@
 
 (defn fingerprint
   [{:keys [tool-name input]}]
-  (sha-256 (pr-str [(normalize-tool-name tool-name)
-                    (canonical-input input)])))
+  (security/sha256-hex (pr-str [(normalize-tool-name tool-name)
+                                (canonical-input input)])))
 
 (defn tool-calls
   [step]

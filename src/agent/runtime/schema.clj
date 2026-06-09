@@ -244,24 +244,40 @@
         (map (fn [event-type] [event-type (event-schema event-type)])
              runtime-event-types)))
 
+(def ^:private message-block-validator (m/validator message-block-schema))
+(def ^:private message-block-explainer (m/explainer message-block-schema))
+(def ^:private assistant-turn-validator (m/validator assistant-turn-schema))
+(def ^:private assistant-turn-explainer (m/explainer assistant-turn-schema))
+(def ^:private runtime-event-validator (m/validator runtime-event-schema))
+(def ^:private runtime-event-explainer (m/explainer runtime-event-schema))
+
+(defn- validation-error [label errors value]
+  (ex-info (str label " failed schema validation")
+           {:type :validation-failed
+            :schema label
+            :errors errors
+            :value value}))
+
 (defn validate!
   [schema value label]
   (if (m/validate schema value)
     value
-    (throw (ex-info (str label " failed schema validation")
-                    {:type :validation-failed
-                     :schema label
-                     :errors (me/humanize (m/explain schema value))
-                     :value value}))))
+    (throw (validation-error label (me/humanize (m/explain schema value)) value))))
+
+(defn- validate-compiled!
+  [validator explainer value label]
+  (if (validator value)
+    value
+    (throw (validation-error label (me/humanize (explainer value)) value))))
 
 (defn validate-message-block! [block]
-  (validate! message-block-schema block :message-block))
+  (validate-compiled! message-block-validator message-block-explainer block :message-block))
 
 (defn validate-assistant-turn! [turn]
-  (validate! assistant-turn-schema turn :assistant-turn))
+  (validate-compiled! assistant-turn-validator assistant-turn-explainer turn :assistant-turn))
 
 (defn validate-runtime-event! [event]
-  (validate! runtime-event-schema event :runtime-event))
+  (validate-compiled! runtime-event-validator runtime-event-explainer event :runtime-event))
 
 (defn- data-uri-source [value fallback-media-type]
   (let [value* (str (or value ""))]

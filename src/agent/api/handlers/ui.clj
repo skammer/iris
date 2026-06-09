@@ -2,7 +2,6 @@
   (:require
    [agent.api.errors :as errors]
    [agent.runs.service :as runs]
-   [agent.api.handlers.tool-approvals :as approvals]
    [agent.api.handlers.tools :as tools-h]
    [agent.api.helpers :as h]
    [agent.api.responses :as responses]
@@ -492,7 +491,7 @@
                    :input input
                    :requested-by "ui"
                    :reason (:reason body)
-                   :expires-at (approvals/approval-expires-at system)})]
+                   :expires-at (tool-approvals/default-expires-at system)})]
     (events/log-event! system
                        {:event-type :tool.approval.requested
                         :entity-type :tool_approval

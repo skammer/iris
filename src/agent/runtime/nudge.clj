@@ -1,7 +1,7 @@
 (ns agent.runtime.nudge
   "Small-model retry governor for invalid planner turns."
   (:require
-   [cheshire.core :as json]
+   [agent.runtime.calls :as calls]
    [clojure.string :as str]))
 
 (def default-budgets
@@ -38,24 +38,11 @@
    :fs-read-paths #{}
    :fs-listed-paths #{}})
 
-(defn- tool-name [call]
-  (keyword (or (:name call) (:tool-name call) (get-in call [:function :name]))))
-
 (defn- call-input [call]
-  (or (:input call)
-      (:arguments call)
-      (:args call)
-      (when-let [arguments (get-in call [:function :arguments])]
-        (if (string? arguments)
-          (try
-            (json/parse-string arguments true)
-            (catch Exception _
-              ::malformed))
-          arguments))
-      {}))
+  (calls/call-input call ::malformed))
 
 (defn tool-fingerprint [call]
-  {:tool-name (tool-name call)
+  {:tool-name (calls/tool-name-of call)
    :input (call-input call)})
 
 (defn error-fingerprint [receipt]
@@ -92,7 +79,7 @@
 
 (defn- fs-mutation? [directive]
   (and (tool-call-directive? directive)
-       (contains? #{:fs_write :fs_create :fs_replace :fs_delete :fs_mkdir}
+       (contains? calls/fs-mutation-tools
                   (keyword (get-in directive [:payload :tool-name])))))
 
 (defn- fs-prereq-ok? [state path]
@@ -195,7 +182,7 @@
         {:reason :repeated-same-error
          :fingerprint fp})
       (some (fn [receipt]
-              (when (and (contains? #{:fs_write :fs_create :fs_replace :fs_delete :fs_mkdir}
+              (when (and (contains? calls/fs-mutation-tools
                                     (keyword (:tool-name receipt)))
                          (contains? #{:error :denied} (keyword (:status receipt)))
                          (contains? #{:not-found :not-directory :path-not-allowed :validation-failed}

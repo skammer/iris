@@ -3,6 +3,7 @@
   (:require
    [agent.telegram.api :as tg-api]
    [agent.tools.display :as tool-display]
+   [agent.util :as util]
    [clojure.string :as str]))
 
 (def ^:private max-source-chars 3400)
@@ -10,18 +11,11 @@
 (def ^:private typing-refresh-ms 4000)
 (def ^:private max-draft-id 2147483647)
 
-(defn- escape-html [s]
-  (-> (str s)
-      (str/replace "&" "&amp;")
-      (str/replace "<" "&lt;")
-      (str/replace ">" "&gt;")))
-
 (defn- thinking-quote-html [text]
-  (let [source (str text)
-        clipped (if (> (count source) max-source-chars)
-                  (str (subs source 0 max-source-chars) "\n\n[truncated]")
-                  source)]
-    (str "<blockquote expandable>thinking\n\n" (escape-html clipped) "</blockquote>")))
+  (let [clipped (util/truncate text max-source-chars (constantly "\n\n[truncated]"))]
+    (str "<blockquote expandable>thinking\n\n"
+         (tool-display/escape-html clipped)
+         "</blockquote>")))
 
 (defn- private-chat? [chat]
   (= "private" (:type chat)))

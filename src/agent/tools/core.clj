@@ -1,15 +1,13 @@
 (ns agent.tools.core
   "Rewritten tool registry and execution helpers."
   (:require
+   [agent.security :as security]
    [agent.util :as util]
-   [cheshire.core :as json]
    [clojure.set :as set]
    [clojure.string :as str]
    [malli.core :as m]
    [malli.error :as me]
-   [malli.json-schema :as json-schema])
-  (:import
-   (java.security MessageDigest)))
+   [malli.json-schema :as json-schema]))
 
 (defprotocol ITool
   (execute [this input context])
@@ -367,17 +365,10 @@
                                    "Sensitive tool approval policy did not allow execution"
                                    {:tool-name (:name tool-description)})))))))
 
-(defn- sha256-hex [value]
-  (let [digest (.digest (MessageDigest/getInstance "SHA-256")
-                        (.getBytes (str value) "UTF-8"))]
-    (apply str (map #(format "%02x" (bit-and 0xff %)) digest))))
-
-(defn- canonical-json [value]
-  (json/generate-string value {:canonical true}))
-
 (defn- tool-activity-name [tool-name validated-input]
   (let [tool (name tool-name)]
-    (str "tool." tool "." (subs (sha256-hex (canonical-json validated-input)) 0 16))))
+    (str "tool." tool "."
+         (subs (security/sha256-hex (security/canonical-json validated-input)) 0 16))))
 
 (defn- execute-effect! [registry tool-name validated-input context* f]
   (if-let [activity-executor (:activity-executor registry)]

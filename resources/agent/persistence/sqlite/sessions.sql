@@ -199,3 +199,7 @@ values (:session_id, :leaf_entry_id, :updated_at)
 on conflict(session_id) do update set
   leaf_entry_id = excluded.leaf_entry_id,
   updated_at = excluded.updated_at
+
+-- :name count-sessions :? :1
+select count(*) as n
+from sessions

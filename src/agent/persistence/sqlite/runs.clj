@@ -89,14 +89,12 @@
 (def ^:private activity-statuses #{"running" "completed" "failed" "cancelled"})
 
 (defn- valid-status! [allowed field status]
-  (let [status* (common/normalize-name status)]
-    (when-not (contains? allowed status*)
-      (throw (ex-info (str "Invalid " (name field))
-                      {:type :invalid-agent-run-state
+  (common/valid-enum! (common/normalize-name status) allowed
+                      {:message (str "Invalid " (name field))
+                       :type :invalid-agent-run-state
                        :field field
                        :value status
-                       :allowed allowed})))
-    status*))
+                       :allowed allowed}))
 
 (defn- maybe-status! [allowed field status]
   (some->> status (valid-status! allowed field)))
@@ -383,12 +381,7 @@
                                  identity))))))
 
 (defn count-pending-agent-run-commands [store]
-  (common/with-connection
-    store
-    (fn [conn]
-      (some-> (common/select-one conn (count-pending-agent-run-commands-sqlvec) identity)
-              :n
-              int))))
+  (common/count-rows store (count-pending-agent-run-commands-sqlvec)))
 
 (defn get-agent-run-command [store command-id]
   (common/with-connection
@@ -474,10 +467,7 @@
                                  identity))))))
 
 (defn count-agent-runs [store]
-  (common/with-connection
-    store
-    (fn [conn]
-      (some-> (common/select-one conn (count-agent-runs-sqlvec) identity) :n int))))
+  (common/count-rows store (count-agent-runs-sqlvec)))
 
 (defn start-agent-run-activity!
   [store {:keys [activity-key run-id command-id activity-name input]}]

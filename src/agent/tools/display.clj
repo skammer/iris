@@ -87,7 +87,17 @@
     \> "&gt;"
     (str ch)))
 
-(defn- escape-html-truncated [s max-chars]
+(defn escape-html
+  "Escape &, <, and > for HTML-formatted channel messages."
+  [s]
+  (-> (str s)
+      (str/replace "&" "&amp;")
+      (str/replace "<" "&lt;")
+      (str/replace ">" "&gt;")))
+
+(defn escape-html-truncated
+  "Escape `s` for HTML, keeping at most max-chars escaped characters."
+  [s max-chars]
   (loop [chars (seq (str s))
          acc []
          n 0]

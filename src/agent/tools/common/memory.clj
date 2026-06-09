@@ -3,6 +3,7 @@
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.tools.core :as tools]
+   [agent.util :as util]
    [clojure.java.io :as io]
    [clojure.set :as set]
    [clojure.string :as str]))
@@ -28,10 +29,7 @@
   input)
 
 (defn- truncate-text [value max-chars]
-  (let [text (str (or value ""))]
-    (if (> (count text) max-chars)
-      (str (subs text 0 max-chars) " [truncated " (- (count text) max-chars) " chars]")
-      text)))
+  (util/truncate value max-chars #(str " [truncated " % " chars]")))
 
 (defn- compact-whitespace [value]
   (str/trim (str/replace (str (or value "")) #"\s+" " ")))

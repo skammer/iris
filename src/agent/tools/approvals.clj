@@ -2,37 +2,36 @@
   "Persisted approval flow for sensitive tool executions."
   (:require
    [agent.persistence.sqlite :as sqlite]
+   [agent.security :as security]
    [agent.tools.core :as tools]
-   [cheshire.core :as json]
    [clojure.string :as str])
   (:import
-   (java.security MessageDigest)
    (java.time Instant)))
 
 (defn approval-required?
-  [tool-name input]
+  [tool-name _input]
   (case tool-name
     :shell true
     (:fs_write :fs_create :fs_replace :fs_delete :fs_mkdir) true
     false))
 
 (defn granted-permissions
-  [tool-name input]
+  [tool-name _input]
   (case tool-name
     :shell #{:shell-exec}
     (:fs_write :fs_create :fs_replace :fs_delete :fs_mkdir) #{:filesystem-write}
     (:fs_read :fs_list) #{:filesystem-read}
     #{}))
 
-(defn- sha256-hex [value]
-  (let [digest (.digest (MessageDigest/getInstance "SHA-256")
-                        (.getBytes (str value) "UTF-8"))]
-    (apply str (map #(format "%02x" (bit-and 0xff %)) digest))))
-
-(declare canonicalize-input)
-
 (defn input-hash [input]
-  (sha256-hex (json/generate-string (canonicalize-input input) {:canonical true})))
+  (security/sha256-hex (security/canonical-json input)))
+
+(defn default-expires-at
+  "ISO instant when a newly minted approval expires, per
+   [:tools :approvals :ttl-seconds] (default 900)."
+  [system]
+  (str (.plusSeconds (Instant/now)
+                     (long (get-in system [:config :tools :approvals :ttl-seconds] 900)))))
 
 (defn- expired? [expires-at]
   (when (seq expires-at)
@@ -65,20 +64,6 @@
 (defn deny!
   [store approval-id actor reason]
   (sqlite/decide-tool-approval! store approval-id :denied actor reason))
-
-(defn- canonicalize-input [input]
-  (cond
-    (map? input)
-    (->> input
-         (remove (fn [[k v]]
-                   (nil? v)))
-         (map (fn [[k v]]
-                [k (cond
-                     (keyword? v) (name v)
-                     (vector? v) (mapv #(if (keyword? %) (name %) %) v)
-                     :else v)]))
-         (into (sorted-map)))
-    :else input))
 
 (defn valid-approval?
   ([approval tool-name input]

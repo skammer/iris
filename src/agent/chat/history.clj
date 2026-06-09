@@ -72,19 +72,11 @@
   (some-> (latest-user-message messages)
           llm-messages/content-text))
 
-(defn- truncate-text [text max-chars]
-  (let [text* (or text "")]
-    (if (> (count text*) max-chars)
-      (str (subs text* 0 max-chars)
-           "\n\n[truncated "
-           (- (count text*) max-chars)
-           " chars]")
-      text*)))
-
 (defn- db-message-content [role content]
   (let [content* (or content "")]
     (if (and (= "tool" role) (string? content*))
-      (truncate-text content* history-message-max-chars)
+      (util/truncate content* history-message-max-chars
+                     #(str "\n\n[truncated " % " chars]"))
       content*)))
 
 (defn session-messages [system session-id]

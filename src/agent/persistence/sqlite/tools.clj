@@ -8,13 +8,11 @@
 (def ^:private statuses #{"pending" "approved" "denied"})
 
 (defn- valid-status! [status]
-  (let [status* (common/normalize-name status)]
-    (when-not (contains? statuses status*)
-      (throw (ex-info "Invalid tool approval status"
-                      {:type :invalid-tool-approval
+  (common/valid-enum! (common/normalize-name status) statuses
+                      {:message "Invalid tool approval status"
+                       :type :invalid-tool-approval
                        :field :status
-                       :value status})))
-    status*))
+                       :value status}))
 
 (defn- row->approval [{:keys [id tool_name status input_json input_hash requested_permissions_json requested_by reason actor decision_reason expires_at created_at decided_at]}]
   {:id id
@@ -94,7 +92,4 @@
   (get-tool-approval store approval-id))
 
 (defn count-tool-approvals [store]
-  (common/with-connection
-    store
-    (fn [conn]
-      (some-> (common/select-one conn (count-tool-approvals-sqlvec) identity) :n int))))
+  (common/count-rows store (count-tool-approvals-sqlvec)))

@@ -32,6 +32,11 @@
 (defn now-str []
   (util/now-str))
 
+(defn valid-enum! [value allowed {:keys [message] :as opts}]
+  (when-not (contains? allowed value)
+    (throw (ex-info message (dissoc opts :message))))
+  value)
+
 (defn uuid-str []
   (str (UUID/randomUUID)))
 
@@ -242,6 +247,12 @@
     (with-open [rs (.executeQuery stmt)]
       (when (.next rs)
         (.getObject rs 1)))))
+
+(defn count-rows [store sqlvec]
+  (with-connection
+    store
+    (fn [conn]
+      (some-> (select-one conn sqlvec identity) :n int))))
 
 (defn close-store! [store]
   (when-let [datasource (:datasource store)]

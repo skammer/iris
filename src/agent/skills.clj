@@ -30,9 +30,6 @@
           [nil content]))
       [nil content])))
 
-(defn- parse-frontmatter [content]
-  (first (parse-frontmatter* content)))
-
 (defn- first-markdown-blurb [content]
   (loop [lines (str/split-lines (or content ""))
          in-fence? false]

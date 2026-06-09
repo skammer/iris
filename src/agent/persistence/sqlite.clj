@@ -7,7 +7,6 @@
    [agent.persistence.sqlite.memory :as memory]
    [agent.persistence.sqlite.migrations :as migrations]
    [agent.persistence.sqlite.runs :as runs]
-   [agent.persistence.sqlite.schema :as schema]
    [agent.persistence.sqlite.sessions :as sessions]
    [agent.persistence.sqlite.todos :as todos]
    [agent.persistence.sqlite.tools :as tools]
@@ -336,4 +335,22 @@
   (federation/get-outbox store id))
 
 (defn health-check [store]
-  (schema/health-check store))
+  (try
+    {:healthy true
+     :details {:path (:path store)
+               :session-count (sessions/count-sessions store)
+               :event-count (events/count-events store)
+               :tool-approval-count (tools/count-tool-approvals store)
+               :memory-fact-count (memory/count-facts store)
+               :todo-list-count (todos/count-lists store)
+               :agent-run-count (runs/count-agent-runs store)
+               :federation-peer-key-count (federation/count-peer-keys store)
+               :federation-outbox-count (federation/count-outbox store)
+               :schema-version (migrations/schema-version store)
+               :latest-schema-version migrations/latest-schema-version
+               :up-to-date? (= (migrations/schema-version store)
+                               migrations/latest-schema-version)}}
+    (catch Exception e
+      {:healthy false
+       :details {:path (:path store)
+                 :error (.getMessage e)}})))

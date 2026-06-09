@@ -4,6 +4,7 @@
    [agent.llm.messages :as llm-messages]
    [agent.runtime.schema :as runtime-schema]
    [agent.runtime.tokens :as tokens]
+   [agent.util :as util]
    [clojure.string :as str]
    [clojure.walk :as walk]))
 
@@ -147,13 +148,8 @@
                       :limit (:output-reserve budgets)}}))
 
 (defn- truncate [text max-chars]
-  (let [text* (str (or text ""))]
-    (if (> (count text*) max-chars)
-      (str (subs text* 0 max-chars)
-           "\n\n[context-pack truncated "
-           (- (count text*) max-chars)
-           " chars]")
-      text*)))
+  (util/truncate text max-chars
+                 #(str "\n\n[context-pack truncated " % " chars]")))
 
 (defn- compact-tool-result-message [message max-chars compact?]
   (let [blocks (runtime-schema/normalize-content (:content message))

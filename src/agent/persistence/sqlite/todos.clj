@@ -13,22 +13,13 @@
 (def ^:private statuses #{"pending" "in_progress" "completed" "cancelled"})
 (def ^:private priorities #{"high" "medium" "low"})
 
-(defn- normalized-name [value]
-  (cond
-    (keyword? value) (name value)
-    (string? value) value
-    (nil? value) nil
-    :else (str value)))
-
 (defn- normalize-enum [field allowed fallback item]
-  (let [value (or (normalized-name (get item field)) fallback)]
-    (when-not (contains? allowed value)
-      (throw (ex-info (str "Invalid todo " (name field))
-                      {:type :invalid-todo-item
+  (common/valid-enum! (or (common/normalize-name (get item field)) fallback) allowed
+                      {:message (str "Invalid todo " (name field))
+                       :type :invalid-todo-item
                        :field field
                        :value (get item field)
-                       :allowed allowed})))
-    value))
+                       :allowed allowed}))
 
 (defn- normalize-item [item]
   (let [unknown (seq (remove allowed-item-keys (keys item)))]
@@ -173,7 +164,4 @@
                                      identity))))))))
 
 (defn count-lists [store]
-  (common/with-connection
-    store
-    (fn [conn]
-      (some-> (common/select-one conn (count-lists-sqlvec) identity) :n int))))
+  (common/count-rows store (count-lists-sqlvec)))

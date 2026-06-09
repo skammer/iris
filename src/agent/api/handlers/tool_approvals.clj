@@ -5,13 +5,7 @@
    [agent.api.responses :as responses]
    [agent.api.serializers :as ser]
    [agent.system.events :as events]
-   [agent.tools.approvals :as tool-approvals])
-  (:import
-   (java.time Instant)))
-
-(defn approval-expires-at [system]
-  (str (.plusSeconds (Instant/now)
-                     (long (get-in system [:config :tools :approvals :ttl-seconds] 900)))))
+   [agent.tools.approvals :as tool-approvals]))
 
 (defn list-approvals [system request]
   (responses/json-response 200
@@ -30,7 +24,7 @@
                    :input input
                    :requested-by (or (:requested_by body) "api")
                    :reason (:reason body)
-                   :expires-at (approval-expires-at system)})]
+                   :expires-at (tool-approvals/default-expires-at system)})]
     (events/log-event! system
                        {:event-type :tool.approval.requested
                         :entity-type :tool_approval

@@ -26,9 +26,7 @@
    [agent.tools.core :as tools]
    [agent.util :as util]
    [clojure.core.async :as async]
-   [clojure.string :as str])
-  (:import
-   (java.time Instant)))
+   [clojure.string :as str]))
 
 (defn- iris-context-message [system]
   (when-let [context (some-> (get-in system [:config :iris :context]) str/trim not-empty)]
@@ -40,10 +38,6 @@
                                str/trim
                                not-empty)]
       {:role "system" :content section})))
-
-(defn- approval-expires-at [system]
-  (str (.plusSeconds (Instant/now)
-                     (long (get-in system [:config :tools :approvals :ttl-seconds] 900)))))
 
 (defn- approval-reason [tool-name input]
   (or (some-> (or (:reason input) (get input "reason") (:purpose input) (get input "purpose"))
@@ -60,7 +54,7 @@
       :input (:input receipt)
       :requested-by (or session-id "chat")
       :reason (approval-reason tool-name (:input receipt))
-      :expires-at (approval-expires-at system)})))
+      :expires-at (tool-approvals/default-expires-at system)})))
 
 (defn- error-content [error]
   (str "Chat failed: " (.getMessage ^Throwable error)))

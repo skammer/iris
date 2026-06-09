@@ -122,6 +122,9 @@
       (mapv row->session
             (common/select-many conn (list-sessions-sqlvec) identity)))))
 
+(defn count-sessions [store]
+  (common/count-rows store (count-sessions-sqlvec)))
+
 (defn get-session [store session-id]
   (common/with-connection
     store
