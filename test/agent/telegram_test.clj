@@ -454,17 +454,26 @@
       (is (= [{:callback-id "callback-1" :body {:text "Denied."}}] @answers))
       (is (= [{:chat-id 100 :message-id 55 :reply-markup nil}] @edits))
       (is (= [{:chat-id 100 :text "Tool denied."}] @sent))
+      ;; Double-tapping Deny must answer gracefully, not raise a decision conflict.
+      (is (= :processed
+             (telegram/process-update! system config opts
+                                       (callback-update-for 2 100 7 55 (str "ta:deny:" (:id approval))))))
+      (is (= {:text "Already denied."} (:body (second @answers))))
+      (is (= 1 (count @sent)))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
-(deftest telegram-poll-retries-failed-update-before-advancing-offset
+(deftest telegram-poll-advances-offset-past-failed-update
+  ;; A poison update must not head-of-line-block the channel: it is preserved
+  ;; as :failed in channel_inbox and the poller moves on to later updates.
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path :evict-on-close? true})
         events (atom [])
         polls (atom [])
         attempts (atom 0)
-        update (update-for 41 100 7 "hi")
+        poison (update-for 41 100 7 "hi")
+        follow-up (update-for 42 100 7 "hello again")
         system {:store store
                 :config {:channel-adapters {:telegram {:enabled true
                                                        :bot-token "token"
@@ -476,21 +485,25 @@
                  system
                  {:get-updates-fn (fn [{:keys [offset]}]
                                     (swap! polls conj offset)
-                                    (if (< (count @polls) 3) [update] []))
-	                  :send-message-fn (fn [_ _] nil)
+                                    (cond
+                                      (nil? offset) [poison]
+                                      (= 42 offset) [follow-up]
+                                      :else []))
+                  :send-message-fn (fn [_ _] nil)
                   :async-chat? false
-	                  :chat-fn (fn [_ _]
-                                 (if (= 1 (swap! attempts inc))
-                                   (throw (ex-info "boom" {}))
-                                   {:content "ok"}))})]
+                  :chat-fn (fn [_ _]
+                             (if (= 1 (swap! attempts inc))
+                               (throw (ex-info "boom" {}))
+                               {:content "ok"}))})]
     (try
       (telegram/start! service)
-      (Thread/sleep 1500)
+      (Thread/sleep 2500)
       (telegram/stop! service 1000)
-      (is (= [nil nil 42] (take 3 @polls)))
+      (is (= [nil 42 43] (take 3 @polls)))
       (is (= 2 @attempts))
-      (is (= 42 (:next_offset (sqlite/get-channel-offset store :telegram))))
-      (is (= "processed" (:status (sqlite/get-channel-inbox-update store :telegram 41))))
+      (is (= 43 (:next_offset (sqlite/get-channel-offset store :telegram))))
+      (is (= "failed" (:status (sqlite/get-channel-inbox-update store :telegram 41))))
+      (is (= "processed" (:status (sqlite/get-channel-inbox-update store :telegram 42))))
       (finally
         (telegram/stop! service 1000)
         (sqlite/close-store! store)

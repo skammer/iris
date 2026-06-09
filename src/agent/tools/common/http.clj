@@ -163,12 +163,12 @@
                       [:headers {:optional true} [:map-of :string :string]]
                       [:params {:optional true} [:map-of :any :any]]
                       [:body {:optional true} :any]
-                      [:timeout-ms {:optional true} [:int {:min 1}]]])
+                      [:timeout-ms {:optional true} [:int {:min 1}]]]
        :operation :act
        :approval-sensitive? false
        :action-key :method
        :read-only-actions (when (:parallel-safe-read-methods? config) #{:get :head})
-       :parallel-safe-actions (when (:parallel-safe-read-methods? config) #{:get :head})
+       :parallel-safe-actions (when (:parallel-safe-read-methods? config) #{:get :head}))
       :validate-fn validate-input
       :health-fn (fn []
                    {:healthy true

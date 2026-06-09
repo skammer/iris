@@ -408,7 +408,12 @@
       (sqlite/save-channel-offset! store :telegram next-offset)
       (reset! last-offset next-offset)
       (catch Exception e
+        ;; Advance past the poisoned update: the row is preserved as :failed in
+        ;; channel_inbox for replay/inspection, and the poller must not refetch
+        ;; it forever (head-of-line blocking for the whole channel).
         (sqlite/mark-channel-inbox-update! store :telegram update-id :failed (.getMessage e))
+        (sqlite/save-channel-offset! store :telegram next-offset)
+        (reset! last-offset next-offset)
         (throw e)))))
 
 (defn start!

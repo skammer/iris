@@ -7,18 +7,13 @@
    [agent.defaults :as defaults]
    [agent.persistence.sqlite :as sqlite]))
 
-(def ^:private default-limit 100)
-(def ^:private max-limit 1000)
-
-(defn- bounded-limit [limit]
-  (min max-limit (max 1 (long (or limit default-limit)))))
-
 (defn list-events [system request]
   (let [{:keys [limit]} (-> request :parameters :query)]
+    ;; limit clamping is owned by the store (sqlite.common/bounded-limit)
     (responses/json-response 200
                              {:data (mapv ser/event->response
                                           (sqlite/list-events (:store system)
-                                                              {:limit (bounded-limit limit)}))})))
+                                                              {:limit limit}))})))
 
 (defn- next-event-id [stream-id counter event]
   (str (or (:id event)

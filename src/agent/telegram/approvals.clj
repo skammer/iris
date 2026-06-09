@@ -117,6 +117,20 @@
             approval)
           (throw e))))))
 
+(defn- ensure-denied!
+  [store approval-id actor]
+  (try
+    (tool-approvals/deny! store approval-id actor "denied in telegram")
+    {:already? false}
+    (catch clojure.lang.ExceptionInfo e
+      (let [data (ex-data e)]
+        (if (= :approval-decision-conflict (:type data))
+          (let [approval (tool-approvals/get-request store approval-id)]
+            (when-not (= "denied" (:status approval))
+              (throw e))
+            {:already? true})
+          (throw e))))))
+
 (defn approved-status-text [tool-name]
   (str (name tool-name) " status: ok"))
 
@@ -170,11 +184,12 @@
         actor* (actor callback-query)]
     (case action
       :deny
-      (do
-        (tool-approvals/deny! (:store system) approval-id actor* "denied in telegram")
+      (let [{:keys [already?]} (ensure-denied! (:store system) approval-id actor*)]
         (remove-callback-keyboard! safe-telegram! system config opts chat-id message-id)
-        (answer-callback! safe-telegram! system config opts callback-query "Denied.")
-        (send! chat-id "Tool denied.")
+        (answer-callback! safe-telegram! system config opts callback-query
+                          (if already? "Already denied." "Denied."))
+        (when-not already?
+          (send! chat-id "Tool denied."))
         :processed)
 
       :run

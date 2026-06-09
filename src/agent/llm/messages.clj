@@ -337,7 +337,9 @@
   (or (:thinking response)
       (:reasoning-content response)
       (:reasoning_content response)
+      (:reasoning response)
       (get-in response [:raw :reasoning_content])
+      (get-in response [:raw :reasoning])
       (get-in response [:raw :thinking])))
 
 (defn provider-response->assistant-turn
