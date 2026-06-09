@@ -165,6 +165,17 @@
                          {:argv ["fdisk" "**"] :decision :deny}
                          {:argv ["mkswap" "**"] :decision :deny}]
                  :max-output-bytes 65536}
+         ;; Remote MCP (Model Context Protocol) servers. When enabled, each
+         ;; server's tools register as :<server-name>__<tool-name>. Server
+         ;; entries look like:
+         ;; {:name "github"
+         ;;  :url "https://example.com/mcp"
+         ;;  :headers {"Authorization" "Bearer ..."}
+         ;;  :timeout-ms 30000}
+         ;; :headers and :timeout-ms are optional. Unreachable servers are
+         ;; skipped at startup; their tools are simply not registered.
+         :mcp {:enabled false
+               :servers []}
          ;; Per-channel rendering of tool calls and results.
          ;; preview-chars caps inline summary length; max-result-height-px caps
          ;; expanded result container height in the web UI; full? disables any

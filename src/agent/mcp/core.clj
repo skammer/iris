@@ -126,32 +126,36 @@
                          :error error})))
       (:result body))))
 
+(defn- post-request! [client request]
+  (http/post (:endpoint-url client)
+             {:headers (request-headers client request)
+              :body (json/generate-string request)
+              :socket-timeout (:timeout-ms client)
+              :connection-timeout (:timeout-ms client)
+              :throw-exceptions false
+              :as :text}))
+
+(defn- with-mcp-telemetry [client request f]
+  (let [start-ns (System/nanoTime)
+        record! (fn [attrs]
+                  (telemetry/record-mcp-call!
+                   (:telemetry client)
+                   (merge {:server-url (:endpoint-url client)
+                           :method (:method request)
+                           :duration-ms (/ (double (- (System/nanoTime) start-ns)) 1000000.0)}
+                          attrs)))]
+    (try
+      (let [result (f)]
+        (record! {:success? true})
+        result)
+      (catch Exception e
+        (record! {:success? false :error e})
+        (throw e)))))
+
 (defn rpc!
   [client request]
-  (let [start-ns (System/nanoTime)
-        result (try
-                 (let [response (http/post (:endpoint-url client)
-                                           {:headers (request-headers client request)
-                                            :body (json/generate-string request)
-                                            :socket-timeout (:timeout-ms client)
-                                            :connection-timeout (:timeout-ms client)
-                                            :throw-exceptions false
-                                            :as :text})]
-                   (response->result! request response))
-                 (catch Exception e
-                   (telemetry/record-mcp-call! (:telemetry client)
-                                               {:server-url (:endpoint-url client)
-                                                :method (:method request)
-                                                :duration-ms (/ (double (- (System/nanoTime) start-ns)) 1000000.0)
-                                                :success? false
-                                                :error e})
-                   (throw e)))]
-    (telemetry/record-mcp-call! (:telemetry client)
-                                {:server-url (:endpoint-url client)
-                                 :method (:method request)
-                                 :duration-ms (/ (double (- (System/nanoTime) start-ns)) 1000000.0)
-                                 :success? true})
-    result))
+  (with-mcp-telemetry client request
+    #(response->result! request (post-request! client request))))
 
 (defn initialize!
   [client]
@@ -160,14 +164,10 @@
                  {:protocolVersion (:protocol-version client)
                   :capabilities (:capabilities client)
                   :clientInfo (:client-info client)})
-        response (http/post (:endpoint-url client)
-                            {:headers (request-headers client request)
-                             :body (json/generate-string request)
-                             :socket-timeout (:timeout-ms client)
-                             :connection-timeout (:timeout-ms client)
-                             :throw-exceptions false
-                             :as :text})
-        result (response->result! request response)
+        [response result] (with-mcp-telemetry client request
+                            (fn []
+                              (let [response (post-request! client request)]
+                                [response (response->result! request response)])))
         client* (assoc client
                        :server-info (:serverInfo result)
                        :server-capabilities (:capabilities result)

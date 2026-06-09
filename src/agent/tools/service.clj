@@ -1,6 +1,8 @@
 (ns agent.tools.service
   "Tool registry factory, policy, and execution facade."
   (:require
+   [agent.logging :as logging]
+   [agent.mcp.core :as mcp]
    [agent.runs.registry :as runtime]
    [agent.runtime.tools :as runtime-tools]
    [agent.runtime.trace :as runtime-trace]
@@ -14,7 +16,8 @@
    [agent.tools.common.telegram :as telegram-tool]
    [agent.tools.common.todo :as todo-tool]
    [agent.tools.core :as tools]
-   [clojure.set :as set]))
+   [clojure.set :as set]
+   [clojure.string :as str]))
 
 (defn- normalize-tool-name [tool]
   (cond
@@ -90,6 +93,44 @@
     :health-fn
     (fn [] {:healthy true})}))
 
+(defn- mcp-tool-name-prefix [server-name]
+  (str (str/replace (str server-name) #"[^a-zA-Z0-9_-]" "_") "__"))
+
+(defn- register-mcp-server-tools
+  [registry server telemetry-collector]
+  (let [client (-> (mcp/create-http-client
+                    (cond-> {:endpoint-url (:url server)
+                             :headers (:headers server)
+                             :telemetry telemetry-collector}
+                      (:timeout-ms server) (assoc :timeout-ms (:timeout-ms server))))
+                   mcp/initialize!)]
+    (mcp/register-remote-tools! registry client
+                                :name-prefix (mcp-tool-name-prefix (:name server)))))
+
+(defn- register-mcp-tools
+  "Register tools from each configured MCP server. A server that fails to
+   initialize or list tools is logged and skipped so registry construction
+   never fails because of a remote peer."
+  [registry mcp-cfg event-sink telemetry-collector]
+  (reduce
+   (fn [registry* server]
+     (try
+       (register-mcp-server-tools registry* server telemetry-collector)
+       (catch Exception e
+         (logging/log-error! :agent.tools/mcp-server-skipped e
+                             {:mcp/server (:name server)
+                              :mcp/url (:url server)})
+         (when event-sink
+           (event-sink {:event-type :mcp-server-skipped
+                        :entity-type :tool
+                        :entity-id (str (:name server))
+                        :payload {:server (:name server)
+                                  :url (:url server)
+                                  :error (.getMessage e)}}))
+         registry*)))
+   registry
+   (:servers mcp-cfg)))
+
 (defn create-tool-registry
   "Build the production tool registry from a dependency map:
    {:cfg <:tools config> :event-sink :store :telemetry :memory-service
@@ -101,6 +142,7 @@
          fs-cfg (get cfg :fs)
          shell-cfg (get cfg :shell)
          todo-cfg (get cfg :todo)
+         mcp-cfg (get cfg :mcp)
          telegram-cfg (get channel-adapters-cfg :telegram)
          policy-hook (create-tool-policy-hook cfg)
          registry (tools/create-registry
@@ -171,7 +213,10 @@
            (tools/register-tool (telegram-tool/create-ask-tool telegram-cfg)))
 
        system-control
-       (tools/register-tool (reload-tool system-control)))))
+       (tools/register-tool (reload-tool system-control))
+
+       (and (:enabled mcp-cfg) (seq (:servers mcp-cfg)))
+       (register-mcp-tools mcp-cfg event-sink telemetry-collector))))
 
 (defn list-tools
   [system]

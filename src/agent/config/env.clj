@@ -152,6 +152,7 @@
    {:names "AGENT_OTEL_PUBLISH_DELAY_MS" :parse parse-long* :apply (assoc-path [:logging :otel :publish-delay])}
    {:names "AGENT_OTEL_MAX_ITEMS" :parse parse-long* :apply (assoc-path [:logging :otel :max-items])}
    {:names "AGENT_TOOLS_YOLO" :parse parse-bool :apply (assoc-path [:tools :yolo?])}
+   {:names "AGENT_MCP_ENABLED" :parse parse-bool :apply (assoc-path [:tools :mcp :enabled])}
    {:names "AGENT_TOOL_ALLOWLIST" :parse parse-keyword-csv :apply (assoc-path [:tools :policy :allowlist])}
    {:names "AGENT_TOOL_BLOCKLIST" :parse parse-keyword-csv :apply (assoc-path [:tools :policy :blocklist])}
    {:names "AGENT_TOOL_APPROVAL_TTL_SECONDS" :parse parse-long* :apply (assoc-path [:tools :approvals :ttl-seconds])}

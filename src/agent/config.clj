@@ -183,6 +183,8 @@
                            {:argv ["fdisk" "**"] :decision :deny}
                            {:argv ["mkswap" "**"] :decision :deny}]
                    :max-output-bytes 65536}
+           :mcp {:enabled false
+                 :servers []}
            :display {:web {:show-tool-calls? true
                            :collapsed? true
                            :preview-chars 800
