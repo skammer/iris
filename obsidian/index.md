@@ -7,6 +7,7 @@
 - [[knowledge-graphs]] - Oxford Semantic/RDFox, Noumenon
 
 ## Architecture
+- [[codebase-map]] - Full namespace map, layer diagram, flows (June 2026 review)
 - [[design-principles]] - Core architectural decisions
 - [[component-structure]] - Module organization
 - [[security-model]] - Sandboxing and authentication
@@ -26,6 +27,8 @@
 - [[deployment-patterns]] - Production deployment
 
 ## Decision Logs
+- [[refactoring-2026-06-findings]] - Deep-review findings (bugs, dead code, duplication)
+- [[refactoring-2026-06-plan]] - Phased refactoring plan + decisions
 - [[decisions-2026]] - Architectural decisions
 - [[issue-tracking]] - Problems and solutions
 - [[future-considerations]] - Future enhancements
