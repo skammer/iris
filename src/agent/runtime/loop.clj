@@ -15,24 +15,6 @@
    [agent.util :as util]
    [clojure.string :as str]))
 
-(def ^:private event! runtime-events/emit!)
-(def ^:private emit-message-delta! runtime-events/emit-message-delta!)
-(def ^:private emit-thinking-delta! runtime-events/emit-thinking-delta!)
-(def ^:private emit-terminal-message! runtime-events/emit-terminal-message!)
-(def ^:private max-token-stop-reason? runtime-events/max-token-stop-reason?)
-(def ^:private emit-max-token-truncation! runtime-events/emit-max-token-truncation!)
-(def ^:private emit-tool-turn! runtime-events/emit-tool-turn!)
-
-(def ^:private cancelled? cancel/cancelled?)
-(def ^:private throw-if-cancelled! cancel/throw-if-cancelled!)
-
-(def ^:private result-text util/result-content)
-(def ^:private stopped-content runtime-messages/stopped-content)
-(def ^:private max-steps-content runtime-messages/max-steps-content)
-(def ^:private doom-loop-content runtime-messages/doom-loop-content)
-(def ^:private max-tokens-content runtime-messages/max-tokens-content)
-(def ^:private guardrail-exhausted-content runtime-messages/guardrail-exhausted-content)
-
 (defn- approval-receipts [receipts]
   (filter #(= :approval-required (keyword (:status %))) receipts))
 
@@ -145,13 +127,13 @@
     step))
 
 (defn- retry-events! [sink base verdict step-no]
-  (event! sink :guardrail-blocked base {:step step-no
-                                        :action (name (:action verdict))
-                                        :reason (name (:reason verdict))
-                                        :fingerprint (:fingerprint verdict)})
-  (event! sink :nudge-injected base {:step step-no
-                                     :reason (name (:reason verdict))
-                                     :content (:content verdict)}))
+  (runtime-events/emit! sink :guardrail-blocked base {:step step-no
+                                                      :action (name (:action verdict))
+                                                      :reason (name (:reason verdict))
+                                                      :fingerprint (:fingerprint verdict)})
+  (runtime-events/emit! sink :nudge-injected base {:step step-no
+                                                   :reason (name (:reason verdict))
+                                                   :content (:content verdict)}))
 
 (defn- terminal-result
   "Canonical terminal return map for run!. Every terminal branch returns the
@@ -170,17 +152,101 @@
            :stream? stream?}
           extra)))
 
-(defn- fatal-guardrail! [sink base verdict step-no final-messages trace usage stream? request-id]
-  (let [content (or (:content verdict) guardrail-exhausted-content)]
-    (emit-terminal-message! sink base content {:stop-reason :guardrail-exhausted
-                                               :metadata {:reason (some-> (:reason verdict) name)}})
-    (event! sink :agent-end base {:steps (inc step-no)
-                                  :stop-reason :guardrail-exhausted
-                                  :stream stream?})
+;; Terminal emitters. Each one owns the event sequence and terminal-result
+;; shape for exactly one way the loop can end; run! itself only decides
+;; WHICH ending applies. `env` carries the per-run constants
+;; {:sink :base :request-id :stream?}.
+
+(defn- fatal-guardrail! [{:keys [sink base request-id stream?]} verdict step-no final-messages trace usage]
+  (let [content (or (:content verdict) runtime-messages/guardrail-exhausted-content)]
+    (runtime-events/emit-terminal-message! sink base content {:stop-reason :guardrail-exhausted
+                                                              :metadata {:reason (some-> (:reason verdict) name)}})
+    (runtime-events/emit! sink :agent-end base {:steps (inc step-no)
+                                                :stop-reason :guardrail-exhausted
+                                                :stream stream?})
     (terminal-result content request-id
                      (conj final-messages {:role "assistant" :content content})
                      trace usage :guardrail-exhausted stream?
                      {:guardrail? true})))
+
+(defn- max-steps-terminal! [{:keys [sink base request-id stream?]} step-no final-messages trace usage]
+  (runtime-events/emit-terminal-message! sink base runtime-messages/max-steps-content {:stop-reason :max-steps})
+  (runtime-events/emit! sink :agent-end base {:steps step-no :stop-reason :max-steps :stream stream?})
+  (terminal-result runtime-messages/max-steps-content request-id
+                   (conj final-messages {:role "assistant" :content runtime-messages/max-steps-content})
+                   trace usage :max-steps stream?))
+
+(defn- max-tokens-terminal! [{:keys [sink base request-id stream?]} llm-response step-no final-messages trace usage]
+  (runtime-events/emit-max-token-truncation! sink base request-id llm-response)
+  (runtime-events/emit! sink :agent-end base {:steps (inc step-no)
+                                              :stop-reason :max-tokens
+                                              :stream stream?})
+  (terminal-result runtime-messages/max-tokens-content request-id
+                   (conj final-messages {:role "assistant" :content runtime-messages/max-tokens-content})
+                   trace usage :max-tokens stream?
+                   {:error? true}))
+
+(defn- doom-loop-terminal! [{:keys [sink base request-id stream?]} doom-check config step-no final-messages trace usage]
+  (let [call (:call doom-check)
+        payload {:kind :doom-loop-detected
+                 :tool-name (:tool-name call)
+                 :input (:input call)
+                 :fingerprint (:fingerprint call)
+                 :count (:count doom-check)
+                 :threshold (:threshold config)
+                 :window-size (:window-size config)}]
+    (runtime-events/emit! sink :tool-execution-update base payload)
+    (runtime-events/emit-terminal-message! sink base runtime-messages/doom-loop-content {:stop-reason :doom-loop
+                                                                                         :metadata payload})
+    (runtime-events/emit! sink :agent-end base {:steps (inc step-no)
+                                                :stop-reason :doom-loop
+                                                :stream stream?})
+    (terminal-result runtime-messages/doom-loop-content request-id
+                     (conj final-messages {:role "assistant" :content runtime-messages/doom-loop-content})
+                     trace usage :doom-loop stream?
+                     {:guardrail? true
+                      :doom-loop payload})))
+
+(defn- completed-terminal!
+  [{:keys [sink base request-id stream?]} content llm-response step-no final-messages trace usage]
+  (runtime-events/emit! sink :message-end base
+                        (cond-> {:role "assistant"
+                                 :content content
+                                 :final? true
+                                 :stop-reason :completed}
+                          (:usage llm-response) (assoc :metadata {:usage (:usage llm-response)})))
+  (runtime-events/emit! sink :agent-end base {:steps (inc step-no)
+                                              :stop-reason :completed
+                                              :stream stream?})
+  (terminal-result content request-id
+                   (conj final-messages {:role "assistant" :content content})
+                   trace usage :completed stream?))
+
+(defn- approval-terminal!
+  [{:keys [sink base request-id stream?]} approvals pending-receipts step-no final-messages trace usage]
+  (let [content (approval-message approvals)]
+    (runtime-events/emit! sink :tool-execution-update base {:kind :approval-required
+                                                            :approvals approvals
+                                                            :receipts pending-receipts})
+    (runtime-events/emit-terminal-message! sink base content {:stop-reason :approval-required
+                                                              :approvals approvals})
+    (runtime-events/emit! sink :agent-end base {:steps (inc step-no)
+                                                :stop-reason :approval-required
+                                                :stream stream?})
+    (terminal-result content request-id
+                     (conj final-messages {:role "assistant" :content content})
+                     trace usage :approval-required stream?
+                     {:approvals approvals})))
+
+(defn- cancelled-terminal! [{:keys [sink base request-id stream?]} e]
+  (runtime-events/emit-terminal-message! sink base runtime-messages/stopped-content {:stop-reason :cancelled})
+  (runtime-events/emit! sink :agent-end base {:stop-reason :cancelled
+                                              :message (.getMessage ^Throwable e)
+                                              :stream stream?})
+  (terminal-result runtime-messages/stopped-content request-id
+                   [{:role "assistant" :content runtime-messages/stopped-content}]
+                   [] {} :cancelled stream?
+                   {:cancelled? true}))
 
 (defn run!
   [{:keys [messages context-injectors system-prompt tools model provider-config
@@ -197,6 +263,7 @@
         doom-loop-config* (doom-loop/normalize-config doom-loop-config)
         messages* (apply-context-injectors (vec (or messages [])) context-injectors)
         stream?* (true? stream?)
+        env {:sink event-sink :base base :request-id request-id :stream? stream?*}
         chat-profile* (nudge/normalize-profile chat-profile)
         delta-emitted? (atom false)
         pending-deltas (atom [])
@@ -204,10 +271,10 @@
         emit-delta! (fn [chunk]
                       (when (and (string? chunk) (not= "" chunk))
                         (reset! delta-emitted? true)
-                        (emit-message-delta! event-sink base chunk)))
+                        (runtime-events/emit-message-delta! event-sink base chunk)))
         emit-thinking! (fn [chunk]
                          (when (and (string? chunk) (not= "" chunk))
-                           (emit-thinking-delta! event-sink base chunk)
+                           (runtime-events/emit-thinking-delta! event-sink base chunk)
                            (when on-thinking-delta
                              (on-thinking-delta chunk))))
         flush-pending-deltas! (fn []
@@ -217,12 +284,12 @@
         discard-pending-deltas! #(reset! pending-deltas [])
         on-content-delta (when stream?*
                            (fn [chunk]
-                             (throw-if-cancelled! cancellation-token)
+                             (cancel/throw-if-cancelled! cancellation-token)
                              (when (and (string? chunk) (not= "" chunk))
                                (if buffer-deltas?
                                  (swap! pending-deltas conj chunk)
                                  (emit-delta! chunk)))))]
-    (event! event-sink :agent-start base {:message-count (count messages*) :stream stream?*})
+    (runtime-events/emit! event-sink :agent-start base {:message-count (count messages*) :stream stream?*})
     (try
       (loop [step-no 0
              state {}
@@ -232,21 +299,16 @@
              usage {}
              doom-loop-state (doom-loop/new-state)
              nudge-state (nudge/new-state)]
-        (throw-if-cancelled! cancellation-token)
+        (cancel/throw-if-cancelled! cancellation-token)
         (if (>= step-no max-steps)
-          (do
-            (emit-terminal-message! event-sink base max-steps-content {:stop-reason :max-steps})
-            (event! event-sink :agent-end base {:steps step-no :stop-reason :max-steps :stream stream?*})
-            (terminal-result max-steps-content request-id
-                             (conj final-messages {:role "assistant" :content max-steps-content})
-                             trace usage :max-steps stream?*))
-          (let [_ (event! event-sink :turn-start base {:step step-no})
+          (max-steps-terminal! env step-no final-messages trace usage)
+          (let [_ (runtime-events/emit! event-sink :turn-start base {:step step-no})
                 _ (reset! delta-emitted? false)
                 _ (discard-pending-deltas!)
-                _ (event! event-sink :message-start base {:role "assistant" :step step-no})
+                _ (runtime-events/emit! event-sink :message-start base {:role "assistant" :step step-no})
                 {planner-messages* :messages repairs :repairs} (runtime-messages/normalize-chat-history planner-messages)
                 _ (when (seq repairs)
-                    (event! event-sink :message-update base {:kind :history-repaired :repairs repairs}))
+                    (runtime-events/emit! event-sink :message-update base {:kind :history-repaired :repairs repairs}))
                 context-pack-raw (context-pack-fn {:messages planner-messages*
                                                    :system-prompt system-prompt
                                                    :tools tools
@@ -266,21 +328,21 @@
                 routed-tools (:tools routed)
                 allowed-tools (:allowed-tools routed)
                 _ (when (contains? context-pack :tokens-before)
-                    (event! event-sink :message-update base
-                            {:kind :context-budget
-                             :step step-no
-                             :tokens-before (:tokens-before context-pack)
-                             :tokens-after (:tokens-after context-pack)
-                             :budgets (:budgets context-pack)
-                             :decisions (:decisions context-pack)}))
+                    (runtime-events/emit! event-sink :message-update base
+                                          {:kind :context-budget
+                                           :step step-no
+                                           :tokens-before (:tokens-before context-pack)
+                                           :tokens-after (:tokens-after context-pack)
+                                           :budgets (:budgets context-pack)
+                                           :decisions (:decisions context-pack)}))
                 _ (doseq [warning (:warnings context-pack)]
-                    (event! event-sink :message-update base {:kind :context-warning
-                                                             :step step-no
-                                                             :warning warning}))
+                    (runtime-events/emit! event-sink :message-update base {:kind :context-warning
+                                                                           :step step-no
+                                                                           :warning warning}))
                 _ (when-let [compaction (:compaction context-pack)]
-                    (event! event-sink :message-update base {:kind :context-compacted
-                                                             :step step-no
-                                                             :compaction compaction}))
+                    (runtime-events/emit! event-sink :message-update base {:kind :context-compacted
+                                                                           :step step-no
+                                                                           :compaction compaction}))
                 step (planner-fn provider-config
                                  {:messages planner-visible-messages
                                   :state state
@@ -298,7 +360,7 @@
                                                  "required")
                                   :on-content-delta on-content-delta
                                   :on-thinking-delta (when stream?* emit-thinking!)})
-                _ (throw-if-cancelled! cancellation-token)
+                _ (cancel/throw-if-cancelled! cancellation-token)
                 llm-response0 (:llm-response step)
                 step* (-> step
                           (strip-respond-when-mixed llm-response0)
@@ -306,7 +368,7 @@
                 executable-step (select-keys step* [:schema-version :state :directives :receipts])
                 llm-response (:llm-response step*)
                 usage* (usage+ usage (:usage llm-response))
-                max-token? (max-token-stop-reason? (:stop-reason llm-response))
+                max-token? (runtime-events/max-token-stop-reason? (:stop-reason llm-response))
                 ;; A length-truncated turn is only terminal when it produced no
                 ;; executable tool calls. finish_reason="length" frequently rides
                 ;; along with a complete tool_calls array (the model emitted the
@@ -335,46 +397,23 @@
               (do
                 (discard-pending-deltas!)
                 (retry-events! event-sink base pre-verdict step-no)
-                (fatal-guardrail! event-sink base pre-verdict step-no final-messages trace usage* stream?* request-id))
+                (fatal-guardrail! env pre-verdict step-no final-messages trace usage*))
 
               max-token-terminal?
               (do
                 (discard-pending-deltas!)
-                (emit-max-token-truncation! event-sink base request-id llm-response)
-                (event! event-sink :agent-end base {:steps (inc step-no)
-                                                    :stop-reason :max-tokens
-                                                    :stream stream?*})
-                (terminal-result max-tokens-content request-id
-                                 (conj final-messages {:role "assistant" :content max-tokens-content})
-                                 trace usage* :max-tokens stream?*
-                                 {:error? true}))
+                (max-tokens-terminal! env llm-response step-no final-messages trace usage*))
 
               :else
               (let [doom-check (doom-loop/check-step doom-loop-state doom-loop-config* executable-step)
                     doom-loop-state* (:state doom-check)]
                 (if (:detected? doom-check)
-                  (let [call (:call doom-check)
-                        payload {:kind :doom-loop-detected
-                                 :tool-name (:tool-name call)
-                                 :input (:input call)
-                                 :fingerprint (:fingerprint call)
-                                 :count (:count doom-check)
-                                 :threshold (:threshold doom-loop-config*)
-                                 :window-size (:window-size doom-loop-config*)}]
+                  (do
                     (discard-pending-deltas!)
-                    (event! event-sink :tool-execution-update base payload)
-                    (emit-terminal-message! event-sink base doom-loop-content {:stop-reason :doom-loop
-                                                                               :metadata payload})
-                    (event! event-sink :agent-end base {:steps (inc step-no)
-                                                        :stop-reason :doom-loop
-                                                        :stream stream?*})
-                    (terminal-result doom-loop-content request-id
-                                     (conj final-messages {:role "assistant" :content doom-loop-content})
-                                     trace usage* :doom-loop stream?*
-                                     {:guardrail? true
-                                      :doom-loop payload}))
+                    (doom-loop-terminal! env doom-check doom-loop-config* step-no
+                                         final-messages trace usage*))
                   (let [executed (execute-step-fn executable-step)
-                        _ (throw-if-cancelled! cancellation-token)
+                        _ (cancel/throw-if-cancelled! cancellation-token)
                         receipts (:receipts executed)
                         post-verdict (nudge/check-after-exec chat-profile* nudge-state {:receipts receipts})
                         trace-entry {:step step-no :directives (:directives step*) :receipts receipts}
@@ -384,9 +423,9 @@
                       (do
                         (discard-pending-deltas!)
                         (retry-events! event-sink base post-verdict step-no)
-                        (event! event-sink :turn-end base {:step step-no
-                                                           :directives (:directives step*)
-                                                           :receipts receipts})
+                        (runtime-events/emit! event-sink :turn-end base {:step step-no
+                                                                         :directives (:directives step*)
+                                                                         :receipts receipts})
                         (recur (inc step-no)
                                (merge state (:state executed))
                                (conj planner-messages* (nudge/nudge-message post-verdict))
@@ -402,7 +441,7 @@
                       (do
                         (discard-pending-deltas!)
                         (retry-events! event-sink base post-verdict step-no)
-                        (fatal-guardrail! event-sink base post-verdict step-no final-messages trace* usage* stream?* request-id))
+                        (fatal-guardrail! env post-verdict step-no final-messages trace* usage*))
 
                       :else
                       (do
@@ -414,70 +453,41 @@
                                           (align-approval-reasons receipts approvals)
                                           receipts)
                               approval-needed* (vec (approval-receipts receipts*))]
-                          (event! event-sink :turn-end base {:step step-no
-                                                             :directives (:directives step*)
-                                                             :receipts receipts*})
+                          (runtime-events/emit! event-sink :turn-end base {:step step-no
+                                                                           :directives (:directives step*)
+                                                                           :receipts receipts*})
                           (let [provider-tool-calls (seq (:tool-calls llm-response))
                                 protocol-messages (when provider-tool-calls
-                                                    (emit-tool-turn! event-sink base request-id llm-response
-                                                                     provider-tool-calls receipts* tool-output-max-chars))
-                              final-messages* (into final-messages protocol-messages)]
-                          (if-let [receipt (complete-receipt receipts)]
-                            (let [content (result-text (:result receipt))]
-                              (when-not @delta-emitted?
-                                (emit-delta! content))
-                              (event! event-sink :message-end base
-                                      (cond-> {:role "assistant"
-                                               :content content
-                                               :final? true
-                                               :stop-reason :completed}
-                                        (:usage llm-response) (assoc :metadata {:usage (:usage llm-response)})))
-                              (event! event-sink :agent-end base {:steps (inc step-no)
-                                                                  :stop-reason :completed
-                                                                  :stream stream?*})
-                              (terminal-result content request-id
-                                               (conj final-messages* {:role "assistant" :content content})
-                                               trace* usage* :completed stream?*))
-                            (if (seq approval-needed*)
-                              (let [content (approval-message approvals)]
-                                  (event! event-sink :tool-execution-update base {:kind :approval-required
-                                                                                  :approvals approvals
-                                                                                  :receipts approval-needed*})
-                                  (emit-terminal-message! event-sink base content {:stop-reason :approval-required
-                                                                                   :approvals approvals})
-                                  (event! event-sink :agent-end base {:steps (inc step-no)
-                                                                      :stop-reason :approval-required
-                                                                      :stream stream?*})
-                                  (terminal-result content request-id
-                                                   (conj final-messages* {:role "assistant" :content content})
-                                                   trace* usage* :approval-required stream?*
-                                                   {:approvals approvals}))
-                              (recur (inc step-no)
-                                     (merge state (:state executed))
-                                     (into planner-messages* protocol-messages)
-                                     trace*
-                                     final-messages*
-                                     usage*
-                                     doom-loop-state*
-                                     (nudge/record-execution nudge-state executable-step receipts*)))))))))))))))
+                                                    (runtime-events/emit-tool-turn! event-sink base request-id llm-response
+                                                                                    provider-tool-calls receipts* tool-output-max-chars))
+                                final-messages* (into final-messages protocol-messages)]
+                            (if-let [receipt (complete-receipt receipts)]
+                              (let [content (util/result-content (:result receipt))]
+                                (when-not @delta-emitted?
+                                  (emit-delta! content))
+                                (completed-terminal! env content llm-response step-no
+                                                     final-messages* trace* usage*))
+                              (if (seq approval-needed*)
+                                (approval-terminal! env approvals approval-needed* step-no
+                                                    final-messages* trace* usage*)
+                                (recur (inc step-no)
+                                       (merge state (:state executed))
+                                       (into planner-messages* protocol-messages)
+                                       trace*
+                                       final-messages*
+                                       usage*
+                                       doom-loop-state*
+                                       (nudge/record-execution nudge-state executable-step receipts*)))))))))))))))
       (catch Exception e
-        (if (or (cancelled? cancellation-token)
+        (if (or (cancel/cancelled? cancellation-token)
                 (= :chat-cancelled (some-> e ex-data :type)))
-          (do
-            (emit-terminal-message! event-sink base stopped-content {:stop-reason :cancelled})
-            (event! event-sink :agent-end base {:stop-reason :cancelled
-                                                :message (.getMessage e)
-                                                :stream stream?*})
-            (terminal-result stopped-content request-id
-                             [{:role "assistant" :content stopped-content}]
-                             [] {} :cancelled stream?*
-                             {:cancelled? true}))
+          (cancelled-terminal! env e)
           (if fallback-fn
             (try
               (reset! delta-emitted? false)
-              (event! event-sink :message-start base {:role "assistant"
-                                                      :fallback? true
-                                                      :reason (.getMessage e)})
+              (runtime-events/emit! event-sink :message-start base {:role "assistant"
+                                                                    :fallback? true
+                                                                    :reason (.getMessage e)})
               (let [fallback (fallback-fn {:messages messages*
                                            :error e
                                            :stream? stream?*
@@ -485,14 +495,14 @@
                     content (:content fallback)]
                 (when-not @delta-emitted?
                   (emit-delta! content))
-                (event! event-sink :message-end base {:role "assistant"
-                                                      :content content
-                                                      :final? true
-                                                      :fallback? true
-                                                      :stop-reason (if (:error? fallback) :error :completed)})
-                (event! event-sink :agent-end base {:stop-reason (if (:error? fallback) :error :completed)
-                                                    :fallback? true
-                                                    :stream stream?*})
+                (runtime-events/emit! event-sink :message-end base {:role "assistant"
+                                                                    :content content
+                                                                    :final? true
+                                                                    :fallback? true
+                                                                    :stop-reason (if (:error? fallback) :error :completed)})
+                (runtime-events/emit! event-sink :agent-end base {:stop-reason (if (:error? fallback) :error :completed)
+                                                                  :fallback? true
+                                                                  :stream stream?*})
                 (merge (terminal-result content request-id
                                         [{:role "assistant" :content content}]
                                         [] (:usage fallback {})
@@ -500,23 +510,23 @@
                        fallback))
               (catch Exception fallback-error
                 (let [content (str "Chat failed: " (.getMessage fallback-error))]
-                  (event! event-sink :message-end base {:role "assistant"
-                                                        :content content
-                                                        :final? true
-                                                        :fallback? true
-                                                        :stop-reason :error})
-                  (event! event-sink :agent-end base {:stop-reason :error
-                                                      :fallback? true
-                                                      :message (.getMessage fallback-error)
-                                                      :initial-error (.getMessage e)
-                                                      :stream stream?*})
+                  (runtime-events/emit! event-sink :message-end base {:role "assistant"
+                                                                      :content content
+                                                                      :final? true
+                                                                      :fallback? true
+                                                                      :stop-reason :error})
+                  (runtime-events/emit! event-sink :agent-end base {:stop-reason :error
+                                                                    :fallback? true
+                                                                    :message (.getMessage fallback-error)
+                                                                    :initial-error (.getMessage e)
+                                                                    :stream stream?*})
                   (terminal-result content request-id
                                    [{:role "assistant" :content content}]
                                    [] {} :error stream?*
                                    {:error? true}))))
             (do
-              (event! event-sink :agent-end base {:stop-reason :planner-error
-                                                  :message (.getMessage e)
-                                                  :type (some-> e ex-data :type)
-                                                  :stream stream?*})
+              (runtime-events/emit! event-sink :agent-end base {:stop-reason :planner-error
+                                                                :message (.getMessage e)
+                                                                :type (some-> e ex-data :type)
+                                                                :stream stream?*})
               (throw e))))))))
