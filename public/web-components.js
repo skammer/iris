@@ -463,3 +463,46 @@ const skillAutocompleteObserver = new MutationObserver(attachSkillAutocompletes)
 skillAutocompleteObserver.observe(document.body, { childList: true, subtree: true });
 attachSkillAutocompletes();
 requestAnimationFrame(syncRouterState);
+
+// --- math typesetting (KaTeX auto-render) + spoiler reveal -------------------
+// SSE morphs reset typeset math back to raw $...$ text, so re-typeset after
+// DOM mutations; the .katex filter prevents self-trigger loops and typesetting
+// is idempotent (output contains no delimiters).
+const MATH_OPTS = {
+  delimiters: [
+    { left: "$$", right: "$$", display: true },
+    { left: "\\[", right: "\\]", display: true },
+    { left: "$", right: "$", display: false },
+    { left: "\\(", right: "\\)", display: false },
+  ],
+  ignoredTags: ["pre", "code", "script", "style", "textarea", "option"],
+  throwOnError: false,
+};
+let mathTimer = null;
+const typesetMath = () => {
+  if (typeof window.renderMathInElement !== "function") return;
+  document.querySelectorAll(".message-content.markdown").forEach((el) => {
+    window.renderMathInElement(el, MATH_OPTS);
+  });
+};
+const mathObserver = new MutationObserver((mutations) => {
+  const relevant = mutations.some((m) => {
+    const target = m.target instanceof Element ? m.target : m.target.parentElement;
+    return target && !target.closest(".katex");
+  });
+  if (!relevant) return;
+  clearTimeout(mathTimer);
+  mathTimer = setTimeout(typesetMath, 60);
+});
+mathObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+if (document.readyState === "complete") {
+  typesetMath();
+} else {
+  window.addEventListener("load", typesetMath);
+}
+
+// Spoilers: delegated so the handler survives SSE morphs.
+document.addEventListener("click", (event) => {
+  const spoiler = event.target instanceof Element && event.target.closest(".spoiler");
+  if (spoiler) spoiler.classList.toggle("spoiler--revealed");
+});

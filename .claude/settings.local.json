@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "mcp__context7__query-docs"
+      "mcp__context7__query-docs",
+      "Bash(mkdir -p target/test-iris-config target/test-iris-data)",
+      "Bash(env IRIS_CONFIG_DIR=target/test-iris-config IRIS_DATA_DIR=target/test-iris-data clojure -M:test -e \"\\(require 'agent.test-runner\\) \\(agent.test-runner/run-all-tests\\) \\(shutdown-agents\\)\")",
+      "WebFetch(domain:core.telegram.org)"
     ]
   }
 }

@@ -7,6 +7,10 @@
         clj-http/clj-http {:mvn/version "3.13.1"}
         cheshire/cheshire {:mvn/version "5.11.0"}
         org.commonmark/commonmark {:mvn/version "0.24.0"}
+        org.commonmark/commonmark-ext-gfm-tables {:mvn/version "0.24.0"}
+        org.commonmark/commonmark-ext-gfm-strikethrough {:mvn/version "0.24.0"}
+        org.commonmark/commonmark-ext-task-list-items {:mvn/version "0.24.0"}
+        org.commonmark/commonmark-ext-footnotes {:mvn/version "0.24.0"}
         org.jsoup/jsoup {:mvn/version "1.18.3"}
         metosin/malli {:mvn/version "0.20.1"}
         hiccup/hiccup {:mvn/version "2.0.0"}

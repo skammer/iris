@@ -105,6 +105,7 @@
       (is (nil? (get-in cfg [:memory :facts :dedup :similarity-threshold])))
       (is (= {:enabled false
               :bot-token nil
+              :rich-messages? true
               :poll-timeout-seconds 30
               :poll-limit 100
               :max-download-bytes 20971520
@@ -146,6 +147,11 @@
   (with-isolated-config [_root {"AGENT_ORCHESTRATOR_ENABLED" "true"}]
     (let [cfg (config/load-config)]
       (is (true? (get-in cfg [:orchestrator :enabled]))))))
+
+(deftest telegram-rich-messages-env-override-test
+  (with-isolated-config [_root {"AGENT_TELEGRAM_RICH_MESSAGES" "false"}]
+    (let [cfg (config/load-config)]
+      (is (false? (get-in cfg [:channel-adapters :telegram :rich-messages?]))))))
 
 (deftest invalid-env-bool-fails-with-env-context-test
   (with-isolated-config [_root {"AGENT_ORCHESTRATOR_ENABLED" "maybe"}]

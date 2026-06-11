@@ -11,6 +11,7 @@
    [agent.telegram.approvals :as tg-approvals]
    [agent.telegram.commands :as tg-commands]
    [agent.telegram.media :as tg-media]
+   [agent.telegram.rich :as tg-rich]
    [agent.telegram.sessions :as tg-sessions]
    [agent.telegram.streaming :as tg-streaming]
    [clojure.core.async :as async]
@@ -51,13 +52,18 @@
 (defn- telegram-operation-failed!
   [system chat-id operation error]
   (when-let [event-sink (:event-sink system)]
-    (event-sink {:event-type :telegram.operation.failed
-                 :entity-type :telegram_chat
-                 :entity-id (str chat-id)
-                 :payload {:operation operation
-                           :chat-id chat-id
-                           :message (.getMessage error)
-                           :type (some-> error ex-data :type)}})))
+    (let [data (ex-data error)]
+      (event-sink {:event-type :telegram.operation.failed
+                   :entity-type :telegram_chat
+                   :entity-id (str chat-id)
+                   :payload (cond-> {:operation operation
+                                     :chat-id chat-id
+                                     :message (.getMessage error)
+                                     :type (:type data)}
+                              (:status data)
+                              (assoc :status (:status data))
+                              (get-in data [:body :description])
+                              (assoc :description (get-in data [:body :description])))}))))
 
 (defn- safe-telegram!
   [system chat-id operation f]
@@ -176,20 +182,41 @@
       (finally
         (broker/unsubscribe! broker-instance subscription)))))
 
+(defn- rich-send-fn
+  "Final-reply sender that tries sendRichMessage and falls back to the
+   legacy chunked MarkdownV2 path, recording the rich failure."
+  [system config opts]
+  (let [token (:bot-token config)
+        send-rich! (or (:send-rich-message-fn opts)
+                       (fn [cid markdown] (tg-api/send-rich-message! token cid markdown)))
+        legacy! (or (:send-message-fn opts)
+                    (fn [cid text] (tg-api/send-message! token cid text)))]
+    (fn [chat-id text]
+      (try
+        (doseq [chunk (tg-rich/final-chunks nil text)]
+          (send-rich! chat-id chunk))
+        (catch Exception e
+          (telegram-operation-failed! system chat-id :rich-send e)
+          (legacy! chat-id text))))))
+
 (defn- run-turn!
   "Shared chat-turn runner: typing indicator, draft streaming controls,
    tool-call summaries, approval cards, and final reply delivery."
   [system config opts chat chat-id session-id messages]
   (let [token (:bot-token config)
-        send! (or (:send-message-fn opts)
-                  (fn [cid text] (tg-api/send-message! token cid text)))
+        send! (if (tg-rich/enabled? config)
+                (rich-send-fn system config opts)
+                (or (:send-message-fn opts)
+                    (fn [cid text] (tg-api/send-message! token cid text))))
         stop-typing! (tg-streaming/start-typing-indicator! safe-telegram! system config opts chat-id)
         stream-controls (tg-streaming/build-controls safe-telegram! system config opts chat chat-id)
         on-tool-call (tg-streaming/build-on-tool-call safe-telegram! system opts chat-id stream-controls)
         result (try
                  (run-chat-events! system config opts chat-id session-id messages stream-controls on-tool-call)
                  (finally
-                   (stop-typing!)))
+                   (stop-typing!)
+                   (when-let [stop-controls! (:stop! stream-controls)]
+                     (stop-controls!))))
         final (or (:content result) "")]
     (when (nil? (:finalize! stream-controls))
       (send! chat-id (if (str/blank? final) "(no response)" final)))
@@ -323,6 +350,7 @@
    :public-url-required? false
    :config-schema {:enabled :boolean
                    :bot-token :string
+                   :rich-messages? :boolean
                    :allowlist :map}))
 
 (defrecord TelegramService [system config running? future last-offset opts]

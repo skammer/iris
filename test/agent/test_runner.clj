@@ -5,6 +5,7 @@
    [agent.api-smoke-test]
    [agent.api.event-compat-test]
    [agent.cli-test]
+   [agent.cli.render-test]
    [agent.broker.local-test]
    [agent.channels.core-test]
    [agent.chat-harness-test]
@@ -17,6 +18,8 @@
    [agent.health-test]
    [agent.system-test]
    [agent.telegram.format-test]
+   [agent.telegram.rich-test]
+   [agent.telegram.streaming-test]
    [agent.telegram-test]
    [agent.telemetry-test]
    [agent.kernel-test]
@@ -40,6 +43,7 @@
    [agent.runtime.trace-test]
    [agent.skills-test]
    [agent.ui-test]
+   [agent.ui.render-test]
    [agent.tools.common.fs-test]
    [agent.tools.common.memory-test]
    [agent.llm.registry-test]
@@ -61,6 +65,7 @@
     agent.api-smoke-test
     agent.api.event-compat-test
     agent.cli-test
+    agent.cli.render-test
     agent.broker.local-test
     agent.channels.core-test
     agent.chat-harness-test
@@ -72,6 +77,8 @@
     agent.health-test
     agent.system-test
     agent.telegram.format-test
+    agent.telegram.rich-test
+    agent.telegram.streaming-test
     agent.telegram-test
     agent.telemetry-test
     agent.kernel-test
@@ -95,6 +102,7 @@
     agent.runtime.trace-test
     agent.skills-test
     agent.ui-test
+    agent.ui.render-test
     agent.tools.common.fs-test
     agent.tools.common.memory-test
     agent.llm.registry-test

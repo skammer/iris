@@ -2,12 +2,20 @@
   (:require
 	   [agent.chat :as chat]
 	   [agent.cli :as cli]
+	   [agent.cli.render :as cli-render]
 	   [agent.logging :as logging]
 	   [agent.nrepl :as nrepl]
    [agent.sessions.service :as sessions]
    [agent.system :as system]
    [clojure.string :as str]
-   [clojure.test :refer [deftest is]]))
+   [clojure.test :refer [deftest is use-fixtures]]))
+
+;; Exact-stdout assertions below depend on the CLI renderer staying in raw
+;; passthrough, regardless of whether the test JVM has an interactive console.
+(use-fixtures :each
+  (fn [f]
+    (with-redefs [cli-render/tty? (constantly false)]
+      (f))))
 
 (deftest parse-headless-session-flags-test
   (is (= {:config-path "local.edn"

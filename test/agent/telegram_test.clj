@@ -983,3 +983,291 @@
         (is (every? pos? ids))
         (is (every? #(<= % max-id) ids))
         (is (some #(= 1 %) ids) "wraps back to 1")))))
+
+;; --- rich messages (Bot API 10.1) --------------------------------------------
+
+(defn- rich-test-config []
+  {:bot-token "token"
+   :rich-messages? true
+   :allowlist {:allow-all? true}})
+
+(defn- recording-opts
+  [{:keys [sent html-sent drafts rich-sent rich-drafts]}
+   & {:keys [rich-draft-fn rich-send-fn]}]
+  {:send-message-fn (fn [chat-id text]
+                      (swap! sent conj {:chat-id chat-id :text text}))
+   :send-html-message-fn (fn [chat-id text]
+                           (swap! html-sent conj {:chat-id chat-id :text text}))
+   :send-message-draft-fn (fn [chat-id draft-id text]
+                            (swap! drafts conj {:chat-id chat-id
+                                                :draft-id draft-id
+                                                :text text}))
+   :send-rich-message-fn (or rich-send-fn
+                             (fn [chat-id markdown]
+                               (swap! rich-sent conj {:chat-id chat-id
+                                                      :markdown markdown})))
+   :send-rich-message-draft-fn (or rich-draft-fn
+                                   (fn [chat-id draft-id markdown]
+                                     (swap! rich-drafts conj {:chat-id chat-id
+                                                              :draft-id draft-id
+                                                              :markdown markdown})))
+   :send-chat-action-fn (fn [& _] nil)})
+
+(deftest telegram-rich-streams-thinking-and-finalizes-with-details
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        recorders {:sent (atom []) :html-sent (atom []) :drafts (atom [])
+                   :rich-sent (atom []) :rich-drafts (atom [])}
+        system {:store store
+                :event-bus (system-events/create-event-bus)
+                :event-sink (fn [_] nil)}
+        opts (recording-opts recorders)]
+    (try
+      (with-redefs [chat/run! (chat-stub
+                               (fn [{:keys [session-id]} emit!]
+                                 (emit! :message-update {:thinking-delta "pondering"})
+                                 (Thread/sleep 1300) ;; pass flush throttle
+                                 (emit! :message-update {:delta "**answer**"})
+                                 (emit! :message-end {:content "**answer**" :final? true})
+                                 {:content "**answer**"
+                                  :session-id session-id}))]
+        (is (= :processed
+               (telegram/process-update! system (rich-test-config) opts
+                                         (update-for 1 100 7 "hi")))))
+      (testing "drafts stream through sendRichMessageDraft with live thinking"
+        (is (pos? (count @(:rich-drafts recorders))))
+        (is (some #(str/includes? (:markdown %) "<tg-thinking>")
+                  @(:rich-drafts recorders)))
+        (is (empty? @(:drafts recorders))))
+      (testing "final lands via sendRichMessage with collapsed thinking"
+        (is (= 1 (count @(:rich-sent recorders))))
+        (let [{:keys [chat-id markdown]} (first @(:rich-sent recorders))]
+          (is (= 100 chat-id))
+          (is (str/includes? markdown "<details><summary>thinking</summary>"))
+          (is (str/includes? markdown "pondering"))
+          (is (str/includes? markdown "**answer**"))
+          (is (not (str/includes? markdown "<tg-thinking")))))
+      (testing "legacy senders untouched"
+        (is (empty? @(:sent recorders)))
+        (is (empty? @(:html-sent recorders))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-rich-draft-failure-downgrades-turn-to-legacy
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        events (atom [])
+        rich-draft-calls (atom 0)
+        recorders {:sent (atom []) :html-sent (atom []) :drafts (atom [])
+                   :rich-sent (atom []) :rich-drafts (atom [])}
+        system {:store store
+                :event-bus (system-events/create-event-bus)
+                :event-sink #(swap! events conj %)}
+        opts (recording-opts recorders
+                             :rich-draft-fn (fn [_ _ _]
+                                              (swap! rich-draft-calls inc)
+                                              (throw (ex-info "rich down"
+                                                              {:type :rich-down}))))]
+    (try
+      (with-redefs [chat/run! (chat-stub
+                               (fn [_ emit!]
+                                 (doseq [d ["a" "b" "c"]]
+                                   (Thread/sleep 1300)
+                                   (emit! :message-update {:delta d}))
+                                 (emit! :message-end {:content "abc" :final? true})
+                                 {:content "abc"}))]
+        (is (= :processed
+               (telegram/process-update! system (rich-test-config) opts
+                                         (update-for 1 100 7 "hi")))))
+      (testing "one rich attempt, then sticky legacy downgrade"
+        (is (= 1 @rich-draft-calls))
+        (is (pos? (count @(:drafts recorders))))
+        (is (empty? @(:rich-drafts recorders))))
+      (testing "failure recorded"
+        (let [failure (first (filter #(= :telegram.operation.failed (:event-type %)) @events))]
+          (is (= :rich-draft-update (get-in failure [:payload :operation])))
+          (is (= :rich-down (get-in failure [:payload :type])))))
+      (testing "final goes through legacy after downgrade"
+        (is (= [{:chat-id 100 :text "abc"}] @(:sent recorders)))
+        (is (empty? @(:rich-sent recorders))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-rich-final-failure-falls-back-to-legacy
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        events (atom [])
+        recorders {:sent (atom []) :html-sent (atom []) :drafts (atom [])
+                   :rich-sent (atom []) :rich-drafts (atom [])}
+        system {:store store
+                :event-bus (system-events/create-event-bus)
+                :event-sink #(swap! events conj %)}
+        opts (recording-opts recorders
+                             :rich-send-fn (fn [_ _]
+                                             (throw (ex-info "rich final down"
+                                                             {:type :rich-down}))))]
+    (try
+      (with-redefs [chat/run! (chat-stub
+                               (fn [_ emit!]
+                                 (emit! :message-update {:thinking-delta "hmm"})
+                                 (emit! :message-update {:delta "answer"})
+                                 (emit! :message-end {:content "answer" :final? true})
+                                 {:content "answer"}))]
+        (is (= :processed
+               (telegram/process-update! system (rich-test-config) opts
+                                         (update-for 1 100 7 "hi")))))
+      (is (= [{:chat-id 100 :text "answer"}] @(:sent recorders)))
+      (is (= [{:chat-id 100
+               :text "<blockquote expandable>thinking\n\nhmm</blockquote>"}]
+             @(:html-sent recorders)))
+      (let [failure (first (filter #(= :telegram.operation.failed (:event-type %)) @events))]
+        (is (= :rich-finalize (get-in failure [:payload :operation]))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-rich-disabled-keeps-legacy-path
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        recorders {:sent (atom []) :html-sent (atom []) :drafts (atom [])
+                   :rich-sent (atom []) :rich-drafts (atom [])}
+        system {:store store
+                :event-bus (system-events/create-event-bus)
+                :event-sink (fn [_] nil)}
+        opts (recording-opts recorders)]
+    (try
+      (with-redefs [chat/run! (chat-stub
+                               (fn [_ emit!]
+                                 (emit! :message-update {:delta "plain"})
+                                 (emit! :message-end {:content "plain" :final? true})
+                                 {:content "plain"}))]
+        (is (= :processed
+               (telegram/process-update! system
+                                         (assoc (rich-test-config) :rich-messages? false)
+                                         opts
+                                         (update-for 1 100 7 "hi")))))
+      (is (= [{:chat-id 100 :text "plain"}] @(:sent recorders)))
+      (is (empty? @(:rich-sent recorders)))
+      (is (empty? @(:rich-drafts recorders)))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-rich-group-chat-sends-rich-final-without-drafts
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        recorders {:sent (atom []) :html-sent (atom []) :drafts (atom [])
+                   :rich-sent (atom []) :rich-drafts (atom [])}
+        system {:store store
+                :event-bus (system-events/create-event-bus)
+                :event-sink (fn [_] nil)}
+        opts (recording-opts recorders)
+        update (assoc-in (update-for 1 -200 7 "hi") [:message :chat :type] "group")]
+    (try
+      (with-redefs [chat/run! (chat-stub
+                               (fn [_ emit!]
+                                 (emit! :message-end {:content "# Report" :final? true})
+                                 {:content "# Report"}))]
+        (is (= :processed
+               (telegram/process-update! system (rich-test-config) opts update))))
+      (is (= [{:chat-id -200 :markdown "# Report"}] @(:rich-sent recorders)))
+      (is (empty? @(:rich-drafts recorders)))
+      (is (empty? @(:sent recorders)))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-inbound-rich-message-converts-to-markdown
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        seen-content (atom nil)
+        recorders {:sent (atom []) :html-sent (atom []) :drafts (atom [])
+                   :rich-sent (atom []) :rich-drafts (atom [])}
+        system {:store store
+                :event-bus (system-events/create-event-bus)
+                :event-sink (fn [_] nil)}
+        opts (recording-opts recorders)
+        update {:update_id 1
+                :message {:message_id 1
+                          :from {:id 7}
+                          :chat {:id 100 :type "private" :first_name "Test"}
+                          :rich_message {:blocks [{:type "heading" :text "Hi" :size 1}
+                                                  {:type "paragraph" :text "body"}]}}}]
+    (try
+      (with-redefs [chat/run! (chat-stub
+                               (fn [{:keys [messages]} emit!]
+                                 (reset! seen-content (-> messages first :content))
+                                 (emit! :message-end {:content "ok" :final? true})
+                                 {:content "ok"}))]
+        (is (= :processed
+               (telegram/process-update! system (rich-test-config) opts update))))
+      (is (= "# Hi\n\nbody" @seen-content))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-send-rich-message-calls-api
+  (let [calls (atom [])]
+    (with-redefs [telegram-api/request! (fn [token method body]
+                                          (swap! calls conj {:token token
+                                                             :method method
+                                                             :body body})
+                                          {:ok true})]
+      (telegram-api/send-rich-message! "token" 100 "# Hello")
+      (telegram-api/send-rich-message! "token" 100 "pick" {:reply-markup {:inline_keyboard []}})
+      (telegram-api/send-rich-message-draft! "token" 100 42 "partial"))
+    (is (= [{:token "token"
+             :method "sendRichMessage"
+             :body {:chat_id 100 :rich_message {:markdown "# Hello"}}}
+            {:token "token"
+             :method "sendRichMessage"
+             :body {:chat_id 100
+                    :rich_message {:markdown "pick"}
+                    :reply_markup {:inline_keyboard []}}}
+            {:token "token"
+             :method "sendRichMessageDraft"
+             :body {:chat_id 100 :draft_id 42 :rich_message {:markdown "partial"}}}]
+           @calls))))
+
+(deftest telegram-rich-draft-failure-during-thinking-shows-placeholder
+  ;; Regression: a rich-draft rejection mid-thinking used to leave the chat
+  ;; blank (legacy drafts carry no thinking) until the old draft's TTL wiped
+  ;; it. The downgrade path now sends an empty legacy draft, which Telegram
+  ;; renders as a native "Thinking..." placeholder.
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        recorders {:sent (atom []) :html-sent (atom []) :drafts (atom [])
+                   :rich-sent (atom []) :rich-drafts (atom [])}
+        system {:store store
+                :event-bus (system-events/create-event-bus)
+                :event-sink (fn [_] nil)}
+        opts (recording-opts recorders
+                             :rich-draft-fn (fn [_ _ _]
+                                              (throw (ex-info "rich down"
+                                                              {:type :rich-down}))))]
+    (try
+      (with-redefs [chat/run! (chat-stub
+                               (fn [_ emit!]
+                                 (emit! :message-update {:thinking-delta "long pondering"})
+                                 (Thread/sleep 1300)
+                                 (emit! :message-update {:thinking-delta " continues"})
+                                 (Thread/sleep 1300)
+                                 (emit! :message-update {:delta "answer"})
+                                 (emit! :message-end {:content "answer" :final? true})
+                                 {:content "answer"}))]
+        (is (= :processed
+               (telegram/process-update! system (rich-test-config) opts
+                                         (update-for 1 100 7 "hi")))))
+      (testing "thinking-only downgrade keeps a placeholder draft alive"
+        (is (some #(= "" (:text %)) @(:drafts recorders))
+            "empty draft text renders Telegram's native Thinking placeholder"))
+      (testing "final reply still lands via legacy"
+        (is (= [{:chat-id 100 :text "answer"}] @(:sent recorders)))
+        (is (= [{:chat-id 100
+                 :text "<blockquote expandable>thinking\n\nlong pondering continues</blockquote>"}]
+               @(:html-sent recorders))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))

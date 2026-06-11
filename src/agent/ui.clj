@@ -107,6 +107,9 @@
      [:link {:rel "stylesheet"
              :href "https://fonts.googleapis.com/css2?family=Doto:wght,ROND@400..900,0..100&family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap"}]
      [:link {:rel "stylesheet" :href "/public/app.css"}]
+     [:link {:rel "stylesheet" :href "/public/katex/katex.min.css"}]
+     [:script {:defer true :src "/public/katex/katex.min.js"}]
+     [:script {:defer true :src "/public/katex/auto-render.min.js"}]
      [:script {:type "module"
                :src "https://cdn.jsdelivr.net/gh/starfederation/datastar@1.0.0-RC.8/bundles/datastar.js"}]
      [:script {:type "module" :src "/public/web-components.js"}]

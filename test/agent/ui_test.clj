@@ -83,14 +83,17 @@
         store (sqlite/create-store {:path path})]
     (try
       (let [session (sqlite/create-session! store "xss")
-            payload "<script>alert(1)</script><img src=\"x\" onerror=\"alert(2)\"> **bold** [ok](https://example.com) [bad](javascript:alert(3))"]
+            payload "<script>alert(1)</script><img src=\"x\" onerror=\"alert(2)\">\n\n**bold** [ok](https://example.com) [bad](javascript:alert(3))"]
         (sqlite/append-message! store (:id session) "user" payload)
         (let [html (ui/session-messages-fragment {:store store} (:id session))]
-          (is (str/includes? html "&lt;script&gt;alert(1)&lt;/script&gt;"))
+          (is (not (str/includes? html "alert(1)"))
+              "script tags and their bodies are removed, not displayed")
           (is (str/includes? html "<strong>bold</strong>"))
           (is (str/includes? html "href=\"https://example.com\""))
           (is (not (str/includes? html "<script")))
-          (is (not (str/includes? html "<img")))
+          (is (not (str/includes? html "onerror")))
+          (is (not (re-find #"<img[^>]*src=\"x\"" html))
+              "non-https image sources are dropped")
           (is (not (str/includes? html "javascript:alert")))))
       (finally
         (sqlite/close-store! store)
@@ -235,8 +238,8 @@
                            :content payload
                            :created-at "2026-04-19T00:00:00Z"}]
                :events []})]
-    (is (str/includes? html "&lt;img src=\"x\" onerror=\"alert(1)\"&gt;"))
     (is (str/includes? html "<a>link</a>"))
+    (is (not (str/includes? html "onerror")))
     (is (not (str/includes? html "<script")))
     (is (not (str/includes? html "<img")))
     (is (not (str/includes? html "href=\"javascript")))))

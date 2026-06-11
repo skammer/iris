@@ -155,6 +155,26 @@
                      :message_id message-id}
               (some? reply-markup) (assoc :reply_markup reply-markup))))
 
+(defn send-rich-message!
+  "Sends a rich message (Bot API 10.1). `markdown` must already be sanitized
+   Rich Markdown within the 32768-char limit (see agent.telegram.rich)."
+  ([token chat-id markdown] (send-rich-message! token chat-id markdown nil))
+  ([token chat-id markdown {:keys [reply-markup]}]
+   (request! token "sendRichMessage"
+             (cond-> {:chat_id chat-id
+                      :rich_message {:markdown markdown}}
+               reply-markup (assoc :reply_markup reply-markup)))))
+
+(defn send-rich-message-draft!
+  "Streams a partial rich message as an ephemeral draft (private chats only).
+   Re-sending with the same draft-id animates the update; the draft must be
+   finalized with send-rich-message!."
+  [token chat-id draft-id markdown]
+  (request! token "sendRichMessageDraft"
+            {:chat_id chat-id
+             :draft_id draft-id
+             :rich_message {:markdown markdown}}))
+
 (defn send-message-draft!
   [token chat-id draft-id text]
   (let [s (str text)

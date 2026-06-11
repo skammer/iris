@@ -213,6 +213,7 @@
                     :dedup {:similarity-threshold nil}}}
    :channel-adapters {:telegram {:enabled false
                                   :bot-token nil
+                                  :rich-messages? true
                                   :poll-timeout-seconds 30
                                   :poll-limit 100
                                   :max-download-bytes 20971520

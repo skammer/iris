@@ -878,6 +878,87 @@ textarea {
   text-decoration-color: var(--accent);
 }
 
+.markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0 0 8px;
+  border-collapse: collapse;
+}
+
+.markdown th,
+.markdown td {
+  padding: 4px 8px;
+  border: 1px solid var(--border-visible);
+  text-align: left;
+}
+
+.markdown thead th {
+  background: var(--surface-raised);
+  color: var(--text-display);
+}
+
+.markdown li > input[type="checkbox"] {
+  pointer-events: none;
+  accent-color: var(--accent);
+  margin-right: 4px;
+}
+
+.markdown li:has(> input[type="checkbox"]) {
+  list-style: none;
+  margin-left: -16px;
+}
+
+.markdown section.footnotes {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.markdown details {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+
+.markdown details > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.markdown mark {
+  padding: 0 2px;
+  background: var(--accent);
+  color: var(--surface);
+}
+
+.markdown .spoiler {
+  filter: blur(5px);
+  cursor: pointer;
+  user-select: none;
+  transition: filter 120ms ease;
+}
+
+.markdown .spoiler--revealed {
+  filter: none;
+  user-select: text;
+  cursor: text;
+}
+
+.markdown img {
+  max-width: 100%;
+  height: auto;
+}
+
+.markdown .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}
+
 .message-media {
   margin: 0;
   display: grid;

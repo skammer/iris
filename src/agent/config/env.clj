@@ -133,6 +133,7 @@
    {:names "AGENT_FACT_DEDUP_SIMILARITY_THRESHOLD" :parse parse-double* :apply (assoc-path [:memory :facts :dedup :similarity-threshold])}
    {:names "AGENT_TELEGRAM_ENABLED" :parse parse-bool :apply (assoc-path [:channel-adapters :telegram :enabled])}
    {:names "AGENT_TELEGRAM_BOT_TOKEN" :apply (assoc-path [:channel-adapters :telegram :bot-token])}
+   {:names "AGENT_TELEGRAM_RICH_MESSAGES" :parse parse-bool :apply (assoc-path [:channel-adapters :telegram :rich-messages?])}
    {:names "AGENT_TELEGRAM_ALLOW_ALL" :parse parse-bool :apply (assoc-path [:channel-adapters :telegram :allowlist :allow-all?])}
    {:names "AGENT_TELEGRAM_ALLOWED_USER_IDS" :parse parse-csv :apply (assoc-path [:channel-adapters :telegram :allowlist :user-ids])}
    {:names "AGENT_TELEGRAM_ALLOWED_CHAT_IDS" :parse parse-csv :apply (assoc-path [:channel-adapters :telegram :allowlist :chat-ids])}

@@ -2,6 +2,7 @@
   "Telegram inbound media normalization for LLM message content."
   (:require
    [agent.telegram.api :as tg-api]
+   [agent.telegram.rich :as rich]
    [clojure.string :as str])
   (:import
    (java.util Base64)))
@@ -151,7 +152,9 @@
 
 (defn user-content!
   [config opts message]
-  (let [text (or (:text message) (:caption message))
+  (let [text (or (:text message)
+                 (:caption message)
+                 (rich/message->markdown message))
         descriptors* (vec (keep identity (descriptors message)))
         media-blocks (mapv #(media-block! config opts %) descriptors*)
         prompt (or (some-> text str/trim not-empty)
@@ -165,4 +168,5 @@
 (defn processable-message? [message]
   (or (not (str/blank? (:text message)))
       (not (str/blank? (:caption message)))
+      (some? (:rich_message message))
       (seq (descriptors message))))

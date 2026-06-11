@@ -2,6 +2,7 @@
   "Command-line parsing and dispatch."
   (:require
    [agent.chat :as chat]
+   [agent.cli.render :as cli-render]
    [agent.config :as cfg]
    [agent.loop :as loop]
    [agent.logging :as logging]
@@ -175,16 +176,18 @@
       :else (new-session-id system prompt))))
 
 (defn- stream-prompt! [system prompt session-id]
-  (let [streamed? (atom false)
+  (let [render-opts {:tty? (cli-render/tty?)}
+        {:keys [on-delta finish]} (cli-render/make-stream-renderer render-opts)
+        streamed? (atom false)
         result (chat/run! system
                           {:messages [{:role "user" :content prompt}]
                            :session-id session-id
                            :on-delta (fn [delta]
                                        (reset! streamed? true)
-                                       (print delta)
-                                       (flush))})]
-    (when-not @streamed?
-      (print (or (:content result) "")))
+                                       (on-delta delta))})]
+    (if @streamed?
+      (finish)
+      (cli-render/render-string! (or (:content result) "") render-opts))
     (println)
     result))
 
