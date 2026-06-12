@@ -116,9 +116,9 @@
     (try
       (let [html (ui/sessions-fragment {:store store})]
         (is (str/includes? html "selector: &apos;#create-session-form&apos;"))
-        (is (str/includes? html "evt.detail.type === &apos;finished&apos;"))
-        (is (str/includes? html "el.reset()")
-            "el, not evt.currentTarget: currentTarget is undefined by the time Datastar evaluates the async expression"))
+        (is (str/includes? html "evt.detail.el === el")
+            "datastar-fetch fires on document for every fetch; detail.el is the only correct initiator guard")
+        (is (str/includes? html "el.reset()")))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
@@ -322,6 +322,11 @@
                          :search {:default-limit 10}}
                         store)]
     (try
+      (memory/save-memory-fact! memory-service
+                                {:subject "iris"
+                                 :predicate "speaks"
+                                 :object "rich markdown"
+                                 :scope {:type "global"}})
       (let [html (ui/memory-workspace-fragment {:store store
                                                 :memory-service memory-service})]
         (is (str/includes? html "Memory Tool"))
@@ -329,10 +334,24 @@
 	        (is (str/includes? html "Reset facts"))
 	        (is (str/includes? html "/ui/memory/facts/reset"))
 	        (is (str/includes? html "Memory Search"))
-	        (is (str/includes? html "workspace-grid memory-workspace")))
+	        (is (str/includes? html "workspace-grid memory-workspace"))
+        (testing "facts panel lists stored facts"
+          (is (str/includes? html "memory-facts"))
+          (is (str/includes? html "iris"))
+          (is (str/includes? html "speaks · rich markdown"))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
+
+(deftest memory-tool-input-omits-blank-content
+  (require 'agent.api.handlers.ui)
+  (let [tool-input @(resolve 'agent.api.handlers.ui/memory-tool-input)]
+    (testing "blank content from the always-submitted textarea is dropped"
+      (is (= {:action "search" :query "hey" :limit 10}
+             (tool-input {:action "search" :query "hey" :limit "10" :content ""}))))
+    (testing "real content still passes through"
+      (is (= {:action "write-vault" :path "notes.md" :content "hello"}
+             (tool-input {:action "write-vault" :path "notes.md" :content "hello"}))))))
 
 (deftest memory-tool-result-shows-text-and-source-json
   (let [html (ui/memory-tool-result-fragment

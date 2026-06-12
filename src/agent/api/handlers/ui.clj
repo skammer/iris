@@ -377,7 +377,9 @@
     (not (str/blank? (str predicate))) (assoc :predicate predicate)
     (not (str/blank? (str object))) (assoc :object object)
     (not (str/blank? (str path))) (assoc :path path)
-    (contains? body :content) (assoc :content content)))
+    ;; Only include content when present: the form always submits the
+    ;; textarea (as ""), and tools like memory_search reject unknown keys.
+    (not (str/blank? (str content))) (assoc :content content)))
 
 (defn- memory-tool-target [{:keys [action] :as input}]
   (case (keyword (str/lower-case (str action)))

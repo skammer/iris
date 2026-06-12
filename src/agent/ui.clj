@@ -416,9 +416,12 @@
              (when active-id
                (str "?session_id=" (ui-render/url-encode active-id)))
              "')")}
+       ;; datastar-fetch events are dispatched on document for EVERY fetch on
+       ;; the page; evt.detail.el identifies the initiator. Guarding on it is
+       ;; the only way a reset doesn't fire for unrelated polls and patches.
        [:form#create-session-form.create-session-form
         {"data-on:submit" "@post('/ui/sessions', {contentType: 'form', selector: '#create-session-form'})"
-         "data-on:datastar-fetch" "evt.detail.type === 'finished' && el.reset()"
+         "data-on:datastar-fetch" "evt.detail.el === el && evt.detail.type === 'finished' && el.reset()"
          "data-indicator" "createSessionLoading"}
         [:div.compact-form-row
          [:input {:type "text" :name "title" :placeholder "new session title"}]
@@ -500,12 +503,15 @@
              "Close"]]
            [:div#tool-detail-sidebar-body.tool-detail-sidebar__body
             [:div.empty "Select tool row."]]]
+          ;; No fetch-reset here: auto-grow-textarea already clears the prompt
+          ;; on submit (after Datastar's synchronous FormData serialization).
+          ;; A form.reset() on datastar-fetch is redundant and — because those
+          ;; events fire on document for every fetch on the page — dangerous.
           [:form#chat-form
            {"data-on:submit" "@post('/ui/chat', {contentType: 'form'})"
             "data-indicator" "chatLoading"
             "data-class:is-loading" "$chatLoading"
             "data-skill-autocomplete" "true"
-            "data-on:datastar-fetch" "evt.detail.type === 'finished' && el.reset()"
             :enctype "multipart/form-data"}
            [:input {:id (str "chat-session-id-" (:id session))
                     :type "hidden"

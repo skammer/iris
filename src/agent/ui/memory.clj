@@ -2,6 +2,7 @@
   "Memory workspace fragments for server-rendered UI."
   (:require
    [agent.memory.core :as memory]
+   [agent.persistence.sqlite :as sqlite]
    [agent.ui.render :as ui-render]
    [cheshire.core :as json]
    [clojure.string :as str]))
@@ -73,7 +74,8 @@
 
 (defn- memory-reset-result [{:keys [ok? surface result error details]}]
   (if (nil? ok?)
-    [:div#memory-reset-output.empty "No reset output."]
+    ;; Keep the patch target in the DOM, but show nothing until a reset runs.
+    [:div#memory-reset-output {:hidden true}]
     [:div#memory-reset-output.result
      [:strong (str surface " reset")]
      (if ok?
@@ -121,28 +123,38 @@
            [:div.meta created-at]]))]
       [:div.empty "No memory matches."])]))
 
+(defn- fact-row [{:keys [subject predicate object scope updated-at]}]
+  [:div.row
+   [:span.row__id {:title (str subject
+                               (when scope
+                                 (str " [" (:type scope) "/" (or (:id scope) "-") "]")))}
+    (str subject)]
+   [:span.row__meta {:title (str predicate " " object)}
+    (str predicate " · " object)]
+   [:span.row__time (ui-render/short-timestamp updated-at)]])
+
 (defn memory-workspace-fragment
   ([system] (memory-workspace-fragment system nil))
 	   ([system reset-result]
 	    (let [memory-service (:memory-service system)
 	         health (memory/health-check memory-service)
 	         surfaces (memory/list-surfaces memory-service)
-	         prompt (memory/read-prompt-memory memory-service)]
+	         prompt (memory/read-prompt-memory memory-service)
+	         fact-count (get-in health [:facts :count] 0)
+	         ;; Store-level call: the memory service clamps :limit to the search
+	         ;; max, which would cap this listing at a couple dozen facts.
+	         facts (sqlite/search-memory-facts (:store memory-service) ""
+	                                           {:all-scopes? true :limit 100})]
      (ui-render/render
       [:section#memory-workspace.workspace-grid.memory-workspace
        [:section.panel.memory-overview
         [:h2 "Memory"]
         [:div.memory-stats
 	         (memory-health-stat "prompt" (get-in health [:prompt :document-count] 0))
-	         (memory-health-stat "facts" (get-in health [:facts :count] 0))
+	         (memory-health-stat "facts" fact-count)
 	         (memory-health-stat "limit" (str (get-in health [:search :default-limit])
                                           "/"
                                           (get-in health [:search :max-limit])))]
-	         [:div.actions
-	          [:button {:type "button"
-	                    "data-on:click" "@post('/ui/memory/facts/reset')"}
-	           "Reset facts"]]
-        (memory-reset-result reset-result)
         [:table.memory-table
          [:thead
           [:tr
@@ -201,4 +213,20 @@
 	          [:button {:type "button"
 	                    "data-on:click" "@post('/ui/memory/search', {contentType: 'form', selector: '#memory-search-form'})"}
 	           "Search"]]]
-	        [:div#memory-search-results-panel.empty "No search output."]]]))))
+	        [:div#memory-search-results-panel.empty "No search output."]]
+
+       [:section.panel.memory-facts
+        [:div.panel-head
+         [:h2 "Facts"]
+         [:div.panel-head__form
+          [:span.count-badge (str fact-count)]
+          [:button {:type "button"
+                    "data-on:click" "@post('/ui/memory/facts/reset')"}
+           "Reset facts"]]]
+        (memory-reset-result reset-result)
+        (if (seq facts)
+          [:div.rows
+           (map fact-row facts)]
+          [:div.empty-line "none"])
+        (when (> fact-count (count facts))
+          [:p.meta (str "showing " (count facts) " of " fact-count)])]]))))
