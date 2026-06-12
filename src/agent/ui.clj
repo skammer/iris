@@ -476,7 +476,10 @@
                            :else "")]
          [:agent-chat-panel#session-detail-panel.panel
           {:data-session-id (:id session)
-           "data-init" (str "@get('/ui/session/live?session_id=" (:id session) "', {openWhenHidden: true})")}
+           ;; Generous retry budget: the default 10 retries can be exhausted
+           ;; by server restarts, after which the transcript silently freezes.
+           "data-init" (str "@get('/ui/session/live?session_id=" (:id session)
+                            "', {openWhenHidden: true, retryMaxCount: 1000, retryMaxWaitMs: 10000})")}
           [:div.chat-titlebar
            [:h2 (or (:title session) "Untitled session")]
            [:span.meta.code (:id session)]
@@ -503,12 +506,11 @@
              "Close"]]
            [:div#tool-detail-sidebar-body.tool-detail-sidebar__body
             [:div.empty "Select tool row."]]]
-          ;; No fetch-reset here: auto-grow-textarea already clears the prompt
-          ;; on submit (after Datastar's synchronous FormData serialization).
-          ;; A form.reset() on datastar-fetch is redundant and — because those
-          ;; events fire on document for every fetch on the page — dangerous.
+          ;; @post serializes the FormData synchronously, so el.reset() right
+          ;; after it deterministically clears the prompt (and any attached
+          ;; image) without depending on submit-listener ordering.
           [:form#chat-form
-           {"data-on:submit" "@post('/ui/chat', {contentType: 'form'})"
+           {"data-on:submit" "@post('/ui/chat', {contentType: 'form'}); el.reset()"
             "data-indicator" "chatLoading"
             "data-class:is-loading" "$chatLoading"
             "data-skill-autocomplete" "true"
@@ -517,11 +519,11 @@
                     :type "hidden"
                     :name "session_id"
                     :value (:id session)}]
-          [:auto-grow-textarea {:submit-on-enter true}
-            [:textarea.chat-input {:name "prompt"
-                                   :data-skill-input "true"
-                                   :rows 1
-                                   :placeholder "Ask model something concrete"}]]
+           [:textarea.chat-input {:name "prompt"
+                                  :data-skill-input "true"
+                                  :data-submit-on-enter "true"
+                                  :rows 1
+                                  :placeholder "Ask model something concrete"}]
           [:label.chat-file-input
            [:span "Image"]
            [:input {:type "file"

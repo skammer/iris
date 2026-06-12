@@ -178,8 +178,21 @@
             (recur))))))))
 
 (defn chat-action [system request]
-  (let [{:keys [session_id prompt image]} (h/read-form-body request)
-        content (chat-content prompt image)]
+  (let [body (h/read-form-body request)
+        {:keys [session_id prompt image]} body
+        content (try
+                  (chat-content prompt image)
+                  (catch Exception e
+                    ;; Forensics for empty-prompt 400s: record what the form
+                    ;; actually delivered (keys + sizes, never content).
+                    (when-let [event-sink (:event-sink system)]
+                      (event-sink {:event-type :ui.chat.bad-request
+                                   :entity-type :session
+                                   :entity-id (str session_id)
+                                   :payload {:form-keys (mapv name (keys body))
+                                             :prompt-chars (count (str prompt))
+                                             :content-type (get-in request [:headers "content-type"])}}))
+                    (throw e)))]
     (h/ensure-session-exists! system session_id)
 	    (streaming/managed-response
 	     request

@@ -114,10 +114,6 @@ agent-run-panel {
   display: block;
 }
 
-auto-grow-textarea {
-  display: contents;
-}
-
 scroll-bottom {
   display: block;
 }
@@ -663,7 +659,11 @@ textarea {
   scrollbar-gutter: stable;
 }
 
-#session-messages-panel > * {
+/* Pin-to-bottom via CSS scroll anchoring: every child is excluded from
+   anchor candidacy except the 1px bottom anchor, so while it's in view the
+   browser keeps the scroller pinned as content above it grows. The anchor
+   must be excluded HERE — this ID rule outranks any class rule on it. */
+#session-messages-panel > :not(.chat-stream__bottom-anchor) {
   overflow-anchor: none;
 }
 
@@ -770,10 +770,13 @@ textarea {
 }
 
 #chat-form .chat-input {
+  /* Grows with content up to max-height, then scrolls. Browsers without
+     field-sizing fall back to a fixed-height scrolling textarea. */
+  field-sizing: content;
   min-height: 0;
   max-height: 220px;
   resize: none;
-  overflow-y: hidden;
+  overflow-y: auto;
   padding: 9px 10px;
   border: 1px solid var(--border-visible);
   background: var(--surface-raised);

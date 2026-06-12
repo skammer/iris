@@ -136,73 +136,6 @@ class ThemeToggle extends HTMLElement {
   }
 }
 
-class AutoGrowTextarea extends HTMLElement {
-  #form = null;
-
-  connectedCallback() {
-    this.style.display = "contents";
-    this.textarea?.addEventListener("input", this);
-    this.textarea?.addEventListener("keydown", this);
-    this.#form = this.closest("form");
-    this.#form?.addEventListener("submit", this);
-    requestAnimationFrame(() => this.grow());
-  }
-
-  disconnectedCallback() {
-    this.textarea?.removeEventListener("input", this);
-    this.textarea?.removeEventListener("keydown", this);
-    this.#form?.removeEventListener("submit", this);
-    this.#form = null;
-  }
-
-  get textarea() {
-    const node = this.querySelector("textarea");
-    return node instanceof HTMLTextAreaElement ? node : null;
-  }
-
-  handleEvent(event) {
-    if (event.type === "input") {
-      this.grow();
-      return;
-    }
-    if (event.type === "submit") {
-      // Defer so other submit listeners (e.g. Datastar) read FormData first.
-      queueMicrotask(() => {
-        const textarea = this.textarea;
-        if (!textarea) return;
-        textarea.value = "";
-        this.grow();
-      });
-      return;
-    }
-    if (
-      event instanceof KeyboardEvent
-      && this.hasAttribute("submit-on-enter")
-      && event.key === "Enter"
-      && !event.shiftKey
-      && !event.isComposing
-    ) {
-      event.preventDefault();
-      this.closest("form")?.requestSubmit();
-    }
-  }
-
-  grow() {
-    const textarea = this.textarea;
-    if (!textarea) return;
-    textarea.style.height = "auto";
-    const maxHeight = parseFloat(getComputedStyle(textarea).maxHeight);
-    const next = Number.isFinite(maxHeight)
-      ? Math.min(textarea.scrollHeight, maxHeight)
-      : textarea.scrollHeight;
-    textarea.style.height = `${next}px`;
-    textarea.style.overflowY =
-      Number.isFinite(maxHeight) && textarea.scrollHeight > maxHeight
-        ? "auto"
-        : "hidden";
-  }
-}
-
 class ScrollBottom extends HTMLElement {
   #stick = true;
   #target = null;
@@ -258,12 +191,10 @@ class AgentChatPanel extends HTMLElement {}
 
 class ChatStream extends HTMLElement {
   #stick = true;
-  #streaming = false;
   #observer = new MutationObserver(() => this.afterChange());
 
   connectedCallback() {
     this.addEventListener("scroll", this, { passive: true });
-    this.#streaming = this.isStreaming();
     this.#observer.observe(this, { childList: true, subtree: true, characterData: true });
     requestAnimationFrame(() => this.scrollToAnchor());
   }
@@ -277,18 +208,11 @@ class ChatStream extends HTMLElement {
     this.#stick = this.scrollHeight - this.clientHeight - this.scrollTop <= AUTOSCROLL_THRESHOLD_PX;
   }
 
-  isStreaming() {
-    return this.querySelector(".message--streaming") !== null;
-  }
-
   afterChange() {
-    const streaming = this.isStreaming();
-    const started = !this.#streaming && streaming;
-    const completed = this.#streaming && !streaming;
-    this.#streaming = streaming;
-    if (this.#stick && (started || completed)) {
-      requestAnimationFrame(() => this.scrollToAnchor());
-    }
+    // CSS scroll anchoring (app.css) pins growth natively where supported,
+    // but it is suppressed while scrollTop is 0 and absent in Safari, so
+    // keep pinning from here too. Both target the same position; no fight.
+    if (this.#stick) requestAnimationFrame(() => this.scrollToAnchor());
   }
 
   scrollToAnchor() {
@@ -297,7 +221,20 @@ class ChatStream extends HTMLElement {
       anchor.scrollIntoView({ block: "end" });
     }
   }
+
+  // Sending a message is an explicit "take me to the conversation tail",
+  // even when scrolled up reading history (where #stick is false).
+  followBottom() {
+    this.#stick = true;
+    requestAnimationFrame(() => this.scrollToAnchor());
+  }
 }
+
+document.addEventListener("submit", (event) => {
+  if (event.target instanceof HTMLFormElement && event.target.id === "chat-form") {
+    document.querySelector("chat-stream")?.followBottom?.();
+  }
+}, true);
 
 class AgentRunPanel extends ScrollBottom {
   connectedCallback() {
@@ -394,7 +331,17 @@ const attachSkillAutocomplete = (form) => {
     menu.hidden = false;
   };
 
+  let suppressNextRefresh = false;
+
   const refresh = async () => {
+    // Pasted content is never a skill invocation in progress: without this,
+    // text ending in "/word" pops the menu and the next Enter gets hijacked
+    // into completing a skill instead of submitting the message.
+    if (suppressNextRefresh) {
+      suppressNextRefresh = false;
+      close();
+      return;
+    }
     const draft = slashDraftAtCaret(textarea.value, textarea.selectionStart ?? 0);
     if (!draft) {
       close();
@@ -419,22 +366,38 @@ const attachSkillAutocomplete = (form) => {
     }
   };
 
+  textarea.addEventListener("paste", () => {
+    suppressNextRefresh = true;
+  });
   textarea.addEventListener("input", refresh);
   textarea.addEventListener("click", refresh);
   textarea.addEventListener("keyup", refresh);
+  // Single owner of the Enter key: completing a skill and submitting the
+  // form must never race in separate listeners.
   textarea.addEventListener("keydown", (event) => {
-    if (menu.hidden) return;
-    if (event.key === "Escape") {
-      event.preventDefault();
-      close();
+    if (!menu.hidden) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        const first = menu.querySelector(".skill-menu__row");
+        if (first instanceof HTMLButtonElement) {
+          event.preventDefault();
+          first.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        }
+      }
       return;
     }
-    if (event.key === "Enter" || event.key === "Tab") {
-      const first = menu.querySelector(".skill-menu__row");
-      if (first instanceof HTMLButtonElement) {
-        event.preventDefault();
-        first.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-      }
+    if (
+      textarea.hasAttribute("data-submit-on-enter")
+      && event.key === "Enter"
+      && !event.shiftKey
+      && !event.isComposing
+    ) {
+      event.preventDefault();
+      form.requestSubmit();
     }
   });
   document.addEventListener("click", (event) => {
@@ -447,7 +410,6 @@ const attachSkillAutocompletes = () => {
 };
 
 if (!customElements.get("theme-toggle")) customElements.define("theme-toggle", ThemeToggle);
-if (!customElements.get("auto-grow-textarea")) customElements.define("auto-grow-textarea", AutoGrowTextarea);
 if (!customElements.get("scroll-bottom")) customElements.define("scroll-bottom", ScrollBottom);
 if (!customElements.get("chat-stream")) customElements.define("chat-stream", ChatStream);
 if (!customElements.get("agent-chat-panel")) customElements.define("agent-chat-panel", AgentChatPanel);
@@ -582,9 +544,14 @@ const animateChangedNumbers = () => {
     const labelEl = card.querySelector(".label, .status-label, strong");
     const valueEl = card.querySelector(".value, .status-value");
     if (!labelEl || !valueEl) return;
-    const key = labelEl.textContent.trim();
+    const label = labelEl.textContent.trim();
+    if (!label) return;
+    // Scope the cache key to the containing panel: the header chip and the
+    // overview stat card are both labelled "events" with slightly different
+    // refresh cadences — one shared key makes them ping-pong animations
+    // forever as each pass "corrects" the other's value.
+    const key = `${card.closest("[id]")?.id ?? "page"}::${label}`;
     const text = valueEl.textContent.trim();
-    if (!key) return;
     const prev = statValueCache.get(key);
     statValueCache.set(key, text);
     if (prev === undefined || prev === text) return;
@@ -621,3 +588,12 @@ motionObserver.observe(document.body, { childList: true, subtree: true, characte
 positionNavPill();
 replayWorkspaceEntrance();
 animateChangedNumbers();
+
+// SSE last resort: a stream that exhausts its retry budget leaves the page
+// silently frozen — patches stop arriving with no visible sign. Reload to
+// re-establish every stream from scratch.
+document.addEventListener("datastar-fetch", (event) => {
+  if (event.detail?.type === "retries-failed") {
+    window.location.reload();
+  }
+});
