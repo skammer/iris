@@ -23,20 +23,15 @@
 - Supports sequential and parallel batches while preserving ordered tool results.
 - Tool termination only terminates if all ordered results say terminate.
 
-## Subagents / Long Tasks
-- `src/agent/runtime/child.clj`, `core.clj`, `runs.clj`.
-- Runtime service supports create/register/heartbeat/checkpoint/enqueue-command/history/replay/idempotency/leases.
-- Child workers poll commands, heartbeat, checkpoint, handle cancel/run-task.
-
 ## User Handoff
 - Approval required can suspend loop.
 - Queued messages are serialized per session and activated after current turn.
-- Web/UI can cancel active session and inspect runs.
+- Web/UI can cancel active sessions and inspect tools/events.
 
 ## Events / UI
 - `src/agent/persistence/sqlite/events.clj` stores typed events with request/session linkage.
 - `chat.clj` subscribes to runtime events; message-end persists messages; stream deltas flush to UI.
-- UI renders routes `/chat/:id` and `/runs/:id`, compact tool rows plus details.
+- UI renders `/chat/:id`, compact tool rows, events, and details.
 
 ## Reconciliation
 - History repair before planner call inserts/normalizes missing tool results.

@@ -21,11 +21,6 @@
    [:path {:optional true} :string]
    [:content {:optional true} :string]])
 
-(def ^:private ui-create-run-form
-  [:map
-   [:agent_id {:optional true} :string]
-   [:name {:optional true} :string]])
-
 (def ^:private ui-tool-approval-request-form
   [:map
    [:tool schemas/NonBlankString]
@@ -45,17 +40,13 @@
 (def ^:private shell-query
   [:map
    [:tab {:optional true} :string]
-   [:session_id {:optional true} :string]
-   [:run_id {:optional true} :string]])
+   [:session_id {:optional true} :string]])
 
 (def ^:private optional-session-id-query
   [:map [:session_id {:optional true} :string]])
 
 (def ^:private session-id-query
   [:map [:session_id schemas/NonBlankString]])
-
-(def ^:private run-id-query
-  [:map [:run_id schemas/NonBlankString]])
 
 (def routes
   [["/ui/shell" {:get {:handler/id :ui-shell
@@ -84,15 +75,6 @@
    ["/ui/memory/tool" {:post {:handler/id :ui-memory-tool
                               :parameters {:form ui-memory-tool-form}}}]
    ["/ui/memory/facts/reset" {:post {:handler/id :ui-memory-facts-reset}}]
-   ["/ui/runs" {:get {:handler/id :ui-runs}
-                :post {:handler/id :ui-create-run
-                       :parameters {:form ui-create-run-form}}}]
-   ["/ui/run-detail" {:get {:handler/id :ui-run-detail
-                            :parameters {:query run-id-query}}}]
-   ["/ui/run-detail-body" {:get {:handler/id :ui-run-detail-body
-                                 :parameters {:query run-id-query}}}]
-   ["/ui/run-detail/live" {:get {:handler/id :ui-run-detail-live
-                                 :parameters {:query run-id-query}}}]
    ["/ui/tools" {:get {:handler/id :ui-tools}}]
    ["/ui/system/reload" {:post {:handler/id :ui-system-reload}}]
    ["/ui/tool-approvals" {:get {:handler/id :ui-tool-approvals}}]

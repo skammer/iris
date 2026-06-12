@@ -11,7 +11,6 @@
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
-   [agent.runs.service :as runs-service]
    [agent.runtime.trace :as runtime-trace]
    [agent.skills :as skills]
    [agent.streaming.metrics :as streaming-metrics]
@@ -120,9 +119,6 @@
         broker-instance (system-health/with-component-health health-registry :broker
                           #(events/create-broker store))
         event-sink (events/create-event-sink store broker-instance telemetry-collector observer trace)
-        recorded-event-sink (events/create-recorded-event-sink broker-instance telemetry-collector observer trace)
-        runtime-service (system-health/with-component-health health-registry :runtime
-                          #(runs-service/create-runtime-service store event-sink broker-instance recorded-event-sink))
         memory-service (system-health/with-component-health health-registry :memory
                          #(create-memory-service (:memory cfg) (:tools cfg) store))
         llm-registry (llm-registry/create-registry llm-cfg)
@@ -153,11 +149,9 @@
                        :trace trace
                        :broker broker-instance
                        :event-sink event-sink
-                       :recorded-event-sink recorded-event-sink
                        :chat-service chat-service
                        :skills-registry (create-skills-registry (:skills cfg))
                        :memory-service memory-service
-                       :runtime-service runtime-service
                        :orchestrator (create-orchestrator (:orchestrator cfg)
                                                           event-sink
                                                           telemetry-collector

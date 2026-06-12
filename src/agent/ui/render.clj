@@ -7,7 +7,6 @@
    [hiccup2.core :as h])
   (:import
    (java.net URLEncoder)
-   (java.time Instant)
    (java.util ArrayDeque IdentityHashMap)
    (org.commonmark.ext.footnotes FootnotesExtension)
    (org.commonmark.ext.gfm.strikethrough StrikethroughExtension)
@@ -448,7 +447,7 @@
    "approved" "dot--ok"})
 
 (defn status-dot
-  "Square status indicator, colored by status keyword/string. Stale runs
+  "Square status indicator, colored by status keyword/string. Stale items
    always show as warning regardless of their nominal status."
   ([status] (status-dot status nil))
   ([status {:keys [stale?]}]
@@ -598,24 +597,3 @@
           (into [:span.thread-stats__breakdown]
                 (for [[nm n] tool-breakdown]
                   [:span.thread-stats__tool nm [:span.thread-stats__tool-n (str "×" n)]])))]])))
-
-(defn- now-ms []
-  (.toEpochMilli (Instant/now)))
-
-(defn- instant-ms [value]
-  (when (seq (str value))
-    (try
-      (.toEpochMilli (Instant/parse (str value)))
-      (catch Exception _ nil))))
-
-(defn- run-last-seen-ms [run]
-  (or (some-> run :heartbeat :observed-at instant-ms)
-      (some-> run :started-at instant-ms)
-      (some-> run :created-at instant-ms)))
-
-(def stale-run-threshold-ms 30000)
-
-(defn stale-run? [run]
-  (and (contains? #{"requested" "running"} (:status run))
-       (when-let [seen-ms (run-last-seen-ms run)]
-         (> (- (now-ms) seen-ms) stale-run-threshold-ms))))

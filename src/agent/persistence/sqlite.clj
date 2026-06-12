@@ -6,7 +6,6 @@
    [agent.persistence.sqlite.federation :as federation]
    [agent.persistence.sqlite.memory :as memory]
    [agent.persistence.sqlite.migrations :as migrations]
-   [agent.persistence.sqlite.runs :as runs]
    [agent.persistence.sqlite.sessions :as sessions]
    [agent.persistence.sqlite.todos :as todos]
    [agent.persistence.sqlite.tools :as tools]
@@ -228,85 +227,6 @@
 (defn decide-tool-approval! [store approval-id status actor decision-reason]
   (tools/decide-tool-approval! store approval-id status actor decision-reason))
 
-(defn create-agent-run! [store run]
-  (runs/create-agent-run! store run))
-
-(defn get-agent-run [store run-id]
-  (runs/get-agent-run store run-id))
-
-(defn get-agent-run-by-idempotency-key [store idempotency-key]
-  (runs/get-agent-run-by-idempotency-key store idempotency-key))
-
-(defn list-agent-runs
-  ([store] (runs/list-agent-runs store))
-  ([store opts] (runs/list-agent-runs store opts)))
-
-(defn update-agent-run! [store run-id updates]
-  (runs/update-agent-run! store run-id updates))
-
-(defn create-agent-run-lease! [store lease]
-  (runs/create-agent-run-lease! store lease))
-
-(defn latest-agent-run-lease [store run-id]
-  (runs/latest-agent-run-lease store run-id))
-
-(defn renew-agent-run-lease! [store lease-id expires-at]
-  (runs/renew-agent-run-lease! store lease-id expires-at))
-
-(defn release-agent-run-lease! [store lease-id]
-  (runs/release-agent-run-lease! store lease-id))
-
-(defn record-agent-run-heartbeat! [store heartbeat]
-  (runs/record-agent-run-heartbeat! store heartbeat))
-
-(defn latest-agent-run-heartbeat [store run-id]
-  (runs/latest-agent-run-heartbeat store run-id))
-
-(defn get-agent-run-heartbeat-by-sequence [store run-id sequence-no]
-  (runs/get-agent-run-heartbeat-by-sequence store run-id sequence-no))
-
-(defn list-agent-run-heartbeats
-  ([store run-id] (runs/list-agent-run-heartbeats store run-id))
-  ([store run-id opts] (runs/list-agent-run-heartbeats store run-id opts)))
-
-(defn enqueue-agent-run-command! [store command]
-  (runs/enqueue-agent-run-command! store command))
-
-(defn list-agent-run-commands
-  ([store run-id] (runs/list-agent-run-commands store run-id))
-  ([store run-id opts] (runs/list-agent-run-commands store run-id opts)))
-
-(defn count-pending-agent-run-commands [store]
-  (runs/count-pending-agent-run-commands store))
-
-(defn get-agent-run-command [store command-id]
-  (runs/get-agent-run-command store command-id))
-
-(defn update-agent-run-command! [store command-id updates]
-  (runs/update-agent-run-command! store command-id updates))
-
-(defn create-agent-run-checkpoint! [store checkpoint]
-  (runs/create-agent-run-checkpoint! store checkpoint))
-
-(defn latest-agent-run-checkpoint [store run-id]
-  (runs/latest-agent-run-checkpoint store run-id))
-
-(defn get-agent-run-checkpoint-by-sequence-type [store run-id sequence-no checkpoint-type]
-  (runs/get-agent-run-checkpoint-by-sequence-type store run-id sequence-no checkpoint-type))
-
-(defn list-agent-run-checkpoints
-  ([store run-id] (runs/list-agent-run-checkpoints store run-id))
-  ([store run-id opts] (runs/list-agent-run-checkpoints store run-id opts)))
-
-(defn start-agent-run-activity! [store activity]
-  (runs/start-agent-run-activity! store activity))
-
-(defn get-agent-run-activity [store activity-key]
-  (runs/get-agent-run-activity store activity-key))
-
-(defn complete-agent-run-activity! [store activity-key updates]
-  (runs/complete-agent-run-activity! store activity-key updates))
-
 (defn upsert-federation-peer-key! [store peer-key]
   (federation/upsert-peer-key! store peer-key))
 
@@ -341,9 +261,8 @@
                :session-count (sessions/count-sessions store)
                :event-count (events/count-events store)
                :tool-approval-count (tools/count-tool-approvals store)
-               :memory-fact-count (memory/count-facts store)
-               :todo-list-count (todos/count-lists store)
-               :agent-run-count (runs/count-agent-runs store)
+	               :memory-fact-count (memory/count-facts store)
+	               :todo-list-count (todos/count-lists store)
                :federation-peer-key-count (federation/count-peer-keys store)
                :federation-outbox-count (federation/count-outbox store)
                :schema-version (migrations/schema-version store)

@@ -32,7 +32,7 @@ Baseline before refactor: 500 tests / 1859 assertions, 1 pre-existing flaky fail
 
 - **LLM (~250 LOC)**: `llm.service/complete|stream|embed`; clojure.spec block in `llm.core`; `ILLMProviderWithConfig` protocol + impls; `get-metrics` placeholders; registry `:provider-health` + no-op re-assocs; assorted unused arities; `:stream-events` accumulation; `messages/provider-tool-result->internal`.
 - **Entry/system (~70 LOC)**: `health/register!`, `system.events/subscribe-events|unsubscribe-events|list-events`, `telemetry/observer-event-types|observer-metric-types`, `system/reload-status` + `:reload-status`, unused arities of `create-recorded-event-sink`/`create-orchestrator`.
-- **API**: `agent.api.validation` deletable entirely (duplicated `sessions.service` + `system.events`, plus broker-bypass fallback); `helpers/body-value`; hand-rolled urlencoded parsing (ring.util.codec on classpath); `handlers/tools/split-command-optional`; `handlers/skills/parse-long*`; `handlers/runs` wrappers; `agent.federation.http` 11-line facade.
+- **API**: `agent.api.validation` deletable entirely (duplicated `sessions.service` + `system.events`, plus broker-bypass fallback); `helpers/body-value`; hand-rolled urlencoded parsing (ring.util.codec on classpath); `handlers/tools/split-command-optional`; `handlers/skills/parse-long*`; `agent.federation.http` 11-line facade.
 - **Chat**: `:stream?`/`:stream-state` fields on active-turn (never read); `persist-final-assistant!` (pure alias).
 - **Config**: `:iris/context-files` knob (written into every generated config, read by nothing); `default-markdown-content` fallback (classpath resource always wins; had drifted).
 - **Tools**: `tools.core/with-approval`, `read-only-call?` (test-only callers); `display/result-preview|block-preview`; `params-preview`/`args-preview` alias pair; `:prerequisites` metadata on fs tools (no consumer).
@@ -44,11 +44,11 @@ Baseline before refactor: 500 tests / 1859 assertions, 1 pre-existing flaky fail
 - Canonical-JSON input encoding ×5 with 3 divergent semantics (bug 4; federation.crypto's copy is wire-format and stays frozen).
 - `truncate` ×8 with drifted markers (some marker text is model-visible).
 - `escape-html`(+truncated) ×3 (telegram.approvals, telegram.streaming, tools.display).
-- `approval-expires-at` ×2 byte-identical (chat.turn, handlers.tool_approvals) + a near-miss in runs.registry.
+- `approval-expires-at` ×2 byte-identical (chat.turn, handlers.tool_approvals).
 - Reasoning/thinking key extraction ×3 with drift (bug 3).
 - `bounded-limit` re-implemented in events handler despite `sqlite.common` canonical.
 - Tool-call accessors (name/input parsing) ×4 across runtime namespaces with semantic drift.
-- Persistence: enum validator ×4, count-* fns ×8 (9 with the bonus), idempotent-insert pattern ×4 in runs.clj, append-message!/append-entry! copy-paste.
+- Persistence: enum validator ×4, count-* fns ×8 (9 with the bonus), append-message!/append-entry! copy-paste.
 - Tool-registry construction: same 9 positional args spelled at 3 call sites; `create-tool-registry` 6-arity ladder.
 - API: ~15 hand-rolled try/catch ladders re-encoding the central domain-error table; 20 hand-written serializer fns; 7 verbatim broker-subscription option maps; chat SSE state machine copy-pasted between handlers/chat.clj and handlers/ui.clj with drift.
 - history.clj activate/cancel + persist-user/persist-queued pairs; subscribers.clj two byte-identical branches.

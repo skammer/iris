@@ -8,7 +8,6 @@
    [agent.api.routes.memory :as memory]
    [agent.api.routes.providers :as providers]
    [agent.api.routes.root :as root]
-   [agent.api.routes.runs :as runs]
    [agent.api.routes.sessions :as sessions]
    [agent.api.routes.tools :as tools]
    [agent.api.routes.ui :as ui]))
@@ -20,7 +19,6 @@
                 sessions/routes
                 chat/routes
                 providers/routes
-                runs/routes
                 tools/routes
                 events/routes
                 memory/routes

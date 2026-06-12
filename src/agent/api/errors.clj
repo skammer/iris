@@ -43,21 +43,16 @@
    :approval-invalid [403 "approval_invalid"]
    :approval-required [403 "approval_required"]
    :tool-blocked [403 "tool_blocked"]
-   :run-not-found [404 "run_not_found"]
    :agent-not-found [404 "agent_not_found"]
    :channel-not-found [404 "channel_not_found"]
    :peer-not-found [404 "peer_not_found"]
-   :lease-not-found [404 "lease_not_found"]
-   :activity-not-found [404 "activity_not_found"]
    :orchestrator-disabled [404 "orchestrator_disabled"]
-   :illegal-run-transition [409 "illegal_run_transition"]
    :vault-read-only [403 "vault_read_only"]
    :invalid-memory-fact [400 "invalid_memory_fact"]
    :invalid-memory-fact-selector [400 "invalid_memory_fact_selector"]
    :invalid-memory-scope [400 "invalid_memory_scope"]
    :unknown-provider [404 "unknown_provider"]
    :entry-not-found [404 "entry_not_found"]
-   :command-not-found [404 "command_not_found"]
    :unknown-prompt-mode [400 "unknown_mode" unknown-prompt-mode-details]})
 
 (defn domain-error->api-error

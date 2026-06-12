@@ -13,7 +13,6 @@
    [agent.api.handlers.memory :as memory]
    [agent.api.handlers.public :as public]
    [agent.api.handlers.providers :as providers]
-   [agent.api.handlers.runs :as runs]
    [agent.api.handlers.sessions :as sessions]
    [agent.api.handlers.skills :as skills]
    [agent.api.handlers.telemetry :as telemetry]
@@ -88,11 +87,6 @@
    :ui-operator-board (fn [r] (ui/operator-board (sys) r))
    :ui-sessions (fn [r] (ui/sessions (sys) r))
    :ui-create-session (fn [r] (ui/create-session (sys) r))
-   :ui-runs (fn [r] (ui/list-runs (sys) r))
-   :ui-create-run (fn [r] (ui/create-run (sys) r))
-   :ui-run-detail (fn [r] (ui/run-detail (sys) r))
-   :ui-run-detail-body (fn [r] (ui/run-detail-body (sys) r))
-   :ui-run-detail-live (fn [r] (ui/run-detail-live-response (sys) r))
    :ui-session-detail (fn [r] (ui/session-detail (sys) r))
    :ui-session-messages (fn [r] (ui/session-messages (sys) r))
    :ui-session-live (fn [r] (ui/session-live-response (sys) r))
@@ -133,18 +127,6 @@
    :list-providers (fn [r] (providers/list-providers (sys) r))
    :provider-health (fn [r] (providers/provider-health (sys) r (path-param r :provider-key)))
    :provider-models (fn [r] (providers/provider-models (sys) r (path-param r :provider-key)))
-
-   :list-runs (fn [r] (runs/list-runs (sys) r))
-   :create-run (fn [r] (runs/create (sys) r))
-   :get-run (fn [r] (runs/get-run (sys) r (path-param r :run-id)))
-   :run-heartbeats (fn [r] (runs/heartbeats (sys) r (path-param r :run-id)))
-   :run-checkpoints (fn [r] (runs/checkpoints (sys) r (path-param r :run-id)))
-   :run-commands (fn [r] (runs/commands (sys) r (path-param r :run-id)))
-   :run-events (fn [r] (runs/run-events (sys) r (path-param r :run-id)))
-   :run-events-stream (fn [r] (runs/events-stream-response (sys) (path-param r :run-id) r))
-   :run-wait (fn [r] (runs/wait (sys) r (path-param r :run-id)))
-   :run-recover (fn [r] (runs/recover (sys) r (path-param r :run-id)))
-   :reclaim-stale-runs (fn [r] (runs/reclaim-stale (sys) r))
 
    :list-tools (fn [r] (tools/list-tools (sys) r))
    :execute-tool (fn [r] (tools/execute-tool (sys) r (path-param r :tool-name)))

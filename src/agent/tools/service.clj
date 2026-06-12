@@ -3,7 +3,6 @@
   (:require
    [agent.logging :as logging]
    [agent.mcp.core :as mcp]
-   [agent.runs.registry :as runtime]
    [agent.runtime.tools :as runtime-tools]
    [agent.runtime.trace :as runtime-trace]
    [agent.orchestrator :as orchestrator]
@@ -150,12 +149,6 @@
                    {:event-sink event-sink
                     :approval-check (tool-approvals/create-policy-hook store)
                     :before-execute policy-hook
-                    :activity-executor (when store
-                                         (fn [activity f]
-                                           (:result (runtime/execute-activity!
-                                                     (runtime/create-runtime-service {:store store})
-                                                     activity
-                                                     f))))
                     :after-execute (fn [{:keys [tool context duration-ms is-error error input result] :as hook}]
                                      (let [observation {:tool-name (:name tool)
                                                         :duration-ms duration-ms

@@ -10,7 +10,7 @@
    [agent.telemetry.observer :as telemetry-observer]))
 
 (defn- replay-broker-messages
-  [store pattern {:keys [limit after-id since-sequence request-id]
+  [store pattern {:keys [limit after-id]
                   :or {limit 100}}]
   (let [pattern* (str pattern)]
     (cond
@@ -20,49 +20,6 @@
       (mapv (fn [event] {:subject "events.all" :payload event})
             (reverse (sqlite/list-events store {:limit limit
                                                 :after-id after-id})))
-
-      (= pattern* (broker/all-runs-subject))
-      (mapcat broker/event->messages
-              (reverse (sqlite/list-events store {:entity-type :agent_run
-                                                  :limit limit
-                                                  :after-id after-id})))
-
-      (re-matches #"runs\.([^\.]+)\.events" pattern*)
-      (let [[_ run-id] (re-matches #"runs\.([^\.]+)\.events" pattern*)]
-        (mapv (fn [event] {:subject (broker/run-events-subject run-id)
-                           :payload event})
-              (reverse (sqlite/list-events store {:entity-type :agent_run
-                                                  :entity-id run-id
-                                                  :limit limit
-                                                  :after-id after-id}))))
-
-      (re-matches #"runs\.([^\.]+)\.commands" pattern*)
-      (let [[_ run-id] (re-matches #"runs\.([^\.]+)\.commands" pattern*)]
-        (mapv broker/command->message
-              (sqlite/list-agent-run-commands store run-id {:limit limit
-                                                            :request-id request-id})))
-
-      (re-matches #"runs\.([^\.]+)\.heartbeats" pattern*)
-      (let [[_ run-id] (re-matches #"runs\.([^\.]+)\.heartbeats" pattern*)]
-        (mapv broker/heartbeat->message
-              (sqlite/list-agent-run-heartbeats store run-id {:limit limit
-                                                              :since-sequence since-sequence})))
-
-      (re-matches #"runs\.([^\.]+)\.checkpoints" pattern*)
-      (let [[_ run-id] (re-matches #"runs\.([^\.]+)\.checkpoints" pattern*)]
-        (mapv broker/checkpoint->message
-              (sqlite/list-agent-run-checkpoints store run-id {:limit limit
-                                                               :since-sequence since-sequence})))
-
-      (re-matches #"runs\.([^\.]+)\.output" pattern*)
-      (let [[_ run-id] (re-matches #"runs\.([^\.]+)\.output" pattern*)]
-        (mapv (fn [event] {:subject (broker/run-output-subject run-id)
-                           :payload event})
-              (reverse (sqlite/list-events store {:entity-type :agent_run
-                                                  :entity-id run-id
-                                                  :event-type "agent.run.output"
-                                                  :limit limit
-                                                  :after-id after-id}))))
 
       :else [])))
 
@@ -116,15 +73,6 @@
        (doseq [message (broker/event->messages recorded)]
          (broker/publish! broker-instance message))
        recorded))))
-
-(defn create-recorded-event-sink
-  [broker-instance telemetry-collector observer trace]
-  (fn [recorded]
-    (observe-system-event! telemetry-collector observer recorded)
-    (trace-system-event! trace recorded)
-    (doseq [message (broker/event->messages recorded)]
-      (broker/publish! broker-instance message))
-    recorded))
 
 (defn log-event!
   [system event]

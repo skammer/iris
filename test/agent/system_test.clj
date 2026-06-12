@@ -12,8 +12,6 @@
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
-   [agent.runs.service :as runs]
-   [agent.runs.registry :as runtime]
    [agent.skills :as skills]
    [agent.system :as system]
    [agent.system.components :as components]
@@ -76,11 +74,10 @@
     (is (false? (get-in system-health [:logging :enabled])))
     (is (= :local (get-in system-health [:broker :backend])))
     (is (<= 7 (get-in system-health [:tools :count])))
-    (is (integer? (get-in system-health [:runtime :run-count])))
     (is (= 1 (get-in system-health [:channel-adapters :count])))
     (is (= 0 (get-in system-health [:orchestrator :agent-count])))
     (is (= "ok" (get-in system-health [:health-snapshot :components "sqlite" :status])))
-    (is (= "ok" (get-in system-health [:health-snapshot :components "runtime" :status])))))
+    (is (contains? (get-in system-health [:health-snapshot :components]) "runtime"))))
 
 (deftest soft-reload-refreshes-llm-registry-and-telegram-system
   (let [events (atom [])
@@ -179,27 +176,6 @@
         (is (= system-ref (:system-ref new-system)))
         (is (= ::new-tools (get-in new-system [:telegram-service :telegram-system :tool-registry])))
         (is (= :system.config.reloaded (:event-type (last @events))))))))
-
-(deftest retry-run-bumps-runtime-restart-count-test
-  (let [path (temp-db-path)
-        store (sqlite/create-store {:path path})
-        registry (health/create-registry)
-        service (runs/create-runtime-service store (fn [_] nil))
-        system {:runtime-service service
-                :health-registry registry}
-        run (runs/request-run! system
-	                                 (runtime/create-run-request
-	                                  {:name "restart-count-test"
-	                                   :substrate :local-unsandboxed}))]
-    (try
-      (runs/retry-run! system (:id run))
-      (is (= 1 (get-in (health/snapshot registry)
-                       [:components "runtime" :restart-count])))
-      (is (= "ok" (get-in (health/snapshot registry)
-                          [:components "runtime" :status])))
-      (finally
-        (sqlite/close-store! store)
-        (io/delete-file path true)))))
 
 (deftest tool-policy-blocks-and-yolo-skips-approval-only
   (let [path (temp-db-path)

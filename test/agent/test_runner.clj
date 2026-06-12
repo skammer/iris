@@ -33,7 +33,6 @@
    [agent.release-smoke-test]
    [agent.runtime.compaction-test]
    [agent.runtime.context-pack-test]
-   [agent.runs.registry-test]
    [agent.runtime.loop-test]
    [agent.runtime.messages-test]
    [agent.runtime.nudge-test]
@@ -92,7 +91,6 @@
     agent.release-smoke-test
     agent.runtime.compaction-test
     agent.runtime.context-pack-test
-    agent.runs.registry-test
     agent.runtime.loop-test
     agent.runtime.messages-test
     agent.runtime.nudge-test

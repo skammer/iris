@@ -1,23 +1,7 @@
 (ns agent.telemetry
   "First-class cost/latency telemetry collector and μ/log emission."
   (:require
-   [agent.logging :as logging])
-  (:import
-   (java.time Instant)))
-
-(def terminal-run-statuses #{"completed" "failed" "cancelled" "expired"})
-
-(defn- now-ms []
-  (System/currentTimeMillis))
-
-(defn- parse-instant [value]
-  (when value
-    (Instant/parse value)))
-
-(defn- event-ms [event]
-  (if-let [created-at (:created-at event)]
-    (.toEpochMilli (parse-instant created-at))
-    (now-ms)))
+   [agent.logging :as logging]))
 
 (defn- bounded-conj [xs value max-size]
   (let [xs* (conj (vec (or xs [])) value)]
@@ -49,9 +33,7 @@
           max-latency-samples 1000}}]
    {:enabled (true? enabled)
     :max-latency-samples (long max-latency-samples)
-    :state (atom {:runs {}
-                  :run-latencies []
-                  :agents {}
+    :state (atom {:agents {}
                   :tools {}
                   :federation {}
                   :mcp {:calls 0
@@ -67,12 +49,6 @@
 
 (defn enabled? [collector]
   (true? (:enabled collector)))
-
-(defn- add-run-latency [state run-id latency-ms status max-samples]
-  (-> state
-      (assoc-in [:runs run-id :latency-ms] latency-ms)
-      (assoc-in [:runs run-id :status] status)
-      (update :run-latencies bounded-conj latency-ms max-samples)))
 
 (defn- record-component-call!
   "One swap! for the per-component call accounting every record-* fn shares:
@@ -95,45 +71,7 @@
 (defn record-system-event!
   [collector event]
   (when (enabled? collector)
-    (let [event-type (:event-type event)
-          entity-type (:entity-type event)
-          run-id (:entity-id event)
-          payload (:payload event)
-          observed-ms (event-ms event)
-          max-samples (:max-latency-samples collector)]
-      (when (= "agent_run" entity-type)
-        (cond
-          (= "agent.run.requested" event-type)
-          (swap! (:state collector)
-                 assoc-in [:runs run-id]
-                 {:run-id run-id
-                  :agent-id (:agent-id payload)
-                  :status "requested"
-                  :requested-at-ms observed-ms})
-
-          (= "agent.run.registered" event-type)
-          (swap! (:state collector)
-                 update-in [:runs run-id]
-                 merge
-                 {:agent-id (:agent-id payload)
-                  :status "running"
-                  :started-at-ms observed-ms}))
-        (when-let [status (:status payload)]
-          (when (contains? terminal-run-statuses status)
-            (let [state* (swap! (:state collector)
-                                (fn [state]
-                                  (let [run (get-in state [:runs run-id])
-                                        start-ms (or (:requested-at-ms run)
-                                                     (:started-at-ms run)
-                                                     observed-ms)
-                                        latency-ms (max 0 (- observed-ms start-ms))]
-                                    (add-run-latency state run-id latency-ms status max-samples))))
-                  run (get-in state* [:runs run-id])]
-              (logging/log! :agent.telemetry/run-latency
-                            {:run/id run-id
-                             :agent/id (:agent-id run)
-                             :run/status status
-                             :latency/ms (:latency-ms run)})))))
+    (let [event-type (:event-type event)]
       (when (= "agent.kernel.step.executed" event-type)
         (let [receipts (get-in event [:payload :receipts])]
           (swap! (:state collector)
@@ -251,15 +189,11 @@
 
 (defn snapshot [collector]
   (let [state (if (enabled? collector) @(:state collector) {})
-        run-latencies (:run-latencies state)
         summarize-vals (fn [m]
                          (into {}
                                (map (fn [[k stats]] [k (call-summary stats)]))
                                m))]
     {:enabled (enabled? collector)
-     :runs {:count (count (:runs state))
-            :terminal-count (count run-latencies)
-            :latency-ms (latency-summary run-latencies)}
      :agents (:agents state)
      :tools (summarize-vals (:tools state))
      :federation (summarize-vals (:federation state))
@@ -271,4 +205,4 @@
 (defn health-check [collector]
   {:healthy true
    :enabled (enabled? collector)
-   :summary (select-keys (snapshot collector) [:runs :llm])})
+   :summary (select-keys (snapshot collector) [:llm])})

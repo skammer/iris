@@ -183,35 +183,3 @@
       (is (= "boom" (:error payload)))
       (is (= {:message "hi"} (:input payload)))
       (is (number? (:duration-ms payload))))))
-
-(deftest registry-dedupes-tools-with-activity-context-test
-  (let [calls (atom 0)
-        activity-calls (atom [])
-        tool (tools/create-tool
-              {:description (tools/create-tool-description
-                             :echo
-                             "Echo tool"
-                             :input-schema [:map [:message :string]]
-                             :required-permissions #{:echo})
-               :execute-fn (fn [input _context]
-                             (swap! calls inc)
-                             {:echoed (:message input)})})
-        registry (-> (tools/create-registry
-                      {:activity-executor (fn [activity f]
-                                            (swap! activity-calls conj activity)
-                                            (if (= 1 (count @activity-calls))
-                                              (f)
-                                              {:echoed "cached"}))})
-                     (tools/register-tool tool))
-        context {:permissions #{:echo}
-                 :activity {:run-id "run-1"
-                            :command-id "cmd-1"}}]
-    (is (= {:echoed "hi"}
-           (tools/execute-tool registry :echo {:message "hi"} context)))
-    (is (= {:echoed "cached"}
-           (tools/execute-tool registry :echo {:message "hi"} context)))
-    (is (= 1 @calls))
-    (is (= "run-1" (:run-id (first @activity-calls))))
-    (is (= "cmd-1" (:command-id (first @activity-calls))))
-    (is (re-matches #"tool\.echo\.[0-9a-f]{16}"
-                    (:activity-name (first @activity-calls))))))

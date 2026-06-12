@@ -3,7 +3,6 @@
    [agent.api :as api]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
-   [agent.runs.service :as runs]
    [agent.system :as system]
    [agent.system.components :as components]
    [agent.system.events :as events]
@@ -51,7 +50,6 @@
         store (sqlite/create-store {:path path})
         event-bus (events/create-event-bus)
         event-sink (events/create-event-sink store event-bus)
-        runtime-service (runs/create-runtime-service store event-sink)
         provider (predictable/create-provider)
         config (-> (:config base-system)
                    (assoc :api {:host "127.0.0.1" :port port}
@@ -70,7 +68,6 @@
                       :event-sink event-sink
                       :tool-registry (tool-service/create-tool-registry {:cfg (:tools config) :event-sink event-sink :store store})
                       :memory-service (memory/create-memory-service (:memory config) store)
-                      :runtime-service runtime-service
                       :orchestrator (components/create-orchestrator (:orchestrator config) event-sink)
                       :config config)
         server (api/start-server! system {:host "127.0.0.1" :port port})]

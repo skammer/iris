@@ -98,25 +98,12 @@ Notes:
 - SQLite env var:
   - `AGENT_SQLITE_PATH`
   - `AGENT_SQLITE_DESTRUCTIVE_RESET_ON_DRIFT=true`: delete and rebuild SQLite files if migration metadata drift is detected. Default is false; otherwise Iris prints exact files to delete.
-- Runner env var:
-  - `AGENT_RUNNER_DEFAULT_SUBSTRATE=auto|seatbelt|bubblewrap|docker|podman|local-unsandboxed`. `auto` means Seatbelt on macOS, Bubblewrap on Linux.
 - Orchestrator env var:
   - `AGENT_ORCHESTRATOR_ENABLED=true`: enables experimental in-memory `/v1/agents`, `/v1/channels`, and `/v1/federation` APIs. Default is false because this state is not durable.
   - Federation outbound signing: `AGENT_FEDERATION_KEY_ID`, `AGENT_FEDERATION_PRIVATE_KEY`.
   - Federation tuning: `AGENT_FEDERATION_TIMEOUT_MS`, `AGENT_FEDERATION_MAX_CLOCK_SKEW_MS`, `AGENT_FEDERATION_OUTBOX_POLL_MS`.
-- Isolated child runtime env vars:
-  - `AGENT_CONTROL_URL`: parent API URL used by container children.
-  - `AGENT_BOOTSTRAP_TOKEN`: per-run token; injected by runner.
-  - `AGENT_CHILD_SQLITE_PATH`: child-owned SQLite path; not the parent DB.
 - SSE chat streaming is available on rewritten `/v1/chat/completions` with `{\"stream\": true}`.
 - `/loop run` and CLI loop `--run` no longer execute shell validation commands. Run checks through approved shell/tool paths.
-
-Runtime isolation note:
-
-- Parent owns durable SQLite run/session state.
-- Docker/Podman children do not mount the parent DB.
-- Child runners communicate with parent through `/v1/runs/:run-id/control/*` using the bootstrap token. These endpoints accept only the run bootstrap token; normal API keys do not authorize run-control calls.
-- API/UI run creation defaults to safe isolation: Seatbelt on macOS, Bubblewrap on Linux. `local-unsandboxed` is explicit dev mode.
 
 ## Run Iris isolated
 
@@ -226,12 +213,11 @@ curl http://localhost:8080/health
 
 Required/important env:
 
-- `AGENT_API_KEY`: protects `/v1/*` and `/ui/*`, except `/v1/runs/:run-id/control/*`, which uses the per-run bootstrap token.
+- `AGENT_API_KEY`: protects `/v1/*` and `/ui/*`.
 - `AGENT_API_HOST=0.0.0.0`: required inside container.
 - `IRIS_DATA_DIR=~/.config/iris/data`: default host data dir. `AGENT_SQLITE_PATH` and `AGENT_MEMORY_GRAPH_PATH` override individual stores.
 - `AGENT_SQLITE_PATH=/app/data/agent.db`: persisted SQLite path.
 - `AGENT_SQLITE_DESTRUCTIVE_RESET_ON_DRIFT=false`: keep false in production unless data loss is acceptable; true rebuilds drifted DB files.
-- `AGENT_RUNNER_DEFAULT_SUBSTRATE=auto`: Seatbelt on macOS, Bubblewrap on Linux.
 - `AGENT_ORCHESTRATOR_ENABLED=false`: keep false unless testing experimental process-local agent/federation APIs.
 - Federation peers use `keys [{key_id, public_key, status, valid_from, valid_until}]`; outbound federation requires `AGENT_FEDERATION_KEY_ID` + `AGENT_FEDERATION_PRIVATE_KEY`.
 - `JAVA_TOOL_OPTIONS=--enable-native-access=ALL-UNNAMED`: suppresses sqlite-jdbc native access warning.

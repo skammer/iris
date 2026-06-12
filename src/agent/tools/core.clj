@@ -1,7 +1,6 @@
 (ns agent.tools.core
   "Rewritten tool registry and execution helpers."
   (:require
-   [agent.security :as security]
    [agent.util :as util]
    [clojure.set :as set]
    [clojure.string :as str]
@@ -23,7 +22,7 @@
   (health-check [_]
     (health-fn)))
 
-(defrecord ToolRegistry [tools before-execute after-execute event-sink approval-check activity-executor])
+(defrecord ToolRegistry [tools before-execute after-execute event-sink approval-check])
 
 (defn tool-error
   ([type message] (tool-error type message {}))
@@ -310,9 +309,9 @@
 
 (defn create-registry
   ([] (create-registry {}))
-  ([{:keys [tools before-execute after-execute event-sink approval-check activity-executor]
+  ([{:keys [tools before-execute after-execute event-sink approval-check]
      :or {tools {}}}]
-   (->ToolRegistry tools before-execute after-execute event-sink approval-check activity-executor)))
+   (->ToolRegistry tools before-execute after-execute event-sink approval-check)))
 
 (defn- emit-event!
   [registry event]
@@ -365,23 +364,8 @@
                                    "Sensitive tool approval policy did not allow execution"
                                    {:tool-name (:name tool-description)})))))))
 
-(defn- tool-activity-name [tool-name validated-input]
-  (let [tool (name tool-name)]
-    (str "tool." tool "."
-         (subs (security/sha256-hex (security/canonical-json validated-input)) 0 16))))
-
-(defn- execute-effect! [registry tool-name validated-input context* f]
-  (if-let [activity-executor (:activity-executor registry)]
-    (if-let [{:keys [run-id command-id activity-name]} (:activity context*)]
-      (activity-executor {:run-id run-id
-                          :command-id command-id
-                          :activity-name (or activity-name
-                                             (tool-activity-name tool-name validated-input))
-                          :input {:tool-name (name tool-name)
-                                  :input validated-input}}
-                         f)
-      (f))
-    (f)))
+(defn- execute-effect! [_registry _tool-name _validated-input _context* f]
+  (f))
 
 (defn register-tool
   [registry tool]

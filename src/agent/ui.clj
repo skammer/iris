@@ -8,7 +8,6 @@
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.trace :as runtime-trace]
-   [agent.runs.registry :as runtime]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [agent.ui.memory :as ui-memory]
@@ -27,16 +26,12 @@
 	         memory-prompt-fragment
 	         memory-search-results-fragment
 	         memory-tool-result-fragment
-	         tools-fragment
-         tool-approvals-fragment
-         runs-fragment
-         run-detail-body
-         run-detail-fragment)
+		         tools-fragment
+	         tool-approvals-fragment)
 
 (def ^:private tabs
   [{:key :overview :label "Overview"}
    {:key :chat :label "Chat"}
-   {:key :runs :label "Runs"}
    {:key :tools :label "Tools"}
    {:key :memory :label "Memory"}
    {:key :logs :label "Logs"}])
@@ -50,11 +45,10 @@
   (let [tab (some-> value name str/lower-case keyword)]
     (if (some #(= tab (:key %)) tabs) tab :chat)))
 
-(defn- route-path [{:keys [tab session-id run-id]}]
+(defn- route-path [{:keys [tab session-id]}]
   (case (normalize-tab tab)
     :overview "/overview"
     :chat (if session-id (str "/chat/" session-id) "/chat")
-    :runs (if run-id (str "/runs/" run-id) "/runs")
     :tools "/tools"
     :memory "/memory"
     :logs "/logs"
@@ -67,18 +61,15 @@
     (case segment
       "overview" {:tab :overview}
       "chat" (cond-> {:tab :chat} id (assoc :session-id id))
-      "runs" (cond-> {:tab :runs} id (assoc :run-id id))
       "tools" {:tab :tools}
       "memory" {:tab :memory}
       "logs" {:tab :logs}
       {:tab :chat})))
 
-(defn- shell-url [{:keys [tab session-id run-id]}]
+(defn- shell-url [{:keys [tab session-id]}]
   (str "/ui/shell?tab=" (name (normalize-tab tab))
        (when session-id
-         (str "&session_id=" (ui-render/url-encode session-id)))
-       (when run-id
-         (str "&run_id=" (ui-render/url-encode run-id)))))
+         (str "&session_id=" (ui-render/url-encode session-id)))))
 
 (defn router-state-fragment [path]
   (ui-render/render [:div#router-state {:hidden true
@@ -134,9 +125,7 @@
   (let [route (if (map? active-route) active-route {:tab active-route})
         active-tab (normalize-tab (:tab route))
         session-id (:session-id route)
-        run-id (:run-id route)
         storage (sqlite/health-check (:store system))
-        runtime-health (runtime/runtime-health (:runtime-service system))
         provider (name (config/active-provider-key (get-in system [:config :llm])))
         session-count (get-in storage [:details :session-count] 0)
         event-count (get-in storage [:details :event-count] 0)
@@ -144,8 +133,7 @@
     (ui-render/render
      [:div#shell-fragment.workspace-stack
       (ui-render/trusted-fragment (router-state-fragment (route-path {:tab active-tab
-                                                            :session-id session-id
-                                                            :run-id run-id})))
+                                                            :session-id session-id})))
       [:header.shell-header
        [:div.status-bar
         [:div.status-block.status-block--accent
@@ -158,9 +146,6 @@
         [:div.status-block
          [:span.status-label "sessions"]
          [:span.status-value (str session-count)]]
-        [:div.status-block
-         [:span.status-label "runs"]
-         [:span.status-value (str (:run-count runtime-health))]]
         [:div.status-block.status-block--success
          [:span.status-label "events"]
          [:span.status-value (str event-count)]]]
@@ -179,11 +164,7 @@
                     [:section.workspace-grid.chat-workspace
                      (ui-render/trusted-fragment (sessions-fragment system session-id))
                      (ui-render/trusted-fragment (session-detail-fragment system session-id))])
-             :runs (ui-render/render-many
-                    [:section.workspace-grid.two-up
-                     (ui-render/trusted-fragment (runs-fragment system))
-                     (ui-render/trusted-fragment (run-detail-fragment system run-id))])
-             :tools (ui-render/render-many
+	             :tools (ui-render/render-many
                      [:section.workspace-grid.tools
                       [:section.panel.stack
                        (ui-render/trusted-fragment (tools-fragment system))]
@@ -201,22 +182,6 @@
                (ui-render/trusted-fragment (dashboard-fragment system))
                (ui-render/trusted-fragment (operator-board-fragment system))])))])))
 
-(defn- run-row [{:keys [id substrate status created-at] :as run}]
-  [:div.row
-   (ui-render/status-dot status {:stale? (ui-render/stale-run? run)})
-   [:span.row__id {:title id} (ui-render/short-id id)]
-   [:span.row__meta (str substrate " · " status)]
-   [:span.row__time (ui-render/short-timestamp created-at)]])
-
-(defn- attention-row [{:keys [id status last-error] :as run}]
-  [:div.row
-   (ui-render/status-dot status {:stale? (ui-render/stale-run? run)})
-   [:span.row__id {:title id} (ui-render/short-id id)]
-   [:span.row__meta.row__meta--err
-    (cond-> (str status)
-      (ui-render/stale-run? run) (str " · stale")
-      (seq last-error) (str " · " last-error))]])
-
 (defn dashboard-fragment [system]
   (let [storage (sqlite/health-check (:store system))
         llm-config (get-in system [:config :llm])
@@ -225,18 +190,7 @@
         adapter-health (channel-adapters/registry-health (:channel-adapter-registry system))
         agent-health (orchestrator/health-check (:orchestrator system))
         federated-peers (orchestrator/list-federated-peers (:orchestrator system))
-        runs (runtime/list-runs (:runtime-service system) {:limit 50})
-        recent-runs (take 6 runs)
         pending-approvals (count (tool-approvals/list-requests (:store system) {:status "pending" :limit 100}))
-        status-counts (reduce (fn [acc run]
-                                (update acc (:status run) (fnil inc 0)))
-                              {}
-                              runs)
-        stale-runs (filter ui-render/stale-run? runs)
-        attention-runs (->> recent-runs
-                            (filter #(or (contains? #{"failed" "cancelled"} (:status %))
-                                         (ui-render/stale-run? %)))
-                            (take 4))
         reload-status (or (some-> system :reload-state deref)
                           {:status :idle})
         reload-label (str/join " · " (keep #(some-> % name)
@@ -275,48 +229,7 @@
        [:div.result.result--metric
         [:strong "Pending approvals"]
         [:div.value {:class (when (pos? pending-approvals) "value--warn")}
-         (str pending-approvals)]]
-       [:div.result.result--metric
-        [:strong "Stale runs"]
-        [:div.value {:class (when (pos? (count stale-runs)) "value--warn")}
-         (str (count stale-runs))]]
-       [:div.result.result--span
-        [:strong "Run status"]
-        (if (seq status-counts)
-          [:div.badge-row
-           (for [[status n] (sort-by key status-counts)]
-             [:span.badge
-              (ui-render/status-dot status)
-              (str status " " n)])]
-          [:div.empty-line "none"])]
-       [:div.result.result--span
-        [:strong "Recent runs"]
-        (if (seq recent-runs)
-          [:div.rows (map run-row recent-runs)]
-          [:div.empty-line "none"])]
-       [:div.result.result--span.result--attention
-        [:strong "Attention"]
-        (if (seq attention-runs)
-          [:div.rows (map attention-row attention-runs)]
-          [:div.empty-line "none"])]]])))
-
-(defn- run-link-row [variant {:keys [id substrate status created-at heartbeat last-error finished-at] :as run}]
-  [:button.row.row--link
-   {:type "button"
-    "data-route" (route-path {:tab :runs :run-id id})
-    "data-on:click" (str "@get('/ui/shell?tab=runs&run_id=" id "')")}
-   (ui-render/status-dot status {:stale? (ui-render/stale-run? run)})
-   [:span.row__id {:title id} (ui-render/short-id id)]
-   [:span.row__meta {:class (when (= :failed variant) "row__meta--err")}
-    (case variant
-      :stale (str status " · stale")
-      :failed (cond-> (str status) (seq last-error) (str " · " last-error))
-      (str substrate " · " status))]
-   [:span.row__time (ui-render/short-timestamp
-                     (case variant
-                       :stale (or (:observed-at heartbeat) created-at)
-                       :failed (or finished-at created-at)
-                       created-at))]])
+         (str pending-approvals)]]]])))
 
 (defn- board-section
   ([label items row-fn] (board-section label items row-fn nil))
@@ -332,11 +245,7 @@
         [:div.empty-line "none"])])))
 
 (defn operator-board-fragment [system]
-  (let [runs (runtime/list-runs (:runtime-service system) {:limit 50})
-        agents (orchestrator/list-agents (:orchestrator system))
-        active-runs (filter #(contains? #{"requested" "running"} (:status %)) runs)
-        stale-runs (filter ui-render/stale-run? runs)
-        failed-runs (filter #(contains? #{"failed" "cancelled"} (:status %)) runs)
+  (let [agents (orchestrator/list-agents (:orchestrator system))
         approvals (tool-approvals/list-requests (:store system) {:status "pending" :limit 8})
         recent-events-pool (sqlite/list-events (:store system) {:limit 40})
         events (take 8 recent-events-pool)
@@ -357,17 +266,14 @@
       [:div.panel-head
        [:h2 "Operator Board"]]
       [:div.board
-       (board-section "Active runs" (take 6 active-runs) (partial run-link-row :active))
-       (board-section "Stale runs" (take 6 stale-runs) (partial run-link-row :stale) {:alert? true})
        (board-section "Approval queue" approvals
                       (fn [{:keys [tool-name reason created-at]}]
-                        [:div.row
-                         (ui-render/status-dot "pending")
-                         [:span.row__id (str tool-name)]
-                         [:span.row__meta (or (not-empty reason) "awaiting approval")]
-                         [:span.row__time (ui-render/short-timestamp created-at)]])
-                      {:alert? true})
-       (board-section "Failure queue" (take 6 failed-runs) (partial run-link-row :failed) {:alert? true})
+	                        [:div.row
+	                         (ui-render/status-dot "pending")
+	                         [:span.row__id (str tool-name)]
+	                         [:span.row__meta (or (not-empty reason) "awaiting approval")]
+	                         [:span.row__time (ui-render/short-timestamp created-at)]])
+	                      {:alert? true})
        (board-section "Recent events" events
                       (fn [{:keys [event-type entity-id created-at]}]
                         [:div.row
@@ -727,157 +633,3 @@
           [:div.code (json/generate-string (:input approval) {:pretty true})]
          [:div.actions (approval-actions approval)]])]
       [:div.empty "No tool approvals yet."])]))
-
-(defn runs-fragment [system]
-  (let [runs (runtime/list-runs (:runtime-service system) {:limit 50})]
-    (ui-render/render
-     [:section#runs-panel.panel
-      {"data-on-interval__duration.10s.leading" "@get('/ui/runs')"}
-      [:h2 "Runs"]
-      (if (seq runs)
-        [:div.stack
-         (for [{:keys [id name agent-id substrate status created-at]} runs]
-           [:button.session-link
-            {:type "button"
-             "data-route" (route-path {:tab :runs :run-id id})
-             "data-on:click" (str "@get('/ui/run-detail?run_id=" id "')")}
-            [:strong (or name id)]
-            [:div.session-meta.code (str agent-id " / " substrate)]
-            [:div.session-meta (str status " / " created-at)]])]
-        [:div.empty "No runs yet."])
-	      [:form#create-run-form
-	       [:h3 "Create Run"]
-	       [:input {:type "text" :name "name" :placeholder "optional name"}]
-	       [:input {:type "text" :name "agent_id" :placeholder "agent id"}]
-	       [:div.actions
-	        [:button {:type "button"
-	                  "data-on:click" "@post('/ui/runs', {contentType: 'form', selector: '#create-run-form'})"}
-	         "Create"]]]])))
-
-(defn- run-detail-target [system run-id]
-  (let [runs (runtime/list-runs (:runtime-service system) {:limit 50})]
-    (or (when run-id (runtime/get-run (:runtime-service system) run-id))
-        (when-let [candidate (first runs)]
-          (runtime/get-run (:runtime-service system) (:id candidate))))))
-
-(defn run-route-path [system run-id]
-  (if-let [run (run-detail-target system run-id)]
-    (route-path {:tab :runs :run-id (:id run)})
-    "/runs"))
-
-(defn- json-result [title value]
-  [:div.result
-   [:strong title]
-   [:div.code (json/generate-string value {:pretty true})]])
-
-(defn run-detail-body [system run-id]
-  (let [run (run-detail-target system run-id)
-        recovery (when run
-                   (runtime/recovery-plan (:runtime-service system) (:id run)))
-        output-events (when run
-                        (->> (sqlite/list-events (:store system)
-                                                {:entity-type :agent_run
-                                                 :entity-id (:id run)
-                                                 :limit 50})
-                             (filter #(= "agent.run.output" (:event-type %)))))
-        output-lines (map (fn [event]
-                            (let [{:keys [stream line]} (:payload event)]
-                              (str "[" stream "] " line)))
-                          (reverse output-events))
-        recent-events (when run
-                        (remove #(= "agent.run.output" (:event-type %))
-                                (sqlite/list-events (:store system)
-                                                    {:entity-type :agent_run
-                                                     :entity-id (:id run)
-                                                     :limit 12})))
-        failure-events (when run
-                         (filter (fn [{:keys [event-type payload]}]
-                                   (or (#{"agent.run.failed" "agent.run.cancelled"} event-type)
-                                       (= "failed" (:status payload))))
-                                 recent-events))]
-    (ui-render/render
-     (if-not run
-       [:div
-        [:h2 "Run Detail"]
-        [:div.empty "No runs yet."]]
-       [:div.stack
-        [:div.run-header
-         [:div
-          [:h2 (or (:name run) (:id run))]
-          [:div.meta.code (:id run)]]
-         [:div.meta
-          "stream "
-          [:span.run-live-state.poll {"data-run-live-state" true} "poll"]]]
-        [:div.meta
-         (str "agent: " (:agent-id run)
-              " | substrate: " (:substrate run)
-              " | status: " (:status run)
-              " | requested: " (:created-at run))]
-        (when (seq (:last-error run))
-          [:div.result.diagnostic-result
-           [:strong "Failure diagnostics"]
-           [:div.code (:last-error run)]])
-	        (when recovery
-	          [:div.result
-	           [:strong "Recovery"]
-	           [:div.code (json/generate-string recovery {:pretty true})]])
-	        [:div.run-grid
-	         (when-let [heartbeat (:heartbeat run)]
-	           (json-result "Latest heartbeat" heartbeat))
-         (when-let [checkpoint (:checkpoint run)]
-           (json-result "Latest checkpoint" checkpoint))
-         (when-let [commands (seq (:pending-commands run))]
-           (json-result "Pending commands" commands))]
-        [:div.result
-         [:strong "Recent output"]
-         [:div#run-output-panel.code
-          {:data-run-output-tail true}
-          (if (seq output-lines)
-            (str/join "\n" output-lines)
-            "[waiting for output]")]]
-        (when-let [events (seq failure-events)]
-          [:div.result.diagnostic-result
-           [:strong "Recent failures"]
-           [:div.stack
-            (for [{:keys [event-type created-at payload]} events]
-              [:article.event-item
-               [:strong event-type]
-               [:div.code (json/generate-string payload)]
-               [:div.meta created-at]])]])
-        (when-let [events (seq recent-events)]
-          [:div#run-events-panel.result
-           {:data-run-events-list true}
-           [:strong "Recent events"]
-           [:div.stack
-            (for [{:keys [event-type created-at payload]} events]
-              [:article.event-item
-               [:strong event-type]
-               [:div.code (json/generate-string payload)]
-               [:div.meta created-at]])]])
-	        [:div.actions
-	         [:form {:id (str "run-recover-" (:id run))}
-	          [:button {:type "button"
-	                    "data-on:click" (str "@post('/v1/runs/" (:id run) "/recover')")}
-	           "Recover"]]]
-        (json-result "Catch-up"
-                     {:heartbeats (runtime/list-heartbeats (:runtime-service system) (:id run) {:limit 5})
-                      :checkpoints (runtime/list-checkpoints (:runtime-service system) (:id run) {:limit 5})
-                      :commands (runtime/list-commands (:runtime-service system) (:id run) {:limit 5})
-                      :events (sqlite/list-events (:store system)
-                                                  {:entity-type :agent_run
-                                                   :entity-id (:id run)
-                                                   :limit 10})})]))))
-
-(defn run-detail-fragment [system run-id]
-  (let [run (run-detail-target system run-id)]
-    (ui-render/render
-     (if-not run
-       [:section#run-detail-panel.panel
-        [:h2 "Run Detail"]
-        [:div.empty "No runs yet."]]
-       [:agent-run-panel#run-detail-panel.panel
-        {:data-run-id (:id run)
-         :data-live-state "live"
-         "data-init" (str "@get('/ui/run-detail/live?run_id=" (:id run) "', {openWhenHidden: true})")}
-        [:div#run-detail-body
-         (ui-render/trusted-fragment (run-detail-body system (:id run)))]]))))

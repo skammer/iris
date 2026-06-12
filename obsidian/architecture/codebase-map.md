@@ -20,7 +20,6 @@ graph TD
     API --> HANDLERS[agent.api.handlers.*] --> SERVICES
     TG --> CHAT
     subgraph SERVICES[service facades]
-        RUNS[agent.runs.service]
         SESS[agent.sessions.service]
         TOOLSVC[agent.tools.service]
         MEM[agent.memory.core]
@@ -95,7 +94,7 @@ Pure route data (`agent.api.routes.*`, malli `:parameters`, `:handler/id` marker
 | `agent.api.schemas` | 81 | Shared malli schemas for :parameters |
 | `agent.api.serializers` | 232 | kebab→snake_case response transforms (20 hand-written fns) |
 | `agent.api.streaming` | 201 | Managed SSE context: subscriptions, auto-unsubscribe, workers, frames |
-| `agent.api.routes.*` | 570 | 12 pure-data route namespaces (agents, channels, chat, events, federation, memory, providers, root, runs, sessions, tools, ui) |
+| `agent.api.routes.*` | 570 | Pure-data route namespaces (agents, channels, chat, events, federation, memory, providers, root, sessions, tools, ui) |
 | `agent.api.handlers.*` | ~1900 | 17 handler namespaces; mostly thin delegation to service facades; `ui.clj` (564) is the god-namespace outlier |
 
 ### Chat
@@ -167,20 +166,19 @@ Protocol-based registry with a single heavyweight `execute-tool` pipeline; six b
 | `agent.tools.common.todo` | 168 | Session-scoped todo tools |
 | `agent.tools.core` | 537 | Registry kernel: ITool, BasicTool, descriptions, execute-tool pipeline |
 | `agent.tools.display` | 147 | Per-channel tool call/result formatting |
-| `agent.tools.service` | 238 | Production registry wiring + policy/telemetry/trace/activity hooks |
+| `agent.tools.service` | 238 | Production registry wiring + policy/telemetry/trace hooks |
 
 ### Persistence
 Facade (`agent.persistence.sqlite`) is the sole entry point (verified: no consumer bypasses it). Domain namespaces over shared plumbing (`common`: HikariCP, PRAGMAs, retry, tx serialization); SQL in HugSQL files; ragtime migrations with checksum drift detection.
 
 | Namespace | LOC | Purpose |
 |---|---|---|
-| `agent.persistence.sqlite` | 347 | Facade: lifecycle + ~90 one-line delegations |
+| `agent.persistence.sqlite` | 347 | Facade: lifecycle + domain delegations |
 | `…sqlite.common` | 248 | Pool, PRAGMAs, retry, with-connection/transaction, JSON, FTS5, limits |
 | `…sqlite.events` | 88 | Append-only agent_events: insert, list, FTS search, cursor |
 | `…sqlite.federation` | 190 | Peer keys, nonces, delivery outbox FSM |
 | `…sqlite.memory` | 186 | Fact triples: normalize, dedupe-on-save, scoped search |
 | `…sqlite.migrations` | 234 | Baseline descriptor, SQL splitter, checksums, ragtime adapters |
-| `…sqlite.runs` | 525 | Runs FSM, leases, heartbeats, commands, checkpoints, activities |
 | `…sqlite.schema` | 40 | Misnamed health/stats namespace (being dissolved) |
 | `…sqlite.sessions` | 602 | Sessions, messages, session_entries DAG, completions, channel mappings |
 | `…sqlite.todos` | 179 | Todo lists with strict item validation |
@@ -197,11 +195,11 @@ Facade (`agent.persistence.sqlite`) is the sole entry point (verified: no consum
 | `agent.telegram.media` | 168 | Inbound media → base64 LLM blocks |
 | `agent.telegram.sessions` | 34 | Chat ↔ session mapping |
 | `agent.telegram.streaming` | 111 | Draft streaming, thinking blockquote, typing loop |
-| `agent.ui` | 865 | Datastar UI fragments (sessions/chat/runs/tools/approvals/events/logs) |
+| `agent.ui` | 865 | Datastar UI fragments (sessions/chat/tools/approvals/events/logs) |
 | `agent.ui.memory` | 204 | Memory workspace fragments |
 | `agent.ui.render` | 477 | Hiccup render core, sanitized markdown, message rendering |
 
-### Orchestration / federation / runs / kernel / memory
+### Orchestration / federation / kernel / memory
 | Namespace | LOC | Purpose |
 |---|---|---|
 | `agent.broker.core` | 76 | IBroker protocol, subject naming/wildcards |
@@ -220,8 +218,6 @@ Facade (`agent.persistence.sqlite`) is the sole entry point (verified: no consum
 | `agent.memory.schema` | 59 | Scope normalization + fact validation |
 | `agent.orchestrator` | 1046 | In-memory multi-agent runtime (atom-backed; experimental, env-gated) |
 | `agent.planner` | 112 | Native tool-calling planner |
-| `agent.runs.registry` | 524 | Durable run control plane (FSM, leases, reclaim) |
-| `agent.runs.service` | 114 | System-map facade over runs.registry |
 | `agent.sessions.service` | 80 | Session store facade |
 
 ## Inter-subsystem dependencies (require-graph, aggregated)

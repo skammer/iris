@@ -7,7 +7,7 @@
 
 ## Verdict
 
-Iris has strong runtime foundations, but is **not release-ready** until CI lint, container startup, and unsafe/admin run controls are tightened.
+Iris has strong runtime foundations, but is **not release-ready** until CI lint and container startup are tightened.
 
 Confidence: **0.86**
 
@@ -32,7 +32,7 @@ Key caveats:
 |---|---:|---|
 | Architecture | A- | Clean core seams: loop DI, kernel protocols, API handlers, persistence facade. Large edge namespaces remain. |
 | Agent loop | A- | Bounded, evented, test-covered. Main risk now operational supervision, not loop logic. |
-| Security | B+ | Major sandbox/auth issues appear closed. UI/admin run path still exposes high-power controls. |
+| Security | B+ | Major sandbox/auth issues appear closed; release still needs production auth smoke coverage. |
 | Persistence | A- | SQLite/migrations/facts are mature. Lint tooling cannot understand generated SQL fns yet. |
 | Build/CI | C | Tests/build pass locally, but CI lint command is currently red. |
 | Tests | B+ | Broad suite passes. Coverage is not measured; 50 source namespaces lack direct test counterparts. |
@@ -44,14 +44,12 @@ Key caveats:
 - API route data + handler binding are clear; orchestrator API is disabled by default.
 - SQLite layer is transactional, WAL-aware, and now has real migration checksum drift detection.
 - Tool execution has a single authoritative approval point after preflight.
-- Container runner defaults no longer share network unless requested.
 - Full test suite and uberjar build pass locally.
 
 ## Cons
 
 - CI linter is not green; release workflow cannot be trusted until it passes.
 - Docker image default env binds `0.0.0.0` but provides no API key, so default container startup conflicts with auth safety.
-- UI run creation exposes `local-unsandboxed`, arbitrary command, and network-sharing knobs to authenticated UI users.
 - Several namespaces remain too large for easy support: `orchestrator`, `telegram`, `ui`, `memory.core`, OpenAI provider, migrations, config.
 - Worker execution still uses raw `future` in several long-lived/control paths.
 - Coverage report is inventory-only; no cloverage/LCOV gate.
@@ -115,29 +113,11 @@ Confidence: **0.9**
 
 ### P1 - Security / Product Hardening
 
-#### 4. Align UI run creation with API sandbox policy
+#### 4. Standardize API request body handling
 
-Impact: authenticated UI users can launch high-power local runs even though the public API path blocks unsafe substrate selection.
-
-Evidence:
-- UI form offers `local-unsandboxed`.
-- UI handler accepts arbitrary `command`.
-- UI handler sets `:share-network? true` when checkbox is set.
-- API-selectable substrates exclude `local-unsandboxed`.
-
-Action:
-- Default UI to same allow-list as API: `seatbelt`, `bubblewrap`, `docker`, `podman`.
-- Put `local-unsandboxed`, arbitrary command, and shared network behind explicit dev/admin config.
-- Emit audit events for unsafe run launches.
-
-Confidence: **0.84**
-
-#### 5. Standardize API request body handling
-
-Impact: some handlers validate route schemas but still read `:body-params`/raw bodies directly. This repeats the old coercion-discard risk outside runs.
+Impact: some handlers validate route schemas but still read `:body-params`/raw bodies directly.
 
 Evidence:
-- `handlers/runs.clj` has custom logic to preserve raw `runner_options` while using coerced `:parameters :body`.
 - `handlers/agents.clj`, `handlers/tools.clj`, and several other handlers still call `h/read-json-body`.
 - Route schemas are mostly open maps, so this is not always exploitable, but behavior is inconsistent.
 
@@ -183,7 +163,7 @@ Action:
 - Split by behavior owner, not arbitrary size:
   - orchestrator: agents, interop, channels, federation
   - telegram: polling, drafts, media, chat bridge
-  - ui: shell/router, sessions, runs, tools, telemetry panels
+  - ui: shell/router, sessions, tools, telemetry panels
   - memory: prompt docs, search/ranking, fact extraction
   - OpenAI provider: payloads, streaming parser, response normalization
 

@@ -122,17 +122,3 @@
       (let [{:keys [status body]} (helpers/http-get (str base-url "/ui/tool-approvals"))]
         (is (= 200 status))
         (is (str/includes? body "Tool Approvals"))))))
-
-(deftest ui-run-detail-body-fragment-smoke
-  (with-server nil
-    (fn [{:keys [base-url]}]
-      (let [run-resp (helpers/http-post (str base-url "/v1/runs")
-	                                        {:agent_id "smoke-agent"
-	                                         :name "smoke"
-	                                         :substrate "external"})
-            run-id (get-in (json/parse-string (:body run-resp) true) [:data :id])
-            {:keys [status body]} (helpers/http-get
-                                   (str base-url "/ui/run-detail-body?run_id=" run-id))]
-        (is (= 201 (:status run-resp)))
-        (is (= 200 status))
-        (is (str/includes? body run-id))))))

@@ -12,19 +12,12 @@
   Optional fields (a second spec map) are assoc'd only when the source
   value is truthy; everything else is always present."
   (:require
-   [agent.api.event-compat :as event-compat]
-   [clojure.string :as str]))
+   [agent.api.event-compat :as event-compat]))
 
 (defn- ->name [value]
   (cond
     (keyword? value) (name value)
     (some? value) (str value)))
-
-(defn- json-key [k]
-  (keyword (str/replace (->name k) "-" "_")))
-
-(defn- json-keys [m]
-  (some-> m (update-keys json-key)))
 
 (defn- each
   "Collection transform: maps `f` over the value with `mapv`."
@@ -211,62 +204,6 @@
               :expires_at :expires-at
               :created_at :created-at
               :decided_at :decided-at}))
-
-(defn run->response [run]
-  (when run
-    (serialize run
-               {:id :id
-                :idempotency_key :idempotency-key
-                :agent_id :agent-id
-                :parent_run_id :parent-run-id
-                :lease_id :lease-id
-                :name :name
-                :substrate :substrate
-                :status :status
-                :capabilities :capabilities
-                :network_identity :network-identity
-                :runner_metadata :runner-metadata
-                :run_options :run-options
-                :requested_by :requested-by
-                :last_error :last-error
-                :created_at :created-at
-                :started_at :started-at
-                :finished_at :finished-at
-                :lease [:lease json-keys]
-                :heartbeat [:heartbeat json-keys]
-                :checkpoint [:checkpoint json-keys]
-                :pending_commands [:pending-commands (each json-keys)]})))
-
-(defn heartbeat->response [heartbeat]
-  (serialize heartbeat
-             {:run_id :run-id
-              :sequence_no :sequence-no
-              :status :status
-              :metrics :metrics
-              :observed_at :observed-at}))
-
-(defn checkpoint->response [checkpoint]
-  (serialize checkpoint
-             {:id :id
-              :run_id :run-id
-              :sequence_no :sequence-no
-              :checkpoint_type :checkpoint-type
-              :state :state
-              :created_at :created-at}))
-
-(defn run-command->response [command]
-  (serialize command
-             {:id :id
-              :run_id :run-id
-              :command_type :command-type
-              :payload :payload
-              :request_id :request-id
-              :response :response
-              :status :status
-              :created_at :created-at
-              :acknowledged_at :acknowledged-at
-              :completed_at :completed-at
-              :error :error}))
 
 (defn memory-surface->response [surface]
   (serialize surface

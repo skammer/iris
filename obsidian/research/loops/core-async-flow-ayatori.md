@@ -145,8 +145,8 @@ Pattern: terminal collector is a sink with side effects. This is acceptable at g
 ## Fit For Iris
 - Good fit: optional graph engine for bounded subflows: routing pipelines, multi-agent fan-out, evaluator pipelines, external service orchestration.
 - Maybe fit: flow monitor for live graph visualization, if events are mirrored into Iris' durable event stream.
-- Poor fit: primary chat loop manager. Iris loop has provider-history repair, branch restore, approval suspension, queued user turns, runtime child runs, UI persistence, and protocol reconciliation. Those are run/session concerns, not just flow topology concerns.
-- Risk: Ayatori's fan-out workaround stores branch state in step state because flow lacks built-in multi-branch join. That is fine for a POC, but for Iris it should be explicit durable run state if tasks can outlive one request.
+- Poor fit: primary chat loop manager. Iris loop has provider-history repair, branch restore, approval suspension, queued user turns, UI persistence, and protocol reconciliation. Those are session concerns, not just flow topology concerns.
+- Risk: Ayatori's fan-out workaround stores branch state in step state because flow lacks built-in multi-branch join. That is fine for a POC, but Iris should keep long-lived task state explicit if tasks can outlive one request.
 
 ## Verdict
 - `core.async.flow`: good primitive for graph-shaped internal runtimes; do not put it directly at the center of Iris chat.

@@ -41,22 +41,22 @@ Best decision: append-only or tree storage plus derived LLM context rebuild; nev
 Best decision: ordered result model even when executing in parallel.
 
 ### 5. Subagents
-- Iris: durable child runtime with runs, heartbeats, checkpoints, commands.
+- Iris: no separate durable child runtime; current model favors sessions/tools/events.
 - ZeroClaw: `llm_task`, `swarm`, `sessions_*`.
 - Shelley: DB-backed or CLI subagent tools.
 - Little Coder/Pi: multi-session/extensions, less durable child protocol.
 - Others: limited/no native subagent.
 
-Best decision: model subagents as runs/sessions with explicit lifecycle, not anonymous tool calls.
+Best decision: model subagents as sessions/tasks with explicit lifecycle, not anonymous tool calls.
 
 ### 6. Long-Running Tasks
-- Iris: run service with leases/checkpoints/replay.
+- Iris: no dedicated long-task service after simplification.
 - Forge: slot worker with priority/preemption.
 - ZeroClaw: daemon, cron/routines, session state, cancellation tokens.
 - ZeroStack: optional iterative `/loop` over plan file.
 - Shelley: context/tool timeouts.
 
-Best decision: durable run state plus heartbeat/checkpoint if task can outlive one chat turn.
+Best decision: durable task state if task can outlive one chat turn.
 
 ### 7. User Handoff / Questions
 - Iris: approval-required and queued turns.

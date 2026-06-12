@@ -10,7 +10,7 @@
    (java.nio.charset StandardCharsets)
    (java.security MessageDigest)))
 
-(def latest-schema-version 1)
+(def latest-schema-version 2)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -19,6 +19,11 @@
     :id "001-baseline"
     :name "baseline-schema"
     :up-resource "agent/persistence/sqlite/migrations/001-baseline.up.sql"
+    :irreversible? true}
+   {:version 2
+    :id "002-drop-runs"
+    :name "drop-runs"
+    :up-resource "agent/persistence/sqlite/migrations/002-drop-runs.up.sql"
     :irreversible? true}])
 
 (defn descriptor-by-version [version]
@@ -145,8 +150,7 @@
 
 (defn- unversioned-schema? [conn]
   (or (common/table-exists? conn "sessions")
-      (common/table-exists? conn "messages")
-      (common/table-exists? conn "agent_runs")))
+      (common/table-exists? conn "messages")))
 
 (defn- ensure-ragtime-table! [conn]
   (common/execute-ddl! conn "CREATE TABLE IF NOT EXISTS ragtime_migrations (

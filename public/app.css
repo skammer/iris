@@ -110,14 +110,6 @@ agent-chat-panel {
   display: block;
 }
 
-agent-run-panel {
-  display: block;
-}
-
-scroll-bottom {
-  display: block;
-}
-
 chat-stream {
   display: flex;
 }
@@ -399,21 +391,7 @@ theme-toggle {
   grid-column: 1 / -1;
 }
 
-#run-output-panel {
-  max-height: 240px;
-  overflow: auto;
-  white-space: pre-wrap;
-}
-
 .diagnostic-result strong {
-  color: var(--warning);
-}
-
-.run-live-state.live {
-  color: var(--success);
-}
-
-.run-live-state.poll {
   color: var(--warning);
 }
 

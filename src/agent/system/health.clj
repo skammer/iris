@@ -11,7 +11,6 @@
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
-   [agent.runs.registry :as runtime]
    [agent.runtime.trace :as runtime-trace]
    [agent.skills :as skills]
    [agent.streaming.metrics :as streaming-metrics]
@@ -70,8 +69,6 @@
      :telemetry (checked-component-health registry :telemetry
                   #(telemetry/health-check (:telemetry system)))
      :trace (runtime-trace/health-check (:trace system))
-     :runtime (checked-component-health registry :runtime
-                #(runtime/runtime-health (:runtime-service system)))
 	     :sse {:healthy true
 	           :metrics (streaming-metrics/snapshot (:sse-metrics system))}
      :chat (checked-component-health registry :chat

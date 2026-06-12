@@ -5,7 +5,7 @@
    [agent.telemetry :as telemetry]
    [agent.telemetry.observer :as telemetry-observer]
    [clojure.core.async :as async]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defrecord TelemetryProvider []
   llm-core/ILLMProvider
@@ -22,23 +22,6 @@
      :tokens 20
      :prompt-tokens 7
      :cost-usd 0.02}))
-
-(deftest run-latency-percentiles
-  (let [collector (telemetry/create-collector {:enabled true})]
-    (telemetry/record-system-event! collector
-                                    {:event-type "agent.run.requested"
-                                     :entity-type "agent_run"
-                                     :entity-id "run-1"
-                                     :payload {:agent-id "agent-1"}
-                                     :created-at "2026-04-21T00:00:00Z"})
-    (telemetry/record-system-event! collector
-                                    {:event-type "agent.run.completed"
-                                     :entity-type "agent_run"
-                                     :entity-id "run-1"
-                                     :payload {:status "completed"}
-                                     :created-at "2026-04-21T00:00:00.150Z"})
-    (is (= 150 (get-in (telemetry/snapshot collector) [:runs :latency-ms :p50-ms])))
-    (is (= 150 (get-in (telemetry/snapshot collector) [:runs :latency-ms :p95-ms])))))
 
 (deftest llm-token-spend-by-agent
   (let [collector (telemetry/create-collector {:enabled true})
@@ -130,16 +113,3 @@
     (telemetry-observer/flush! observer)
     (is (= [{:event-type :turn/start :payload {:id "t1"}}] @events))
     (is (= [{:metric-type :queue-depth :value 2}] @metrics))))
-
-(deftest telemetry-collector-observer-records-system-events
-  (let [collector (telemetry/create-collector {:enabled true})
-        observer (telemetry-observer/create-observer collector {:sinks [:telemetry]
-                                                                :best-effort? true})]
-    (telemetry-observer/record-event! observer
-                                      {:event-type :system/event
-                                       :payload {:event-type "agent.run.requested"
-                                                 :entity-type "agent_run"
-                                                 :entity-id "run-1"
-                                                 :payload {:agent-id "agent-1"}
-                                                 :created-at "2026-04-21T00:00:00Z"}})
-    (is (= 1 (get-in (telemetry/snapshot collector) [:runs :count])))))

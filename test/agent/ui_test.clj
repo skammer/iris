@@ -5,7 +5,6 @@
    [agent.memory.core :as memory]
    [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
-   [agent.runs.registry :as runtime]
    [agent.runtime.trace :as trace]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
@@ -26,8 +25,8 @@
     (is (not (str/includes? html "/public/app.js")))))
 
 (deftest index-page-deep-link-loads-route-fragment
-  (let [html (ui/index-page "/runs/run-1")]
-    (is (str/includes? html "/ui/shell?tab=runs&amp;run_id=run-1"))))
+  (let [html (ui/index-page "/chat/session-1")]
+    (is (str/includes? html "/ui/shell?tab=chat&amp;session_id=session-1"))))
 
 (deftest dashboard-fragment-shows-active-model
   (with-redefs [sqlite/health-check (constantly {:details {:session-count 0
@@ -39,7 +38,6 @@
                 channel-adapters/registry-health (constantly {:count 0})
                 orchestrator/health-check (constantly {:agent-count 0})
                 orchestrator/list-federated-peers (constantly [])
-                runtime/list-runs (constantly [])
                 tool-approvals/list-requests (constantly [])]
     (let [html (ui/dashboard-fragment
                 {:config {:llm {:active-provider :openai-compatible
@@ -49,44 +47,6 @@
       (is (str/includes? html ">model</span>"))
       (is (str/includes? html ">gpt-4o-mini</span>")))))
 
-(deftest dashboard-fragment-renders-structured-run-rows
-  (with-redefs [sqlite/health-check (constantly {:details {:session-count 2
-                                                           :event-count 10
-                                                           :schema-version 1
-                                                           :tool-approval-count 1}})
-                tools/registry-health (constantly {:count 5})
-                memory/health-check (constantly {:facts {:count 3}})
-                channel-adapters/registry-health (constantly {:count 1})
-                orchestrator/health-check (constantly {:agent-count 0})
-                orchestrator/list-federated-peers (constantly [])
-                runtime/list-runs (constantly [{:id "run-1"
-                                                :substrate "docker"
-                                                :status "running"
-                                                :created-at "2026-06-12T10:30:00Z"}
-                                               {:id "run-2"
-                                                :substrate "seatbelt"
-                                                :status "failed"
-                                                :last-error "boom"
-                                                :created-at "2026-06-12T10:31:00Z"}])
-                tool-approvals/list-requests (constantly [])]
-    (let [html (ui/dashboard-fragment
-                {:config {:llm {:active-provider :openai-compatible
-                                :providers {:openai-compatible {:type :openai-compatible
-                                                                :model "gpt-4o-mini"}}}}
-                 :reload-state (atom {:status :idle})})]
-      (testing "structured rows replace pipe-separated strings"
-        (is (str/includes? html "row__id"))
-        (is (str/includes? html "06-12 10:30"))
-        (is (not (str/includes? html "run-1 | docker"))))
-      (testing "status dots and badges"
-        (is (str/includes? html "dot--live"))
-        (is (str/includes? html "dot--err"))
-        (is (str/includes? html "badge-row")))
-      (testing "fact strip replaces the meta pipe line"
-        (is (str/includes? html "fact-strip"))
-        (is (str/includes? html ">memory facts</span>"))
-        (is (not (str/includes? html "memory facts: ")))))))
-
 (deftest short-id-shortens-uuids-only
   (is (= "303ea8ca" (ui-render/short-id "303ea8ca-9665-4edd-bd97-b5c3cec87438")))
   (is (= "run-1" (ui-render/short-id "run-1"))
@@ -94,20 +54,14 @@
   (is (= "telegram" (ui-render/short-id "telegram"))))
 
 (deftest operator-board-renders-sections-with-counts
-  (with-redefs [runtime/list-runs (constantly [{:id "run-9"
-                                                :substrate "docker"
-                                                :status "running"
-                                                :created-at "2026-06-12T09:00:00Z"}])
-                orchestrator/list-agents (constantly [])
+  (with-redefs [orchestrator/list-agents (constantly [])
                 orchestrator/list-federated-peers (constantly [])
                 tool-approvals/list-requests (constantly [])
                 sqlite/list-events (constantly [])]
-    (let [html (ui/operator-board-fragment {:store nil :orchestrator nil :runtime-service nil})]
+    (let [html (ui/operator-board-fragment {:store nil :orchestrator nil})]
       (is (str/includes? html "board-section"))
       (is (str/includes? html "count-badge"))
       (is (str/includes? html "board-section--empty"))
-      (is (str/includes? html "row--link"))
-      (is (str/includes? html "run-9"))
       (is (str/includes? html "empty-line")))))
 
 (deftest create-session-form-posts-explicit-form-and-clears-on-success

@@ -136,57 +136,6 @@ class ThemeToggle extends HTMLElement {
   }
 }
 
-class ScrollBottom extends HTMLElement {
-  #stick = true;
-  #target = null;
-  #observer = new MutationObserver(() => this.afterChange());
-
-  connectedCallback() {
-    this.bindTarget();
-    this.#observer.observe(this, { childList: true, subtree: true, characterData: true });
-    requestAnimationFrame(() => this.scrollToBottom(true));
-  }
-
-  disconnectedCallback() {
-    this.#target?.removeEventListener("scroll", this);
-    this.#target = null;
-    this.#observer.disconnect();
-  }
-
-  get target() {
-    const node = this.querySelector("[data-run-output-tail]");
-    return node instanceof HTMLElement ? node : this;
-  }
-
-  bindTarget() {
-    const next = this.target;
-    if (next === this.#target) return;
-    this.#target?.removeEventListener("scroll", this);
-    this.#target = next;
-    this.#target.addEventListener("scroll", this, { passive: true });
-  }
-
-  handleEvent() {
-    this.#stick = this.distanceFromBottom() <= AUTOSCROLL_THRESHOLD_PX;
-  }
-
-  distanceFromBottom() {
-    const target = this.target;
-    return target.scrollHeight - target.clientHeight - target.scrollTop;
-  }
-
-  afterChange() {
-    this.bindTarget();
-    if (this.#stick) requestAnimationFrame(() => this.scrollToBottom(false));
-  }
-
-  scrollToBottom(force) {
-    if (!force && !this.#stick) return;
-    const target = this.target;
-    target.scrollTop = target.scrollHeight;
-  }
-}
-
 class AgentChatPanel extends HTMLElement {}
 
 class ChatStream extends HTMLElement {
@@ -235,21 +184,6 @@ document.addEventListener("submit", (event) => {
     document.querySelector("chat-stream")?.followBottom?.();
   }
 }, true);
-
-class AgentRunPanel extends ScrollBottom {
-  connectedCallback() {
-    super.connectedCallback();
-    this.renderLiveState();
-  }
-
-  renderLiveState() {
-    const node = this.querySelector("[data-run-live-state]");
-    if (!(node instanceof HTMLElement)) return;
-    const state = this.dataset.liveState || "poll";
-    node.textContent = state;
-    node.className = `run-live-state ${state}`;
-  }
-}
 
 const inMarkdownFenceBeforeCaret = (text, caret) => {
   const head = text.slice(0, caret);
@@ -410,10 +344,8 @@ const attachSkillAutocompletes = () => {
 };
 
 if (!customElements.get("theme-toggle")) customElements.define("theme-toggle", ThemeToggle);
-if (!customElements.get("scroll-bottom")) customElements.define("scroll-bottom", ScrollBottom);
 if (!customElements.get("chat-stream")) customElements.define("chat-stream", ChatStream);
 if (!customElements.get("agent-chat-panel")) customElements.define("agent-chat-panel", AgentChatPanel);
-if (!customElements.get("agent-run-panel")) customElements.define("agent-run-panel", AgentRunPanel);
 
 routerObserver.observe(document.body, {
   childList: true,

@@ -1,7 +1,6 @@
 (ns agent.api.handlers.ui
   (:require
    [agent.api.errors :as errors]
-   [agent.runs.service :as runs]
    [agent.api.handlers.tools :as tools-h]
    [agent.api.helpers :as h]
    [agent.api.responses :as responses]
@@ -68,8 +67,7 @@
                            (let [query (-> request :parameters :query)]
                              (ui/shell-fragment system
                                                 {:tab (some-> (:tab query) keyword)
-                                                 :session-id (:session_id query)
-                                                 :run-id (:run_id query)}))))
+                                                 :session-id (:session_id query)}))))
 
 (defn dashboard [system _request]
   (responses/html-response 200 (ui/dashboard-fragment system)))
@@ -308,39 +306,6 @@
 (defn logs [system _request]
   (responses/html-response 200 (ui/logs-fragment system)))
 
-(defn- relevant-run-detail-event? [event run-id]
-  (and (= "agent_run" (:entity-type event))
-       (= run-id (:entity-id event))))
-
-(defn run-detail-live-response
-  [system request]
-  (let [run-id (-> request :parameters :query :run_id)
-        broker-instance (or (:event-bus system) (:broker system))]
-	    (streaming/managed-response
-	     request
-	     {:name :ui-run-detail-live
-          :metrics (:sse-metrics system)
-	      :on-error (fn [_ _] nil)}
-     (fn [ctx]
-       (let [subscription (streaming/subscribe! ctx
-                                                broker-instance
-                                                (broker/all-events-subject)
-                                                {:buffer-size defaults/event-stream-buffer-size
-                                                 :buffer-strategy :sliding
-                                                 :slow-client :drop-new})
-             ch (:channel subscription)
-             patch! #(streaming/send-datastar-patch!
-                      ctx
-                      (str "<div id=\"run-detail-body\">"
-                           (ui/run-detail-body system run-id)
-                           "</div>"))]
-         (patch!)
-         (loop []
-           (when-let [event (some-> (streaming/take! ctx ch) :payload)]
-             (when (relevant-run-detail-event? event run-id)
-               (patch!))
-            (recur))))))))
-
 (defn events-live-response
   [system request]
   (let [broker-instance (or (:event-bus system) (:broker system))]
@@ -459,34 +424,6 @@
   (memory-reset-response system
                          "Facts"
                          #(memory/reset-facts! (:memory-service system))))
-
-(defn list-runs [system _request]
-  (responses/html-response 200 (ui/runs-fragment system)))
-
-(defn run-detail [system request]
-  (responses/html-response 200
-                           (let [run-id (-> request :parameters :query :run_id)]
-                             (str (ui/run-detail-fragment system run-id)
-                                  (ui/router-state-fragment
-                                   (ui/run-route-path system run-id))))))
-
-(defn run-detail-body [system request]
-  (responses/html-response 200
-                           (ui/run-detail-body system (-> request :parameters :query :run_id))))
-
-(defn create-run [system request]
-  (let [body (h/read-form-body request)
-        run (runs/request-run! system
-                               {:agent-id (not-empty (:agent_id body))
-                                :name (not-empty (:name body))
-                                :substrate :external
-                                :requested-by "ui"})
-        run-id (:id run)]
-    (responses/html-response 201
-                             (str (ui/runs-fragment system)
-                                  (ui/run-detail-fragment system run-id)
-                                  (ui/router-state-fragment
-                                   (ui/run-route-path system run-id))))))
 
 (defn list-tools [system _request]
   (responses/html-response 200 (ui/tools-fragment system)))
