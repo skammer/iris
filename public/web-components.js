@@ -506,3 +506,118 @@ document.addEventListener("click", (event) => {
   const spoiler = event.target instanceof Element && event.target.closest(".spoiler");
   if (spoiler) spoiler.classList.toggle("spoiler--revealed");
 });
+
+// --- motion orchestration (transitions.dev) ----------------------------------
+// Sliding nav pill: position survives Datastar morphs via module state, so a
+// tab change animates from the previous tab even when inline styles are
+// stripped by the patch.
+const navPillState = { left: null, width: null };
+
+const positionNavPill = () => {
+  const nav = document.getElementById("shell-nav");
+  if (!nav) return;
+  const pill = nav.querySelector(".shell-nav__pill");
+  const active = nav.querySelector(".tab-link.active");
+  if (!pill || !active) return;
+  const left = active.offsetLeft;
+  const width = active.offsetWidth;
+  const apply = (l, w) => {
+    pill.style.transform = `translateX(${l}px)`;
+    pill.style.width = `${w}px`;
+  };
+  const snap = (l, w) => {
+    pill.style.transition = "none";
+    apply(l, w);
+    void pill.offsetWidth;
+    pill.style.transition = "";
+  };
+  if (navPillState.left === null) {
+    snap(left, width);
+  } else if (navPillState.left !== left || navPillState.width !== width) {
+    snap(navPillState.left, navPillState.width);
+    apply(left, width);
+  } else {
+    snap(left, width);
+  }
+  navPillState.left = left;
+  navPillState.width = width;
+  nav.setAttribute("data-pill-ready", "true");
+};
+
+window.addEventListener("resize", () => {
+  navPillState.left = null;
+  positionNavPill();
+});
+
+// Workspace entrance: staggered rise on the FIRST paint only. Tab switches
+// must be instant — re-animating on navigation makes every click read as a
+// full-page flash (content paints, blinks to opacity 0, fades back in).
+// The class is removed once the animation completes — leaving it on would
+// re-run the entrance on every patched child and can strand content at the
+// animation's from-state (opacity 0) if rendering is interrupted.
+let entrancePlayed = false;
+let entranceCleanupTimer = null;
+
+const replayWorkspaceEntrance = () => {
+  if (entrancePlayed) return;
+  const grid = document.querySelector(".workspace-grid");
+  if (!grid) return;
+  entrancePlayed = true;
+  grid.classList.add("is-entering");
+  clearTimeout(entranceCleanupTimer);
+  entranceCleanupTimer = setTimeout(() => {
+    document.querySelectorAll(".workspace-grid.is-entering").forEach((el) => {
+      el.classList.remove("is-entering");
+    });
+  }, 450);
+};
+
+// Number pop-in: re-enter digits when a labelled stat value changes. Values
+// are tracked per label in module state so the 10s dashboard refresh only
+// animates genuine changes.
+const statValueCache = new Map();
+
+const animateChangedNumbers = () => {
+  document.querySelectorAll(".stat, .status-block, .result--metric").forEach((card) => {
+    const labelEl = card.querySelector(".label, .status-label, strong");
+    const valueEl = card.querySelector(".value, .status-value");
+    if (!labelEl || !valueEl) return;
+    const key = labelEl.textContent.trim();
+    const text = valueEl.textContent.trim();
+    if (!key) return;
+    const prev = statValueCache.get(key);
+    statValueCache.set(key, text);
+    if (prev === undefined || prev === text) return;
+    if (!/^[\d.,]+$/.test(text)) return;
+    valueEl.classList.remove("is-animating");
+    valueEl.replaceChildren(
+      ...[...text].map((ch, i, arr) => {
+        const digit = document.createElement("span");
+        digit.className = "t-digit";
+        const fromEnd = arr.length - 1 - i;
+        if (fromEnd < 2) digit.dataset.stagger = String(2 - fromEnd);
+        digit.textContent = ch;
+        return digit;
+      }),
+    );
+    void valueEl.offsetWidth;
+    valueEl.classList.add("is-animating");
+  });
+};
+
+let motionTimer = null;
+const motionObserver = new MutationObserver(() => {
+  // Pre-paint (observer callbacks are microtasks): both the entrance class
+  // and the pill position must land before the browser paints the patched
+  // content. A morph strips the pill's inline transform, and a deferred
+  // reposition lets it visibly transition toward translateX(0) — the first
+  // tab — before snapping back to the clicked one.
+  replayWorkspaceEntrance();
+  positionNavPill();
+  clearTimeout(motionTimer);
+  motionTimer = setTimeout(animateChangedNumbers, 40);
+});
+motionObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+positionNavPill();
+replayWorkspaceEntrance();
+animateChangedNumbers();

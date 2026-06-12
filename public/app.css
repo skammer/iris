@@ -217,6 +217,7 @@ theme-toggle {
 }
 
 .shell-nav {
+  position: relative;
   display: flex;
   gap: 0;
   overflow-x: auto;
@@ -224,10 +225,27 @@ theme-toggle {
   flex: 0 0 auto;
 }
 
+/* Sliding active-tab pill (transitions.dev tabs-sliding, squared to match
+   the surface language). JS writes transform/width from the active tab. */
+.shell-nav__pill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 0;
+  background: var(--surface-raised);
+  box-shadow: inset 0 -2px 0 var(--accent);
+  transform: translateX(0);
+  transition:
+    transform var(--tabs-dur) var(--tabs-ease),
+    width var(--tabs-dur) var(--tabs-ease);
+  will-change: transform, width;
+  pointer-events: none;
+}
+
 .tab-link {
   appearance: none;
   border: 0;
-  /* border-right: 1px solid var(--border); */
   border-radius: 0;
   background: transparent;
   color: var(--text-secondary);
@@ -235,7 +253,9 @@ theme-toggle {
   font-size: 12px;
   line-height: 1.2;
   cursor: pointer;
-  transition: background-color 0.2s ease, color 0.2s ease;
+  position: relative;
+  z-index: 1;
+  transition: color var(--tabs-dur) var(--tabs-ease);
 }
 
 .tab-link:last-child {
@@ -244,11 +264,13 @@ theme-toggle {
 
 .tab-link:hover,
 .tab-link.active {
-  background: var(--surface-raised);
   color: var(--text-display);
 }
 
-.tab-link.active {
+/* No-JS fallback: until the pill has been positioned once, the active tab
+   paints its own highlight. JS marks the nav as managed. */
+.shell-nav:not([data-pill-ready]) .tab-link.active {
+  background: var(--surface-raised);
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 
@@ -314,8 +336,8 @@ theme-toggle {
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .stat {
@@ -323,26 +345,24 @@ theme-toggle {
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
   background: var(--surface-raised);
-  min-height: 72px;
+  min-height: 64px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  gap: 8px;
 }
 
 .stat.stat--wide {
   grid-column: span 2;
 }
 
+/* Same stack as the base .value rule — a divergent fallback (Doto) made
+   provider and model render in different typefaces whenever the primary
+   font wasn't picked. */
 .stat.stat--wide .value {
-  font-family: "IoskeleyMono", "Doto", "Space Mono", monospace;
-  font-size: 28px;
-  line-height: 1;
-  color: var(--accent);
-}
-
-.stat.stat--wide .provider-value {
   font-size: 18px;
   line-height: 1.15;
+  color: var(--accent);
   word-break: break-word;
 }
 
@@ -368,7 +388,19 @@ theme-toggle {
 .run-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
+}
+
+.result.result--metric {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 64px;
+}
+
+.result.result--span {
+  grid-column: 1 / -1;
 }
 
 #run-output-panel {
@@ -1249,7 +1281,18 @@ textarea {
 }
 
 .result {
-  border-left: 2px solid var(--warning);
+  border-left: 2px solid var(--border-visible);
+}
+
+.result--attention {
+  border-left-color: var(--warning);
+}
+
+.result strong {
+  font: 500 10px/1.4 "IoskeleyMono", "Space Mono", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
 }
 
 .message.is-error {
@@ -1542,4 +1585,415 @@ textarea {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* =============================================================
+   Design refresh: motion tokens (transitions.dev) + overview
+   ============================================================= */
+
+:root {
+  /* Number pop-in */
+  --digit-dur: 500ms;
+  --digit-distance: 8px;
+  --digit-stagger: 70ms;
+  --digit-blur: 2px;
+  --digit-ease: cubic-bezier(0.34, 1.45, 0.64, 1);
+  --digit-dir-x: 0;
+  --digit-dir-y: 1;
+  /* Page / panel entrance */
+  --page-slide-dur: 250ms;
+  --page-slide-distance: 8px;
+  --page-blur: 3px;
+  --page-slide-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --stagger-stagger: 40ms;
+  /* Shimmer text */
+  --shimmer-dur: 2000ms;
+  --shimmer-base: #4a4a4a;
+  --shimmer-highlight: #ffffff;
+  --shimmer-band: 400%;
+  --shimmer-ease: linear;
+  /* Tabs sliding */
+  --tabs-dur: 250ms;
+  --tabs-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Text states swap */
+  --text-swap-dur: 150ms;
+  --text-swap-translate-y: 4px;
+  --text-swap-blur: 2px;
+  --text-swap-ease: ease-in-out;
+}
+
+:root[data-theme="light"] {
+  --shimmer-base: #b3b3ab;
+  --shimmer-highlight: #000000;
+}
+
+/* --- shimmer text (pure CSS, transitions.dev 15) --- */
+.t-shimmer {
+  position: relative;
+  display: inline-block;
+  color: var(--shimmer-base);
+}
+
+.t-shimmer::before {
+  content: attr(data-shimmer-text);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 40%,
+    var(--shimmer-highlight) 50%,
+    transparent 60%,
+    transparent 100%
+  );
+  background-size: var(--shimmer-band) 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: t-shimmer var(--shimmer-dur) var(--shimmer-ease) infinite;
+}
+
+@keyframes t-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: 0% 0; }
+}
+
+.boot-shimmer {
+  font-family: "IoskeleyMono", "Space Mono", monospace;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  padding: 12px;
+}
+
+/* --- number pop-in (transitions.dev 02) --- */
+@keyframes t-digit-pop-in {
+  0% {
+    transform: translate(
+      calc(var(--digit-distance) * var(--digit-dir-x)),
+      calc(var(--digit-distance) * var(--digit-dir-y))
+    );
+    opacity: 0;
+    filter: blur(var(--digit-blur));
+  }
+  100% {
+    transform: translate(0, 0);
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+.t-digit {
+  display: inline-block;
+  will-change: transform, opacity, filter;
+}
+
+.is-animating > .t-digit {
+  animation: t-digit-pop-in var(--digit-dur) var(--digit-ease) both;
+}
+
+.is-animating > .t-digit[data-stagger="1"] {
+  animation-delay: var(--digit-stagger);
+}
+
+.is-animating > .t-digit[data-stagger="2"] {
+  animation-delay: calc(var(--digit-stagger) * 2);
+}
+
+/* --- workspace entrance (transitions.dev 07/18, tuned subtle) --- */
+@keyframes t-panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--page-slide-distance));
+    filter: blur(var(--page-blur));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+.workspace-grid.is-entering > * {
+  animation: t-panel-enter var(--page-slide-dur) var(--page-slide-ease) both;
+}
+
+.workspace-grid.is-entering > :nth-child(2) {
+  animation-delay: var(--stagger-stagger);
+}
+
+.workspace-grid.is-entering > :nth-child(3) {
+  animation-delay: calc(var(--stagger-stagger) * 2);
+}
+
+/* --- panel header --- */
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.panel-head h2 {
+  margin: 0;
+}
+
+.panel-head__form {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.reload-status {
+  font-family: "IoskeleyMono", "Space Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-disabled);
+  transition: color var(--text-swap-dur) var(--text-swap-ease);
+}
+
+.reload-status--running { color: var(--warning); }
+.reload-status--ok,
+.reload-status--done { color: var(--success); }
+.reload-status--error,
+.reload-status--failed { color: var(--accent); }
+
+/* --- fact strip --- */
+.fact-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin: 12px 0;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+
+.fact {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 12px;
+  border-right: 1px solid var(--border);
+  font-size: 11px;
+}
+
+.fact:last-child {
+  border-right: 0;
+}
+
+.fact__label {
+  font-family: "IoskeleyMono", "Space Mono", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.fact__value {
+  font-family: "IoskeleyMono", "Space Mono", monospace;
+  color: var(--text-display);
+}
+
+/* --- status dots --- */
+.dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  background: var(--text-disabled);
+  display: inline-block;
+}
+
+.dot--ok { background: var(--success); }
+.dot--warn { background: var(--warning); }
+.dot--err { background: var(--accent); }
+
+.dot--live {
+  background: var(--success);
+  animation: dot-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.status-block .dot {
+  margin-right: 2px;
+}
+
+/* --- list rows --- */
+.rows {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  padding: 5px 8px;
+  font: 400 11px/1.4 "IoskeleyMono", "Space Mono", "JetBrains Mono", "SF Mono", monospace;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  text-align: left;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.row__id {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.row__meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.row__meta--err {
+  color: var(--warning);
+}
+
+.row__time {
+  flex: 0 0 auto;
+  color: var(--text-disabled);
+  font-size: 10px;
+}
+
+button.row--link {
+  cursor: pointer;
+  transition: border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease;
+}
+
+button.row--link:hover {
+  background: var(--surface);
+  border-left-color: var(--accent);
+  color: var(--text-display);
+}
+
+button.row--link:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--text-display);
+}
+
+/* --- badges --- */
+.badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-visible);
+  font: 400 10px/1.4 "IoskeleyMono", "Space Mono", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-primary);
+}
+
+.count-badge {
+  font: 500 10px/1 "IoskeleyMono", "Space Mono", monospace;
+  color: var(--text-disabled);
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  min-width: 14px;
+  text-align: center;
+}
+
+.count-badge--alert {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* --- operator board --- */
+.board {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  align-items: start;
+}
+
+.board-section {
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  padding: 8px 10px;
+  display: grid;
+  gap: 6px;
+  /* Grid items default to min-width auto: long UUIDs would refuse to
+     shrink and spill across the board columns. */
+  min-width: 0;
+  overflow: hidden;
+}
+
+.board-section__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.board-section__head strong {
+  font: 500 10px/1.4 "IoskeleyMono", "Space Mono", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.board-section--empty {
+  opacity: 0.55;
+}
+
+/* --- empty + value states --- */
+.empty-line {
+  font: 400 11px/1.4 "IoskeleyMono", "Space Mono", monospace;
+  color: var(--text-disabled);
+}
+
+.empty-line::before {
+  content: "— ";
+}
+
+.value--warn {
+  color: var(--warning);
+}
+
+/* --- reduced motion (required by every transitions.dev snippet) --- */
+@media (prefers-reduced-motion: reduce) {
+  .shell-nav__pill,
+  .tab-link,
+  .reload-status {
+    transition: none \!important;
+  }
+
+  .t-shimmer::before,
+  .is-animating > .t-digit,
+  .workspace-grid.is-entering > *,
+  .dot--live {
+    animation: none \!important;
+  }
 }

@@ -84,6 +84,14 @@
   (ui-render/render [:div#router-state {:hidden true
                               "data-route-path" path}]))
 
+;; Static assets are served with a 1h cache; the version param makes each
+;; server boot serve fresh CSS/JS instead of waiting out stale caches.
+(defonce ^:private asset-version
+  (str (System/currentTimeMillis)))
+
+(defn- asset-href [path]
+  (str path "?v=" asset-version))
+
 (defn- tab-link [tab active-tab]
   [:button.tab-link
    {:type "button"
@@ -105,20 +113,22 @@
      [:link {:rel "preconnect" :href "https://fonts.googleapis.com"}]
      [:link {:rel "preconnect" :href "https://fonts.gstatic.com" :crossorigin true}]
      [:link {:rel "stylesheet"
-             :href "https://fonts.googleapis.com/css2?family=Doto:wght,ROND@400..900,0..100&family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap"}]
-     [:link {:rel "stylesheet" :href "/public/app.css"}]
-     [:link {:rel "stylesheet" :href "/public/katex/katex.min.css"}]
-     [:script {:defer true :src "/public/katex/katex.min.js"}]
-     [:script {:defer true :src "/public/katex/auto-render.min.js"}]
+             :href "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap"}]
+     [:link {:rel "stylesheet" :href (asset-href "/public/app.css")}]
+     [:link {:rel "stylesheet" :href (asset-href "/public/katex/katex.min.css")}]
+     [:script {:defer true :src (asset-href "/public/katex/katex.min.js")}]
+     [:script {:defer true :src (asset-href "/public/katex/auto-render.min.js")}]
      [:script {:type "module"
                :src "https://cdn.jsdelivr.net/gh/starfederation/datastar@1.0.0-RC.8/bundles/datastar.js"}]
-     [:script {:type "module" :src "/public/web-components.js"}]
+     [:script {:type "module" :src (asset-href "/public/web-components.js")}]
      ]
     [:body
      [:main
       [:div#shell-fragment
        {"data-init" (str "@get('" (shell-url route-state) "')")}
-       "[LOADING...]"]]]]))))
+       ;; data-shimmer-text, not data-text: Datastar owns data-text as an
+       ;; expression attribute and would evaluate the content as JS.
+       [:span.t-shimmer.boot-shimmer {"data-shimmer-text" "[LOADING...]"} "[LOADING...]"]]]]]))))
 
 (defn shell-fragment [system active-route]
   (let [route (if (map? active-route) active-route {:tab active-route})
@@ -139,6 +149,7 @@
       [:header.shell-header
        [:div.status-bar
         [:div.status-block.status-block--accent
+         (ui-render/status-dot "running")
          [:span.status-label "provider"]
          [:span.status-value provider]]
         [:div.status-block.status-block--warning
@@ -159,7 +170,8 @@
           :aria-label "Toggle light or dark mode"
           :title "Toggle light/dark mode"}
          "Dark"]]]
-      [:nav.shell-nav
+      [:nav#shell-nav.shell-nav
+       [:span.shell-nav__pill {:aria-hidden "true"}]
        (for [tab tabs]
          (tab-link tab active-tab))]
       (ui-render/trusted-fragment (case active-tab
@@ -189,6 +201,22 @@
                (ui-render/trusted-fragment (dashboard-fragment system))
                (ui-render/trusted-fragment (operator-board-fragment system))])))])))
 
+(defn- run-row [{:keys [id substrate status created-at] :as run}]
+  [:div.row
+   (ui-render/status-dot status {:stale? (ui-render/stale-run? run)})
+   [:span.row__id {:title id} (ui-render/short-id id)]
+   [:span.row__meta (str substrate " · " status)]
+   [:span.row__time (ui-render/short-timestamp created-at)]])
+
+(defn- attention-row [{:keys [id status last-error] :as run}]
+  [:div.row
+   (ui-render/status-dot status {:stale? (ui-render/stale-run? run)})
+   [:span.row__id {:title id} (ui-render/short-id id)]
+   [:span.row__meta.row__meta--err
+    (cond-> (str status)
+      (ui-render/stale-run? run) (str " · stale")
+      (seq last-error) (str " · " last-error))]])
+
 (defn dashboard-fragment [system]
   (let [storage (sqlite/health-check (:store system))
         llm-config (get-in system [:config :llm])
@@ -210,11 +238,23 @@
                                          (ui-render/stale-run? %)))
                             (take 4))
         reload-status (or (some-> system :reload-state deref)
-                          {:status :idle})]
+                          {:status :idle})
+        reload-label (str/join " · " (keep #(some-> % name)
+                                           [(:status reload-status) (:mode reload-status)]))]
     (ui-render/render
      [:section#dashboard-summary.panel
       {"data-on-interval__duration.10s.leading" "@get('/ui/dashboard')"}
-      [:h2 "Runtime Snapshot"]
+      [:div.panel-head
+       [:h2 "Runtime Snapshot"]
+       [:form#system-reload-form.panel-head__form
+        {:method "post"
+         "data-on:submit" "@post('/ui/system/reload', {contentType: 'form', selector: '#system-reload-form'})"}
+        [:input {:type "hidden" :name "mode" :value "soft"}]
+        [:span.reload-status
+         (cond-> {:class (str "reload-status--" (name (:status reload-status)))}
+           (:message reload-status) (assoc :title (str (:message reload-status))))
+         reload-label]
+        [:button {:type "submit"} "Reload config"]]]
       [:div.stats
        [:div.stat.stat--wide [:span.label "provider"] [:span.value.provider-value (name (config/active-provider-key llm-config))]]
        [:div.stat.stat--wide [:span.label "model"] [:span.value (or (config/active-model llm-config) "-")]]
@@ -222,59 +262,74 @@
        [:div.stat [:span.label "events"] [:span.value (get-in storage [:details :event-count] 0)]]
        [:div.stat [:span.label "tools"] [:span.value (:count tools-health)]]
        [:div.stat [:span.label "agents"] [:span.value (:agent-count agent-health)]]]
-      [:p.meta
-       (str "memory facts: " (get-in memory-health [:facts :count] 0)
-            " | channel adapters: " (:count adapter-health)
-            " | federated peers: " (count federated-peers)
-            " | sqlite schema: " (get-in storage [:details :schema-version] "?")
-            " | approvals: " (get-in storage [:details :tool-approval-count] 0))]
-      [:form#system-reload-form
-       {:method "post"
-        "data-on:submit" "@post('/ui/system/reload', {contentType: 'form', selector: '#system-reload-form'})"}
-       [:input {:type "hidden" :name "mode" :value "soft"}]
-       [:div.actions
-        [:button {:type "submit"} "Reload config"]
-        [:span.meta
-         (str "reload: " (name (:status reload-status))
-              (when-let [mode (:mode reload-status)]
-                (str " | " (name mode)))
-              (when-let [message (:message reload-status)]
-                (str " | " message)))]]]
+      [:div.fact-strip
+       (for [[label value] [["memory facts" (get-in memory-health [:facts :count] 0)]
+                            ["adapters" (:count adapter-health)]
+                            ["peers" (count federated-peers)]
+                            ["schema" (get-in storage [:details :schema-version] "?")]
+                            ["approvals" (get-in storage [:details :tool-approval-count] 0)]]]
+         [:span.fact
+          [:span.fact__label label]
+          [:span.fact__value (str value)]])]
       [:div.run-grid
-       [:div.result
+       [:div.result.result--metric
         [:strong "Pending approvals"]
-        [:div.value (str pending-approvals)]]
-       [:div.result
-        [:strong "Recent runs"]
-        (if (seq recent-runs)
-          [:div.stack
-           (for [{:keys [id substrate status created-at]} recent-runs]
-             [:div.meta
-              (str id " | " substrate " | " status " | " created-at)])]
-          [:div.meta "none"])]
-       [:div.result
+        [:div.value {:class (when (pos? pending-approvals) "value--warn")}
+         (str pending-approvals)]]
+       [:div.result.result--metric
+        [:strong "Stale runs"]
+        [:div.value {:class (when (pos? (count stale-runs)) "value--warn")}
+         (str (count stale-runs))]]
+       [:div.result.result--span
         [:strong "Run status"]
         (if (seq status-counts)
-          [:div.stack
-           (for [[status count] (sort-by key status-counts)]
-             [:div.meta (str status " | " count)])]
-          [:div.meta "none"])]
-       [:div.result
+          [:div.badge-row
+           (for [[status n] (sort-by key status-counts)]
+             [:span.badge
+              (ui-render/status-dot status)
+              (str status " " n)])]
+          [:div.empty-line "none"])]
+       [:div.result.result--span
+        [:strong "Recent runs"]
+        (if (seq recent-runs)
+          [:div.rows (map run-row recent-runs)]
+          [:div.empty-line "none"])]
+       [:div.result.result--span.result--attention
         [:strong "Attention"]
         (if (seq attention-runs)
-          [:div.stack
-           (for [{:keys [id status last-error] :as run} attention-runs]
-             [:div.meta
-              (str id " | " status
-                   (when (ui-render/stale-run? run)
-                     " | stale")
-                   (when (seq last-error)
-                     (str " | " last-error)))])]
-          [:div.meta "none"])]
-       [:div.result
-        [:strong "Stale runs"]
-        [:div.value (str (count stale-runs))]]
-       ]])))
+          [:div.rows (map attention-row attention-runs)]
+          [:div.empty-line "none"])]]])))
+
+(defn- run-link-row [variant {:keys [id substrate status created-at heartbeat last-error finished-at] :as run}]
+  [:button.row.row--link
+   {:type "button"
+    "data-route" (route-path {:tab :runs :run-id id})
+    "data-on:click" (str "@get('/ui/shell?tab=runs&run_id=" id "')")}
+   (ui-render/status-dot status {:stale? (ui-render/stale-run? run)})
+   [:span.row__id {:title id} (ui-render/short-id id)]
+   [:span.row__meta {:class (when (= :failed variant) "row__meta--err")}
+    (case variant
+      :stale (str status " · stale")
+      :failed (cond-> (str status) (seq last-error) (str " · " last-error))
+      (str substrate " · " status))]
+   [:span.row__time (ui-render/short-timestamp
+                     (case variant
+                       :stale (or (:observed-at heartbeat) created-at)
+                       :failed (or finished-at created-at)
+                       created-at))]])
+
+(defn- board-section
+  ([label items row-fn] (board-section label items row-fn nil))
+  ([label items row-fn {:keys [alert?]}]
+   (let [items (vec items)]
+     [:div.board-section {:class (when (empty? items) "board-section--empty")}
+      [:div.board-section__head
+       [:strong label]
+       [:span.count-badge {:class (when (and alert? (seq items)) "count-badge--alert")}
+        (str (count items))]]
+      (if (seq items)
+        [:div.rows (map row-fn items)]
+        [:div.empty-line "none"])])))
 
 (defn operator-board-fragment [system]
   (let [runs (runtime/list-runs (:runtime-service system) {:limit 50})
@@ -299,102 +354,54 @@
     (ui-render/render
      [:section#operator-board.panel
       {"data-on-interval__duration.10s.leading" "@get('/ui/operator-board')"}
-      [:h2 "Operator Board"]
-      [:div.stack
-       [:div.result
-        [:strong "Active runs"]
-       (if (seq active-runs)
-         [:div.stack
-          (for [{:keys [id substrate status created-at]} (take 6 active-runs)]
-             [:button.session-link
-              {:type "button"
-               "data-route" (route-path {:tab :runs :run-id id})
-               "data-on:click" (str "@get('/ui/shell?tab=runs&run_id=" id "')")}
-              [:strong id]
-              [:div.session-meta (str substrate " | " status)]
-              [:div.session-meta created-at]])]
-          [:div.meta "none"])]
-       [:div.result.diagnostic-result
-        [:strong "Stale runs"]
-        (if (seq stale-runs)
-         [:div.stack
-          (for [{:keys [id status heartbeat created-at]} (take 6 stale-runs)]
-             [:button.session-link
-              {:type "button"
-               "data-route" (route-path {:tab :runs :run-id id})
-               "data-on:click" (str "@get('/ui/shell?tab=runs&run_id=" id "')")}
-              [:strong id]
-              [:div.session-meta (str status " | stale")]
-              [:div.session-meta (str "last seen | " (or (:observed-at heartbeat) created-at))]])]
-          [:div.meta "none"])]
-       [:div.result
-        [:strong "Approval queue"]
-        (if (seq approvals)
-          [:div.stack
-           (for [{:keys [id tool-name reason created-at]} approvals]
-             [:div.meta
-              (str id " | " tool-name
-                   (when (seq reason)
-                     (str " | " reason))
-                   " | " created-at)])]
-          [:div.meta "none"])]
-       [:div.result.diagnostic-result
-        [:strong "Failure queue"]
-        (if (seq failed-runs)
-         [:div.stack
-          (for [{:keys [id status last-error finished-at]} (take 6 failed-runs)]
-             [:button.session-link
-              {:type "button"
-               "data-route" (route-path {:tab :runs :run-id id})
-               "data-on:click" (str "@get('/ui/shell?tab=runs&run_id=" id "')")}
-              [:strong id]
-              [:div.session-meta (str status " | " (or finished-at "-"))]
-              (when (seq last-error)
-                [:div.session-meta last-error])])]
-          [:div.meta "none"])]
-       [:div.result
-        [:strong "Recent events"]
-        (if (seq events)
-          [:div.stack
-           (for [{:keys [event-type entity-id created-at]} events]
-             [:div.meta (str event-type " | " (or entity-id "-") " | " created-at)])]
-          [:div.meta "none"])]
-       [:div.result
-        [:strong "Federated peers"]
-        (if (seq federated-peers)
-          [:div.stack
-           (for [{:keys [id status base-url logical-address-prefix]} federated-peers]
-             [:div.meta (str id " | " status " | "
-                             (or base-url logical-address-prefix))])]
-          [:div.meta "none"])]
-       [:div.result
-        [:strong "Interop policy"]
-        (if (seq interop-policies)
-          [:div.stack
-           (for [{:keys [logical-address trusted-peers trust-policies]} interop-policies]
-             [:div.meta
-              (str logical-address
-                   " | peers " (count trusted-peers)
-                   " | policies " (count trust-policies))])]
-          [:div.meta "none"])]
-       [:div.result
-        [:strong "Interop activity"]
-        (if (seq interop-events)
-          [:div.stack
-           (for [{:keys [event-type entity-id created-at]} (take 8 interop-events)]
-             [:div.meta (str event-type " | " (or entity-id "-") " | " created-at)])]
-          [:div.meta "none"])]
-       [:div.result
-        [:strong "Kernel receipts"]
-        (if (seq kernel-events)
-          [:div.stack
-           (for [{:keys [entity-id created-at payload]} (take 8 kernel-events)]
-             [:div.meta
-              (str (or entity-id "-")
-                   " | directives " (get payload :directive-count 0)
-                   " | receipts " (get payload :receipt-count 0)
-                   " | " created-at)])]
-          [:div.meta "none"])]]])))
+      [:div.panel-head
+       [:h2 "Operator Board"]]
+      [:div.board
+       (board-section "Active runs" (take 6 active-runs) (partial run-link-row :active))
+       (board-section "Stale runs" (take 6 stale-runs) (partial run-link-row :stale) {:alert? true})
+       (board-section "Approval queue" approvals
+                      (fn [{:keys [tool-name reason created-at]}]
+                        [:div.row
+                         (ui-render/status-dot "pending")
+                         [:span.row__id (str tool-name)]
+                         [:span.row__meta (or (not-empty reason) "awaiting approval")]
+                         [:span.row__time (ui-render/short-timestamp created-at)]])
+                      {:alert? true})
+       (board-section "Failure queue" (take 6 failed-runs) (partial run-link-row :failed) {:alert? true})
+       (board-section "Recent events" events
+                      (fn [{:keys [event-type entity-id created-at]}]
+                        [:div.row
+                         [:span.row__id (str event-type)]
+                         [:span.row__meta {:title entity-id}
+                          (ui-render/short-id (or entity-id "-"))]
+                         [:span.row__time (ui-render/short-timestamp created-at)]]))
+       (board-section "Federated peers" federated-peers
+                      (fn [{:keys [id status base-url logical-address-prefix]}]
+                        [:div.row
+                         (ui-render/status-dot status)
+                         [:span.row__id {:title id} (ui-render/short-id id)]
+                         [:span.row__meta (or base-url logical-address-prefix "-")]]))
+       (board-section "Interop policy" interop-policies
+                      (fn [{:keys [logical-address trusted-peers trust-policies]}]
+                        [:div.row
+                         [:span.row__id (str logical-address)]
+                         [:span.row__meta (str "peers " (count trusted-peers)
+                                               " · policies " (count trust-policies))]]))
+       (board-section "Interop activity" (take 8 interop-events)
+                      (fn [{:keys [event-type entity-id created-at]}]
+                        [:div.row
+                         [:span.row__id (str event-type)]
+                         [:span.row__meta {:title entity-id}
+                          (ui-render/short-id (or entity-id "-"))]
+                         [:span.row__time (ui-render/short-timestamp created-at)]]))
+       (board-section "Kernel receipts" (take 8 kernel-events)
+                      (fn [{:keys [entity-id created-at payload]}]
+                        [:div.row
+                         [:span.row__id {:title entity-id}
+                          (ui-render/short-id (or entity-id "-"))]
+                         [:span.row__meta (str "directives " (get payload :directive-count 0)
+                                               " · receipts " (get payload :receipt-count 0))]
+                         [:span.row__time (ui-render/short-timestamp created-at)]]))]])))
 
 (defn sessions-fragment
   ([system] (sessions-fragment system nil))
@@ -411,7 +418,7 @@
              "')")}
        [:form#create-session-form.create-session-form
         {"data-on:submit" "@post('/ui/sessions', {contentType: 'form', selector: '#create-session-form'})"
-         "data-on:datastar-fetch" "evt.detail.type === 'finished' && evt.currentTarget.reset()"
+         "data-on:datastar-fetch" "evt.detail.type === 'finished' && el.reset()"
          "data-indicator" "createSessionLoading"}
         [:div.compact-form-row
          [:input {:type "text" :name "title" :placeholder "new session title"}]
@@ -498,7 +505,7 @@
             "data-indicator" "chatLoading"
             "data-class:is-loading" "$chatLoading"
             "data-skill-autocomplete" "true"
-            "data-on:datastar-fetch" "evt.detail.type === 'finished' && evt.currentTarget.reset()"
+            "data-on:datastar-fetch" "evt.detail.type === 'finished' && el.reset()"
             :enctype "multipart/form-data"}
            [:input {:id (str "chat-session-id-" (:id session))
                     :type "hidden"

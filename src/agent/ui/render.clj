@@ -434,6 +434,49 @@
        [:pre.tool-detail__pre.code body])]
      [:div.meta created-at]]))
 
+(def ^:private status-dot-classes
+  {"running" "dot--live"
+   "requested" "dot--live"
+   "completed" "dot--ok"
+   "succeeded" "dot--ok"
+   "ok" "dot--ok"
+   "failed" "dot--err"
+   "error" "dot--err"
+   "cancelled" "dot--err"
+   "denied" "dot--err"
+   "pending" "dot--warn"
+   "approved" "dot--ok"})
+
+(defn status-dot
+  "Square status indicator, colored by status keyword/string. Stale runs
+   always show as warning regardless of their nominal status."
+  ([status] (status-dot status nil))
+  ([status {:keys [stale?]}]
+   [:span.dot {:class (if stale?
+                        "dot--warn"
+                        (get status-dot-classes (some-> status name str/lower-case) "dot--idle"))
+               :aria-hidden "true"}]))
+
+(defn short-timestamp
+  "Compact 'MM-DD HH:MM' rendering of an ISO-8601 timestamp for list rows."
+  [value]
+  (let [s (str value)]
+    (if-let [[_ mm-dd hh-mm] (re-find #"^\d{4}-(\d{2}-\d{2})T(\d{2}:\d{2})" s)]
+      (str mm-dd " " hh-mm)
+      (not-empty s))))
+
+(def ^:private uuid-rx
+  #"(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+(defn short-id
+  "First segment of a UUID for display — pair with a :title attribute
+   carrying the full value. Non-UUID identifiers pass through unchanged."
+  [value]
+  (let [s (str value)]
+    (if (re-matches uuid-rx s)
+      (subs s 0 8)
+      s)))
+
 (defn format-tokens
   "Compact human-readable token count: 950 -> \"950\", 12345 -> \"12.3k\", 2300000 -> \"2.3M\"."
   [n]
