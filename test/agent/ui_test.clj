@@ -284,6 +284,7 @@
 	        (is (str/includes? html "/ui/memory/facts/reset"))
 	        (is (str/includes? html "Memory Search"))
 	        (is (str/includes? html "workspace-grid memory-workspace"))
+        (is (str/includes? html "memory-left-stack"))
         (testing "facts panel lists stored facts"
           (is (str/includes? html "memory-facts"))
           (is (str/includes? html "iris"))

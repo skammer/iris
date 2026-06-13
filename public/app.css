@@ -293,7 +293,7 @@ theme-toggle {
 }
 
 .workspace-grid.memory-workspace {
-  grid-template-columns: minmax(240px, 0.7fr) minmax(420px, 1.1fr) minmax(420px, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(420px, 1fr);
 }
 
 .workspace-grid.single {
@@ -1167,11 +1167,13 @@ textarea {
   color: var(--text-display);
 }
 
+.memory-left-stack,
 .memory-overview,
 .memory-lab {
   display: grid;
   align-content: start;
   gap: 10px;
+  min-width: 0;
 }
 
 .memory-stats {
@@ -1914,7 +1916,7 @@ button.row--link:focus-visible {
 /* --- operator board --- */
 .board {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 8px;
   align-items: start;
 }
@@ -1929,6 +1931,10 @@ button.row--link:focus-visible {
      shrink and spill across the board columns. */
   min-width: 0;
   overflow: hidden;
+}
+
+.board .row {
+  min-height: 28px;
 }
 
 .board-section__head {

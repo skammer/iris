@@ -147,73 +147,74 @@
 	                                           {:all-scopes? true :limit 100})]
      (ui-render/render
       [:section#memory-workspace.workspace-grid.memory-workspace
-       [:section.panel.memory-overview
-        [:h2 "Memory"]
-        [:div.memory-stats
-	         (memory-health-stat "prompt" (get-in health [:prompt :document-count] 0))
-	         (memory-health-stat "facts" fact-count)
-	         (memory-health-stat "limit" (str (get-in health [:search :default-limit])
-                                          "/"
-                                          (get-in health [:search :max-limit])))]
-        [:table.memory-table
-         [:thead
-          [:tr
-           [:th "surface"]
-           [:th "type"]
-           [:th "write"]
-           [:th "on"]
-           [:th "limit"]
-           [:th "paths"]]]
-         [:tbody
-          (for [surface surfaces]
-            (memory-surface-row surface))]]
-        [:div#memory-prompt-panel.memory-docs
-         [:h3 "Prompt Memory"]
-         [:p.meta (str "documents: " (count (:documents prompt)))]
-         (if (seq (:documents prompt))
-           [:div.memory-result-list
-            (for [{:keys [path content]} (:documents prompt)]
-              [:details.result
-               [:summary [:strong path]]
-               [:pre.code content]])]
-           [:div.empty "No prompt memory files found."])]]
+       [:div.memory-left-stack
+        [:section.panel.memory-overview
+         [:h2 "Memory"]
+         [:div.memory-stats
+          (memory-health-stat "prompt" (get-in health [:prompt :document-count] 0))
+          (memory-health-stat "facts" fact-count)
+          (memory-health-stat "limit" (str (get-in health [:search :default-limit])
+                                           "/"
+                                           (get-in health [:search :max-limit])))]
+         [:table.memory-table
+          [:thead
+           [:tr
+            [:th "surface"]
+            [:th "type"]
+            [:th "write"]
+            [:th "on"]
+            [:th "limit"]
+            [:th "paths"]]]
+          [:tbody
+           (for [surface surfaces]
+             (memory-surface-row surface))]]
+         [:div#memory-prompt-panel.memory-docs
+          [:h3 "Prompt Memory"]
+          [:p.meta (str "documents: " (count (:documents prompt)))]
+          (if (seq (:documents prompt))
+            [:div.memory-result-list
+             (for [{:keys [path content]} (:documents prompt)]
+               [:details.result
+                [:summary [:strong path]]
+                [:pre.code content]])]
+            [:div.empty "No prompt memory files found."])]]
 
-       [:section.panel.memory-lab
-        [:h2 "Retrieval Lab"]
-        [:form#memory-tool-form.memory-tool-form
-         [:h3 "Memory Tool"]
-         [:div.memory-form-grid
-          [:select {:name "action"}
-           [:option {:value "search"} "search"]
-           [:option {:value "save-fact"} "save-fact"]
-           [:option {:value "read-vault"} "read-vault"]
-           [:option {:value "write-vault"} "write-vault"]]
-          [:input {:type "text" :name "query" :placeholder "query"}]
-          [:input {:type "text" :name "limit" :value "10" :placeholder "limit"}]
-          [:select {:name "scope_type"}
-           [:option {:value ""} "scope auto"]
-           [:option {:value "global"} "global"]
-           [:option {:value "session"} "session"]
-           [:option {:value "agent"} "agent"]]
-          [:input {:type "text" :name "scope_id" :placeholder "scope id"}]
-          [:input {:type "text" :name "subject" :placeholder "subject"}]
-          [:input {:type "text" :name "predicate" :placeholder "predicate"}]
-          [:input {:type "text" :name "object" :placeholder "object"}]
-          [:input {:type "text" :name "path" :placeholder "vault path"}]]
-         [:textarea {:name "content" :rows 4 :placeholder "vault content"}]
-         [:div.actions
-          [:button {:type "button"
-                    "data-on:click" "@post('/ui/memory/tool', {contentType: 'form', selector: '#memory-tool-form'})"}
-           "Run"]]]
-        [:div#memory-tool-output.empty "No memory tool output."]
-	         [:form#memory-search-form.memory-tool-form
-	         [:h3 "Memory Search"]
-	         [:div.compact-form-row
-	          [:input {:type "text" :name "query" :placeholder "search messages, events, facts"}]
-	          [:button {:type "button"
-	                    "data-on:click" "@post('/ui/memory/search', {contentType: 'form', selector: '#memory-search-form'})"}
-	           "Search"]]]
-	        [:div#memory-search-results-panel.empty "No search output."]]
+        [:section.panel.memory-lab
+         [:h2 "Retrieval Lab"]
+         [:form#memory-tool-form.memory-tool-form
+          [:h3 "Memory Tool"]
+          [:div.memory-form-grid
+           [:select {:name "action"}
+            [:option {:value "search"} "search"]
+            [:option {:value "save-fact"} "save-fact"]
+            [:option {:value "read-vault"} "read-vault"]
+            [:option {:value "write-vault"} "write-vault"]]
+           [:input {:type "text" :name "query" :placeholder "query"}]
+           [:input {:type "text" :name "limit" :value "10" :placeholder "limit"}]
+           [:select {:name "scope_type"}
+            [:option {:value ""} "scope auto"]
+            [:option {:value "global"} "global"]
+            [:option {:value "session"} "session"]
+            [:option {:value "agent"} "agent"]]
+           [:input {:type "text" :name "scope_id" :placeholder "scope id"}]
+           [:input {:type "text" :name "subject" :placeholder "subject"}]
+           [:input {:type "text" :name "predicate" :placeholder "predicate"}]
+           [:input {:type "text" :name "object" :placeholder "object"}]
+           [:input {:type "text" :name "path" :placeholder "vault path"}]]
+          [:textarea {:name "content" :rows 4 :placeholder "vault content"}]
+          [:div.actions
+           [:button {:type "button"
+                     "data-on:click" "@post('/ui/memory/tool', {contentType: 'form', selector: '#memory-tool-form'})"}
+            "Run"]]]
+         [:div#memory-tool-output.empty "No memory tool output."]
+         [:form#memory-search-form.memory-tool-form
+          [:h3 "Memory Search"]
+          [:div.compact-form-row
+           [:input {:type "text" :name "query" :placeholder "search messages, events, facts"}]
+           [:button {:type "button"
+                     "data-on:click" "@post('/ui/memory/search', {contentType: 'form', selector: '#memory-search-form'})"}
+            "Search"]]]
+         [:div#memory-search-results-panel.empty "No search output."]]]
 
        [:section.panel.memory-facts
         [:div.panel-head
