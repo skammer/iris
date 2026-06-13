@@ -68,7 +68,7 @@
 	                            :message_search :shell :system_reload
                             :todo_write :todo_get :todo_list :todo_search]))
     (is (= ["Telegram"] (mapv :display-name adapters)))
-    (is (= ["memory-vault"] (mapv :name (skills/list-skills system))))
+    (is (= ["memory-vault"] (mapv :name (skills/list-skills (:skills-registry system)))))
 	    (is (= 2 (count (memory/list-surfaces system))))
     (is (false? (get-in system-health [:logging :enabled])))
     (is (= :local (get-in system-health [:broker :backend])))
