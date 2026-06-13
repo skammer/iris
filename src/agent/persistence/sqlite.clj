@@ -196,6 +196,10 @@
 (defn count-vault-chunks [store]
   (memory/count-vault-chunks store))
 
+(defn list-vault-chunks
+  ([store] (memory/list-vault-chunks store))
+  ([store opts] (memory/list-vault-chunks store opts)))
+
 (defn save-todo-list! [store todo-list]
   (todos/save-list! store todo-list))
 

@@ -4,6 +4,9 @@ delete from vault_note_index
 -- :name reset-vault-chunks-fts :! :n
 delete from vault_chunks_fts
 
+-- :name reset-vault-chunks :! :n
+delete from vault_chunks
+
 -- :name insert-vault-note :! :n
 insert into vault_note_index
 (path, id, type, title, description, tags_json, timestamp,
@@ -81,3 +84,8 @@ from vault_note_index
 -- :name count-vault-chunks :? :1
 select count(*) as n
 from vault_chunks
+
+-- :name list-vault-chunks :? :*
+select chunk_id, path, heading, block_id, content_hash, text
+from vault_chunks
+limit :limit

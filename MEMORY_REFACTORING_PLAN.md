@@ -521,9 +521,10 @@ Goal:
 - Make vault the primary durable memory system.
 
 Status:
-- In progress.
-- Done: vault chunk indexing, `vault_search`, vault roots in filesystem tools, vault reindex job/API/UI, vault source links, default `memory-vault` skill, scratchpad read/search/exact-replace, scratchpad indexing, and UI scratchpad panel/form.
-- Remaining: full audit report for parse errors, duplicate ids, broken links, orphan chunks, and embeddings.
+- Done in current refactor pass.
+- Added vault chunk indexing, `vault_search`, vault roots in filesystem tools, vault reindex job/API/UI, vault source links, default `memory-vault` skill, scratchpad read/search/exact-replace, scratchpad indexing, UI scratchpad panel/form, and full audit report.
+- Audit report now covers parse errors, duplicate ids, broken links, broken origin vault paths, orphan notes/chunks, OKF type checks, reserved `index.md`/`log.md` handling, and missing/stale embedding placeholders when embeddings are enabled.
+- Reindex keeps body discovery best-effort when frontmatter has errors, and keeps the last successful SQLite index if the index write itself fails.
 
 Work:
 - Add vault chunk indexing.

@@ -5,6 +5,7 @@
    [hugsql.core :as hugsql]))
 
 (declare reset-vault-chunks-fts-sqlvec
+         reset-vault-chunks-sqlvec
          reset-vault-index-sqlvec
          insert-vault-note-sqlvec
          insert-vault-chunk-sqlvec
@@ -13,7 +14,8 @@
          search-vault-chunks-like-sqlvec
          list-vault-notes-sqlvec
          count-vault-notes-sqlvec
-         count-vault-chunks-sqlvec)
+         count-vault-chunks-sqlvec
+         list-vault-chunks-sqlvec)
 
 (hugsql/def-sqlvec-fns "agent/persistence/sqlite/memory.sql")
 
@@ -77,6 +79,7 @@
     store
     (fn [conn]
       (common/execute! conn (reset-vault-chunks-fts-sqlvec))
+      (common/execute! conn (reset-vault-chunks-sqlvec))
       (common/execute! conn (reset-vault-index-sqlvec))
       (doseq [{:keys [chunks] :as note} notes]
         (common/execute!
@@ -148,3 +151,14 @@
 
 (defn count-vault-chunks [store]
   (common/count-rows store (count-vault-chunks-sqlvec)))
+
+(defn list-vault-chunks
+  ([store] (list-vault-chunks store {}))
+  ([store {:keys [limit] :or {limit 1000}}]
+   (common/with-connection
+     store
+     (fn [conn]
+       (common/select-many conn
+                           (list-vault-chunks-sqlvec
+                            {:limit (common/bounded-limit limit 1000 10000)})
+                           identity)))))

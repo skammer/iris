@@ -125,6 +125,14 @@
   (when-let [[_ k v] (re-matches #"^\s*([A-Za-z0-9_.-]+):\s*(.*)$" line)]
     [(keyword k) (scalar v) (str/blank? v)]))
 
+(defn- audit-issue
+  ([type path message] (audit-issue type path message nil))
+  ([type path message data]
+   (cond-> {:type type
+            :path path
+            :message message}
+     data (merge data))))
+
 (defn- add-origin-field [m k v]
   (update-in m [:iris :origins]
              (fn [origins]
@@ -134,14 +142,40 @@
                    origins*
                    (assoc-in origins* [idx k] v))))))
 
-(defn- parse-frontmatter-map [lines]
-  (loop [remaining lines
+(defn- add-sequence-item [m context item]
+  (let [[k v] (parse-kv item)
+        value (if k {k v} (scalar item))]
+    (cond
+      (= context [:iris :origins])
+      (update-in m [:iris :origins]
+                 (fnil conj [])
+                 (if k {k v} {:value value}))
+
+      (= 1 (count context))
+      (update m (first context) #(conj (vec (if (sequential? %) % [])) value))
+
+      (and (= 2 (count context)) (= :iris (first context)))
+      (update-in m context #(conj (vec (if (sequential? %) % [])) value))
+
+      :else m)))
+
+(defn- parse-frontmatter-map [lines path]
+  (loop [remaining (map-indexed vector lines)
          result {}
-         context nil]
-    (if-let [line (first remaining)]
+         context nil
+         errors []]
+    (if-let [[idx line] (first remaining)]
       (cond
-        (str/blank? line)
-        (recur (rest remaining) result context)
+        (or (str/blank? line)
+            (str/starts-with? (str/triml line) "#"))
+        (recur (rest remaining) result context errors)
+
+        (re-matches #"^\s*-\s+(.+)$" line)
+        (let [[_ item] (re-matches #"^\s*-\s+(.+)$" line)]
+          (recur (rest remaining)
+                 (add-sequence-item result context item)
+                 context
+                 errors))
 
         (str/starts-with? line "    ")
         (let [[k v] (parse-kv line)]
@@ -149,47 +183,58 @@
                  (if (and (= context [:iris :origins]) k)
                    (add-origin-field result k v)
                    result)
-                 context))
-
-        (re-matches #"^\s*-\s+(.+)$" line)
-        (let [[_ item] (re-matches #"^\s*-\s+(.+)$" line)
-              [k v] (parse-kv item)]
-          (recur (rest remaining)
-                 (if (= context [:iris :origins])
-                   (update-in result [:iris :origins]
-                              (fnil conj [])
-                              (cond-> {}
-                                k (assoc k v)))
-                   result)
-                 context))
+                 context
+                 (cond-> errors
+                   (and (= context [:iris :origins]) (nil? k))
+                   (conj (audit-issue :parse-error path "unsupported frontmatter origin line"
+                                      {:line (+ idx 2) :text line})))))
 
         (str/starts-with? line "  ")
         (let [[k v blank?] (parse-kv line)]
           (if (and (= context [:iris]) k)
             (recur (rest remaining)
                    (assoc-in result [:iris k] (if blank? [] v))
-                   (if blank? [:iris k] context))
-            (recur (rest remaining) result context)))
+                   (if blank? [:iris k] context)
+                   errors)
+            (recur (rest remaining)
+                   result
+                   context
+                   (conj errors
+                         (audit-issue :parse-error path "unsupported frontmatter line"
+                                      {:line (+ idx 2) :text line})))))
 
         :else
         (let [[k v blank?] (parse-kv line)]
           (recur (rest remaining)
                  (cond-> result
                    k (assoc k (if blank? {} v)))
-                 (when blank? [k]))))
-      result)))
+                 (when blank? [k])
+                 (cond-> errors
+                   (nil? k)
+                   (conj (audit-issue :parse-error path "unsupported frontmatter line"
+                                      {:line (+ idx 2) :text line}))))))
+      {:frontmatter result
+       :parse-errors errors})))
 
-(defn parse-note-content [content]
+(defn parse-note-content
+  ([content] (parse-note-content content nil))
+  ([content path]
   (let [lines (str/split-lines (or content ""))]
     (if (= "---" (first lines))
       (let [[frontmatter-lines rest-lines] (split-with #(not= "---" %) (rest lines))
-            body-lines (if (= "---" (first rest-lines))
-                         (rest rest-lines)
-                         rest-lines)]
-        {:frontmatter (parse-frontmatter-map frontmatter-lines)
-         :body (str/join "\n" body-lines)})
+            closed? (= "---" (first rest-lines))]
+        (if closed?
+          (let [{:keys [frontmatter parse-errors]} (parse-frontmatter-map frontmatter-lines path)]
+            {:frontmatter frontmatter
+             :body (str/join "\n" (rest rest-lines))
+             :parse-errors parse-errors})
+          {:frontmatter {}
+           :body (or content "")
+           :parse-errors [(audit-issue :parse-error path "unterminated frontmatter"
+                                       {:line 1})]}))
       {:frontmatter {}
-       :body (or content "")})))
+       :body (or content "")
+       :parse-errors []}))))
 
 (defn- block-id [text]
   (some-> (re-find #"(?m)\^([A-Za-z0-9_-]+)\s*$" text) second))
@@ -239,11 +284,14 @@
          :origins [{:type "scratchpad"
                     :session_id session-id}]}))))
 
+(defn- reserved-note? [path]
+  (#{"index.md" "log.md"} (str/lower-case (.getName (io/file path)))))
+
 (defn- note->index [file]
   (let [content (slurp file)
         path (.getCanonicalPath file)
         scratchpad (scratchpad-info path)
-        parsed (parse-note-content content)
+        parsed (parse-note-content content path)
         frontmatter (:frontmatter parsed)
         iris (:iris frontmatter)
         body (or (:body parsed) "")
@@ -267,6 +315,7 @@
     {:path path
      :id (or (some-> (:id frontmatter) str)
              (:id scratchpad))
+     :raw-type (some-> (:type frontmatter) str)
      :type (or (some-> (:type frontmatter) str)
                (when scratchpad "Scratchpad")
                "Reference")
@@ -283,18 +332,160 @@
      :iris-confidence (:confidence iris)
      :origins (vec (or (:origins iris) (:origins scratchpad) []))
      :frontmatter frontmatter
+     :body body
      :body-hash (security/sha256-hex body)
      :updated-at (str (java.time.Instant/ofEpochMilli (.lastModified file)))
-     :chunks chunks}))
+     :chunks chunks
+     :parse-errors (vec (:parse-errors parsed))
+     :reserved? (reserved-note? path)}))
+
+(defn- duplicate-id-report [notes]
+  (->> notes
+       (remove #(str/blank? (:id %)))
+       (group-by :id)
+       (keep (fn [[id matches]]
+               (when (< 1 (count matches))
+                 {:id id
+                  :paths (mapv :path matches)})))
+       vec))
+
+(defn- okf-issues [notes]
+  (->> notes
+       (keep (fn [{:keys [path raw-type reserved?]}]
+               (when (and (not reserved?) (str/blank? (or raw-type "")))
+                 (audit-issue :missing-type path "non-reserved vault note is missing required OKF type"))))
+       vec))
+
+(defn- strip-fragment [value]
+  (first (str/split (or value "") #"#" 2)))
+
+(defn- external-link? [target]
+  (let [target* (str/lower-case (str/trim (or target "")))]
+    (or (str/blank? target*)
+        (str/starts-with? target* "#")
+        (re-find #"^[a-z][a-z0-9+.-]*:" target*))))
+
+(defn- canonical-file-path [file]
+  (.getCanonicalPath (io/file file)))
+
+(defn- note-name-index [paths]
+  (reduce (fn [acc path]
+            (let [file (io/file path)
+                  basename (str/replace (.getName file) #"\.md$" "")]
+              (update acc (str/lower-case basename) (fnil conj []) path)))
+          {}
+          paths))
+
+(defn- resolve-markdown-target [roots from-path target name-index]
+  (let [target* (-> target strip-fragment str/trim (str/replace "\\" "/"))
+        target** (str/replace target* #"\|.*$" "")]
+    (cond
+      (external-link? target**) true
+
+      (and (not (str/includes? target** "/"))
+           (not (str/ends-with? (str/lower-case target**) ".md")))
+      (seq (get name-index (str/lower-case target**)))
+
+      :else
+      (let [target-paths (cond-> [target**]
+                           (not (str/ends-with? (str/lower-case target**) ".md"))
+                           (conj (str target** ".md")))
+            parent (.getParentFile (io/file from-path))
+            candidates (concat
+                        (for [value target-paths]
+                          (canonical-file-path (io/file parent value)))
+                        (for [root roots
+                              value target-paths]
+                          (canonical-file-path (io/file root value))))]
+        (some #(.isFile (io/file %)) candidates)))))
+
+(defn- markdown-link-targets [body]
+  (concat
+   (map second (re-seq #"\[[^\]]+\]\(([^)]+)\)" (or body "")))
+   (map second (re-seq #"\[\[([^\]\|#]+(?:#[^\]\|]+)?(?:\|[^\]]+)?)\]\]" (or body "")))))
+
+(defn- broken-link-report [roots notes]
+  (let [paths (mapv :path notes)
+        name-index (note-name-index paths)]
+    (->> notes
+         (mapcat (fn [{:keys [path body]}]
+                   (keep (fn [target]
+                           (when-not (resolve-markdown-target roots path target name-index)
+                             (audit-issue :broken-link path "broken vault note link"
+                                          {:target target})))
+                         (markdown-link-targets body))))
+         vec)))
+
+(defn- origin-vault-paths [note]
+  (keep (fn [origin]
+          (or (:vault_path origin)
+              (:vault-path origin)))
+        (:origins note)))
+
+(defn- broken-origin-report [notes]
+  (->> notes
+       (mapcat (fn [{:keys [path] :as note}]
+                 (keep (fn [origin-path]
+                         (when-not (.isFile (io/file origin-path))
+                           (audit-issue :broken-origin path "origin vault_path does not exist"
+                                        {:origin-path origin-path})))
+                       (origin-vault-paths note))))
+       vec))
+
+(defn- orphan-report [store current-paths]
+  (let [current (set current-paths)
+        old-notes (sqlite/list-vault-notes store {:limit 10000})
+        old-chunks (sqlite/list-vault-chunks store {:limit 10000})]
+    {:orphan-notes (->> old-notes
+                        (remove #(contains? current (:path %)))
+                        (mapv #(select-keys % [:path :id :title])))
+     :orphan-chunks (->> old-chunks
+                         (remove #(contains? current (:path %)))
+                         (mapv #(select-keys % [:chunk_id :path :heading])))}))
+
+(defn- embedding-report [memory-service notes]
+  (if (true? (get-in memory-service [:config :embeddings :enabled?]))
+    (let [approved-chunks (->> notes
+                               (filter #(= "approved" (:iris-status %)))
+                               (mapcat :chunks))]
+      {:embedding-audit {:enabled true}
+       :missing-embeddings (mapv #(select-keys % [:chunk-id :content-hash]) approved-chunks)
+       :stale-embeddings []})
+    {:embedding-audit {:enabled false}
+     :missing-embeddings []
+     :stale-embeddings []}))
+
+(defn- audit-report [memory-service notes paths]
+  (let [orphans (orphan-report (:store memory-service) paths)]
+    (merge {:indexed-files (count notes)
+            :parse-errors (vec (mapcat :parse-errors notes))
+            :duplicate-ids (duplicate-id-report notes)
+            :okf-issues (okf-issues notes)
+            :broken-links (broken-link-report (:vault-roots memory-service) notes)
+            :broken-origins (broken-origin-report notes)
+            :orphan-notes (:orphan-notes orphans)
+            :orphan-chunks (:orphan-chunks orphans)}
+           (embedding-report memory-service notes))))
 
 (defn reindex! [memory-service]
   (let [files (list-markdown-files (:vault-roots memory-service))
         notes (mapv note->index files)
-        result (sqlite/replace-vault-index! (:store memory-service) notes)]
-    (merge {:indexed-files (count files)
-            :parse-errors []
-            :duplicate-ids []}
-           result)))
+        paths (mapv :path notes)
+        report (audit-report memory-service notes paths)]
+    (try
+      (merge {:ok? true
+              :used-last-successful-index? false}
+             report
+             (sqlite/replace-vault-index! (:store memory-service) notes))
+      (catch Exception e
+        (merge {:ok? false
+                :used-last-successful-index? true
+                :index-errors [(audit-issue :index-error nil
+                                            (or (.getMessage e) "vault index update failed")
+                                            (ex-data e))]
+                :note-count (sqlite/count-vault-notes (:store memory-service))
+                :chunk-count (sqlite/count-vault-chunks (:store memory-service))}
+               report)))))
 
 (defn- top-level-frontmatter-line? [line]
   (and (not (str/blank? line))

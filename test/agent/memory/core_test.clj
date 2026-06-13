@@ -472,3 +472,104 @@
         (sqlite/close-store! store)
         (io/delete-file root true)
         (io/delete-file db-path true)))))
+
+(deftest vault-reindex-audit-indexes-body-with-frontmatter-errors-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        note (io/file root "preferences/broken.md")
+        store (sqlite/create-store {:path db-path})
+        service (test-service store {:vault {:paths [(.getAbsolutePath root)]}})]
+    (try
+      (.mkdirs (.getParentFile note))
+      (spit note
+            (str "---\n"
+                 "id: mem_broken\n"
+                 "type Preference\n"
+                 "title: Broken frontmatter marker\n"
+                 "iris:\n"
+                 "  scope: global\n"
+                 "  status: approved\n"
+                 "---\n\n"
+                 "# Broken frontmatter marker\n\n"
+                 "body-only-discovery-marker survives bad metadata.\n"))
+      (let [report (memory/reindex-vault! service)
+            results (memory/search-vault service "body-only-discovery-marker" {:limit 10})]
+        (is (= 1 (:indexed-files report)))
+        (is (= 1 (:note-count report)))
+        (is (seq (:parse-errors report)))
+        (is (= [:missing-type] (mapv :type (:okf-issues report))))
+        (is (= ["mem_broken"] (mapv :note-id results)))
+        (is (str/includes? (:text (first results)) "body-only-discovery-marker")))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
+(deftest vault-reindex-audit-reports-duplicates-links-orphans-and-embeddings-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        old-note (io/file root "preferences/old.md")
+        dup-a (io/file root "preferences/dup-a.md")
+        dup-b (io/file root "runbooks/dup-b.md")
+        index-note (io/file root "index.md")
+        store (sqlite/create-store {:path db-path})
+        service (test-service store {:vault {:paths [(.getAbsolutePath root)]
+                                             :writable? true}
+                                     :embeddings {:enabled? true}})]
+    (try
+      (.mkdirs (.getParentFile old-note))
+      (spit old-note
+            (str "---\n"
+                 "id: mem_old\n"
+                 "type: Preference\n"
+                 "title: Old marker\n"
+                 "iris:\n"
+                 "  scope: global\n"
+                 "  status: approved\n"
+                 "---\n\n"
+                 "vanishedlegacytoken\n"))
+      (memory/reindex-vault! service)
+      (io/delete-file old-note true)
+      (.mkdirs (.getParentFile dup-a))
+      (.mkdirs (.getParentFile dup-b))
+      (spit dup-a
+            (str "---\n"
+                 "id: mem_dup\n"
+                 "type: Preference\n"
+                 "title: Duplicate A\n"
+                 "iris:\n"
+                 "  scope: global\n"
+                 "  status: approved\n"
+                 "  origins:\n"
+                 "  - type: vault_chunk\n"
+                 "    vault_path: " (.getAbsolutePath (io/file root "missing-origin.md")) "\n"
+                 "---\n\n"
+                 "duplicate-marker A links to [[missing-note]].\n"))
+      (spit dup-b
+            (str "---\n"
+                 "id: mem_dup\n"
+                 "type: Runbook\n"
+                 "title: Duplicate B\n"
+                 "iris:\n"
+                 "  scope: global\n"
+                 "  status: approved\n"
+                 "---\n\n"
+                 "duplicate-marker B links to [missing](missing.md).\n"))
+      (spit index-note "# Vault Index\n\nReserved file may omit OKF type.\n")
+      (let [report (memory/reindex-vault! service)
+            duplicate (first (:duplicate-ids report))]
+        (is (= 3 (:indexed-files report)))
+        (is (= "mem_dup" (:id duplicate)))
+        (is (= 2 (count (:paths duplicate))))
+        (is (= #{:broken-link} (set (map :type (:broken-links report)))))
+        (is (= [:broken-origin] (mapv :type (:broken-origins report))))
+        (is (= [(.getCanonicalPath old-note)] (mapv :path (:orphan-notes report))))
+        (is (= [(.getCanonicalPath old-note)] (mapv :path (:orphan-chunks report))))
+        (is (true? (get-in report [:embedding-audit :enabled])))
+        (is (seq (:missing-embeddings report)))
+        (is (empty? (:okf-issues report)))
+        (is (empty? (memory/search-vault service "vanishedlegacytoken" {:limit 10}))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
