@@ -10,7 +10,7 @@
    (java.nio.charset StandardCharsets)
    (java.security MessageDigest)))
 
-(def latest-schema-version 2)
+(def latest-schema-version 3)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -24,6 +24,11 @@
     :id "002-drop-runs"
     :name "drop-runs"
     :up-resource "agent/persistence/sqlite/migrations/002-drop-runs.up.sql"
+    :irreversible? true}
+   {:version 3
+    :id "003-drop-federation"
+    :name "drop-federation"
+    :up-resource "agent/persistence/sqlite/migrations/003-drop-federation.up.sql"
     :irreversible? true}])
 
 (defn descriptor-by-version [version]

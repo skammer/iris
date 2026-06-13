@@ -5,19 +5,9 @@
    [malli.error :as me]))
 
 (def directive-types
-  #{:spawn-worker :send-message :await :complete :tool-call :state-patch})
+  #{:await :complete :tool-call})
 
 (def current-step-schema-version "agent.step.v1")
-
-(def spawn-worker-payload-schema
-  [:map {:closed true}
-   [:task [:map-of :any :any]]
-   [:name {:optional true} [:maybe :string]]
-   [:role {:optional true} [:maybe :string]]
-   [:capability-bundle {:optional true} [:map-of :any :any]]
-   [:memory-scopes {:optional true} [:vector :any]]
-   [:budgets {:optional true} [:map-of :any :any]]
-   [:system-prompt {:optional true} [:maybe :string]]])
 
 (def await-payload-schema
   [:map {:closed true}
@@ -31,38 +21,18 @@
    [:input :any]
    [:context {:optional true} [:map-of :any :any]]])
 
-(def send-message-payload-schema
-  [:map {:closed true}
-   [:agent-id {:optional true} [:maybe :string]]
-   [:message [:map {:closed true}
-              [:content :string]
-              [:role {:optional true} [:maybe :string]]]]])
-
-(def state-patch-payload-schema
-  [:map {:closed true}
-   [:patch [:map-of :any :any]]])
-
 (def complete-payload-schema
   [:map {:closed true}
    [:result :any]])
 
 (def directive-schema
   [:multi {:dispatch :type}
-   [:spawn-worker [:map {:closed true}
-                   [:type [:= :spawn-worker]]
-                   [:payload spawn-worker-payload-schema]]]
    [:await [:map {:closed true}
             [:type [:= :await]]
             [:payload await-payload-schema]]]
    [:tool-call [:map {:closed true}
                 [:type [:= :tool-call]]
                 [:payload tool-call-payload-schema]]]
-   [:send-message [:map {:closed true}
-                   [:type [:= :send-message]]
-                   [:payload send-message-payload-schema]]]
-   [:state-patch [:map {:closed true}
-                  [:type [:= :state-patch]]
-                  [:payload state-patch-payload-schema]]]
    [:complete [:map {:closed true}
                [:type [:= :complete]]
                [:payload complete-payload-schema]]]])
@@ -74,13 +44,9 @@
    [:reason {:optional true} [:maybe :string]]
    [:tool-name {:optional true} [:or :keyword :string]]
    [:tool-call-id {:optional true} [:maybe :string]]
-   [:worker-id {:optional true} [:maybe :string]]
-   [:agent-id {:optional true} [:maybe :string]]
    [:error-type {:optional true} [:maybe [:or :keyword :string]]]
    [:input {:optional true} :any]
-   [:result {:optional true} :any]
-   [:response {:optional true} :any]
-   [:state {:optional true} :any]])
+   [:result {:optional true} :any]])
 
 (def step-schema
   [:map {:closed true}

@@ -131,7 +131,6 @@
               :port 0
               :port-file ".nrepl-port"}
              (:nrepl cfg)))
-      (is (false? (get-in cfg [:orchestrator :enabled])))
       (is (= "65532:65532" (get-in cfg [:runners :docker :user]))))))
 
 (deftest default-config-template-matches-code-defaults-test
@@ -143,39 +142,19 @@
              (get-in template [:llm :providers provider :max-tokens]))))
     (is (= defaults/chat-max-steps (get-in template [:chat :max-steps])))))
 
-(deftest orchestrator-env-enables-experimental-api-test
-  (with-isolated-config [_root {"AGENT_ORCHESTRATOR_ENABLED" "true"}]
-    (let [cfg (config/load-config)]
-      (is (true? (get-in cfg [:orchestrator :enabled]))))))
-
 (deftest telegram-rich-messages-env-override-test
   (with-isolated-config [_root {"AGENT_TELEGRAM_RICH_MESSAGES" "false"}]
     (let [cfg (config/load-config)]
       (is (false? (get-in cfg [:channel-adapters :telegram :rich-messages?]))))))
 
 (deftest invalid-env-bool-fails-with-env-context-test
-  (with-isolated-config [_root {"AGENT_ORCHESTRATOR_ENABLED" "maybe"}]
+  (with-isolated-config [_root {"AGENT_TOOLS_YOLO" "maybe"}]
     (try
       (config/load-config)
       (is false "expected invalid env config")
       (catch clojure.lang.ExceptionInfo e
         (is (= :env-config-invalid (:type (ex-data e))))
-        (is (= "AGENT_ORCHESTRATOR_ENABLED" (:env/name (ex-data e))))))))
-
-(deftest federation-env-overrides-test
-  (with-isolated-config [_root {"AGENT_FEDERATION_KEY_ID" "k1"
-                                "AGENT_FEDERATION_PRIVATE_KEY" "secret"
-                                "AGENT_FEDERATION_TIMEOUT_MS" "2000"
-                                "AGENT_FEDERATION_MAX_CLOCK_SKEW_MS" "1000"
-                                "AGENT_FEDERATION_OUTBOX_POLL_MS" "50"}]
-    (let [cfg (config/load-config)]
-      (is (= {:key-id "k1"
-              :private-key "secret"
-              :timeout-ms 2000
-              :max-clock-skew-ms 1000
-              :outbox-poll-ms 50}
-             (select-keys (get-in cfg [:orchestrator :federation])
-                          [:key-id :private-key :timeout-ms :max-clock-skew-ms :outbox-poll-ms]))))))
+        (is (= "AGENT_TOOLS_YOLO" (:env/name (ex-data e))))))))
 
 (deftest sqlite-pool-env-overrides-test
   (with-isolated-config [_root {"AGENT_SQLITE_MAXIMUM_POOL_SIZE" "12"

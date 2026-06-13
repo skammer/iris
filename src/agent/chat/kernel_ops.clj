@@ -27,19 +27,11 @@
     #{:tool-call :complete :await})
 
   kernel-ops/KernelOps
-  (spawn-task-worker! [_ _]
-    (throw (ex-info "Chat loop cannot spawn workers yet"
-                    {:type :unsupported-directive})))
   (execute-agent-tool! [_ _ tool-name input context]
     (tools/execute-tool (:tool-registry system)
                         tool-name
                         input
                         (chat-tool-context system session-id request-id extra-context context)))
-  (send-agent-message! [_ _ _]
-    (throw (ex-info "Chat loop cannot send agent messages yet"
-                    {:type :unsupported-directive})))
-  (patch-agent-state! [_ _ patch] patch)
-  (set-agent-status! [_ _ _] nil)
   (emit-kernel-event! [_ event] (util/emit! system event))
 
   kernel-ops/KernelToolBatchOps

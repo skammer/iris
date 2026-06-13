@@ -37,15 +37,13 @@
     (is (= "session.created" (:event-type (first events))))
     (is (= "hello" (:content (first messages))))
     (is (= sqlite/latest-schema-version (sqlite/schema-version store)))
-    (is (= [1 sqlite/latest-schema-version] (mapv :version history)))
+    (is (= (vec (range 1 (inc sqlite/latest-schema-version))) (mapv :version history)))
     (is (false? (sqlite-common/with-connection
                   store
                   #(sqlite-common/table-exists? % "agent_runs"))))
     (is (true? (:healthy health)))
     (is (= 1 (get-in health [:details :event-count])))
     (is (= 0 (get-in health [:details :tool-approval-count])))
-    (is (= 0 (get-in health [:details :federation-peer-key-count])))
-    (is (= 0 (get-in health [:details :federation-outbox-count])))
     (is (true? (get-in health [:details :up-to-date?])))
     (io/delete-file path true)))
 

@@ -13,12 +13,9 @@
 
 ## Missing direct test coverage (50 namespaces)
 - `agent.api.errors`
-- `agent.api.handlers.agents`
 - `agent.api.handlers.channel_adapters`
-- `agent.api.handlers.channels`
 - `agent.api.handlers.chat`
 - `agent.api.handlers.events`
-- `agent.api.handlers.federation`
 - `agent.api.handlers.health`
 - `agent.api.handlers.memory`
 - `agent.api.handlers.providers`
@@ -46,7 +43,6 @@
 - `agent.nrepl`
 - `agent.persistence.sqlite.common`
 - `agent.persistence.sqlite.events`
-- `agent.persistence.sqlite.federation`
 - `agent.persistence.sqlite.memory`
 - `agent.persistence.sqlite.migrations`
 - `agent.persistence.sqlite.runs`
@@ -75,7 +71,7 @@
 - `agent.api.handlers.*` and `agent.api.*` internals: route wiring, request/response transforms, validation, middleware effects.
 - `agent.persistence.sqlite.*` internals: migration/DDL/query helpers and per-table edge behavior.
 - `agent.runtime.doom_loop` and `agent.runtime.control_client`: runtime control flow and command handling paths.
-- `agent.kernel.ops`, `agent.kernel.runtime`, `agent.kernel.schema`: orchestration and validation paths.
+- `agent.kernel.ops`, `agent.kernel.runtime`, `agent.kernel.schema`: tool-loop dispatch and validation paths.
 
 2. Medium
 - `agent.runners.core`, `agent.runners.options`, `agent.runners.policy`: runner config/selection/feature-policy behavior.

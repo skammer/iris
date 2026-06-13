@@ -5,7 +5,6 @@
    [agent.chat :as chat]
    [agent.config :as config]
    [agent.memory.core :as memory]
-   [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.trace :as runtime-trace]
    [agent.tools.approvals :as tool-approvals]
@@ -188,8 +187,6 @@
         tools-health (tools/registry-health (:tool-registry system))
         memory-health (memory/health-check (:memory-service system))
         adapter-health (channel-adapters/registry-health (:channel-adapter-registry system))
-        agent-health (orchestrator/health-check (:orchestrator system))
-        federated-peers (orchestrator/list-federated-peers (:orchestrator system))
         pending-approvals (count (tool-approvals/list-requests (:store system) {:status "pending" :limit 100}))
         reload-status (or (some-> system :reload-state deref)
                           {:status :idle})
@@ -215,11 +212,9 @@
        [:div.stat [:span.label "sessions"] [:span.value (get-in storage [:details :session-count] 0)]]
        [:div.stat [:span.label "events"] [:span.value (get-in storage [:details :event-count] 0)]]
        [:div.stat [:span.label "tools"] [:span.value (:count tools-health)]]
-       [:div.stat [:span.label "agents"] [:span.value (:agent-count agent-health)]]]
+       [:div.stat [:span.label "adapters"] [:span.value (:count adapter-health)]]]
       [:div.fact-strip
        (for [[label value] [["memory facts" (get-in memory-health [:facts :count] 0)]
-                            ["adapters" (:count adapter-health)]
-                            ["peers" (count federated-peers)]
                             ["schema" (get-in storage [:details :schema-version] "?")]
                             ["approvals" (get-in storage [:details :tool-approval-count] 0)]]]
          [:span.fact
@@ -245,21 +240,11 @@
         [:div.empty-line "none"])])))
 
 (defn operator-board-fragment [system]
-  (let [agents (orchestrator/list-agents (:orchestrator system))
-        approvals (tool-approvals/list-requests (:store system) {:status "pending" :limit 8})
+  (let [approvals (tool-approvals/list-requests (:store system) {:status "pending" :limit 8})
         recent-events-pool (sqlite/list-events (:store system) {:limit 40})
         events (take 8 recent-events-pool)
-        interop-events (filter #(str/starts-with? (str (:event-type %)) "agent.interop")
-                               recent-events-pool)
         kernel-events (filter #(= "agent.kernel.step.executed" (:event-type %))
-                              recent-events-pool)
-        federated-peers (orchestrator/list-federated-peers (:orchestrator system))
-        interop-policies (->> agents
-                              (map (fn [agent]
-                                     (orchestrator/describe-agent-interop (:orchestrator system) (:id agent))))
-                              (filter #(or (seq (:trusted-peers %))
-                                           (seq (:trust-policies %))))
-                              (take 6))]
+                              recent-events-pool)]
     (ui-render/render
      [:section#operator-board.panel
       {"data-on-interval__duration.10s.leading" "@get('/ui/operator-board')"}
@@ -275,25 +260,6 @@
 	                         [:span.row__time (ui-render/short-timestamp created-at)]])
 	                      {:alert? true})
        (board-section "Recent events" events
-                      (fn [{:keys [event-type entity-id created-at]}]
-                        [:div.row
-                         [:span.row__id (str event-type)]
-                         [:span.row__meta {:title entity-id}
-                          (ui-render/short-id (or entity-id "-"))]
-                         [:span.row__time (ui-render/short-timestamp created-at)]]))
-       (board-section "Federated peers" federated-peers
-                      (fn [{:keys [id status base-url logical-address-prefix]}]
-                        [:div.row
-                         (ui-render/status-dot status)
-                         [:span.row__id {:title id} (ui-render/short-id id)]
-                         [:span.row__meta (or base-url logical-address-prefix "-")]]))
-       (board-section "Interop policy" interop-policies
-                      (fn [{:keys [logical-address trusted-peers trust-policies]}]
-                        [:div.row
-                         [:span.row__id (str logical-address)]
-                         [:span.row__meta (str "peers " (count trusted-peers)
-                                               " · policies " (count trust-policies))]]))
-       (board-section "Interop activity" (take 8 interop-events)
                       (fn [{:keys [event-type entity-id created-at]}]
                         [:div.row
                          [:span.row__id (str event-type)]

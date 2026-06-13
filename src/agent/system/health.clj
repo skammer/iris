@@ -9,7 +9,6 @@
    [agent.llm.core :as llm-core]
    [agent.logging :as logging]
    [agent.memory.core :as memory]
-   [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.trace :as runtime-trace]
    [agent.skills :as skills]
@@ -75,6 +74,5 @@
              #(chat/health-check (:chat-service system)))
      :channel-adapters (checked-component-health registry :channel-adapters
                          #(channel-adapters/registry-health (:channel-adapter-registry system)))
-     :orchestrator (orchestrator/health-check (:orchestrator system))
      :provider (config/active-provider-key (get-in system [:config :llm]))
      :health-snapshot (health/snapshot registry)}))

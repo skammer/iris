@@ -1,5 +1,5 @@
 (ns agent.kernel
-  "Pure agent/orchestrator directive contract."
+  "Pure tool-loop directive contract."
   (:require
    [agent.kernel.schema :as schema]))
 
@@ -26,24 +26,3 @@
   (schema/validate-step! {:state state
                           :directives (vec directives)
                           :receipts (vec receipts)}))
-
-(defn orchestrator-spawn-worker-step
-  [{:keys [task worker-name worker-role capability-bundle memory-scopes budgets system-prompt]
-    :or {worker-name "Task Worker"
-         worker-role "worker"
-         capability-bundle {}
-         memory-scopes []
-         budgets {}}}]
-  (step-result
-   {:state {:phase :delegated
-            :task task}
-    :directives [(directive :spawn-worker
-                            {:task task
-                             :name worker-name
-                             :role worker-role
-                             :capability-bundle capability-bundle
-                             :memory-scopes memory-scopes
-                             :budgets budgets
-                             :system-prompt system-prompt})
-                 (directive :await
-                            {:reason "worker_result"})]}))

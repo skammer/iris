@@ -14,7 +14,6 @@
    [agent.chat-test]
    [clojure.test :as t]
    [agent.config-test]
-   [agent.federation.http-test]
    [agent.health-test]
    [agent.system-test]
    [agent.telegram.format-test]
@@ -26,7 +25,6 @@
    [agent.logging-test]
    [agent.memory.core-test]
    [agent.mcp.core-test]
-   [agent.orchestrator-test]
    [agent.persistence.session-entries-test]
    [agent.persistence.sqlite-test]
    [agent.planner-test]
@@ -72,7 +70,6 @@
     agent.chat.turn-test
     agent.chat-test
     agent.config-test
-    agent.federation.http-test
     agent.health-test
     agent.system-test
     agent.telegram.format-test
@@ -84,7 +81,6 @@
     agent.logging-test
     agent.memory.core-test
     agent.mcp.core-test
-    agent.orchestrator-test
     agent.persistence.session-entries-test
     agent.persistence.sqlite-test
     agent.planner-test

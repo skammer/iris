@@ -164,17 +164,11 @@
    {:names "AGENT_API_HOST" :apply (assoc-path [:api :host])}
    {:names "AGENT_API_KEY" :apply (assoc-path [:api :key])}
    {:names "AGENT_API_PORT" :parse parse-long* :apply (assoc-path [:api :port])}
-   {:names "AGENT_ORCHESTRATOR_ENABLED" :parse parse-bool :apply (assoc-path [:orchestrator :enabled])}
    {:names "AGENT_RUNNER_DEFAULT_SUBSTRATE" :parse parse-keyword* :apply (assoc-path [:runners :default-substrate])}
    {:names "AGENT_NREPL_ENABLED" :parse parse-bool :apply (assoc-path [:nrepl :enabled])}
    {:names "AGENT_NREPL_BIND" :apply (assoc-path [:nrepl :bind])}
    {:names "AGENT_NREPL_PORT" :parse parse-long* :apply (assoc-path [:nrepl :port])}
-   {:names "AGENT_NREPL_PORT_FILE" :apply (assoc-path [:nrepl :port-file])}
-   {:names "AGENT_FEDERATION_KEY_ID" :apply (assoc-path [:orchestrator :federation :key-id])}
-   {:names "AGENT_FEDERATION_PRIVATE_KEY" :apply (assoc-path [:orchestrator :federation :private-key])}
-   {:names "AGENT_FEDERATION_TIMEOUT_MS" :parse parse-long* :apply (assoc-path [:orchestrator :federation :timeout-ms])}
-   {:names "AGENT_FEDERATION_MAX_CLOCK_SKEW_MS" :parse parse-long* :apply (assoc-path [:orchestrator :federation :max-clock-skew-ms])}
-   {:names "AGENT_FEDERATION_OUTBOX_POLL_MS" :parse parse-long* :apply (assoc-path [:orchestrator :federation :outbox-poll-ms])}])
+   {:names "AGENT_NREPL_PORT_FILE" :apply (assoc-path [:nrepl :port-file])}])
 
 (defn apply-env-config
   [cfg getenv]

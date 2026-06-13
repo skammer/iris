@@ -4,7 +4,6 @@
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.system :as system]
-   [agent.system.components :as components]
    [agent.system.events :as events]
    [agent.test.predictable :as predictable]
    [agent.tools.service :as tool-service]
@@ -68,7 +67,6 @@
                       :event-sink event-sink
                       :tool-registry (tool-service/create-tool-registry {:cfg (:tools config) :event-sink event-sink :store store})
                       :memory-service (memory/create-memory-service (:memory config) store)
-                      :orchestrator (components/create-orchestrator (:orchestrator config) event-sink)
                       :config config)
         server (api/start-server! system {:host "127.0.0.1" :port port})]
     {:path path

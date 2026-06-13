@@ -5,12 +5,9 @@
    [agent.chat :as chat]
    [agent.config :as config]
    [agent.health :as health]
-   [agent.kernel]
-   [agent.kernel.service :as kernel-service]
    [agent.llm.registry :as llm-registry]
    [agent.llm.service :as llm-service]
    [agent.memory.core :as memory]
-   [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
    [agent.skills :as skills]
    [agent.system :as system]
@@ -75,7 +72,6 @@
     (is (= :local (get-in system-health [:broker :backend])))
     (is (<= 7 (get-in system-health [:tools :count])))
     (is (= 1 (get-in system-health [:channel-adapters :count])))
-    (is (= 0 (get-in system-health [:orchestrator :agent-count])))
     (is (= "ok" (get-in system-health [:health-snapshot :components "sqlite" :status])))
     (is (contains? (get-in system-health [:health-snapshot :components]) "runtime"))))
 
@@ -222,40 +218,6 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
-(deftest agent-tool-context-ignores-caller-security-overrides
-  (let [path (temp-db-path)
-        target "agent-tool-context-security-test.txt"
-        store (sqlite/create-store {:path path})
-        system (-> (system/create-system)
-                   (assoc :store store
-                          :config config/default-config
-                          :tool-registry (tool-service/create-tool-registry
-                                          {:cfg (:tools config/default-config)
-                                           :event-sink (constantly nil)
-                                           :store store}))
-                   (assoc-in [:orchestrator :enabled?] true))
-        agent (orchestrator/spawn-agent! (:orchestrator system)
-                                         {:name "Worker"
-                                          :kind "worker"
-                                          :role "worker"
-                                          :tool-access ["fs"]})]
-    (try
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                            #"approved request"
-                            (tool-service/execute-agent-tool!
-                             system
-                             (:id agent)
-                             :fs_write
-                             {:path target
-                              :content "blocked"}
-                             {:permissions #{:filesystem-write}
-                              :yolo? true})))
-      (is (not (.exists (io/file target))))
-      (finally
-        (io/delete-file target true)
-        (sqlite/close-store! store)
-        (io/delete-file path true)))))
-
 (deftest tool-policy-enforces-scope-and-approval-test
   (let [path (temp-db-path)
         target "tool-policy-scope-test.txt"
@@ -305,47 +267,3 @@
         (io/delete-file target true)
         (sqlite/close-store! store)
         (io/delete-file path true)))))
-
-(deftest spawn-task-worker-produces-scoped-worker
-  (let [system (assoc-in (system/create-system) [:orchestrator :enabled?] true)
-        worker (kernel-service/spawn-task-worker! system
-                                        {:task {:id "task-1" :prompt "collect facts"}
-                                         :name "Fact Worker"
-                                         :capability-bundle {:capabilities ["research"]
-                                                             :tool-access ["http" "fs"]}
-                                         :memory-scopes ["session"]
-                                         :budgets {:max_tokens 1000}})]
-    (is (= "worker" (:kind worker)))
-    (is (= ["research"] (:capabilities worker)))
-    (is (= ["fs" "http"] (sort (:tool-access worker))))
-    (is (= ["session"] (:memory-scopes worker)))
-    (is (= {:max_tokens 1000} (:budgets worker)))))
-
-(deftest execute-step-produces-receipts
-  (let [system (assoc-in (system/create-system) [:orchestrator :enabled?] true)
-        orchestrator (orchestrator/spawn-agent! (:orchestrator system)
-                                                {:name "Planner"
-                                                 :kind "orchestrator"
-                                                 :role "orchestrator"})
-        step (agent.kernel/orchestrator-spawn-worker-step
-              {:task {:id "task-2"}
-               :worker-name "Exec Worker"
-               :capability-bundle {:capabilities ["execute"]
-                                   :tool-access ["http"]}})
-        executed (kernel-service/execute-step! system (:id orchestrator) step)]
-    (is (= 2 (count (:receipts executed))))
-    (is (= :ok (get-in executed [:receipts 0 :status])))
-    (is (= :deferred (get-in executed [:receipts 1 :status])))))
-
-(deftest disabled-orchestrator-kernel-mutators-return-unsupported
-  (let [system (system/create-system)
-        spawn (kernel-service/execute-directive!
-               system
-               "agent-disabled"
-               (agent.kernel/directive :spawn-worker {:task {:id "blocked"}}))
-        complete (kernel-service/execute-directive!
-                  system
-                  "agent-disabled"
-                  (agent.kernel/directive :complete {:result {:ok true}}))]
-    (is (= :unsupported (:status spawn)))
-    (is (= :completed (:status complete)))))

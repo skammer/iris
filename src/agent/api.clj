@@ -3,12 +3,9 @@
    under agent.api.handlers.*. This namespace wires the route data to handlers,
    composes middleware, and starts/stops the http-kit server."
   (:require
-   [agent.api.handlers.agents :as agents]
    [agent.api.handlers.channel-adapters :as channel-adapters]
-   [agent.api.handlers.channels :as channels]
    [agent.api.handlers.chat :as chat]
    [agent.api.handlers.events :as events]
-   [agent.api.handlers.federation :as federation]
    [agent.api.handlers.health :as health]
    [agent.api.handlers.memory :as memory]
    [agent.api.handlers.public :as public]
@@ -54,25 +51,6 @@
                          :source "api"})]
     (responses/json-response (if (= :scheduled (:status result)) 202 200)
                              {:data result})))
-
-(defn- orchestrator-enabled?
-  [system]
-  (true? (get-in (current-system system) [:config :orchestrator :enabled])))
-
-(defn- orchestrator-disabled-response []
-  (responses/json-response
-   404
-   {:error "not_found"
-    :message "Orchestrator API disabled; set AGENT_ORCHESTRATOR_ENABLED=true or :orchestrator {:enabled true}."}))
-
-(defn- maybe-orchestrator-handler
-  [system route-data handler]
-  (if (:orchestrator/mutating? route-data)
-    (fn [request]
-      (if (orchestrator-enabled? system)
-        (handler request)
-        (orchestrator-disabled-response)))
-    handler))
 
 (defn- handler-map
   "Map of {handler-id → ring handler fn}. Each fn receives a ring request and
@@ -148,31 +126,7 @@
    :memory-fact-save (fn [r] (memory/fact-save (sys) r))
    :memory-fact-search (fn [r] (memory/fact-search (sys) r))
    :memory-vault-read (fn [r] (memory/vault-read (sys) r))
-   :memory-vault-write (fn [r] (memory/vault-write (sys) r))
-
-   :list-agents (fn [r] (agents/list-agents (sys) r))
-   :create-agent (fn [r] (agents/create (sys) r))
-   :agent-messages (fn [r] (agents/list-messages (sys) r (path-param r :agent-id)))
-   :agent-message (fn [r] (agents/send-message (sys) r (path-param r :agent-id)))
-   :agent-tool-execute (fn [r] (agents/tool-execute (sys) r (path-param r :agent-id) (path-param r :tool-name)))
-   :orchestrator-spawn-worker (fn [r] (agents/orchestrator-spawn-worker (sys) r (path-param r :agent-id)))
-   :agent-step-execute (fn [r] (agents/step-execute (sys) r (path-param r :agent-id)))
-   :consume-agent-inbox (fn [r] (agents/consume-inbox (sys) r (path-param r :agent-id)))
-   :agent-interop (fn [r] (agents/interop (sys) r (path-param r :agent-id)))
-   :agent-interop-capabilities (fn [r] (agents/interop-capabilities (sys) r (path-param r :agent-id)))
-   :agent-interop-message (fn [r] (agents/interop-message-post (sys) r (path-param r :agent-id)))
-   :agent-interop-messages (fn [r] (agents/interop-messages-list (sys) r (path-param r :agent-id)))
-   :agent-interop-ack (fn [r] (agents/interop-ack (sys) r (path-param r :agent-id) (path-param r :message-id)))
-   :agent-interop-retry (fn [r] (agents/interop-retry (sys) r (path-param r :agent-id) (path-param r :message-id)))
-
-   :list-federated-peers (fn [r] (federation/list-peers (sys) r))
-   :create-federated-peer (fn [r] (federation/create-peer (sys) r))
-   :federation-inbox (fn [r] (federation/inbox (sys) r))
-
-   :list-channels (fn [r] (channels/list-channels (sys) r))
-   :create-channel (fn [r] (channels/create (sys) r))
-   :channel-messages (fn [r] (channels/list-messages (sys) r (path-param r :channel-id)))
-   :channel-message (fn [r] (channels/post-message (sys) r (path-param r :channel-id)))}))
+   :memory-vault-write (fn [r] (memory/vault-write (sys) r))}))
 
 (defn- route-handler-ids [route-data]
   (let [ids (atom [])]
@@ -203,11 +157,8 @@
        (if (and (map? node) (contains? node :handler/id))
          (let [handler-id (:handler/id node)]
            (-> node
-               (dissoc :handler/id :orchestrator/mutating?)
-               (assoc :handler
-                      (maybe-orchestrator-handler system
-                                                  node
-                                                  (get handlers handler-id)))))
+               (dissoc :handler/id)
+               (assoc :handler (get handlers handler-id))))
          node))
      routes/routes)))
 

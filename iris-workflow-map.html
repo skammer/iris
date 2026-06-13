@@ -98,7 +98,6 @@ const NODES = {
   sse:{l:'SSE streaming handler',t:'transport',f:'api/streaming.clj',s:1,d:'managed-response opens an SSE channel, runs chat/run! on a worker future, converts broker events → OpenAI-style chat.completion.chunk.'},
   ui:{l:'Server-rendered UI',t:'transport',f:'ui.clj · api/handlers/ui.clj',s:1,d:'Hiccup/Datastar operator UI for chat, sessions, tools, approvals, logs, and memory workspace.'},
   broker:{l:'Event broker / bus',t:'transport',f:'system/events.clj · broker/local.clj',s:1,d:'publish! fans events synchronously to all subscriptions. SSE + Telegram subscribe here.'},
-  orchestrator:{l:'Orchestrator control-plane',t:'control',f:'orchestrator.clj',s:2,d:'Separate multi-agent APIs for worker agents, channels, interop, federation, state/status patching, and inbox consumption.'},
   chatrun:{l:'chat/run! + queue manager',t:'runtime',f:'chat.clj · chat/queue.clj',s:2,d:'Facade dispatches to queue/service owners: loop-control, active turn, or persisted queued item under manager-lock.'},
   runturn:{l:'chat/run-turn!',t:'runtime',f:'chat/turn.clj',s:3,d:'Persists user turn, auto-compacts, loads history, recalls memory, builds context-injectors, wires the layered event-sink, then calls the loop.'},
   compaction:{l:'auto-compact!',t:'memory',f:'runtime/compaction.clj',s:4,d:'Trims persisted session entries above token thresholds, writing a deterministic :compaction entry. (Uses its own estimator, separate from context-pack.)'},
@@ -122,9 +121,8 @@ const NODES = {
 };
 const EDGES = [
   ['cli','chatrun','chat/run! {:on-delta}'],['http','chatrun','complete!'],['http','sse','stream-response'],
-  ['http','ui','/ui shell/forms'],['http','orchestrator','agent/orchestrator APIs'],
+  ['http','ui','/ui shell/forms'],
   ['ui','chatrun','chat form'],
-  ['orchestrator','kernel','KernelOps host'],['orchestrator','eventsink','events'],
   ['sse','chatrun','run-task! {:stream? true}'],['sse','broker','subscribe all-events'],
   ['tg','chatrun','run-chat!'],['tg','broker','subscribe (stream)'],
   ['chatrun','runturn','run-active-item!'],
@@ -147,7 +145,7 @@ const EDGES = [
   ['runturn','chatrun','{:content} result'],['chatrun','output','final content'],
   ['sse','output','chunk / [DONE]'],['tg','output','finalize draft'],
 ];
-const STAGE_NAMES = ['Ingress','Transport','Orchestrate','Per-turn prep','Loop','Loop','Plan / control','Plan / control','LLM','Tools','Tools / sandbox','Return','Persist / memory','Output'];
+const STAGE_NAMES = ['Ingress','Transport','Runtime','Per-turn prep','Loop','Loop','Plan / control','Plan / control','LLM','Tools','Tools / sandbox','Return','Persist / memory','Output'];
 // finding tuple: [severity, title]  — open/actionable only; completed items removed.
 const FIND = {
   cli:[],
@@ -157,7 +155,6 @@ const FIND = {
   tg:[['med','P2 telegram.clj remains 938 lines; split polling, drafts, media, chat bridge, task lifecycle']],
   sse:[['low','P2 worker future is cancelled on disconnect, but broader worker supervision remains ad hoc']],
   broker:[],
-  orchestrator:[['med','P2 orchestrator.clj remains 1034 lines; split agents, interop, channels, federation']],
   chatrun:[['med','P2 chat queue/loop-control still uses raw futures; central worker supervision remains thin']],
   runturn:[['med','P2 fact extraction runs after turns by default; cost/latency visibility is weak']],
   loop:[],
@@ -331,7 +328,7 @@ function intro(){
   Object.values(FIND).forEach(arr=>arr.forEach(f=>{counts[f[0]]++;}));
   document.getElementById('panel').innerHTML=`
     <div class="ph"><h2>Release review map</h2>
-      <div class="desc">Open findings only. Completed historical items were removed. Map follows the main chat/runtime workflow plus adjacent UI, orchestrator, runner, and persistence release-risk surfaces.</div>
+      <div class="desc">Open findings only. Completed historical items were removed. Map follows the main chat/runtime workflow plus adjacent UI, runner, and persistence release-risk surfaces.</div>
     </div>
     <div class="flow"><h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin:0 0 10px">Open findings</h3>
       <div class="finding high"><div class="sv">P0 / HIGH × ${counts.high}</div><div class="ti">Release gates: CI lint, Docker startup contract, remote Actions verification.</div></div>

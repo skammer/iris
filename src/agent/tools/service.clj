@@ -3,9 +3,7 @@
   (:require
    [agent.logging :as logging]
    [agent.mcp.core :as mcp]
-   [agent.runtime.tools :as runtime-tools]
    [agent.runtime.trace :as runtime-trace]
-   [agent.orchestrator :as orchestrator]
    [agent.telemetry :as telemetry]
    [agent.telemetry.observer :as telemetry-observer]
    [agent.tools.approvals :as tool-approvals]
@@ -228,45 +226,3 @@
                        tool-name
                        input
                        (assoc context :yolo? (true? (get-in system [:config :tools :yolo?]))))))
-
-(defn agent-tool-context
-  [system agent agent-id context]
-  (let [profile-permissions (tool-permissions system :agent)
-        context-permissions (set (:permissions context))]
-    (merge context
-           {:permissions (set/union profile-permissions context-permissions)
-            :yolo? (true? (get-in system [:config :tools :yolo?]))
-            :user (or (:user context) agent-id)
-            :allowed-tools (tool-name-set (:tool-access agent))})))
-
-(defn execute-agent-tool!
-  ([system agent-id tool-name input]
-   (execute-agent-tool! system agent-id tool-name input {}))
-  ([system agent-id tool-name input context]
-   (let [agent (or (orchestrator/get-agent (:orchestrator system) agent-id)
-                   (throw (ex-info "Agent not found"
-                                   {:type :agent-not-found
-                                    :agent-id agent-id})))]
-     (execute-tool system tool-name input
-                   (agent-tool-context system agent agent-id context)))))
-
-(defn execute-agent-tool-batch!
-  [system agent-id calls context opts]
-  (let [agent (or (orchestrator/get-agent (:orchestrator system) agent-id)
-                  (throw (ex-info "Agent not found"
-                                  {:type :agent-not-found
-                                   :agent-id agent-id})))
-        calls* (mapv (fn [call]
-                       (update call :context #(agent-tool-context system
-                                                                  agent
-                                                                  agent-id
-                                                                  (merge context (or % {})))))
-                     calls)]
-    (runtime-tools/execute-batch! (:tool-registry system)
-                                  calls*
-                                  {}
-                                  (select-keys opts [:mode
-                                                     :tool-execution-modes
-                                                     :max-parallelism
-                                                     :cancellation-token
-                                                     :cancelled?]))))

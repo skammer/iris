@@ -152,9 +152,6 @@
 (defn close-system!
   [system]
   (stop-runtime-edges! system)
-  (safe-stop! :agent.system.lifecycle/federation-stop-failed
-              #(when-let [stop! (some-> system :orchestrator :federation-forwarder :stop!)]
-                 (stop!)))
   (safe-stop! :agent.system.lifecycle/store-close-failed
               #(some-> (:store system) sqlite/close-store!)))
 

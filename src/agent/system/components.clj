@@ -4,12 +4,10 @@
    [agent.channels.core :as channel-adapters]
    [agent.chat :as chat]
    [agent.config :as config]
-   [agent.federation.forwarder :as federation-forwarder]
    [agent.llm.registry :as llm-registry]
    [agent.llm.service :as llm-service]
    [agent.logging :as logging]
    [agent.memory.core :as memory]
-   [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.trace :as runtime-trace]
    [agent.skills :as skills]
@@ -36,25 +34,6 @@
 (defn create-trace
   [cfg]
   (runtime-trace/create-trace (:trace cfg) (get-in cfg [:iris :data-dir])))
-
-(defn create-orchestrator
-  ([_cfg event-sink]
-   (create-orchestrator _cfg event-sink nil nil nil nil))
-  ([cfg event-sink telemetry-collector store]
-   (create-orchestrator cfg event-sink telemetry-collector store nil nil))
-  ([cfg event-sink telemetry-collector store observer trace]
-   (let [forwarder (federation-forwarder/create-forwarder
-                    (assoc (:federation cfg)
-                           :store store
-                           :telemetry telemetry-collector
-                           :auto-start? (true? (:enabled cfg))))]
-     (orchestrator/create-orchestrator {:event-sink event-sink
-                                        :enabled? (true? (:enabled cfg))
-                                        :telemetry telemetry-collector
-                                        :observer observer
-                                        :trace trace
-                                        :federation-forwarder forwarder
-                                        :federation-deliver (:deliver forwarder)}))))
 
 (defn create-skills-registry
   [cfg]
@@ -151,13 +130,7 @@
                        :event-sink event-sink
                        :chat-service chat-service
                        :skills-registry (create-skills-registry (:skills cfg))
-                       :memory-service memory-service
-                       :orchestrator (create-orchestrator (:orchestrator cfg)
-                                                          event-sink
-                                                          telemetry-collector
-                                                          store
-                                                          observer
-                                                          trace)}]
+                       :memory-service memory-service}]
       (-> base-system
           (assoc :tool-registry (build-tool-registry base-system cfg))
           attach-telegram-service))))

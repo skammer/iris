@@ -5,7 +5,7 @@ Generated: 2026-06-09 (deep review, 16-agent sweep over all 147 src namespaces).
 
 ## What it is
 
-`iris` is a single-process Clojure LLM agent runtime: an HTTP API (reitit + http-kit), a SQLite store (HugSQL + HikariCP + ragtime), a Telegram long-polling adapter, a server-rendered Datastar web UI, and an evented agent loop (plan → guard → execute tools → emit) over pluggable LLM providers (Ollama, OpenAI-compatible/OpenRouter). ~22k LOC src, ~17k LOC test, 147 src namespaces, 51 test namespaces.
+`iris` is a single-process Clojure LLM agent runtime: an HTTP API (reitit + http-kit), a SQLite store (HugSQL + HikariCP + ragtime), a Telegram long-polling adapter, a server-rendered Datastar web UI, and an evented agent loop (plan → guard → execute tools → emit) over pluggable LLM providers (Ollama, OpenAI-compatible/OpenRouter).
 
 Entry: `agent.core` → `agent.cli` → either one-shot prompt or `agent.system/create-system` + `start-api!`.
 
@@ -23,7 +23,6 @@ graph TD
         SESS[agent.sessions.service]
         TOOLSVC[agent.tools.service]
         MEM[agent.memory.core]
-        ORCH[agent.orchestrator]
     end
     CHAT --> RT[agent.runtime.*<br/>loop, nudge, doom-loop, context-pack, tools]
     RT --> LLM[agent.llm.*<br/>protocols, providers, messages]
@@ -33,8 +32,7 @@ graph TD
     TOOLS --> STORE
     SYS --> BROKER[agent.broker.*<br/>in-process pub/sub]
     BROKER -.SSE.- HANDLERS
-    ORCH --> FED[agent.federation.*<br/>Ed25519 signing, outbox forwarder]
-    CHAT --> KERNEL[agent.kernel.*<br/>directive contract] --> ORCH
+    CHAT --> KERNEL[agent.kernel.*<br/>tool-loop directive contract]
 ```
 
 ## Key runtime flows
@@ -90,12 +88,12 @@ Pure route data (`agent.api.routes.*`, malli `:parameters`, `:handler/id` marker
 | `agent.api.helpers` | 92 | JSON/form body readers, header lookup, bearer extraction |
 | `agent.api.middleware` | 95 | request-id, error boundary, logging, API-key auth |
 | `agent.api.responses` | 70 | json/html/bytes responses + error renderer |
-| `agent.api.routes` | 29 | Concatenates 12 route-data namespaces |
+| `agent.api.routes` | 20 | Concatenates route-data namespaces |
 | `agent.api.schemas` | 81 | Shared malli schemas for :parameters |
 | `agent.api.serializers` | 232 | kebab→snake_case response transforms (20 hand-written fns) |
 | `agent.api.streaming` | 201 | Managed SSE context: subscriptions, auto-unsubscribe, workers, frames |
-| `agent.api.routes.*` | 570 | Pure-data route namespaces (agents, channels, chat, events, federation, memory, providers, root, sessions, tools, ui) |
-| `agent.api.handlers.*` | ~1900 | 17 handler namespaces; mostly thin delegation to service facades; `ui.clj` (564) is the god-namespace outlier |
+| `agent.api.routes.*` | 418 | Pure-data route namespaces (chat, events, memory, providers, root, sessions, tools, ui) |
+| `agent.api.handlers.*` | ~1500 | Handler namespaces; mostly thin delegation to service facades; `ui.clj` remains the large namespace outlier |
 
 ### Chat
 Layered front-end over the runtime loop. `agent.chat` facade → `chat.queue` (per-session FIFO) + `chat.service` (executors, session/streaming atoms) → `chat.turn` composition root.
@@ -176,7 +174,6 @@ Facade (`agent.persistence.sqlite`) is the sole entry point (verified: no consum
 | `agent.persistence.sqlite` | 347 | Facade: lifecycle + domain delegations |
 | `…sqlite.common` | 248 | Pool, PRAGMAs, retry, with-connection/transaction, JSON, FTS5, limits |
 | `…sqlite.events` | 88 | Append-only agent_events: insert, list, FTS search, cursor |
-| `…sqlite.federation` | 190 | Peer keys, nonces, delivery outbox FSM |
 | `…sqlite.memory` | 186 | Fact triples: normalize, dedupe-on-save, scoped search |
 | `…sqlite.migrations` | 234 | Baseline descriptor, SQL splitter, checksums, ragtime adapters |
 | `…sqlite.schema` | 40 | Misnamed health/stats namespace (being dissolved) |
@@ -187,7 +184,7 @@ Facade (`agent.persistence.sqlite`) is the sole entry point (verified: no consum
 ### Telegram + Web UI
 | Namespace | LOC | Purpose |
 |---|---|---|
-| `agent.telegram` | 460 | Long-polling adapter, update routing, chat-run orchestration, lifecycle |
+| `agent.telegram` | 460 | Long-polling adapter, update routing, chat-run flow, lifecycle |
 | `agent.telegram.api` | 198 | Bot API HTTP client |
 | `agent.telegram.approvals` | 193 | Inline-keyboard approvals |
 | `agent.telegram.commands` | 118 | Slash commands |
@@ -199,31 +196,26 @@ Facade (`agent.persistence.sqlite`) is the sole entry point (verified: no consum
 | `agent.ui.memory` | 204 | Memory workspace fragments |
 | `agent.ui.render` | 477 | Hiccup render core, sanitized markdown, message rendering |
 
-### Orchestration / federation / kernel / memory
+### Broker / kernel / memory
 | Namespace | LOC | Purpose |
 |---|---|---|
 | `agent.broker.core` | 76 | IBroker protocol, subject naming/wildcards |
 | `agent.broker.local` | 108 | In-process IBroker (per-subscriber channels, slow-client policies) |
 | `agent.channels.core` | 190 | IChannelAdapter contracts + registry |
-| `agent.federation.auth` | 86 | Inbound verification: skew, key window, Ed25519, nonce replay |
-| `agent.federation.crypto` | 80 | Ed25519 keypair + canonical-JSON signing |
-| `agent.federation.forwarder` | 306 | Durable outbox + delivery daemon (rate limit, circuit breaker) |
-| `agent.kernel` | 49 | Pure directive contract |
-| `agent.kernel.ops` | 16 | KernelOps protocols |
-| `agent.kernel.runtime` | 242 | Executes directives against a KernelOps host |
-| `agent.kernel.schema` | 121 | Malli schemas for directives/receipts/steps |
-| `agent.kernel.service` | 135 | SystemKernelOps binding kernel to system map |
+| `agent.kernel` | 28 | Pure tool-loop directive contract |
+| `agent.kernel.ops` | 12 | KernelOps protocols |
+| `agent.kernel.runtime` | 200 | Executes directives against a KernelOps host |
+| `agent.kernel.schema` | 80 | Malli schemas for directives/receipts/steps |
 | `agent.loop` | 291 | /loop command state (NOT the agent loop) |
 | `agent.memory.core` | 454 | Memory facade: surfaces, fact store, lexical search, vault, extraction |
 | `agent.memory.schema` | 59 | Scope normalization + fact validation |
-| `agent.orchestrator` | 1046 | In-memory multi-agent runtime (atom-backed; experimental, env-gated) |
 | `agent.planner` | 112 | Native tool-calling planner |
 | `agent.sessions.service` | 80 | Session store facade |
 
 ## Inter-subsystem dependencies (require-graph, aggregated)
 
 - `system` → everything (composition root). `api` → handlers → service facades. Verified: **all 147 src namespaces reachable from agent.core**; no dead namespaces.
-- Known inversions (see [[refactoring-2026-06-findings]]): `telemetry` → `llm.core` + `runtime.trace` (telemetry executes LLM calls); `tools.service` → `orchestrator`; `llm.messages` → `runtime.schema` (schema is really shared infrastructure).
+- Known inversions (see [[refactoring-2026-06-findings]]): `telemetry` → `llm.core` + `runtime.trace` (telemetry executes LLM calls); `llm.messages` → `runtime.schema` (schema is really shared infrastructure).
 - `agent.persistence.sqlite` facade discipline holds everywhere **except** a few API handlers and chat nss that call it directly (layering leak, tracked in findings).
 
 ## Test landscape
@@ -231,7 +223,7 @@ Facade (`agent.persistence.sqlite`) is the sole entry point (verified: no consum
 - Runner: `test/agent/test_runner.clj` — hardcoded ns list (no auto-discovery); wraps everything in a temp config dir.
 - Strong coverage (safe to refactor): `runtime.loop` (17 deftests + e2e), `llm.providers.*` (39 deftests, mocked HTTP), `persistence.sqlite` facade (heavily characterized), `chat` facade (44 deftests via predictable fake provider), `telegram` adapter (892-line test).
 - Facade-only coverage (refactor behind facade only): `chat.{turn,service,queue,history,subscribers}`, sqlite sub-namespaces, api handlers (status + shape smoke only).
-- Dark spots: `agent.security`, `agent.util`, `runtime.tokens`, `streaming.metrics`, `telegram.{commands,media,sessions}`, `federation.{auth,crypto}` (only via http facade).
+- Dark spots: `agent.security`, `agent.util`, `runtime.tokens`, `streaming.metrics`, `telegram.{commands,media,sessions}`.
 
 ## Operational notes
 

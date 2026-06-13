@@ -143,22 +143,6 @@
   ([ops parent-agent-id directive {:keys [yolo? execute-safe-tools?]}]
    (let [directive (schema/validate-directive! directive)]
      (case (:type directive)
-       :spawn-worker
-       (if-not (supported-directive? ops (:type directive))
-         (unsupported-receipt directive)
-         (let [{:keys [task name role capability-bundle memory-scopes budgets system-prompt]} (:payload directive)
-               worker (ops/spawn-task-worker! ops {:task task
-                                                   :name name
-                                                   :role role
-                                                   :capability-bundle capability-bundle
-                                                   :memory-scopes memory-scopes
-                                                   :budgets budgets
-                                                   :system-prompt system-prompt
-                                                   :parent-id parent-agent-id})]
-           {:directive (:type directive)
-            :status :ok
-            :worker-id (:id worker)}))
-
        :await
        {:directive (:type directive)
         :status :deferred}
@@ -179,29 +163,8 @@
                  (exception->tool-receipt directive context* e)))
              (blocked-tool-receipt directive))))
 
-       :send-message
-       (if-not (supported-directive? ops (:type directive))
-         (unsupported-receipt directive)
-         (let [{:keys [agent-id message]} (:payload directive)
-               result (ops/send-agent-message! ops (or agent-id parent-agent-id) message)]
-           {:directive (:type directive)
-            :status :ok
-            :agent-id (or agent-id parent-agent-id)
-            :response (:response result)}))
-
-       :state-patch
-       (if-not (supported-directive? ops (:type directive))
-         (unsupported-receipt directive)
-         (let [{:keys [patch]} (:payload directive)
-               state (ops/patch-agent-state! ops parent-agent-id patch)]
-           {:directive (:type directive)
-            :status :ok
-            :state state}))
-
        :complete
        (let [{:keys [result]} (:payload directive)]
-         (when (supported-directive? ops (:type directive))
-           (ops/set-agent-status! ops parent-agent-id "completed"))
          {:directive (:type directive)
           :status :completed
           :result result})
@@ -212,7 +175,7 @@
 
 (defn- event-receipt [receipt]
   (select-keys receipt [:directive :status :reason :tool-name :tool-call-id
-                        :worker-id :agent-id :error-type]))
+                        :error-type]))
 
 (defn execute-step!
   ([ops parent-agent-id step]

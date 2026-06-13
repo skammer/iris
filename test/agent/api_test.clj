@@ -8,13 +8,11 @@
    [agent.api.routes :as api-routes]
    [agent.api.schemas :as api-schemas]
    [agent.config :as cfg]
-   [agent.federation.crypto :as federation-crypto]
    [agent.logging :as logging]
    [agent.system :as system]
    [agent.llm.core :as llm-core]
    [agent.llm.messages :as llm-messages]
    [agent.memory.core :as memory]
-   [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
    [agent.system.components :as components]
    [agent.system.events :as events]
@@ -206,7 +204,6 @@
         config (-> (:config base-system)
                    (assoc :llm (:llm cfg/default-config)
                           :chat (:chat cfg/default-config))
-	                   (assoc-in [:orchestrator :enabled] false)
                    (assoc :api {:host "127.0.0.1" :port port}
                           :storage {:sqlite {:path path}})
                    config-fn)
@@ -218,7 +215,6 @@
                       :tool-registry (tool-service/create-tool-registry {:cfg (:tools config) :event-sink event-sink :store store})
                       :skills-registry (components/create-skills-registry (:skills config))
                       :memory-service (memory/create-memory-service (:memory config) store)
-                      :orchestrator (components/create-orchestrator (:orchestrator config) event-sink)
                       :config config)]
     {:system system
      :server (api/start-server! system {:host "127.0.0.1" :port port})}))
@@ -227,7 +223,7 @@
   (let [path (temp-db-path)
         port (free-port)
         base-url (str "http://127.0.0.1:" port)
-        {:keys [system server]} (started-test-system path port #(assoc-in % [:api :key] "secret"))]
+        {:keys [server]} (started-test-system path port #(assoc-in % [:api :key] "secret"))]
     (try
       (is (= 200 (:status (http-get (str base-url "/health")))))
       (is (= 401 (:status (http-get (str base-url "/v1/tools")))))
@@ -242,18 +238,6 @@
                                              {"X-Api-Key" "secret"}))))
       (is (= 200 (:status (http-get-headers (str base-url "/v1/tools")
                                             {"Authorization" "Bearer secret"}))))
-      (let [disabled-agents (http-get-headers (str base-url "/v1/agents")
-                                              {"Authorization" "Bearer secret"})
-            disabled-body (json/parse-string (:body disabled-agents) true)]
-        (is (= 200 (:status disabled-agents)))
-        (is (= [] (:data disabled-body))))
-      (let [disabled-create (http-post-headers (str base-url "/v1/agents")
-                                               {:name "blocked"}
-                                               {"Authorization" "Bearer secret"})
-            disabled-body (json/parse-string (:body disabled-create) true)]
-        (is (= 404 (:status disabled-create)))
-        (is (= "not_found" (:error disabled-body)))
-        (is (str/includes? (:message disabled-body) "Orchestrator API disabled")))
       (is (= 200 (:status (http-get-headers
                            (str base-url "/ui/dashboard")
 	                           {"Authorization"
@@ -263,8 +247,6 @@
 	                                  (.getBytes "operator:secret" "UTF-8")))}))))
 	      (is (= 401 (:status (http-get (str base-url "/ui/dashboard")))))
       (finally
-        (when-let [stop! (some-> system :orchestrator :federation-forwarder :stop!)]
-          (stop!))
         (api/stop-server! server)
         (io/delete-file path true)))))
 
@@ -353,10 +335,9 @@
                         :content [{:type "image_url"}]}))))
 
 (deftest api-domain-error-mapping-expanded-test
-  (let [cases [[:agent-not-found 404 "agent_not_found"]
-               [:channel-not-found 404 "channel_not_found"]
-               [:peer-not-found 404 "peer_not_found"]
-               [:orchestrator-disabled 404 "orchestrator_disabled"]]]
+  (let [cases [[:vault-read-only 403 "vault_read_only"]
+               [:unknown-provider 404 "unknown_provider"]
+               [:entry-not-found 404 "entry_not_found"]]]
     (doseq [[type status code] cases]
       (let [response (api-responses/error-response
                       (api-errors/domain-error->api-error
@@ -573,14 +554,11 @@
   (let [path (temp-db-path)
         port (free-port)
         base-url (str "http://127.0.0.1:" port)
-        write-path "target/api-agent-approved-write.txt"
         {:keys [server]} (started-test-system
                            path
                            port
                            #(-> %
-                                (assoc-in [:orchestrator :enabled] true)
                                 (assoc-in [:tools :permissions :api] [])
-                                (assoc-in [:tools :permissions :agent] [])
                                 (assoc-in [:tools :policy :blocklist] [])))]
     (try
       (let [fake-approval-read (http-post (str base-url "/v1/tools/fs_list/execute")
@@ -596,31 +574,12 @@
             shell-approved-exec (http-post (str base-url "/v1/tools/shell/execute")
                                            {:input {:argv ["printf" "approved-api"]}
                                             :approval_id shell-approval-id})
-            shell-approved-body (json/parse-string (:body shell-approved-exec) true)
-            created-agent (http-post (str base-url "/v1/agents")
-                                     {:name "Tool Agent"
-                                      :tool_access ["fs"]})
-            agent-id (:id (json/parse-string (:body created-agent) true))
-            fs-approval-create (http-post (str base-url "/v1/tool-approvals")
-                                          {:tool "fs_write"
-                                           :input {:path write-path
-                                                   :content "approved-agent"}
-                                           :requested_by (str "agent:" agent-id)})
-            fs-approval-id (get-in (json/parse-string (:body fs-approval-create) true) [:data :id])
-            _fs-approval-approve (http-post (str base-url "/v1/tool-approvals/" fs-approval-id "/approve")
-                                            {:actor "tester"})
-            agent-write (http-post (str base-url "/v1/agents/" agent-id "/tools/fs_write/execute")
-                                   {:input {:path write-path
-                                            :content "approved-agent"}
-                                    :approval_id fs-approval-id})]
+            shell-approved-body (json/parse-string (:body shell-approved-exec) true)]
         (is (= 404 (:status fake-approval-read)))
         (is (= 200 (:status shell-approved-exec)))
-        (is (= "approved-api" (get-in shell-approved-body [:data :stdout])))
-        (is (= 200 (:status agent-write)))
-        (is (= "approved-agent" (slurp write-path))))
+        (is (= "approved-api" (get-in shell-approved-body [:data :stdout]))))
       (finally
         (api/stop-server! server)
-        (io/delete-file write-path true)
         (io/delete-file path true)))))
 
 (deftest api-domain-errors-and-normalized-provider-models-test
@@ -631,7 +590,6 @@
                                   path
                                   port
                                   #(-> %
-                                       (assoc-in [:orchestrator :enabled] true)
                                        (assoc-in [:memory :vault :writable?] false)))]
     (try
       (let [session-id (:id (json/parse-string
@@ -659,13 +617,7 @@
                                     {:entry_id "missing-entry"})
             limited-events (json/parse-string
                             (:body (http-get (str base-url "/v1/events?limit=1")))
-                            true)
-            peer-create (http-post (str base-url "/v1/federation/peers")
-                                   {:id "unsafe-peer"
-                                    :keys [{:key_id "test"
-                                            :public_key "public"}]
-                                    :private_key "must-be-ignored"})
-            peer (orchestrator/get-federated-peer (:orchestrator system) "unsafe-peer")]
+                            true)]
         (is (= 404 (:status vault-missing)))
         (is (= 403 (:status vault-read-only)))
         (is (= 404 (:status unknown-provider-health)))
@@ -673,9 +625,7 @@
         (is (contains? (first (:data provider-models)) :model_id))
         (is (not (contains? (first (:data provider-models)) :model-id)))
         (is (= 404 (:status missing-leaf)))
-        (is (= 1 (count (:data limited-events))))
-        (is (= 201 (:status peer-create)))
-        (is (nil? (:private-key peer))))
+        (is (= 1 (count (:data limited-events)))))
       (finally
         (api/stop-server! server)
         (io/delete-file path true)))))
@@ -686,20 +636,13 @@
         base-url (str "http://127.0.0.1:" port)
         base-system (system/create-system)
         messages* (atom nil)
-        fed-keys (federation-crypto/generate-ed25519-keypair)
         store (sqlite/create-store {:path path})
         event-bus (events/create-event-bus)
         event-sink (events/create-event-sink store event-bus)
         config (-> (:config base-system)
                    (assoc :llm (:llm cfg/default-config)
                           :chat (:chat cfg/default-config))
-	                   (assoc-in [:memory :facts :extractor :enabled] false)
-                   (assoc-in [:orchestrator :enabled] true)
-                   ;; Sign outgoing federation requests so the self-loop inbox
-                   ;; (now fail-closed) can verify them.
-                   (assoc-in [:orchestrator :federation]
-                             {:key-id "iris-test"
-                              :private-key (:private-key fed-keys)}))
+	                   (assoc-in [:memory :facts :extractor :enabled] false))
         system (assoc base-system
                       :llm-provider (->TestProvider messages*)
                       :store store
@@ -710,10 +653,6 @@
 	                                       :event-sink event-sink
 	                                       :store store})
 	                      :memory-service (memory/create-memory-service (:memory config) store)
-	                      :orchestrator (components/create-orchestrator (:orchestrator config)
-                                                                    event-sink
-                                                                    nil
-                                                                    store)
                       :config (assoc config
                                      :api {:host "127.0.0.1" :port port}
                                      :storage {:sqlite {:path path}}))
@@ -772,129 +711,6 @@
 	                                             "query=hello")
 	            channel-adapters (http-get (str base-url "/v1/channel-adapters"))
             channel-adapters-body (json/parse-string (:body channel-adapters) true)
-            created-agent (http-post (str base-url "/v1/agents")
-                                     {:name "Worker"
-                                      :kind "worker"
-                                      :role "worker"
-                                      :capabilities ["execute"]
-                                      :tool_access ["http" "fs"]
-                                      :memory_scopes ["session"]
-                                      :budgets {:max_tokens 1000}
-                                      :task {:id "task-1" :prompt "collect facts"}
-                                      :allow_direct true})
-            created-agent-body (json/parse-string (:body created-agent) true)
-            agent-id (:id created-agent-body)
-            created-peer (http-post (str base-url "/v1/agents")
-                                    {:name "Peer"
-                                     :role "router"
-                                     :capabilities ["route"]
-                                     :allow_direct true
-                                     ;; must trust the federated peer to send to it
-                                     :trusted_peers ["mesh-1"]})
-            created-peer-body (json/parse-string (:body created-peer) true)
-            peer-id (:id created-peer-body)
-            created-orchestrator (http-post (str base-url "/v1/agents")
-                                            {:name "Planner"
-                                             :kind "orchestrator"
-                                             :role "orchestrator"})
-            created-orchestrator-body (json/parse-string (:body created-orchestrator) true)
-            orchestrator-id (:id created-orchestrator-body)
-            created-federated-peer (http-post (str base-url "/v1/federation/peers")
-                                              {:id "mesh-1"
-                                               :base_url base-url
-                                               :capabilities ["interop"]
-                                               :keys [{:key_id "iris-test"
-                                                       :public_key (:public-key fed-keys)}]})
-            created-federated-peer-body (json/parse-string (:body created-federated-peer) true)
-            federation-peers (http-get (str base-url "/v1/federation/peers"))
-            federation-peers-body (json/parse-string (:body federation-peers) true)
-            agents (http-get (str base-url "/v1/agents"))
-            agents-body (json/parse-string (:body agents) true)
-            agent-interop (http-get (str base-url "/v1/agents/" agent-id "/interop"))
-            agent-interop-body (json/parse-string (:body agent-interop) true)
-            interop-capabilities (http-post (str base-url "/v1/agents/" agent-id "/interop/capabilities")
-                                            {:capabilities ["execute" "report"]
-                                             :tool_access ["http"]
-                                             :memory_scopes ["session" "agent"]
-                                             :budgets {:max_tokens 500}
-                                             :allow_direct true
-                                             :trusted_peers [peer-id]
-                                             :trust_policies {peer-id {:message_types ["delegate.request"]
-                                                                       :routes ["direct"]
-                                                                       :required_capabilities ["route"]}}
-                                             :rate_limit_per_minute 2})
-            interop-capabilities-body (json/parse-string (:body interop-capabilities) true)
-            interop-message (http-post (str base-url "/v1/agents/" agent-id "/interop/messages")
-                                       {:from_agent_id peer-id
-                                        :message_type "delegate.request"
-                                        :route "direct"
-                                        :delivery_mode "at-most-once"
-                                        :request_id "req-1"
-                                        :content "collect data"})
-            interop-message-body (json/parse-string (:body interop-message) true)
-            interop-message-duplicate (http-post (str base-url "/v1/agents/" agent-id "/interop/messages")
-                                                 {:from_agent_id peer-id
-                                                  :message_type "delegate.request"
-                                                  :route "direct"
-                                                  :delivery_mode "at-most-once"
-                                                  :request_id "req-1"
-                                                  :content "collect data"})
-            interop-message-duplicate-body (json/parse-string (:body interop-message-duplicate) true)
-            interop-retry (http-post (str base-url "/v1/agents/" peer-id "/interop/messages/"
-                                          (get-in interop-message-body [:data :id]) "/retry")
-                                     {})
-            interop-retry-body (json/parse-string (:body interop-retry) true)
-            interop-list (http-get (str base-url "/v1/agents/" agent-id "/interop/messages?direction=inbound"))
-            interop-list-body (json/parse-string (:body interop-list) true)
-            interop-ack (http-post (str base-url "/v1/agents/" agent-id "/interop/messages/"
-                                         (get-in interop-message-body [:data :id]) "/ack")
-                                   {:ack_type "completed"})
-            interop-ack-body (json/parse-string (:body interop-ack) true)
-            federated-interop-message (http-post (str base-url "/v1/agents/" peer-id "/interop/messages")
-                                                 {:from_agent_id peer-id
-                                                  :message_type "delegate.request"
-                                                  :route "federated"
-                                                  :request_id "req-fed-1"
-                                                  :content "collect remote"
-                                                  :to_agent_ref (str "federation://mesh-1/" agent-id)})
-            federated-interop-message-body (json/parse-string (:body federated-interop-message) true)
-            _ ((-> system :orchestrator :federation-forwarder :drain!))
-            interop-list-after-federation (http-get (str base-url "/v1/agents/" agent-id "/interop/messages?direction=inbound"))
-            interop-list-after-federation-body (json/parse-string (:body interop-list-after-federation) true)
-            agent-tool-exec (http-post (str base-url "/v1/agents/" agent-id "/tools/http/execute")
-                                       {:input {:url (str base-url "/health")}
-                                        :permissions ["http-request"]})
-            agent-tool-exec-blocked (http-post (str base-url "/v1/agents/" agent-id "/tools/fs_list/execute")
-                                               {:input {:path "."}
-                                                :permissions ["filesystem-read"]})
-            orchestrator-spawn-worker (http-post (str base-url "/v1/agents/" orchestrator-id "/spawn-worker")
-                                                 {:name "Delegated Worker"
-                                                  :task {:id "task-3" :prompt "do thing"}
-                                                  :capabilities ["execute"]
-                                                  :tool_access ["http"]
-                                                  :memory_scopes ["session"]
-                                                  :budgets {:max_tokens 100}})
-            orchestrator-spawn-worker-body (json/parse-string (:body orchestrator-spawn-worker) true)
-            step-execute (http-post (str base-url "/v1/agents/" agent-id "/steps")
-                                    {:directives [{:type "state-patch"
-                                                   :payload {:patch {:phase "working"}}}
-                                                  {:type "complete"
-                                                   :payload {:result "done"}}]})
-            step-execute-body (json/parse-string (:body step-execute) true)
-            agent-msg (http-post (str base-url "/v1/agents/" agent-id "/messages")
-                                 {:content "do work"})
-            agent-msg-body (json/parse-string (:body agent-msg) true)
-            channel (http-post (str base-url "/v1/channels")
-                               {:name "ops"
-                                :participants [agent-id]})
-            channel-body (json/parse-string (:body channel) true)
-            channel-id (:id channel-body)
-            channel-post (http-post (str base-url "/v1/channels/" channel-id "/messages")
-                                    {:sender_id agent-id
-                                     :content "status update"})
-            channel-post-body (json/parse-string (:body channel-post) true)
-            channels (http-get (str base-url "/v1/channels"))
-            channels-body (json/parse-string (:body channels) true)
             created (http-post (str base-url "/v1/sessions") {:title "api-test"})
             created-body (json/parse-string (:body created) true)
             session-id (:id created-body)
@@ -928,15 +744,11 @@
         (is (= 200 (:status ui-operator-board)))
         (is (str/includes? (:body ui-operator-board) "Operator Board"))
         (is (str/includes? (:body ui-operator-board) "Approval queue"))
-        (is (str/includes? (:body ui-operator-board) "Federated peers"))
-        (is (str/includes? (:body ui-operator-board) "Interop policy"))
-        (is (str/includes? (:body ui-operator-board) "Interop activity"))
         (is (str/includes? (:body ui-operator-board) "Kernel receipts"))
         (is (= 200 (:status health)))
         (is (= 13 (get-in health-body [:tools :count])))
         (is (= true (get-in health-body [:memory :healthy])))
         (is (= 1 (get-in health-body [:channel-adapters :count])))
-        (is (= 0 (get-in health-body [:orchestrator :agent-count])))
         (is (map? (:health-snapshot health-body)))
         (is (= "ok" (get-in health-body [:health-snapshot :components :api :status])))
         (is (= "ok" (get-in health-body [:health-snapshot :components :sqlite :status])))
@@ -973,68 +785,9 @@
         (is (= 200 (:status fact-search)))
         (is (= 1 (count (:data fact-search-body))))
         (is (= 200 (:status ui-memory-search)))
-	        (is (str/includes? (:body ui-memory-search) "Search Results"))
+        (is (str/includes? (:body ui-memory-search) "Search Results"))
         (is (= 200 (:status channel-adapters)))
         (is (= ["telegram"] (mapv :name (:data channel-adapters-body))))
-        (is (= 201 (:status created-agent)))
-        (is (= "worker" (:kind created-agent-body)))
-        (is (= ["fs" "http"] (:tool_access created-agent-body)))
-        (is (= ["session"] (:memory_scopes created-agent-body)))
-        (is (= {} (:state created-agent-body)))
-        (is (= 201 (:status created-peer)))
-        (is (= 201 (:status created-orchestrator)))
-        (is (= "orchestrator" (:kind created-orchestrator-body)))
-        (is (= 201 (:status created-federated-peer)))
-        (is (= "mesh-1" (get-in created-federated-peer-body [:data :id])))
-        (is (= 200 (:status federation-peers)))
-        (is (= ["mesh-1"] (mapv :id (:data federation-peers-body))))
-        (is (= 200 (:status agents)))
-        (is (= #{agent-id peer-id orchestrator-id} (set (map :id (:data agents-body)))))
-        (is (= 200 (:status agent-interop)))
-        (is (= (str "agent://" agent-id) (get-in agent-interop-body [:data :logical-address])))
-        (is (= 200 (:status interop-capabilities)))
-        (is (= ["execute" "report"] (get-in interop-capabilities-body [:data :capabilities])))
-        (is (= ["http"] (get-in interop-capabilities-body [:data :tool-access])))
-        (is (= ["session" "agent"] (get-in interop-capabilities-body [:data :memory-scopes])))
-        (is (= {:max_tokens 500} (get-in interop-capabilities-body [:data :budgets])))
-        (is (= [peer-id] (get-in interop-capabilities-body [:data :trusted-peers])))
-        (is (= ["delegate.request"] (get-in interop-capabilities-body [:data :trust-policies (keyword peer-id) :message-types])))
-        (is (= ["direct"] (get-in interop-capabilities-body [:data :trust-policies (keyword peer-id) :routes])))
-        (is (= 2 (get-in interop-capabilities-body [:data :interop-rate-limit-per-minute])))
-        (is (= 201 (:status interop-message)))
-        (is (= "direct" (get-in interop-message-body [:data :route])))
-        (is (= 201 (:status interop-message-duplicate)))
-        (is (= (get-in interop-message-body [:data :id])
-               (get-in interop-message-duplicate-body [:data :id])))
-        (is (= 200 (:status interop-retry)))
-        (is (= 2 (get-in interop-retry-body [:data :delivery_count])))
-        (is (= 200 (:status interop-list)))
-        (is (= 1 (count (:data interop-list-body))))
-        (is (= "delivered" (get-in interop-list-body [:data 0 :status])))
-        (is (= 200 (:status interop-ack)))
-        (is (= "acked" (get-in interop-ack-body [:data :status])))
-        (is (= "completed" (get-in interop-ack-body [:data :ack_type])))
-        (is (= 201 (:status federated-interop-message)))
-        (is (= "federated" (get-in federated-interop-message-body [:data :route])))
-        (is (= "queued" (get-in federated-interop-message-body [:data :status])))
-        (is (= 200 (:status interop-list-after-federation)))
-        (is (= 2 (count (:data interop-list-after-federation-body))))
-        (is (= 1 (count (filter #(= "federated" (:route %)) (:data interop-list-after-federation-body)))))
-        (is (= 200 (:status agent-tool-exec)))
-        (is (= 403 (:status agent-tool-exec-blocked)))
-        (is (= 201 (:status orchestrator-spawn-worker)))
-        (is (= :ok (keyword (get-in orchestrator-spawn-worker-body [:data :receipts 0 :status]))))
-        (is (= ["http"] (get-in orchestrator-spawn-worker-body [:data :worker :tool_access])))
-        (is (= 200 (:status step-execute)))
-        (is (= 2 (count (get-in step-execute-body [:data :receipts]))))
-        (is (= :completed (keyword (get-in step-execute-body [:data :receipts 1 :status]))))
-        (is (= 200 (:status agent-msg)))
-        (is (= "test-response" (get-in agent-msg-body [:response :content])))
-        (is (= 201 (:status channel)))
-        (is (= 201 (:status channel-post)))
-        (is (= agent-id (:sender_id channel-post-body)))
-        (is (= 200 (:status channels)))
-        (is (= [channel-id] (mapv :id (:data channels-body))))
         (is (= 201 (:status created)))
         (is (= 200 (:status ui-created)))
         (is (str/includes? (:body ui-created) "datastar-patch-elements"))
@@ -1056,8 +809,6 @@
         (is (= "[DONE]" (last streamed-lines)))
         (is (= 200 (:status events)))
         (is (some #{"session.created"} (map :event_type (:data events-body))))
-        (is (some #{"agent.created"} (map :event_type (:data events-body))))
-        (is (some #{"channel.created"} (map :event_type (:data events-body))))
         (is (some #{"message-end"} (map :event_type (:data events-body))))
         (is (= 6 (count (:data messages-body))))
         (is (= "test-response" (get-in messages-body [:data 1 :content])))

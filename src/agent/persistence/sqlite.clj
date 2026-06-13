@@ -3,7 +3,6 @@
   (:require
    [agent.persistence.sqlite.common :as common]
    [agent.persistence.sqlite.events :as events]
-   [agent.persistence.sqlite.federation :as federation]
    [agent.persistence.sqlite.memory :as memory]
    [agent.persistence.sqlite.migrations :as migrations]
    [agent.persistence.sqlite.sessions :as sessions]
@@ -227,33 +226,6 @@
 (defn decide-tool-approval! [store approval-id status actor decision-reason]
   (tools/decide-tool-approval! store approval-id status actor decision-reason))
 
-(defn upsert-federation-peer-key! [store peer-key]
-  (federation/upsert-peer-key! store peer-key))
-
-(defn get-federation-peer-key [store peer-id key-id]
-  (federation/get-peer-key store peer-id key-id))
-
-(defn insert-federation-nonce! [store nonce]
-  (federation/insert-nonce! store nonce))
-
-(defn create-federation-outbox! [store outbox]
-  (federation/create-outbox! store outbox))
-
-(defn claim-due-federation-outbox! [store opts]
-  (federation/claim-due-outbox! store opts))
-
-(defn mark-federation-outbox-retry! [store id updates]
-  (federation/mark-outbox-retry! store id updates))
-
-(defn mark-federation-outbox-acked! [store id updates]
-  (federation/mark-outbox-acked! store id updates))
-
-(defn mark-federation-outbox-dead-letter! [store id updates]
-  (federation/mark-outbox-dead-letter! store id updates))
-
-(defn get-federation-outbox [store id]
-  (federation/get-outbox store id))
-
 (defn health-check [store]
   (try
     {:healthy true
@@ -263,8 +235,6 @@
                :tool-approval-count (tools/count-tool-approvals store)
 	               :memory-fact-count (memory/count-facts store)
 	               :todo-list-count (todos/count-lists store)
-               :federation-peer-key-count (federation/count-peer-keys store)
-               :federation-outbox-count (federation/count-outbox store)
                :schema-version (migrations/schema-version store)
                :latest-schema-version migrations/latest-schema-version
                :up-to-date? (= (migrations/schema-version store)

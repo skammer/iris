@@ -32,10 +32,9 @@
      :or {enabled true
           max-latency-samples 1000}}]
    {:enabled (true? enabled)
-    :max-latency-samples (long max-latency-samples)
+   :max-latency-samples (long max-latency-samples)
     :state (atom {:agents {}
                   :tools {}
-                  :federation {}
                   :mcp {:calls 0
                         :errors 0
                         :latencies []}
@@ -131,28 +130,6 @@
                                    :error/type (or (:type (ex-data error))
                                                    (.getName (class error)))))))))
 
-(defn record-federation-send!
-  [collector {:keys [peer-id duration-ms attempt success? status error]}]
-  (when (enabled? collector)
-    (let [peer-id* (or peer-id "unknown")
-          success?* (not (false? success?))]
-      (record-component-call!
-       collector [:federation peer-id*] duration-ms success?*
-       (fn [state]
-         (update-in state
-                    [:federation peer-id* :retries]
-                    (fnil + 0)
-                    (max 0 (dec (long (or attempt 1)))))))
-      (logging/log! :agent.telemetry/federation-send
-                    (cond-> {:peer/id peer-id*
-                             :latency/ms duration-ms
-                             :attempt attempt
-                             :success success?*
-                             :http/status status}
-                      error (assoc :error/message (.getMessage ^Throwable error)
-                                   :error/type (or (:type (ex-data error))
-                                                   (.getName (class error)))))))))
-
 (defn record-mcp-call!
   [collector {:keys [server-url method duration-ms success? error]}]
   (when (enabled? collector)
@@ -196,7 +173,6 @@
     {:enabled (enabled? collector)
      :agents (:agents state)
      :tools (summarize-vals (:tools state))
-     :federation (summarize-vals (:federation state))
      :mcp (call-summary (:mcp state))
      :planner (call-summary (:planner state))
      :directives (:directives state)

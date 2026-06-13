@@ -3,7 +3,6 @@
    [agent.chat :as chat]
    [agent.channels.core :as channel-adapters]
    [agent.memory.core :as memory]
-   [agent.orchestrator :as orchestrator]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.trace :as trace]
    [agent.tools.approvals :as tool-approvals]
@@ -36,8 +35,6 @@
                 tools/registry-health (constantly {:count 0})
                 memory/health-check (constantly {:facts {:count 0}})
                 channel-adapters/registry-health (constantly {:count 0})
-                orchestrator/health-check (constantly {:agent-count 0})
-                orchestrator/list-federated-peers (constantly [])
                 tool-approvals/list-requests (constantly [])]
     (let [html (ui/dashboard-fragment
                 {:config {:llm {:active-provider :openai-compatible
@@ -54,11 +51,9 @@
   (is (= "telegram" (ui-render/short-id "telegram"))))
 
 (deftest operator-board-renders-sections-with-counts
-  (with-redefs [orchestrator/list-agents (constantly [])
-                orchestrator/list-federated-peers (constantly [])
-                tool-approvals/list-requests (constantly [])
+  (with-redefs [tool-approvals/list-requests (constantly [])
                 sqlite/list-events (constantly [])]
-    (let [html (ui/operator-board-fragment {:store nil :orchestrator nil})]
+    (let [html (ui/operator-board-fragment {:store nil})]
       (is (str/includes? html "board-section"))
       (is (str/includes? html "count-badge"))
       (is (str/includes? html "board-section--empty"))
