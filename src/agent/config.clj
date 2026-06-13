@@ -201,18 +201,16 @@
                            :full? true
                            :per-tool {}}}}
    :skills {:dirs ["skills"]}
-   :memory {:prompt {:paths ["MEMORY.md"]}
-            :search {:default-limit 10
+   :memory {:search {:default-limit 10
                      :max-limit 10
                      :min-score 0.3}
             :vault {:paths ["memory"]
                     :writable? true}
-            :facts {:extractor {:enabled true
+            :notes {:extractor {:enabled true
                                 :provider nil
                                 :model nil
                                 :format :json-schema}
-                    :default-scope :session
-                    :dedup {:similarity-threshold nil}}}
+                    :default-scope :session}}
    :channel-adapters {:telegram {:enabled false
                                   :bot-token nil
                                   :rich-messages? true
@@ -281,9 +279,8 @@
 (def config-file-name "config.edn")
 (def markdown-file-names
   ["SOUL.md" "AGENTS.md" "USER.md" "TOOLS.md" "BOOT.md" "HEARTBEAT.md"])
-(def memory-file-name "MEMORY.md")
 (def context-file-names (into [config-file-name] markdown-file-names))
-(def template-file-names (conj context-file-names memory-file-name))
+(def template-file-names context-file-names)
 (def app-config-keys
   [:llm :storage :tools :skills :memory :channel-adapters :runners
    :telemetry :observer :trace :logging :api :chat :loop])

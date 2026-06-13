@@ -96,13 +96,12 @@
               :provider nil
               :model nil
               :format :json-schema}
-             (get-in cfg [:memory :facts :extractor])))
+             (get-in cfg [:memory :notes :extractor])))
       (is (= {:default-limit 10
               :max-limit 10
               :min-score 0.3}
              (get-in cfg [:memory :search])))
-      (is (= :session (get-in cfg [:memory :facts :default-scope])))
-      (is (nil? (get-in cfg [:memory :facts :dedup :similarity-threshold])))
+      (is (= :session (get-in cfg [:memory :notes :default-scope])))
       (is (= {:enabled false
               :bot-token nil
               :rich-messages? true
@@ -281,8 +280,7 @@
       (doseq [name config/template-file-names]
         (is (.exists (io/file dir name))))
       (is (.exists (io/file dir "HEARTBEAT.md")))
-      (is (re-find #"Durable prompt memory"
-                   (slurp (io/file dir "MEMORY.md"))))
+      (is (not (.exists (io/file dir "MEMORY.md"))))
       (is (not (.exists (io/file dir "HEARBEAT.md"))))
       (is (re-find #":iris/config-version"
                    (slurp (io/file dir "config.edn"))))

@@ -105,8 +105,8 @@
         llm-registry (llm-registry/create-registry llm-cfg)
         llm-provider (system-health/with-component-health health-registry :llm-provider
                        #(llm-service/create-llm-provider llm-cfg))
-        fact-llm-provider (system-health/with-component-health health-registry :llm-provider
-                            #(llm-service/create-fact-llm-provider cfg))
+        note-llm-provider (system-health/with-component-health health-registry :llm-provider
+                            #(llm-service/create-note-llm-provider cfg))
         chat-service (system-health/with-component-health health-registry :chat
                        #(chat/create-service))]
     (logging/log! :agent.system.lifecycle/created
@@ -122,7 +122,7 @@
                        :health-registry health-registry
                        :llm-registry llm-registry
                        :llm-provider llm-provider
-                       :fact-llm-provider fact-llm-provider
+                       :note-llm-provider note-llm-provider
                        :store store
                        :telemetry telemetry-collector
                        :sse-metrics (streaming-metrics/create-store)

@@ -1153,7 +1153,6 @@ textarea {
 #tool-results-panel h3,
 #tools-panel h3,
 #tool-approvals-panel h3,
-#memory-prompt-panel h3,
 #memory-search-results-panel h3,
 #memory-tool-output h3 {
   margin-bottom: var(--space-sm);

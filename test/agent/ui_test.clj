@@ -33,7 +33,7 @@
                                                            :schema-version 1
                                                            :tool-approval-count 0}})
                 tools/registry-health (constantly {:count 0})
-                memory/health-check (constantly {:facts {:count 0}})
+                memory/health-check (constantly {:vault {:note-count 0}})
                 channel-adapters/registry-health (constantly {:count 0})
                 tool-approvals/list-requests (constantly [])]
     (let [html (ui/dashboard-fragment
@@ -240,15 +240,23 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
-(deftest memory-search-message-content-is-escaped
+(deftest memory-recall-message-content-is-escaped
   (let [payload "<img src=\"x\" onerror=\"alert(1)\"> [link](javascript:alert(1))"
         html (ui/memory-search-results-fragment
               {:query "<script>alert(1)</script>"
-               :messages [{:session-id "session-1"
-                           :role "assistant"
-                           :content payload
-                           :created-at "2026-04-19T00:00:00Z"}]
-               :events []})]
+               :results [{:surface :message
+                          :type "assistant"
+                          :id "msg-1"
+                          :scope {:type :session :id "session-1"}
+                          :status :current
+                          :text payload
+                          :score 1.0
+                          :source {:message-id "msg-1"}
+                          :reason :exact-match
+                          :tags []}]
+               :surface-counts {:messages 1
+                                :events 0
+                                :vault-chunks 0}})]
     (is (str/includes? html "<a>link</a>"))
     (is (not (str/includes? html "onerror")))
     (is (not (str/includes? html "<script")))
@@ -265,32 +273,54 @@
 
 (deftest memory-workspace-exposes-tool-and-search-lab
   (let [path (temp-db-path)
+        root (.toFile (java.nio.file.Files/createTempDirectory
+                       "iris-ui-memory-"
+                       (make-array java.nio.file.attribute.FileAttribute 0)))
+        note (io/file root "inbox/note.md")
         store (sqlite/create-store {:path path})
         memory-service (memory/create-memory-service
-                        {:prompt {:paths []}
-                         :search {:default-limit 10}}
+                        {:search {:default-limit 10}
+                         :vault {:paths [(.getAbsolutePath root)]
+                                 :writable? true}}
                         store)]
     (try
-      (memory/save-memory-fact! memory-service
-                                {:subject "iris"
-                                 :predicate "speaks"
-                                 :object "rich markdown"
-                                 :scope {:type "global"}})
+      (.mkdirs (.getParentFile note))
+      (spit note
+            (str "---\n"
+                 "id: mem_ui\n"
+                 "type: Reference\n"
+                 "title: UI note\n"
+                 "iris:\n"
+                 "  scope: global\n"
+                 "  status: candidate\n"
+                 "---\n\n"
+                 "UI note body\n"))
+      (memory/reindex-vault! memory-service)
       (let [html (ui/memory-workspace-fragment {:store store
                                                 :memory-service memory-service})]
         (is (str/includes? html "Memory Tool"))
         (is (str/includes? html "/ui/memory/tool"))
-	        (is (str/includes? html "Reset facts"))
-	        (is (str/includes? html "/ui/memory/facts/reset"))
-	        (is (str/includes? html "Memory Search"))
+	        (is (not (str/includes? html "Reset facts")))
+	        (is (not (str/includes? html "/ui/memory/facts/reset")))
+	        (is (str/includes? html "Memory Recall"))
+	        (is (str/includes? html "Audit &amp; Reindex"))
+	        (is (str/includes? html "/ui/memory/vault/reindex"))
+	        (is (str/includes? html "/ui/memory/vault/move"))
+	        (is (str/includes? html "vault-search"))
+        (is (not (str/includes? html "write-vault")))
+        (is (not (str/includes? html "read-vault")))
+        (is (str/includes? html "Scratchpad"))
+        (is (str/includes? html "scratchpad-read"))
+        (is (str/includes? html "scratchpad-replace"))
+        (is (str/includes? html "expected_revision"))
+        (is (str/includes? html "old_text"))
+        (is (str/includes? html "new_text"))
 	        (is (str/includes? html "workspace-grid memory-workspace"))
         (is (str/includes? html "memory-left-stack"))
-        (testing "facts panel lists stored facts"
-          (is (str/includes? html "memory-facts"))
-          (is (str/includes? html "iris"))
-          (is (str/includes? html "speaks · rich markdown"))))
+        (is (not (str/includes? html "memory-facts"))))
       (finally
         (sqlite/close-store! store)
+        (io/delete-file root true)
         (io/delete-file path true)))))
 
 (deftest memory-tool-input-omits-blank-content
@@ -299,21 +329,32 @@
     (testing "blank content from the always-submitted textarea is dropped"
       (is (= {:action "search" :query "hey" :limit 10}
              (tool-input {:action "search" :query "hey" :limit "10" :content ""}))))
-    (testing "real content still passes through"
-      (is (= {:action "write-vault" :path "notes.md" :content "hello"}
-             (tool-input {:action "write-vault" :path "notes.md" :content "hello"}))))))
+    (testing "vault write fields are no longer memory-tool inputs"
+      (is (= {:action "vault-search" :query "tags"}
+             (tool-input {:action "vault-search"
+                          :query "tags"
+                          :path "notes.md"
+                          :content "hello"}))))
+    (testing "scratchpad replace keeps blank exact-replace text"
+      (is (= {:action "scratchpad-replace"
+              :old-text ""
+              :new-text ""
+              :expected-revision "abc"}
+             (tool-input {:action "scratchpad-replace"
+                          :old_text ""
+                          :new_text ""
+                          :expected_revision "abc"}))))))
 
 (deftest memory-tool-result-shows-text-and-source-json
   (let [html (ui/memory-tool-result-fragment
 	              {:ok? true
-	               :input {:action :search :query "tags"}
-	               :result "Memory results for: tags\n- fact score=0.500: x"
-	               :source-json {:ranked [{:surface :fact
-	                                        :item {:subject "fact/tags"
-	                                               :object "project"}}]}})]
-	    (is (str/includes? html "Memory results for: tags"))
+	               :input {:action :recall :query "tags"}
+	               :result "Memory recall for: tags\n- vault_chunk #1 score=0.500 approved exact-match: x"
+	               :source-json {:results [{:surface :vault_chunk
+	                                         :text "vault/tags project"}]}})]
+	    (is (str/includes? html "Memory recall for: tags"))
 	    (is (str/includes? html "source json"))
-	    (is (str/includes? html "fact/tags"))))
+	    (is (str/includes? html "vault/tags"))))
 
 (deftest logs-fragment-shows-events-and-trace-state
   (let [path (temp-db-path)

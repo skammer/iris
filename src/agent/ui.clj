@@ -23,7 +23,6 @@
          events-fragment
          logs-fragment
 	         memory-workspace-fragment
-	         memory-prompt-fragment
 	         memory-search-results-fragment
 	         memory-tool-result-fragment
 		         tools-fragment
@@ -36,7 +35,6 @@
    {:key :memory :label "Memory"}
    {:key :logs :label "Logs"}])
 
-(def memory-prompt-fragment ui-memory/memory-prompt-fragment)
 (def memory-search-results-fragment ui-memory/memory-search-results-fragment)
 (def memory-tool-result-fragment ui-memory/memory-tool-result-fragment)
 (def memory-workspace-fragment ui-memory/memory-workspace-fragment)
@@ -215,7 +213,7 @@
        [:div.stat [:span.label "tools"] [:span.value (:count tools-health)]]
        [:div.stat [:span.label "adapters"] [:span.value (:count adapter-health)]]]
       [:div.fact-strip
-       (for [[label value] [["memory facts" (get-in memory-health [:facts :count] 0)]
+       (for [[label value] [["vault notes" (get-in memory-health [:vault :note-count] 0)]
                             ["schema" (get-in storage [:details :schema-version] "?")]
                             ["approvals" (get-in storage [:details :tool-approval-count] 0)]]]
          [:span.fact

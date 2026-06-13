@@ -5,7 +5,7 @@
    [agent.prompts :as prompts]
    [agent.telemetry.observer :as telemetry-observer]
    [clojure.string :as str]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (deftest bundled-prompt-modes-test
   (is (= ["ask"
@@ -41,10 +41,10 @@
                       :usage nil
                       :raw nil})
                    (generate [this messages opts]
-                     (llm/invoke this (assoc opts :messages messages))))]
-    (let [step (planner/plan-step! provider {:messages [{:role "user" :content "finish"}]})]
-      (is (= :complete (get-in step [:directives 0 :type])))
-      (is (= "ok" (get-in step [:directives 0 :payload :result]))))))
+                     (llm/invoke this (assoc opts :messages messages))))
+        step (planner/plan-step! provider {:messages [{:role "user" :content "finish"}]})]
+    (is (= :complete (get-in step [:directives 0 :type])))
+    (is (= "ok" (get-in step [:directives 0 :payload :result])))))
 
 (deftest planner-passes-native-tool-defs-and-converts-tool-calls-test
   (let [tool {:name :fs_list

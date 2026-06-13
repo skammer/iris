@@ -9,6 +9,7 @@
    [agent.chat :as chat]
    [agent.defaults :as defaults]
    [agent.memory.core :as memory]
+   [agent.memory.recall :as memory-recall]
    [agent.sessions.service :as session-service]
    [agent.system.events :as events]
    [agent.tools.approvals :as tool-approvals]
@@ -328,14 +329,11 @@
              (streaming/send-datastar-patch! ctx (ui/events-fragment system))
             (recur))))))))
 
-(defn memory-prompt [system _request]
-  (responses/html-response 200 (ui/memory-prompt-fragment system)))
-
 (defn memory-search [system request]
   (let [{:keys [query]} (h/read-form-body request)]
     (responses/html-response 200
                              (ui/memory-search-results-fragment
-                              (memory/search-memory (:memory-service system) query)))))
+                              (memory-recall/recall (:memory-service system) query)))))
 
 (defn- parse-int-form [value]
   (when-not (str/blank? (str value))
@@ -346,31 +344,33 @@
     (cond-> {:type scope_type}
       (not (str/blank? (str scope_id))) (assoc :id scope_id))))
 
-(defn- memory-tool-input [{:keys [action query subject predicate object path content] :as body}]
-  (cond-> {:action action}
-    (not (str/blank? (str query))) (assoc :query query)
-    (parse-int-form (:limit body)) (assoc :limit (parse-int-form (:limit body)))
-    (form-scope body) (assoc :scope (form-scope body))
-    (not (str/blank? (str subject))) (assoc :subject subject)
-    (not (str/blank? (str predicate))) (assoc :predicate predicate)
-    (not (str/blank? (str object))) (assoc :object object)
-    (not (str/blank? (str path))) (assoc :path path)
-    ;; Only include content when present: the form always submits the
-    ;; textarea (as ""), and tools like memory_search reject unknown keys.
-    (not (str/blank? (str content))) (assoc :content content)))
+(defn- memory-tool-input [{:keys [action query old_text new_text
+                                  expected_revision]
+                           :as body}]
+  (let [action* (keyword (str/lower-case (str action)))
+        scratchpad-replace? (= :scratchpad-replace action*)]
+    (cond-> {:action action}
+      (not (str/blank? (str query))) (assoc :query query)
+      (parse-int-form (:limit body)) (assoc :limit (parse-int-form (:limit body)))
+      (form-scope body) (assoc :scope (form-scope body))
+      (or (not (str/blank? (str old_text))) scratchpad-replace?)
+      (assoc :old-text (or old_text ""))
+      (or (not (str/blank? (str new_text))) scratchpad-replace?)
+      (assoc :new-text (or new_text ""))
+      (not (str/blank? (str expected_revision))) (assoc :expected-revision expected_revision))))
 
 (defn- memory-tool-target [{:keys [action] :as input}]
   (case (keyword (str/lower-case (str action)))
-	    :search [:memory_search (dissoc input :action)]
-	    :save-fact [:memory_save_fact (dissoc input :action)]
-	    :remove-fact [:memory_remove_fact (dissoc input :action)]
-	    :read-vault [:memory_read_vault (dissoc input :action)]
-	    :write-vault [:memory_write_vault (dissoc input :action)]))
+	    :recall [:memory_recall (select-keys input [:query :limit :scope])]
+	    :vault-search [:vault_search (select-keys input [:query :limit])]
+	    :scratchpad-read [:scratchpad_read (select-keys input [:scope])]
+	    :scratchpad-search [:scratchpad_search (select-keys input [:query :scope])]
+	    :scratchpad-replace [:scratchpad_replace (select-keys input [:old-text :new-text :expected-revision :scope])]))
 
 (defn- memory-search-source-json [system {:keys [action query limit scope]}]
-  (when (and (= :search (keyword (str/lower-case (str action))))
+  (when (and (= :recall (keyword (str/lower-case (str action))))
              (not (str/blank? (str query))))
-    (memory/search-memory (:memory-service system)
+    (memory-recall/recall (:memory-service system)
                           query
                           (cond-> {}
                             limit (assoc :limit limit)
@@ -420,10 +420,28 @@
                                       :error (.getMessage e)
                                       :details (ex-data e)})))))
 
-(defn memory-facts-reset [system _request]
+(defn memory-vault-reindex [system _request]
   (memory-reset-response system
-                         "Facts"
-                         #(memory/reset-facts! (:memory-service system))))
+                         "Vault reindex"
+                         #(memory/reindex-vault! (:memory-service system))))
+
+(defn memory-vault-status [system request]
+  (let [body (h/read-form-body request)]
+    (memory-reset-response system
+                           "Vault note"
+                           #(memory/update-vault-note-iris!
+                             (:memory-service system)
+                             (:path body)
+                             (select-keys body [:scope :status])))))
+
+(defn memory-vault-move [system request]
+  (let [body (h/read-form-body request)]
+    (memory-reset-response system
+                           "Vault note"
+                           #(memory/move-vault-note!
+                             (:memory-service system)
+                             (:path body)
+                             (:folder body)))))
 
 (defn list-tools [system _request]
   (responses/html-response 200 (ui/tools-fragment system)))

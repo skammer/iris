@@ -2,7 +2,7 @@
   (:require
    [cheshire.core :as json]
    [clojure.string :as str]
-   [clojure.test :refer :all])
+   [clojure.test :refer [deftest is]])
   (:import
    (java.net URI)
    (java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers HttpResponse$BodyHandlers)
@@ -80,7 +80,7 @@
                          "--name" container-name
                          "-p" (str "127.0.0.1:" port ":8080")
                          "-e" (str "AGENT_API_KEY=" api-key)
-                         "-e" "AGENT_FACT_EXTRACTOR_ENABLED=false"
+                         "-e" "AGENT_NOTE_EXTRACTOR_ENABLED=false"
                          "-e" "AGENT_SQLITE_PATH=/app/data/release-smoke.db"
                          image-tag])
           (let [health (wait-for-health! base-url)
@@ -89,25 +89,22 @@
                                  {:title "release smoke"}
                                  auth)
                 session-body (json/parse-string (:body session) true)
-                fact (request "POST"
-                              (str base-url "/v1/memory/facts")
-                              {:subject "release"
-                               :predicate "writes"
-                               :object "memory"
-                               :scope {:type "global"}}
-                              auth)
-                search (request "POST"
-                                (str base-url "/v1/memory/facts/search")
-                                {:query "release"
-                                 :scope {:type "global"}}
+                recall (request "POST"
+                                (str base-url "/v1/memory/recall")
+                                {:query "release"}
                                 auth)
-                search-body (json/parse-string (:body search) true)]
+                old-facts (request "POST"
+                                   (str base-url "/v1/memory/facts")
+                                   {:subject "release"
+                                    :predicate "writes"
+                                    :object "memory"
+                                    :scope {:type "global"}}
+                                   auth)]
             (is (= 200 (:status health)))
             (is (= 201 (:status session)))
             (is (string? (get-in session-body [:data :id])))
-            (is (= 201 (:status fact)))
-            (is (= 200 (:status search)))
-            (is (= ["release"] (mapv :subject (:data search-body)))))
+            (is (= 200 (:status recall)))
+            (is (= 404 (:status old-facts))))
           (finally
             (try
               (run-command! ["docker" "rm" "-f" container-name])

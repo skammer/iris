@@ -1,124 +1,83 @@
--- :name get-fact-by-normalized :? :1
-select id, scope_type, scope_id, subject, predicate, object,
-       normalized_subject, normalized_predicate, normalized_object,
-       source_session_id, source_message_ids_json, source_request_id,
-       confidence, status, metadata_json, created_at, updated_at
-from memory_facts
-where scope_type = :scope_type
-  and coalesce(scope_id, '') = coalesce(:scope_id, '')
-  and normalized_subject = :normalized_subject
-  and normalized_predicate = :normalized_predicate
-  and normalized_object = :normalized_object
-limit 1
+-- :name reset-vault-index :! :n
+delete from vault_note_index
 
--- :name insert-fact :! :n
-insert into memory_facts
-(id, scope_type, scope_id, subject, predicate, object,
- normalized_subject, normalized_predicate, normalized_object,
- source_session_id, source_message_ids_json, source_request_id,
- confidence, status, metadata_json, created_at, updated_at)
+-- :name reset-vault-chunks-fts :! :n
+delete from vault_chunks_fts
+
+-- :name insert-vault-note :! :n
+insert into vault_note_index
+(path, id, type, title, description, tags_json, timestamp,
+ iris_scope, iris_status, iris_confidence, origins_json,
+ frontmatter_json, body_hash, updated_at)
 values
-(:id, :scope_type, :scope_id, :subject, :predicate, :object,
- :normalized_subject, :normalized_predicate, :normalized_object,
- :source_session_id, :source_message_ids_json, :source_request_id,
- :confidence, :status, :metadata_json, :created_at, :updated_at)
+(:path, :id, :type, :title, :description, :tags_json, :timestamp,
+ :iris_scope, :iris_status, :iris_confidence, :origins_json,
+ :frontmatter_json, :body_hash, :updated_at)
 
--- :name update-fact :! :n
-update memory_facts
-set subject = :subject,
-    predicate = :predicate,
-    object = :object,
-    source_session_id = coalesce(:source_session_id, source_session_id),
-    source_message_ids_json = :source_message_ids_json,
-    source_request_id = coalesce(:source_request_id, source_request_id),
-    confidence = coalesce(:confidence, confidence),
-    status = :status,
-    metadata_json = :metadata_json,
-    updated_at = :updated_at
-where id = :id
+-- :name insert-vault-chunk :! :n
+insert into vault_chunks
+(chunk_id, path, heading, block_id, content_hash, text)
+values
+(:chunk_id, :path, :heading, :block_id, :content_hash, :text)
 
--- :name remove-fact-by-id :! :n
-update memory_facts
-set status = 'removed',
-    updated_at = :updated_at
-where id = :id
-  and status = 'active'
+-- :name insert-vault-chunk-fts :! :n
+insert into vault_chunks_fts
+(chunk_id, path, heading, text)
+values
+(:chunk_id, :path, :heading, :text)
 
--- :name remove-fact-by-normalized :! :n
-update memory_facts
-set status = 'removed',
-    updated_at = :updated_at
-where scope_type = :scope_type
-  and coalesce(scope_id, '') = coalesce(:scope_id, '')
-  and normalized_subject = :normalized_subject
-  and normalized_predicate = :normalized_predicate
-  and normalized_object = :normalized_object
-  and status = 'active'
-
--- :name reset-facts :! :n
-delete from memory_facts
-
--- :name search-facts-scoped-like :? :*
-select id, scope_type, scope_id, subject, predicate, object,
-       normalized_subject, normalized_predicate, normalized_object,
-       source_session_id, source_message_ids_json, source_request_id,
-       confidence, status, metadata_json, created_at, updated_at
-from memory_facts
-where status = 'active'
-  and ((:include_global = 1 and scope_type = 'global')
-       or (scope_type = :scope_type and coalesce(scope_id, '') = coalesce(:scope_id, '')))
+-- :name search-vault-chunks-like :? :*
+select c.chunk_id, c.path, c.heading, c.block_id, c.content_hash, c.text,
+       n.id as note_id, n.type, n.title, n.description, n.tags_json,
+       n.timestamp, n.iris_scope, n.iris_status, n.iris_confidence,
+       n.origins_json, n.frontmatter_json, n.updated_at
+from vault_chunks c
+join vault_note_index n on n.path = c.path
+where ((n.iris_status = 'approved' and n.iris_scope in ('global', 'project'))
+       or (:session_id is not null
+           and n.iris_scope = 'session'
+           and n.iris_status in ('approved', 'auto_session')
+           and n.origins_json like :session_origin_needle))
   and (:needle is null
-       or subject like :needle
-       or predicate like :needle
-       or object like :needle
-       or metadata_json like :needle)
+       or c.text like :needle
+       or c.heading like :needle
+       or n.title like :needle
+       or n.description like :needle
+       or n.tags_json like :needle)
+order by n.updated_at desc
+limit :limit
+
+-- :name search-vault-chunks-fts :? :*
+select c.chunk_id, c.path, c.heading, c.block_id, c.content_hash, c.text,
+       n.id as note_id, n.type, n.title, n.description, n.tags_json,
+       n.timestamp, n.iris_scope, n.iris_status, n.iris_confidence,
+       n.origins_json, n.frontmatter_json, n.updated_at,
+       bm25(vault_chunks_fts) as retrieval_score
+from vault_chunks_fts
+join vault_chunks c on c.chunk_id = vault_chunks_fts.chunk_id
+join vault_note_index n on n.path = c.path
+where vault_chunks_fts match :query
+  and ((n.iris_status = 'approved' and n.iris_scope in ('global', 'project'))
+       or (:session_id is not null
+           and n.iris_scope = 'session'
+           and n.iris_status in ('approved', 'auto_session')
+           and n.origins_json like :session_origin_needle))
+order by retrieval_score asc, n.updated_at desc
+limit :limit
+
+-- :name list-vault-notes :? :*
+select path, id, type, title, description, tags_json, timestamp,
+       iris_scope, iris_status, iris_confidence, origins_json,
+       frontmatter_json, body_hash, updated_at
+from vault_note_index
+where (:status is null or iris_status = :status)
 order by updated_at desc
 limit :limit
 
--- :name search-facts-scoped-fts :? :*
-select f.id, f.scope_type, f.scope_id, f.subject, f.predicate, f.object,
-       f.normalized_subject, f.normalized_predicate, f.normalized_object,
-       f.source_session_id, f.source_message_ids_json, f.source_request_id,
-       f.confidence, f.status, f.metadata_json, f.created_at, f.updated_at,
-       bm25(memory_facts_fts) as retrieval_score
-from memory_facts_fts
-join memory_facts f on f.rowid = memory_facts_fts.rowid
-where memory_facts_fts match :query
-  and f.status = 'active'
-  and ((:include_global = 1 and f.scope_type = 'global')
-       or (f.scope_type = :scope_type and coalesce(f.scope_id, '') = coalesce(:scope_id, '')))
-order by retrieval_score asc, f.updated_at desc
-limit :limit
-
--- :name search-facts-all-like :? :*
-select id, scope_type, scope_id, subject, predicate, object,
-       normalized_subject, normalized_predicate, normalized_object,
-       source_session_id, source_message_ids_json, source_request_id,
-       confidence, status, metadata_json, created_at, updated_at
-from memory_facts
-where status = 'active'
-  and (:needle is null
-       or subject like :needle
-       or predicate like :needle
-       or object like :needle
-       or metadata_json like :needle)
-order by updated_at desc
-limit :limit
-
--- :name search-facts-all-fts :? :*
-select f.id, f.scope_type, f.scope_id, f.subject, f.predicate, f.object,
-       f.normalized_subject, f.normalized_predicate, f.normalized_object,
-       f.source_session_id, f.source_message_ids_json, f.source_request_id,
-       f.confidence, f.status, f.metadata_json, f.created_at, f.updated_at,
-       bm25(memory_facts_fts) as retrieval_score
-from memory_facts_fts
-join memory_facts f on f.rowid = memory_facts_fts.rowid
-where memory_facts_fts match :query
-  and f.status = 'active'
-order by retrieval_score asc, f.updated_at desc
-limit :limit
-
--- :name count-facts :? :1
+-- :name count-vault-notes :? :1
 select count(*) as n
-from memory_facts
-where status = 'active'
+from vault_note_index
+
+-- :name count-vault-chunks :? :1
+select count(*) as n
+from vault_chunks

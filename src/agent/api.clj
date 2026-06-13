@@ -73,10 +73,11 @@
    :ui-events (fn [r] (ui/events (sys) r))
    :ui-logs (fn [r] (ui/logs (sys) r))
    :ui-events-live (fn [r] (ui/events-live-response (sys) r))
-   :ui-memory-prompt (fn [r] (ui/memory-prompt (sys) r))
    :ui-memory-search (fn [r] (ui/memory-search (sys) r))
    :ui-memory-tool (fn [r] (ui/memory-tool-run (sys) r))
-   :ui-memory-facts-reset (fn [r] (ui/memory-facts-reset (sys) r))
+   :ui-memory-vault-status (fn [r] (ui/memory-vault-status (sys) r))
+   :ui-memory-vault-move (fn [r] (ui/memory-vault-move (sys) r))
+   :ui-memory-vault-reindex (fn [r] (ui/memory-vault-reindex (sys) r))
    :ui-tools (fn [r] (ui/list-tools (sys) r))
    :ui-system-reload (fn [r] (ui/system-reload (sys) r))
    :ui-tool-approvals (fn [r] (ui/list-tool-approvals (sys) r))
@@ -121,12 +122,10 @@
    :telemetry (fn [r] (telemetry/snapshot (sys) r))
 
    :memory-surfaces (fn [r] (memory/surfaces (sys) r))
-   :memory-prompt (fn [r] (memory/prompt (sys) r))
-   :memory-search (fn [r] (memory/search (sys) r))
-   :memory-fact-save (fn [r] (memory/fact-save (sys) r))
-   :memory-fact-search (fn [r] (memory/fact-search (sys) r))
+   :memory-recall (fn [r] (memory/recall (sys) r))
    :memory-vault-read (fn [r] (memory/vault-read (sys) r))
-   :memory-vault-write (fn [r] (memory/vault-write (sys) r))}))
+   :memory-vault-write (fn [r] (memory/vault-write (sys) r))
+   :memory-vault-reindex (fn [r] (memory/vault-reindex (sys) r))}))
 
 (defn- route-handler-ids [route-data]
   (let [ids (atom [])]

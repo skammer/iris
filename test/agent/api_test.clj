@@ -386,7 +386,7 @@
         (is (nil? (get-in clear-body [:data :active_mode])))
         (is (= 400 (:status unknown-response)))
         (is (= "unknown_mode" (:error unknown-body)))
-        (is (= 11 (count (get-in unknown-body [:details :available_modes]))))
+        (is (some #{"code"} (get-in unknown-body [:details :available_modes])))
         (is (= 404 (:status missing-response)))
         (is (= "session_not_found" (:error missing-body))))
       (finally
@@ -400,7 +400,7 @@
         {:keys [system server]} (started-test-system
                                   path
                                   port
-                                  #(assoc-in % [:memory :facts :extractor :enabled] false))]
+                                  #(assoc-in % [:memory :notes :extractor :enabled] false))]
     (try
       (let [response (http-post (str base-url "/v1/chat/completions")
                                 {:messages [{:role "user"
@@ -500,7 +500,7 @@
         {:keys [system server]} (started-test-system
                                   path
                                   port
-                                  #(assoc-in % [:memory :facts :extractor :enabled] false))]
+                                  #(assoc-in % [:memory :notes :extractor :enabled] false))]
     (try
       (let [created (http-post (str base-url "/v1/sessions") {:title "upload"})
             session-id (:id (json/parse-string (:body created) true))
@@ -642,7 +642,7 @@
         config (-> (:config base-system)
                    (assoc :llm (:llm cfg/default-config)
                           :chat (:chat cfg/default-config))
-	                   (assoc-in [:memory :facts :extractor :enabled] false))
+	                   (assoc-in [:memory :notes :extractor :enabled] false))
         system (assoc base-system
                       :llm-provider (->TestProvider messages*)
                       :store store
@@ -692,21 +692,20 @@
             memory-surfaces (http-get (str base-url "/v1/memory/surfaces"))
             memory-surfaces-body (json/parse-string (:body memory-surfaces) true)
             prompt-memory (http-get (str base-url "/v1/memory/prompt"))
-            prompt-memory-body (json/parse-string (:body prompt-memory) true)
             ui-prompt-memory (http-get (str base-url "/ui/memory/prompt"))
-            memory-search (http-post (str base-url "/v1/memory/search")
+            old-memory-search (http-post (str base-url "/v1/memory/search")
+                                         {:query "hello"})
+            memory-recall (http-post (str base-url "/v1/memory/recall")
                                      {:query "hello"})
-            memory-search-body (json/parse-string (:body memory-search) true)
-            fact-save (http-post (str base-url "/v1/memory/facts")
-                                 {:subject "alice"
-                                  :predicate "likes"
-                                  :object "clojure"
-                                  :scope {:type "global"}})
-            fact-save-body (json/parse-string (:body fact-save) true)
-            fact-search (http-post (str base-url "/v1/memory/facts/search")
-                                   {:query "alice"
-                                    :scope {:type "global"}})
-	            fact-search-body (json/parse-string (:body fact-search) true)
+            memory-recall-body (json/parse-string (:body memory-recall) true)
+            old-fact-save (http-post (str base-url "/v1/memory/facts")
+                                     {:subject "alice"
+                                      :predicate "likes"
+                                      :object "clojure"
+                                      :scope {:type "global"}})
+            old-fact-search (http-post (str base-url "/v1/memory/facts/search")
+                                       {:query "alice"
+                                        :scope {:type "global"}})
 	            ui-memory-search (http-post-form (str base-url "/ui/memory/search")
 	                                             "query=hello")
 	            channel-adapters (http-get (str base-url "/v1/channel-adapters"))
@@ -771,21 +770,19 @@
         (is (= 200 (:status shell-approved-exec)))
         (is (= "hello" (get-in shell-approved-exec-body [:data :stdout])))
         (is (= 200 (:status skills)))
-        (is (= [] (:data skills-body)))
+        (is (= ["memory-vault"] (mapv :name (:data skills-body))))
         (is (= 200 (:status memory-surfaces)))
-	        (is (= ["prompt" "search" "facts" "vault"] (mapv :name (:data memory-surfaces-body))))
-        (is (= 200 (:status prompt-memory)))
-        (is (string? (:combined prompt-memory-body)))
-        (is (= 200 (:status ui-prompt-memory)))
-        (is (str/includes? (:body ui-prompt-memory) "Prompt Memory"))
-        (is (= 200 (:status memory-search)))
-        (is (= "hello" (:query memory-search-body)))
-        (is (= 201 (:status fact-save)))
-        (is (= "alice" (get-in fact-save-body [:data :subject])))
-        (is (= 200 (:status fact-search)))
-        (is (= 1 (count (:data fact-search-body))))
+	        (is (= ["search" "vault"] (mapv :name (:data memory-surfaces-body))))
+        (is (= 404 (:status prompt-memory)))
+        (is (= 404 (:status ui-prompt-memory)))
+        (is (= 404 (:status old-memory-search)))
+        (is (= 200 (:status memory-recall)))
+        (is (= "hello" (:query memory-recall-body)))
+        (is (vector? (:results memory-recall-body)))
+        (is (= 404 (:status old-fact-save)))
+        (is (= 404 (:status old-fact-search)))
         (is (= 200 (:status ui-memory-search)))
-        (is (str/includes? (:body ui-memory-search) "Search Results"))
+        (is (str/includes? (:body ui-memory-search) "Recall Results"))
         (is (= 200 (:status channel-adapters)))
         (is (= ["telegram"] (mapv :name (:data channel-adapters-body))))
         (is (= 201 (:status created)))

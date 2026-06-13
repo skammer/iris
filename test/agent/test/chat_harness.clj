@@ -53,7 +53,7 @@
         config (-> (:config base-system)
                    (assoc :api {:host "127.0.0.1" :port port}
                           :storage {:sqlite {:path path}})
-                   (assoc-in [:memory :facts :extractor :enabled] false)
+                   (assoc-in [:memory :notes :extractor :enabled] false)
                    (assoc-in [:llm :providers :predictable]
                              {:provider :predictable
                               :type :test
@@ -61,7 +61,7 @@
                    (assoc-in [:llm :active-provider] :predictable))
         system (assoc base-system
                       :llm-provider provider
-                      :fact-llm-provider provider
+                      :note-llm-provider provider
                       :store store
                       :event-bus event-bus
                       :event-sink event-sink

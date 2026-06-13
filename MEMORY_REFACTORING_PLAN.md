@@ -111,20 +111,17 @@ Scratchpad tools:
 - Delete is `scratchpad_replace(old_text, "")`.
 - Append/overwrite are possible by reading current text and replacing the full text.
 - No-match, ambiguous-match, or stale revision must fail and require reread.
-- Scratchpad entries can later be promoted to OKF notes in `memory/inbox/` or `memory/approved/`.
-- Promotion default: create one OKF note per coherent memory unit.
-- Append to an existing topic/project note only when target note is explicitly selected or obvious.
+- Scratchpad is not a note promotion surface; vault tools evolve separately.
 
 Recall rules:
 - Normal recall searches indexed vault notes/chunks.
 - Candidate/rejected/superseded notes are excluded unless diagnostics request them.
-- Session recall includes the session scratchpad and session-scoped notes.
+- Session recall includes session-scoped vault matches, including indexed session scratchpad chunks when query matches.
 - Global recall includes approved global/project notes.
-- Raw scratchpad content can be injected separately when scoped to the active session.
+- Full scratchpad content is available through `scratchpad_read`, not unconditional recall injection.
 
 UI/API requirements:
 - UI shows vault notes, scratchpads, audit/reindex report, and recall diagnostics.
-- UI can promote scratchpad sections to OKF notes.
 - `memory_recall` returns note path, type, status, source ids, chunk ids, and evidence snippets.
 - `vault_search` searches indexed vault notes/chunks.
 - `scratchpad_*` tools operate on fixed scoped scratchpad files, not arbitrary paths.
@@ -187,10 +184,7 @@ Target:
 - Let vault notes reference origins/evidence in frontmatter/body.
 - Add explicit tools:
   - `vault_search`
-  - `vault_read`
-  - `vault_write`
-  - `vault_append_note`
-  - `vault_promote_to_note`
+- Edit vault files through the existing filesystem tools (`fs_read`, `fs_create`, `fs_replace`, `fs_write`), not a second vault write API for LLMs.
 - Do not add file watchers now.
 - Add explicit/periodic full-vault audit and reindex.
 
@@ -376,10 +370,7 @@ Current mismatch:
 Target:
 - `memory_recall`: unified recall used by chat and tools.
 - `vault_search`: primary durable memory search.
-- `vault_note_read`: read note by path/id.
-- `vault_note_write`: create/update OKF note.
-- `vault_note_append`: append to note section.
-- `vault_promote_to_note`: promote scratchpad section or source excerpt into an OKF note.
+- `fs_read`/`fs_create`/`fs_replace`/`fs_write`: read and edit vault Markdown files under configured vault roots.
 - `scratchpad_read`: read global/session scratchpad and return revision.
 - `scratchpad_replace`: exact text replacement inside global/session scratchpad with expected revision.
 - `scratchpad_search`: search scratchpad text.
@@ -393,7 +384,11 @@ Clean break rule:
 
 ## Refactoring plan
 
-### Phase 0: Pin critical invariants
+### Phase 0: Pin critical invariants — DONE
+
+Status:
+- Done in current refactor pass.
+- Added coverage for removed `MEMORY.md` injection and normalized recall shape.
 
 Goal:
 - Test only the behavior worth preserving.
@@ -410,7 +405,11 @@ Exit criteria:
 - Preserved invariants are documented by tests.
 - Removed surfaces are gone, not hidden behind aliases or fallback behavior.
 
-### Phase 1: Remove `MEMORY.md` surface
+### Phase 1: Remove `MEMORY.md` surface — DONE
+
+Status:
+- Done in current refactor pass.
+- Removed default config/template, prompt-memory injection, prompt-memory routes/UI, tool search over prompt files, and `resources/MEMORY.md`.
 
 Goal:
 - Remove the misleading prompt-memory path.
@@ -429,7 +428,12 @@ Exit criteria:
 - Existing tests pass.
 - UI communicates vault-backed memory.
 
-### Phase 2: Introduce unified recall API
+### Phase 2: Introduce unified recall API — DONE
+
+Status:
+- Done for currently implemented surfaces: messages, events, approved vault chunks.
+- Added `agent.memory.recall`, `/v1/memory/recall`, `memory_recall`, and chat/UI recall wiring.
+- Vault chunks and scratchpads move into Phase 3/4 because those surfaces are introduced there.
 
 Goal:
 - One retrieval path for chat/API/tools.
@@ -465,6 +469,17 @@ Exit criteria:
 Goal:
 - Remove canonical DB facts/items and make OKF vault notes the durable model.
 
+Status:
+- Done in current refactor pass.
+- Added derived `vault_note_index` and `vault_chunks` schema, explicit vault reindex, approved-note filtering, `vault_search`, and vault chunk recall.
+- Deleted `memory_facts` runtime path, public facts API/tools/UI, and fact-oriented tests.
+- Replaced auto extraction writes with candidate OKF notes in vault `inbox/`.
+- Added session-scoped vault recall for approved/auto-session notes with matching origins.
+- Added UI note status/scope promotion controls backed by vault frontmatter edits and reindex.
+- Added note move UX for standard vault folders.
+- Added global/session scratchpad files and exact-replace tools.
+- Vault reindex indexes scratchpad files with derived `Scratchpad` metadata when frontmatter is absent.
+
 Work:
 - Delete `memory_facts` schema, SQL queries, code paths, tools, and tests.
 - Add derived `vault_note_index`:
@@ -495,8 +510,8 @@ Work:
 
 Exit criteria:
 - Auto extraction writes candidate OKF notes into `memory/inbox/`.
-- UI can edit status, move notes, and promote scratchpad sections.
-- Retrieval defaults to approved global/project notes + current session notes/scratchpad.
+- UI can edit status and move notes.
+- Retrieval defaults to approved global/project notes + current session note/scratchpad matches.
 - Approved global notes have `iris.origins` or explicit manual/operator marker.
 - Recall/debug payloads explain which note/chunk was recalled and why.
 
@@ -505,11 +520,15 @@ Exit criteria:
 Goal:
 - Make vault the primary durable memory system.
 
+Status:
+- In progress.
+- Done: vault chunk indexing, `vault_search`, vault roots in filesystem tools, vault reindex job/API/UI, vault source links, default `memory-vault` skill, scratchpad read/search/exact-replace, scratchpad indexing, and UI scratchpad panel/form.
+- Remaining: full audit report for parse errors, duplicate ids, broken links, orphan chunks, and embeddings.
+
 Work:
 - Add vault chunk indexing.
 - Add `vault_search`.
-- Add `vault_append_note`.
-- Add `vault_promote_to_note`.
+- Let filesystem tools read/edit configured vault roots.
 - Add scratchpad tools:
   - `scratchpad_read`
   - `scratchpad_replace`
@@ -616,7 +635,7 @@ Reason:
 - Do not remove `AGENTS.md`/skills/prompts as instruction surfaces.
 - Do not use embeddings as the only retrieval system.
 - Do not auto-promote every scratchpad/extracted note to global memory.
-- Do not let vault become a second unstructured filesystem API.
+- Do not create a second vault-specific filesystem API for LLM edits.
 - Do not build a knowledge graph or require SPO triples before there is corpus evidence for an ontology.
 - Do not add file watchers in alpha; explicit/periodic audit and reindex is enough.
 

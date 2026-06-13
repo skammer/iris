@@ -28,7 +28,7 @@
 (def ^:private temp-dir @#'chat-test/temp-dir)
 
 (defn- no-extractor [config]
-  (assoc-in config [:memory :facts :extractor :enabled] false))
+  (assoc-in config [:memory :notes :extractor :enabled] false))
 
 (defn- message-text [message]
   (llm-messages/content-text message))
@@ -195,20 +195,31 @@
       (finally
         (io/delete-file path true)))))
 
-(deftest run-turn-injects-recalled-facts-into-planner-request-test
+(deftest run-turn-injects-recalled-vault-notes-into-planner-request-test
   (let [path (harness/temp-db-path)
+        root (temp-dir)
+        note-file (io/file root "preferences/tabs.md")
         responses (atom ["done"])
         requests (atom [])
         provider (chat-test/->PlannerProvider responses requests)
-        system (test-system path provider no-extractor)
+        system (test-system path provider #(-> %
+                                               no-extractor
+                                               (assoc-in [:memory :vault :paths] [(.getAbsolutePath root)])))
         session (sessions/create-session! system "turn-recall")]
     (try
-      (memory/save-memory-fact! (:memory-service system)
-                                {:subject "user"
-                                 :predicate "prefers"
-                                 :object "tabs over spaces"
-                                 :confidence 0.9
-                                 :scope {:type :session :id (:id session)}})
+      (.mkdirs (.getParentFile note-file))
+      (spit note-file
+            (str "---\n"
+                 "id: mem_tabs\n"
+                 "type: Preference\n"
+                 "title: Tabs over spaces\n"
+                 "iris:\n"
+                 "  scope: global\n"
+                 "  status: approved\n"
+                 "---\n\n"
+                 "# Tabs over spaces\n\n"
+                 "User prefers tabs over spaces.\n"))
+      (memory/reindex-vault! (:memory-service system))
       (turn/run-turn! system {:session-id (:id session)
                               :messages [{:role "user" :content "tabs"}]})
       (let [planner-messages (first-invoke-messages @requests)
@@ -221,8 +232,9 @@
         (is (some? memory-msg))
         (is (str/includes? (message-text memory-msg) "tabs over spaces"))
         (is (= "tabs" (get-in recalled [:payload :query])))
-        (is (= 1 (get-in recalled [:payload :fact-count]))))
+        (is (= 1 (get-in recalled [:payload :surface-counts :vault-chunks]))))
       (finally
+        (io/delete-file root true)
         (io/delete-file path true)))))
 
 (deftest run-turn-orders-context-injectors-before-history-test

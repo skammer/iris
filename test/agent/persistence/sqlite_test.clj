@@ -219,15 +219,10 @@
                                 :entity-type :session
                                 :entity-id (:id session)
                                 :payload {:text "gamma gap delta"}})
-      (sqlite/save-memory-fact! store {:subject "epsilon"
-                                       :predicate "points-to"
-                                       :object "zeta marker"})
       (is (= ["alpha gap beta"]
              (mapv :content (sqlite/search-messages store "alpha beta"))))
       (is (= ["memory.marker"]
              (mapv :event-type (sqlite/search-events store "gamma delta"))))
-      (is (= ["zeta marker"]
-             (mapv :object (sqlite/search-memory-facts store "epsilon zeta"))))
       (finally
         (io/delete-file path true)))))
 

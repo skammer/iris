@@ -4,18 +4,7 @@
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.ui.render :as ui-render]
-   [cheshire.core :as json]
    [clojure.string :as str]))
-
-(defn memory-prompt-fragment [system]
-  (let [{:keys [documents combined]} (memory/read-prompt-memory (:memory-service system))]
-    (ui-render/render
-     [:div#memory-prompt-panel
-      [:h3 "Prompt Memory"]
-      [:p.meta (str "documents: " (count documents))]
-      (if (seq documents)
-        [:div.result.code combined]
-        [:div.empty "No prompt memory files found."])])))
 
 (defn- compact-bool [value]
   (if value "yes" "no"))
@@ -86,52 +75,84 @@
 (defn memory-search-results-fragment [results]
   (ui-render/render
    [:div#memory-search-results-panel
-    [:h3 "Search Results"]
+    [:h3 "Recall Results"]
     [:p.meta (str "query: " (:query results)
-	                  " | ranked: " (count (:ranked results))
-	                  " | messages: " (count (:messages results))
-	                  " | events: " (count (:events results))
-	                  " | facts: " (count (:facts results)))]
-    (if (or (seq (:ranked results))
-            (seq (:messages results))
-            (seq (:events results))
-            (seq (:facts results)))
+                  " | results: " (count (:results results))
+                  " | messages: " (get-in results [:surface-counts :messages] 0)
+                  " | events: " (get-in results [:surface-counts :events] 0)
+                  " | vault chunks: " (get-in results [:surface-counts :vault-chunks] 0))]
+    (if (seq (:results results))
       [:div.memory-result-list
-       (concat
-        (for [{:keys [surface score item]} (:ranked results)]
-          [:article.result
-           [:strong (str "ranked " (name surface))]
-           [:div.meta (format "score %.3f" (double score))]
-           [:pre.code (ui-render/pretty-json item)]])
-        (for [{:keys [subject predicate object scope updated-at]} (:facts results)]
-          [:article.result
-	           [:strong "fact"]
-	           [:div.meta.code (str (get scope :type) "/" (or (get scope :id) "-"))]
-	           [:div.code (str subject " " predicate " " object)]
-	           [:div.meta updated-at]])
-        (for [{:keys [session-id role content created-at]} (:messages results)]
-          [:article.result
-           [:strong "message"]
-           [:div.meta.code (str session-id " / " role)]
-           (ui-render/message-content content)
-           [:div.meta created-at]])
-        (for [{:keys [event-type entity-type entity-id payload created-at]} (:events results)]
-          [:article.result
-           [:strong "event"]
-           [:div.meta (str event-type " / " (or entity-type "system") " / " (or entity-id "-"))]
-           [:div.code (json/generate-string payload)]
-           [:div.meta created-at]]))]
+       (for [{:keys [surface type id scope status text score source reason]} (:results results)]
+         [:article.result
+          [:strong (str (name surface) " " (name type))]
+          [:div.meta.code
+           (str "id " (or id "-")
+                " | score " (format "%.3f" (double score))
+                " | " (name status)
+                " | " (name reason)
+                (when scope
+                  (str " | " (name (:type scope)) "/" (or (:id scope) "-"))))]
+          (ui-render/message-content text)
+          [:details
+           [:summary "source"]
+           [:pre.code (ui-render/pretty-json source)]]])]
       [:div.empty "No memory matches."])]))
 
-(defn- fact-row [{:keys [subject predicate object scope updated-at]}]
-  [:div.row
-   [:span.row__id {:title (str subject
-                               (when scope
-                                 (str " [" (:type scope) "/" (or (:id scope) "-") "]")))}
-    (str subject)]
-   [:span.row__meta {:title (str predicate " " object)}
-    (str predicate " · " object)]
-   [:span.row__time (ui-render/short-timestamp updated-at)]])
+(defn- vault-note-action [idx path label status scope]
+  (let [form-id (str "vault-note-action-" idx "-" status "-" scope)]
+    [:form.inline-form {:id form-id}
+     [:input {:type "hidden" :name "path" :value path}]
+     [:input {:type "hidden" :name "status" :value status}]
+     [:input {:type "hidden" :name "scope" :value scope}]
+     [:button {:type "button"
+               "data-on:click" (str "@post('/ui/memory/vault/status', "
+                                    "{contentType: 'form', selector: '#" form-id "'})")}
+      label]]))
+
+(def ^:private vault-note-folders
+  ["inbox" "preferences" "decisions" "projects" "runbooks" "sessions" "references" "archive"])
+
+(defn- vault-note-move-form [idx path]
+  (let [form-id (str "vault-note-move-" idx)]
+    [:form.inline-form {:id form-id}
+     [:input {:type "hidden" :name "path" :value path}]
+     [:select {:name "folder"}
+      (for [folder vault-note-folders]
+        [:option {:value folder} folder])]
+     [:button {:type "button"
+               "data-on:click" (str "@post('/ui/memory/vault/move', "
+                                    "{contentType: 'form', selector: '#" form-id "'})")}
+      "Move"]]))
+
+(defn- vault-note-row [idx {:keys [path title type iris-status iris-scope updated-at]}]
+  [:div.row.memory-note-row
+   [:span.row__id {:title path}
+    (or title path)]
+   [:span.row__meta
+    (str (or type "Reference") " | " (or iris-status "-") " | " (or iris-scope "-"))]
+   [:span.row__time (ui-render/short-timestamp updated-at)]
+   [:span.row__actions
+    (vault-note-action idx path "Approve" "approved" (or iris-scope "global"))
+    (vault-note-action idx path "Approve global" "approved" "global")
+    (vault-note-action idx path "Reject" "rejected" (or iris-scope "global"))
+    (vault-note-move-form idx path)]])
+
+(defn- scratchpad-panel [scratchpad]
+  [:section.panel.memory-overview
+   [:h2 "Scratchpad"]
+   (if-let [error (:error scratchpad)]
+     [:div.result.diagnostic-result
+      [:strong "error"]
+      [:pre.code error]]
+     [:div
+      [:div.memory-stats
+       (memory-health-stat "scope" (get-in scratchpad [:scope :type] "global"))
+       (memory-health-stat "chars" (count (:content scratchpad)))
+       (memory-health-stat "revision" (subs (:revision scratchpad) 0 12))]
+      (if (str/blank? (:content scratchpad))
+        [:div.empty-line "empty"]
+        [:pre.code.scratchpad-preview (:content scratchpad)])])])
 
 (defn memory-workspace-fragment
   ([system] (memory-workspace-fragment system nil))
@@ -139,20 +160,18 @@
 	    (let [memory-service (:memory-service system)
 	         health (memory/health-check memory-service)
 	         surfaces (memory/list-surfaces memory-service)
-	         prompt (memory/read-prompt-memory memory-service)
-	         fact-count (get-in health [:facts :count] 0)
-	         ;; Store-level call: the memory service clamps :limit to the search
-	         ;; max, which would cap this listing at a couple dozen facts.
-	         facts (sqlite/search-memory-facts (:store memory-service) ""
-	                                           {:all-scopes? true :limit 100})]
+	         notes (sqlite/list-vault-notes (:store memory-service) {:limit 50})
+          global-scratchpad (try
+                              (memory/read-scratchpad memory-service {:scope {:type :global}})
+                              (catch Exception e
+                                {:error (.getMessage e)}))]
      (ui-render/render
       [:section#memory-workspace.workspace-grid.memory-workspace
        [:div.memory-left-stack
         [:section.panel.memory-overview
          [:h2 "Memory"]
          [:div.memory-stats
-          (memory-health-stat "prompt" (get-in health [:prompt :document-count] 0))
-          (memory-health-stat "facts" fact-count)
+          (memory-health-stat "notes" (get-in health [:vault :note-count] 0))
           (memory-health-stat "limit" (str (get-in health [:search :default-limit])
                                            "/"
                                            (get-in health [:search :max-limit])))]
@@ -167,17 +186,25 @@
             [:th "paths"]]]
           [:tbody
            (for [surface surfaces]
-             (memory-surface-row surface))]]
-         [:div#memory-prompt-panel.memory-docs
-          [:h3 "Prompt Memory"]
-          [:p.meta (str "documents: " (count (:documents prompt)))]
-          (if (seq (:documents prompt))
-            [:div.memory-result-list
-             (for [{:keys [path content]} (:documents prompt)]
-               [:details.result
-                [:summary [:strong path]]
-                [:pre.code content]])]
-            [:div.empty "No prompt memory files found."])]]
+             (memory-surface-row surface))]]]
+
+        [:section.panel.memory-overview
+         [:h2 "Vault"]
+         [:div.memory-stats
+          (memory-health-stat "notes" (get-in health [:vault :note-count] 0))
+          (memory-health-stat "chunks" (get-in health [:vault :chunk-count] 0))]
+         [:button {:type "button"
+                   "data-on:click" "@post('/ui/memory/vault/reindex')"}
+          "Audit & Reindex"]]
+
+        (scratchpad-panel global-scratchpad)
+
+        [:section.panel.memory-overview
+         [:h2 "Vault Notes"]
+         (if (seq notes)
+           [:div.rows
+            (map-indexed vault-note-row notes)]
+           [:div.empty-line "none"])]
 
         [:section.panel.memory-lab
          [:h2 "Retrieval Lab"]
@@ -185,10 +212,11 @@
           [:h3 "Memory Tool"]
           [:div.memory-form-grid
            [:select {:name "action"}
-            [:option {:value "search"} "search"]
-            [:option {:value "save-fact"} "save-fact"]
-            [:option {:value "read-vault"} "read-vault"]
-            [:option {:value "write-vault"} "write-vault"]]
+            [:option {:value "recall"} "recall"]
+            [:option {:value "vault-search"} "vault-search"]
+            [:option {:value "scratchpad-read"} "scratchpad-read"]
+            [:option {:value "scratchpad-search"} "scratchpad-search"]
+            [:option {:value "scratchpad-replace"} "scratchpad-replace"]]
            [:input {:type "text" :name "query" :placeholder "query"}]
            [:input {:type "text" :name "limit" :value "10" :placeholder "limit"}]
            [:select {:name "scope_type"}
@@ -197,37 +225,20 @@
             [:option {:value "session"} "session"]
             [:option {:value "agent"} "agent"]]
            [:input {:type "text" :name "scope_id" :placeholder "scope id"}]
-           [:input {:type "text" :name "subject" :placeholder "subject"}]
-           [:input {:type "text" :name "predicate" :placeholder "predicate"}]
-           [:input {:type "text" :name "object" :placeholder "object"}]
-           [:input {:type "text" :name "path" :placeholder "vault path"}]]
-          [:textarea {:name "content" :rows 4 :placeholder "vault content"}]
+           [:input {:type "text" :name "expected_revision" :placeholder "scratchpad revision"}]]
+          [:textarea {:name "old_text" :rows 4 :placeholder "scratchpad old_text"}]
+          [:textarea {:name "new_text" :rows 4 :placeholder "scratchpad new_text"}]
           [:div.actions
            [:button {:type "button"
                      "data-on:click" "@post('/ui/memory/tool', {contentType: 'form', selector: '#memory-tool-form'})"}
             "Run"]]]
          [:div#memory-tool-output.empty "No memory tool output."]
          [:form#memory-search-form.memory-tool-form
-          [:h3 "Memory Search"]
-          [:div.compact-form-row
-           [:input {:type "text" :name "query" :placeholder "search messages, events, facts"}]
+         [:h3 "Memory Recall"]
+         [:div.compact-form-row
+           [:input {:type "text" :name "query" :placeholder "recall messages, events, vault notes"}]
            [:button {:type "button"
                      "data-on:click" "@post('/ui/memory/search', {contentType: 'form', selector: '#memory-search-form'})"}
-            "Search"]]]
-         [:div#memory-search-results-panel.empty "No search output."]]]
-
-       [:section.panel.memory-facts
-        [:div.panel-head
-         [:h2 "Facts"]
-         [:div.panel-head__form
-          [:span.count-badge (str fact-count)]
-          [:button {:type "button"
-                    "data-on:click" "@post('/ui/memory/facts/reset')"}
-           "Reset facts"]]]
-        (memory-reset-result reset-result)
-        (if (seq facts)
-          [:div.rows
-           (map fact-row facts)]
-          [:div.empty-line "none"])
-        (when (> fact-count (count facts))
-          [:p.meta (str "showing " (count facts) " of " fact-count)])]]))))
+            "Recall"]]]
+         [:div#memory-search-results-panel.empty "No recall output."]]
+        (memory-reset-result reset-result)]]))))

@@ -1,6 +1,6 @@
 (ns agent.llm.service
   "LLM provider factory. Chooses the active configured provider, constructs the
-   concrete adapter, and builds the fact-extraction provider used by memory."
+   concrete adapter, and builds the note-extraction provider used by memory."
   (:require
    [agent.config :as config]
    [agent.llm.providers.ollama :as ollama]
@@ -33,9 +33,9 @@
                       {:provider provider
                        :type type})))))
 
-(defn create-fact-llm-provider
+(defn create-note-llm-provider
   [cfg]
-  (let [extractor (get-in cfg [:memory :facts :extractor])
+  (let [extractor (get-in cfg [:memory :notes :extractor])
         provider (:provider extractor)
         model (:model extractor)]
     (when (or provider model)

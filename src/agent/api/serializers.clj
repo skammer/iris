@@ -144,21 +144,6 @@
               :max_limit :max-limit
               :min_score :min-score}))
 
-(defn fact->response [fact]
-  (serialize fact
-             {:id :id
-              :scope :scope
-              :subject :subject
-              :predicate :predicate
-              :object :object
-              :source_session_id :source-session-id
-              :source_message_ids :source-message-ids
-              :source_request_id :source-request-id
-              :confidence :confidence
-              :created :created?
-              :created_at :created-at
-              :updated_at :updated-at}))
-
 (defn model->response [model]
   (serialize model
              {:provider [:provider ->name]

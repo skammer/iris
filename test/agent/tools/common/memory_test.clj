@@ -6,17 +6,21 @@
    [agent.tools.core :as tools]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defn- temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-memory-tool-" ".db")))
 
+(defn- temp-dir [prefix]
+  (.toFile (java.nio.file.Files/createTempDirectory
+            prefix
+            (make-array java.nio.file.attribute.FileAttribute 0))))
+
 (defn- memory-service [store]
   (memory/create-memory-service
-	   {:prompt {:paths []}
-	    :search {:default-limit 10}
-	    :facts {:extractor {:enabled false}}}
-	   store))
+   {:search {:default-limit 10}
+    :notes {:extractor {:enabled false}}}
+   store))
 
 (defn- registry [service]
   (reduce tools/register-tool
@@ -24,76 +28,75 @@
           (conj (memory-tool/create-memory-tools service)
                 (memory-tool/create-message-search-tool service))))
 
-(deftest memory-tool-search-uses-facts-and-prompt-files-test
+(deftest memory-tool-recall-uses-vault-notes-and-ignores-prompt-files-test
   (let [path (temp-db-path)
-        root (doto (java.nio.file.Files/createTempDirectory "iris-memory-tool" (make-array java.nio.file.attribute.FileAttribute 0))
-               (.toFile))
-        root-file (.toFile root)
-	        prompt-file (io/file root-file "MEMORY.md")
+        root (temp-dir "iris-memory-tool")
+        prompt-file (io/file root "MEMORY.md")
+        note-file (io/file root "preferences/kimi.md")
         store (sqlite/create-store {:path path})
         session (sqlite/create-session! store "memory-tool")
         _ (spit prompt-file (str "Kimi prompt marker " (apply str (repeat 1200 "x"))))
         service (memory/create-memory-service
-	                 {:prompt {:paths [(.getAbsolutePath prompt-file)]}
-	                  :search {:default-limit 10}
-	                  :facts {:extractor {:enabled false}}}
-	                 store)
+                 {:search {:default-limit 10}
+                  :vault {:paths [(.getAbsolutePath root)]
+                          :writable? true}
+                  :notes {:extractor {:enabled false}}}
+                 store)
         registry* (registry service)]
     (try
+      (.mkdirs (.getParentFile note-file))
+      (spit note-file
+            (str "---\n"
+                 "id: mem_kimi\n"
+                 "type: Preference\n"
+                 "title: Kimi memory support\n"
+                 "iris:\n"
+                 "  scope: global\n"
+                 "  status: approved\n"
+                 "---\n\n"
+                 "# Kimi memory support\n\n"
+                 "Kimi supports memory vault notes.\n"))
+      (memory/reindex-vault! service)
       (sqlite/append-message! store (:id session) "assistant"
                               (str "Kimi model marker " (apply str (repeat 2000 "x"))))
-      (memory/save-memory-fact! service
-                                {:subject "Kimi"
-                                 :predicate "supports"
-                                 :object "memory facts"}
-                                {:scope {:type :global}
-                                 :source-session-id (:id session)})
       (let [result (tools/execute-tool registry*
-                                       :memory_search
+                                       :memory_recall
                                        {:query "Kimi"
                                         :limit 3}
                                        {:permissions #{:memory-read}
                                         :session-id (:id session)})]
         (is (string? result))
-	        (is (str/includes? result "Memory results for: Kimi"))
-	        (is (str/includes? result "fact #"))
-	        (is (str/includes? result "prompt #MEMORY.md"))
-        (is (str/includes? result "[truncated "))
-        (is (not (str/includes? result "message #")))
+        (is (str/includes? result "Memory recall for: Kimi"))
+        (is (str/includes? result "vault_chunk #"))
+        (is (not (str/includes? result "prompt #MEMORY.md")))
         (is (not (str/includes? result "\"messages\"")))
         (is (not (str/includes? result "\"ranked\""))))
       (let [blank-result (tools/execute-tool registry*
-                                             :memory_search
+                                             :memory_recall
                                              {:query ""}
                                              {:permissions #{:memory-read}
                                               :session-id (:id session)})]
-        (is (= "Memory search skipped: query is blank. Provide a focused query."
+        (is (= "Memory recall skipped: query is blank. Provide a focused query."
                blank-result)))
       (finally
         (io/delete-file path true)
-        (io/delete-file root-file true)))))
+        (io/delete-file root true)))))
 
-(deftest memory-tool-search-clamps-requested-limit-test
+(deftest memory-tool-recall-clamps-requested-limit-test
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})
         session (sqlite/create-session! store "memory-tool-limit")
         service (memory/create-memory-service
-	                 {:prompt {:paths []}
-	                  :search {:default-limit 2
-	                           :max-limit 2}
-	                  :facts {:extractor {:enabled false}}}
-	                 store)
+                 {:search {:default-limit 2
+                           :max-limit 2}
+                  :notes {:extractor {:enabled false}}}
+                 store)
         registry* (registry service)]
     (try
       (doseq [idx (range 6)]
-        (memory/save-memory-fact! service
-                                  {:subject "Kimi"
-                                   :predicate "clamp-marker"
-                                   :object (str "value-" idx)}
-                                  {:scope {:type :global}
-                                   :source-session-id (:id session)}))
+        (sqlite/append-message! store (:id session) "assistant" (str "Kimi clamp-marker value-" idx)))
       (let [result (tools/execute-tool registry*
-                                       :memory_search
+                                       :memory_recall
                                        {:query "Kimi"
                                         :limit 99}
                                        {:permissions #{:memory-read}
@@ -104,6 +107,99 @@
         (is (= 2 (count result-lines))))
       (finally
         (io/delete-file path true)))))
+
+(deftest vault-search-tool-uses-indexed-approved-vault-notes-test
+  (let [path (temp-db-path)
+        root (temp-dir "iris-memory-vault-tool")
+        note-file (io/file root "runbooks/ops.md")
+        store (sqlite/create-store {:path path})
+        service (memory/create-memory-service
+                 {:search {:default-limit 10}
+                  :vault {:paths [(.getAbsolutePath root)]
+                          :writable? true}
+                  :notes {:extractor {:enabled false}}}
+                 store)
+        registry* (registry service)]
+    (try
+      (.mkdirs (.getParentFile note-file))
+      (spit note-file
+            (str "---\n"
+                 "id: mem_ops\n"
+                 "type: Runbook\n"
+                 "title: Ops deploy\n"
+                 "iris:\n"
+                 "  scope: global\n"
+                 "  status: approved\n"
+                 "---\n\n"
+                 "# Deploy\n\n"
+                 "Use agent.example.invalid health check.\n"))
+      (memory/reindex-vault! service)
+      (let [result (tools/execute-tool registry*
+                                       :vault_search
+                                       {:query "tailscale"
+                                        :limit 5}
+                                       {:permissions #{:memory-read}})]
+        (is (str/includes? result "Vault results for: tailscale"))
+        (is (str/includes? result "mem_ops"))
+        (is (str/includes? result "agent.example.invalid")))
+      (finally
+        (io/delete-file path true)
+        (io/delete-file root true)))))
+
+(deftest scratchpad-tools-read-search-replace-test
+  (let [path (temp-db-path)
+        root (temp-dir "iris-memory-scratchpad-tool")
+        store (sqlite/create-store {:path path})
+        session (sqlite/create-session! store "scratchpad-tool")
+        service (memory/create-memory-service
+                 {:search {:default-limit 10}
+                  :vault {:paths [(.getAbsolutePath root)]
+                          :writable? true}
+                  :notes {:extractor {:enabled false}}}
+                 store)
+        registry* (registry service)
+        read-ctx {:permissions #{:memory-read}
+                  :session-id (:id session)}
+        write-ctx {:permissions #{:memory-write}
+                   :session-id (:id session)}]
+    (try
+      (let [empty-pad (memory/read-scratchpad service {:session-id (:id session)})
+            replace-result (tools/execute-tool registry*
+                                               :scratchpad_replace
+	                                               {:old-text ""
+	                                                :new-text "alpha scratchpad marker\nbeta scratchpad marker\n"
+	                                                :expected-revision (:revision empty-pad)}
+	                                               write-ctx)
+	            read-result (tools/execute-tool registry* :scratchpad_read {} read-ctx)
+	            search-result (tools/execute-tool registry*
+	                                              :scratchpad_search
+	                                              {:query "beta"}
+	                                              read-ctx)
+             _ (memory/reindex-vault! service)
+             vault-result (tools/execute-tool registry*
+                                              :vault_search
+                                              {:query "alpha"}
+                                              read-ctx)
+	            pad-after (memory/read-scratchpad service {:session-id (:id session)})
+             inbox (io/file root "inbox")]
+	        (is (str/includes? replace-result "Updated scratchpad session/"))
+	        (is (str/includes? read-result "alpha scratchpad marker"))
+	        (is (str/includes? search-result "line 2"))
+        (is (str/includes? vault-result "Scratchpad"))
+	        (is (str/includes? (:content pad-after) "beta scratchpad marker"))
+	        (is (= 1 (sqlite/count-vault-notes store)))
+        (is (not (.exists inbox)))
+	        (is (thrown-with-msg? clojure.lang.ExceptionInfo
+	                              #"scratchpad revision is stale"
+                              (tools/execute-tool registry*
+	                                                  :scratchpad_replace
+	                                                  {:old-text "beta scratchpad marker\n"
+	                                                   :new-text ""
+	                                                   :expected-revision (:revision empty-pad)}
+	                                                  write-ctx))))
+      (finally
+        (io/delete-file path true)
+        (io/delete-file root true)))))
 
 (deftest message-search-tool-returns-only-text-chunks-test
   (let [path (temp-db-path)
@@ -149,30 +245,5 @@
                               (filter #(str/starts-with? % "- "))
                               vec)]
         (is (= 1 (count result-lines))))
-      (finally
-        (io/delete-file path true)))))
-
-(deftest memory-tool-removes-sqlite-facts-test
-  (let [path (temp-db-path)
-        store (sqlite/create-store {:path path})
-        service (memory-service store)
-        registry* (registry service)]
-    (try
-      (tools/execute-tool registry*
-                          :memory_save_fact
-                          {:subject "Kimi"
-                           :predicate "stores"
-                           :object "facts"
-                           :scope {:type :global}}
-                          {:permissions #{:memory-write}})
-      (is (= 1 (count (memory/search-facts service "Kimi" {:all-scopes? true}))))
-      (tools/execute-tool registry*
-                          :memory_remove_fact
-                          {:subject "Kimi"
-                           :predicate "stores"
-                           :object "facts"
-                           :scope {:type :global}}
-                          {:permissions #{:memory-write}})
-      (is (empty? (memory/search-facts service "Kimi" {:all-scopes? true})))
       (finally
         (io/delete-file path true)))))

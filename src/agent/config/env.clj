@@ -120,17 +120,15 @@
    {:names "AGENT_LOOP_PLAN_FILE" :apply (assoc-path [:loop :plan-file])}
    {:names "AGENT_LOOP_SUMMARY_MAX_CHARS" :parse parse-long* :apply (assoc-path [:loop :summary-max-chars])}
    {:names "AGENT_LOOP_VALIDATION_MAX_CHARS" :parse parse-long* :apply (assoc-path [:loop :validation-max-chars])}
-   {:names "AGENT_MEMORY_PROMPT_PATHS" :parse parse-csv :apply (assoc-path [:memory :prompt :paths])}
    {:names "AGENT_MEMORY_SEARCH_DEFAULT_LIMIT" :parse parse-long* :apply (assoc-path [:memory :search :default-limit])}
    {:names "AGENT_MEMORY_SEARCH_MAX_LIMIT" :parse parse-long* :apply (assoc-path [:memory :search :max-limit])}
    {:names "AGENT_MEMORY_SEARCH_MIN_SCORE" :parse parse-double* :apply (assoc-path [:memory :search :min-score])}
    {:names "AGENT_MEMORY_VAULT_PATHS" :parse parse-csv :apply (assoc-path [:memory :vault :paths])}
    {:names "AGENT_MEMORY_VAULT_WRITABLE" :parse parse-bool :apply (assoc-path [:memory :vault :writable?])}
-   {:names "AGENT_FACT_EXTRACTOR_ENABLED" :parse parse-bool :apply (assoc-path [:memory :facts :extractor :enabled])}
-   {:names "AGENT_FACT_EXTRACTOR_PROVIDER" :parse parse-keyword* :apply (assoc-path [:memory :facts :extractor :provider])}
-   {:names "AGENT_FACT_EXTRACTOR_MODEL" :apply (assoc-path [:memory :facts :extractor :model])}
-   {:names "AGENT_FACT_EXTRACTOR_FORMAT" :parse parse-keyword* :apply (assoc-path [:memory :facts :extractor :format])}
-   {:names "AGENT_FACT_DEDUP_SIMILARITY_THRESHOLD" :parse parse-double* :apply (assoc-path [:memory :facts :dedup :similarity-threshold])}
+   {:names "AGENT_NOTE_EXTRACTOR_ENABLED" :parse parse-bool :apply (assoc-path [:memory :notes :extractor :enabled])}
+   {:names "AGENT_NOTE_EXTRACTOR_PROVIDER" :parse parse-keyword* :apply (assoc-path [:memory :notes :extractor :provider])}
+   {:names "AGENT_NOTE_EXTRACTOR_MODEL" :apply (assoc-path [:memory :notes :extractor :model])}
+   {:names "AGENT_NOTE_EXTRACTOR_FORMAT" :parse parse-keyword* :apply (assoc-path [:memory :notes :extractor :format])}
    {:names "AGENT_TELEGRAM_ENABLED" :parse parse-bool :apply (assoc-path [:channel-adapters :telegram :enabled])}
    {:names "AGENT_TELEGRAM_BOT_TOKEN" :apply (assoc-path [:channel-adapters :telegram :bot-token])}
    {:names "AGENT_TELEGRAM_RICH_MESSAGES" :parse parse-bool :apply (assoc-path [:channel-adapters :telegram :rich-messages?])}

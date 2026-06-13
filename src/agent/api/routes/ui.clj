@@ -15,11 +15,20 @@
    [:limit {:optional true} :string]
    [:scope_type {:optional true} :string]
    [:scope_id {:optional true} :string]
-   [:subject {:optional true} :string]
-   [:predicate {:optional true} :string]
-   [:object {:optional true} :string]
-   [:path {:optional true} :string]
-   [:content {:optional true} :string]])
+   [:old_text {:optional true} :string]
+   [:new_text {:optional true} :string]
+   [:expected_revision {:optional true} :string]])
+
+(def ^:private ui-memory-vault-status-form
+  [:map
+   [:path schemas/NonBlankString]
+   [:status {:optional true} :string]
+   [:scope {:optional true} :string]])
+
+(def ^:private ui-memory-vault-move-form
+  [:map
+   [:path schemas/NonBlankString]
+   [:folder schemas/NonBlankString]])
 
 (def ^:private ui-tool-approval-request-form
   [:map
@@ -69,12 +78,15 @@
    ["/ui/events" {:get {:handler/id :ui-events}}]
    ["/ui/logs" {:get {:handler/id :ui-logs}}]
    ["/ui/events/live" {:get {:handler/id :ui-events-live}}]
-   ["/ui/memory/prompt" {:get {:handler/id :ui-memory-prompt}}]
    ["/ui/memory/search" {:post {:handler/id :ui-memory-search
                                 :parameters {:form ui-memory-search-form}}}]
    ["/ui/memory/tool" {:post {:handler/id :ui-memory-tool
                               :parameters {:form ui-memory-tool-form}}}]
-   ["/ui/memory/facts/reset" {:post {:handler/id :ui-memory-facts-reset}}]
+   ["/ui/memory/vault/status" {:post {:handler/id :ui-memory-vault-status
+                                      :parameters {:form ui-memory-vault-status-form}}}]
+   ["/ui/memory/vault/move" {:post {:handler/id :ui-memory-vault-move
+                                    :parameters {:form ui-memory-vault-move-form}}}]
+   ["/ui/memory/vault/reindex" {:post {:handler/id :ui-memory-vault-reindex}}]
    ["/ui/tools" {:get {:handler/id :ui-tools}}]
    ["/ui/system/reload" {:post {:handler/id :ui-system-reload}}]
    ["/ui/tool-approvals" {:get {:handler/id :ui-tool-approvals}}]

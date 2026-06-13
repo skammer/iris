@@ -1,10 +1,11 @@
 (ns agent.chat.memory
   "Chat memory integration. Builds bounded recall context before a turn and
-   extracts durable facts from the completed user/assistant exchange."
+   extracts candidate notes from the completed user/assistant exchange."
   (:require
    [agent.chat.util :as util]
    [agent.config :as config]
    [agent.memory.core :as memory]
+   [agent.memory.recall :as recall]
    [agent.prompts :as prompts]
    [cheshire.core :as json]
    [clojure.string :as str]))
@@ -13,10 +14,11 @@
 (def memory-max-chars 6000)
 
 (def empty-recall
-  {:prompt {:documents []}
-	   :search {:messages []
-	            :events []
-	            :facts []}})
+  {:query nil
+   :results []
+   :surface-counts {:messages 0
+                    :events 0
+                    :vault-chunks 0}})
 
 (defn- compact-memory-json
   "Serializes recalled memory to JSON, capped at memory-max-chars to keep
@@ -32,17 +34,15 @@
 (defn recall-memory [system session-id query request-id]
   (try
     (if-let [memory-service (:memory-service system)]
-      (let [prompt (memory/read-prompt-memory memory-service)
-            search (when-not (str/blank? (or query ""))
-                     (memory/search-memory memory-service
-                                           query
-                                           {:limit memory-result-limit
-                                            :session-id session-id
-                                            :entity-type :session
-                                            :entity-id session-id
-                                            :scope {:type :session :id session-id}}))]
-        {:prompt prompt
-         :search (or search (:search empty-recall))})
+      (if-not (str/blank? (or query ""))
+        (recall/recall memory-service
+                       query
+                       {:limit memory-result-limit
+                        :session-id session-id
+                        :entity-type :session
+                        :entity-id session-id
+                        :scope {:type :session :id session-id}})
+        empty-recall)
       empty-recall)
     (catch Exception e
       (util/emit! system {:event-type :message-update
@@ -62,9 +62,9 @@
 (defn extract-turn-memory! [system session-id user-message assistant-message request-id]
   (when (and session-id user-message assistant-message)
     (try
-      (memory/extract-and-save-facts!
+      (memory/extract-and-save-notes!
        (:memory-service system)
-       (or (:fact-llm-provider system) (:llm-provider system))
+       (or (:note-llm-provider system) (:llm-provider system))
        {:user-message (:content user-message)
         :assistant-message (:content assistant-message)}
        {:session-id session-id

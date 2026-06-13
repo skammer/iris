@@ -4,21 +4,18 @@
    [clojure.string :as str]
    [hugsql.core :as hugsql]))
 
+(declare reset-vault-chunks-fts-sqlvec
+         reset-vault-index-sqlvec
+         insert-vault-note-sqlvec
+         insert-vault-chunk-sqlvec
+         insert-vault-chunk-fts-sqlvec
+         search-vault-chunks-fts-sqlvec
+         search-vault-chunks-like-sqlvec
+         list-vault-notes-sqlvec
+         count-vault-notes-sqlvec
+         count-vault-chunks-sqlvec)
+
 (hugsql/def-sqlvec-fns "agent/persistence/sqlite/memory.sql")
-
-(defn normalize-text [value]
-  (-> (or value "")
-      str/trim
-      str/lower-case
-      (str/replace #"\s+" " ")))
-
-(defn- nonblank! [field value]
-  (when (str/blank? (or value ""))
-    (throw (ex-info (str "Memory fact " (name field) " must be non-blank")
-                    {:type :invalid-memory-fact
-                     :field field
-                     :value value})))
-  value)
 
 (defn normalize-scope [{:keys [scope scope-type scope-id session-id agent-id]}]
   (let [scope* (or scope
@@ -31,153 +28,123 @@
     {:scope-type (name type*)
      :scope-id (when-not (= "global" (name type*)) id*)}))
 
-(defn- row->fact
-  [{:keys [id scope_type scope_id subject predicate object normalized_subject
-           normalized_predicate normalized_object source_session_id
-           source_message_ids_json source_request_id confidence status
-           metadata_json created_at updated_at]}]
-  {:id id
-   :scope {:type scope_type :id scope_id}
-   :subject subject
-   :predicate predicate
-   :object object
-   :normalized {:subject normalized_subject
-                :predicate normalized_predicate
-                :object normalized_object}
-   :source-session-id source_session_id
-   :source-message-ids (vec (or (common/parse-json-string source_message_ids_json) []))
-   :source-request-id source_request_id
-   :confidence confidence
-   :status status
-   :metadata (or (common/parse-json-string metadata_json) {})
-   :created-at created_at
+(defn- row->vault-chunk
+  [{:keys [chunk_id path heading block_id content_hash text note_id type title
+           description tags_json timestamp iris_scope iris_status iris_confidence
+           origins_json frontmatter_json updated_at retrieval_score]}]
+  {:chunk-id chunk_id
+   :path path
+   :heading heading
+   :block-id block_id
+   :content-hash content_hash
+   :text text
+   :note-id note_id
+   :type type
+   :title title
+   :description description
+   :tags (vec (or (common/parse-json-string tags_json) []))
+   :timestamp timestamp
+   :iris-scope iris_scope
+   :iris-status iris_status
+   :iris-confidence iris_confidence
+   :origins (vec (or (common/parse-json-string origins_json) []))
+   :frontmatter (or (common/parse-json-string frontmatter_json) {})
+   :updated-at updated_at
+   :retrieval-score retrieval_score})
+
+(defn- row->vault-note
+  [{:keys [path id type title description tags_json timestamp iris_scope
+           iris_status iris_confidence origins_json frontmatter_json body_hash
+           updated_at]}]
+  {:path path
+   :id id
+   :type type
+   :title title
+   :description description
+   :tags (vec (or (common/parse-json-string tags_json) []))
+   :timestamp timestamp
+   :iris-scope iris_scope
+   :iris-status iris_status
+   :iris-confidence iris_confidence
+   :origins (vec (or (common/parse-json-string origins_json) []))
+   :frontmatter (or (common/parse-json-string frontmatter_json) {})
+   :body-hash body_hash
    :updated-at updated_at})
 
-(defn- fact-row [fact]
-  (let [{:keys [scope-type scope-id]} (normalize-scope fact)
-        now (common/now-str)
-        subject (nonblank! :subject (:subject fact))
-        predicate (nonblank! :predicate (:predicate fact))
-        object (nonblank! :object (:object fact))]
-    {:id (or (:id fact) (common/uuid-str))
-     :scope_type scope-type
-     :scope_id scope-id
-     :subject subject
-     :predicate predicate
-     :object object
-     :normalized_subject (normalize-text subject)
-     :normalized_predicate (normalize-text predicate)
-     :normalized_object (normalize-text object)
-     :source_session_id (or (:source-session-id fact) (:session-id fact))
-     :source_message_ids_json (common/json-string (vec (or (:source-message-ids fact) [])))
-     :source_request_id (:source-request-id fact)
-     :confidence (:confidence fact)
-     :status (or (:status fact) "active")
-     :metadata_json (common/json-string (or (:metadata fact) {}))
-     :created_at (or (:created-at fact) now)
-     :updated_at now}))
+(defn replace-vault-index!
+  [store notes]
+  (common/with-transaction
+    store
+    (fn [conn]
+      (common/execute! conn (reset-vault-chunks-fts-sqlvec))
+      (common/execute! conn (reset-vault-index-sqlvec))
+      (doseq [{:keys [chunks] :as note} notes]
+        (common/execute!
+         conn
+         (insert-vault-note-sqlvec
+          {:path (:path note)
+           :id (:id note)
+           :type (:type note)
+           :title (:title note)
+           :description (:description note)
+           :tags_json (common/json-string (vec (or (:tags note) [])))
+           :timestamp (:timestamp note)
+           :iris_scope (:iris-scope note)
+           :iris_status (:iris-status note)
+           :iris_confidence (:iris-confidence note)
+           :origins_json (common/json-string (vec (or (:origins note) [])))
+           :frontmatter_json (common/json-string (or (:frontmatter note) {}))
+           :body_hash (:body-hash note)
+           :updated_at (:updated-at note)}))
+        (doseq [chunk chunks]
+          (let [row {:chunk_id (:chunk-id chunk)
+                     :path (:path note)
+                     :heading (:heading chunk)
+                     :block_id (:block-id chunk)
+                     :content_hash (:content-hash chunk)
+                     :text (:text chunk)}]
+            (common/execute! conn (insert-vault-chunk-sqlvec row))
+            (common/execute! conn (insert-vault-chunk-fts-sqlvec row)))))
+      {:note-count (count notes)
+       :chunk-count (reduce + 0 (map #(count (:chunks %)) notes))})))
 
-(defn save-fact! [store fact]
-  (let [row (fact-row fact)]
-    (common/with-transaction
-      store
-      (fn [conn]
-        (if-let [existing (common/select-one conn
-                                             (get-fact-by-normalized-sqlvec row)
-                                             row->fact)]
-          (let [row* (assoc row
-                            :id (:id existing)
-                            :created_at (:created-at existing)
-                            :source_message_ids_json
-                            (common/json-string
-                             (vec (distinct (concat (:source-message-ids existing)
-                                                    (or (:source-message-ids fact) []))))))]
-            (common/execute! conn (update-fact-sqlvec row*))
-            (assoc (row->fact (merge row* {:source_message_ids_json (:source_message_ids_json row*)}))
-                   :created? false))
-          (do
-            (common/execute! conn (insert-fact-sqlvec row))
-            (assoc (row->fact row) :created? true)))))))
-
-(defn merge-fact-source! [store existing fact]
-  (let [source-message-ids (vec (distinct (concat (:source-message-ids existing)
-                                                  (or (:source-message-ids fact) []))))
-        row (merge (fact-row (merge existing fact))
-                   {:id (:id existing)
-                    :created_at (:created-at existing)
-                    :subject (:subject existing)
-                    :predicate (:predicate existing)
-                    :object (:object existing)
-                    :normalized_subject (get-in existing [:normalized :subject])
-                    :normalized_predicate (get-in existing [:normalized :predicate])
-                    :normalized_object (get-in existing [:normalized :object])
-                    :source_message_ids_json (common/json-string source-message-ids)})]
-    (common/with-transaction
-      store
-      (fn [conn]
-        (common/execute! conn (update-fact-sqlvec row))
-        (assoc (row->fact row)
-               :created? false
-               :similar-duplicate? true)))))
-
-(defn remove-fact! [store {:keys [id] :as fact}]
-  (let [row (when-not id (fact-row fact))
-        now (common/now-str)
-        params (when row (assoc row :updated_at now))
-        removed (common/with-transaction
-                  store
-                  (fn [conn]
-                    (if id
-                      (common/execute! conn (remove-fact-by-id-sqlvec {:id id
-                                                                       :updated_at now}))
-                      (common/execute! conn (remove-fact-by-normalized-sqlvec params)))))]
-    {:id id
-     :subject (:subject fact)
-     :predicate (:predicate fact)
-     :object (:object fact)
-     :scope (when row
-              {:type (:scope_type row)
-               :id (:scope_id row)})
-     :removed-count removed
-     :removed? (pos? (long removed))
-     :updated-at now}))
-
-(defn reset-facts! [store]
-  (let [removed (common/with-transaction
-                  store
-                  (fn [conn]
-                    (common/execute! conn (reset-facts-sqlvec))))]
-    {:removed-count removed
-     :removed? (pos? (long removed))
-     :reset? true
-     :mode :hard-delete
-     :updated-at (common/now-str)}))
-
-(defn search-facts
-  ([store query] (search-facts store query {}))
-  ([store query {:keys [limit include-global?] :or {limit 20 include-global? true} :as opts}]
+(defn search-vault-chunks
+  ([store query] (search-vault-chunks store query {}))
+  ([store query {:keys [limit] :or {limit 20} :as opts}]
    (let [fts-query (common/fts5-query query)
-         {:keys [scope-type scope-id]} (normalize-scope opts)
+         session-id (:session-id opts)
          params {:needle (when-not (str/blank? (or query ""))
                            (str "%" query "%"))
-                :query fts-query
-                :limit (common/bounded-limit limit 20 100)
-                 :include_global (if include-global? 1 0)
-                 :scope_type scope-type
-                 :scope_id scope-id}]
+                 :query fts-query
+                 :session_id session-id
+                 :session_origin_needle (when session-id
+                                          (str "%\"session_id\":\"" session-id "\"%"))
+                 :limit (common/bounded-limit limit 20 100)}]
      (common/with-connection
        store
        (fn [conn]
-         (mapv row->fact
+         (mapv row->vault-chunk
                (common/select-many conn
-                                   (if (:all-scopes? opts)
-                                     (if fts-query
-                                       (search-facts-all-fts-sqlvec params)
-                                       (search-facts-all-like-sqlvec params))
-                                     (if fts-query
-                                       (search-facts-scoped-fts-sqlvec params)
-                                       (search-facts-scoped-like-sqlvec params)))
+                                   (if fts-query
+                                     (search-vault-chunks-fts-sqlvec params)
+                                     (search-vault-chunks-like-sqlvec params))
                                    identity)))))))
 
-(defn count-facts [store]
-  (common/count-rows store (count-facts-sqlvec)))
+(defn list-vault-notes
+  ([store] (list-vault-notes store {}))
+  ([store {:keys [limit status] :or {limit 50}}]
+   (common/with-connection
+     store
+     (fn [conn]
+       (mapv row->vault-note
+             (common/select-many conn
+                                 (list-vault-notes-sqlvec
+                                  {:limit (common/bounded-limit limit 50 200)
+                                   :status status})
+                                 identity))))))
+
+(defn count-vault-notes [store]
+  (common/count-rows store (count-vault-notes-sqlvec)))
+
+(defn count-vault-chunks [store]
+  (common/count-rows store (count-vault-chunks-sqlvec)))

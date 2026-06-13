@@ -59,15 +59,17 @@
         tool-names (set (map :name tools))
         adapters (channel-adapters/list-adapters (:channel-adapter-registry system))
         system-health (system-health/health-check system)]
-    (is (every? tool-names [:fs_read :fs_write :fs_create :fs_replace :fs_list
+	    (is (every? tool-names [:fs_read :fs_write :fs_create :fs_replace :fs_list
 	                            :fs_delete :fs_mkdir :http
-	                            :memory_search :memory_save_fact :memory_remove_fact
-	                            :memory_read_vault :memory_write_vault
+	                            :memory_recall
+	                            :vault_search
+                            :scratchpad_read :scratchpad_search
+                            :scratchpad_replace
 	                            :message_search :shell :system_reload
                             :todo_write :todo_get :todo_list :todo_search]))
     (is (= ["Telegram"] (mapv :display-name adapters)))
-    (is (empty? (skills/list-skills system)))
-	    (is (= 4 (count (memory/list-surfaces system))))
+    (is (= ["memory-vault"] (mapv :name (skills/list-skills system))))
+	    (is (= 2 (count (memory/list-surfaces system))))
     (is (false? (get-in system-health [:logging :enabled])))
     (is (= :local (get-in system-health [:broker :backend])))
     (is (<= 7 (get-in system-health [:tools :count])))
@@ -102,7 +104,7 @@
                   components/create-trace (fn [& _] ::trace)
                   components/create-skills-registry (fn [_] ::skills)
                   llm-service/create-llm-provider (fn [_] ::llm)
-                  llm-service/create-fact-llm-provider (fn [_] ::fact-llm)
+                  llm-service/create-note-llm-provider (fn [_] ::note-llm)
                   tool-service/create-tool-registry (fn [& _] ::tools)
                   telegram/create-service (fn [system] {:telegram-system system})
                   components/create-channel-adapter-registry (fn [_ service] {:service service})
@@ -216,6 +218,51 @@
                                                  {:permissions #{:shell-exec}})))
       (finally
         (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest filesystem-tools-include-vault-roots-test
+  (let [path (temp-db-path)
+        fs-root (.toFile (java.nio.file.Files/createTempDirectory
+                          "iris-fs-root-"
+                          (make-array java.nio.file.attribute.FileAttribute 0)))
+        vault-root (.toFile (java.nio.file.Files/createTempDirectory
+                             "iris-vault-root-"
+                             (make-array java.nio.file.attribute.FileAttribute 0)))
+        vault-note (io/file vault-root "notes/example.md")
+        store (sqlite/create-store {:path path})
+        memory-service (memory/create-memory-service
+                        {:search {:default-limit 10}
+                         :vault {:paths [(.getAbsolutePath vault-root)]
+                                 :writable? true}}
+                        store)
+        registry (tool-service/create-tool-registry
+                  {:cfg (assoc-in (:tools config/default-config)
+                                  [:fs :roots]
+                                  [(.getAbsolutePath fs-root)])
+                   :event-sink (constantly nil)
+                   :store store
+                   :memory-service memory-service})]
+    (try
+      (.mkdirs (.getParentFile vault-note))
+      (spit vault-note "before")
+      (is (= "before"
+             (:content (tool-service/execute-tool {:tool-registry registry
+                                                   :config {:tools (:tools config/default-config)}}
+                                                  :fs_read
+                                                  {:path (.getAbsolutePath vault-note)}
+                                                  {:permissions #{:filesystem-read}}))))
+      (is (:replaced (tool-service/execute-tool {:tool-registry registry
+                                                 :config {:tools (assoc (:tools config/default-config) :yolo? true)}}
+                                                :fs_replace
+                                                {:path (.getAbsolutePath vault-note)
+                                                 :old-string "before"
+                                                 :new-string "after"}
+                                                {:permissions #{:filesystem-write}})))
+      (is (= "after" (slurp vault-note)))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file fs-root true)
+        (io/delete-file vault-root true)
         (io/delete-file path true)))))
 
 (deftest tool-policy-enforces-scope-and-approval-test

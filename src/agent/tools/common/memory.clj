@@ -1,11 +1,10 @@
 (ns agent.tools.common.memory
   (:require
    [agent.memory.core :as memory]
+   [agent.memory.recall :as recall]
    [agent.persistence.sqlite :as sqlite]
    [agent.tools.core :as tools]
    [agent.util :as util]
-   [clojure.java.io :as io]
-   [clojure.set :as set]
    [clojure.string :as str]))
 
 (def ^:private max-line-chars 600)
@@ -38,18 +37,6 @@
   (->> (str/split (str/lower-case (or value "")) #"\W+")
        (remove str/blank?)
        set))
-
-(defn- text-score [query text]
-  (let [query* (str/lower-case (str/trim (or query "")))
-        text* (str/lower-case (or text ""))
-        query-tokens (tokens query*)
-        text-tokens (tokens text*)]
-    (cond
-      (str/blank? query*) 0.0
-      (str/includes? text* query*) 1.0
-      (empty? query-tokens) 0.0
-      :else (/ (double (count (set/intersection query-tokens text-tokens)))
-               (count query-tokens)))))
 
 (defn- positive-int [value fallback]
   (if (and (integer? value) (pos? value))
@@ -86,136 +73,89 @@
              suffix (when (< end (count text*)) " ...")]
          (str prefix (subs text* start* end) suffix))))))
 
-(defn- fact-text [item]
-  (compact-whitespace (str (:subject item) " " (:predicate item) " " (:object item))))
-
-(defn- prompt-candidates [query documents]
-  (->> documents
-       (mapcat (fn [{:keys [path content]}]
-                 (let [parts (->> (str/split (or content "") #"\n\s*\n")
-                                  (map compact-whitespace)
-                                  (remove str/blank?))
-                       matches (->> parts
-                                    (map (fn [part]
-                                           {:surface :prompt
-                                            :id path
-                                            :text (focused-chunk query part)
-                                            :score (text-score query part)}))
-                                    (filter #(pos? (:score %)))
-                                    (take 3)
-                                    vec)]
-                   (if (seq matches)
-                     matches
-                     (let [score (text-score query content)]
-                       (when (pos? score)
-                         [{:surface :prompt
-                           :id path
-                           :text (focused-chunk query content)
-                           :score score}]))))))
-       (remove nil?)))
-
-(defn- memory-search-candidates [memory-service query opts]
-  (let [limit (memory-tool-limit memory-service (:limit opts))
-        opts* (assoc opts :limit limit)
-        facts (memory/search-facts memory-service query opts*)
-        prompts (prompt-candidates query (:documents (memory/read-prompt-memory memory-service)))]
-    (->> (concat
-          (map (fn [fact]
-                 {:surface :fact
-                  :id (:id fact)
-                  :text (fact-text fact)
-                  :score (max (text-score query (fact-text fact))
-                              0.7)
-                  :item fact})
-               facts)
-          prompts)
-         (sort-by :score >)
-         (take limit)
-         vec)))
-
-(defn- search-results-text [query results]
+(defn- recall-results-text [query results]
   (cond
     (str/blank? (or query ""))
-    "Memory search skipped: query is blank. Provide a focused query."
+    "Memory recall skipped: query is blank. Provide a focused query."
 
     (empty? results)
-    (str "No memory results for: " query)
+    (str "No memory recall results for: " query)
 
     :else
-    (str "Memory results for: " query "\n"
+    (str "Memory recall for: " query "\n"
          (str/join
           "\n"
-          (map (fn [{:keys [surface id text score]}]
+          (map (fn [{:keys [surface id text score scope status reason]}]
                  (str "- " (name surface)
                       (when id
-                        (str " #" (if (= surface :prompt)
-                                   (.getName (io/file id))
-                                   id)))
+                        (str " #" id))
                       (format " score=%.3f" (double score))
+                      " " (name status)
+                      " " (name reason)
+                      (when scope
+                        (str " scope=" (name (:type scope))
+                             (when-let [scope-id (:id scope)]
+                               (str "/" scope-id))))
                       ": "
                       (truncate-text text max-line-chars)))
                results)))))
 
-(defn- save-fact-text [saved]
-  (str "Saved memory fact: "
-       (:subject saved) " " (:predicate saved) " " (:object saved)
-       " (scope=" (get-in saved [:scope :type])
-       (when-let [id (get-in saved [:scope :id])]
-         (str "/" id))
-       ")"))
+(defn- vault-search-text [query results]
+  (if (empty? results)
+    (str "No vault results for: " query)
+    (str "Vault results for: " query "\n"
+         (str/join
+          "\n"
+          (map (fn [{:keys [path note-id chunk-id heading text iris-status iris-scope]}]
+                 (str "- " chunk-id
+                      (when note-id (str " note=" note-id))
+                      " " iris-status
+                      " scope=" iris-scope
+                      " path=" path
+                      (when heading (str " heading=" heading))
+                      ": "
+                      (truncate-text text max-line-chars)))
+               results)))))
 
-(defn- remove-fact-text [removed]
-  (str "Removed memory fact"
-       (when-let [id (:id removed)] (str " #" id))
-       ": " (:removed-count removed) " row(s)"))
+(def ^:private scratchpad-scope-schema
+  [:map {:closed true}
+   [:type [:or [:enum :global :session] [:enum "global" "session"]]]
+   [:id {:optional true} [:maybe :string]]])
 
-(defn- read-vault-text [path result]
-  (str "Memory vault file: " path "\n"
-       (truncate-text (or (:content result) result) max-vault-chars)))
+(defn- scratchpad-read-text [{:keys [scope path revision content]}]
+  (str "Scratchpad " (:type scope)
+       (when-let [id (:id scope)] (str "/" id))
+       " revision=" revision
+       " path=" path
+       "\n"
+       (truncate-text content max-vault-chars)))
 
-(defn- write-vault-text [path result]
-  (str "Wrote memory vault file: " (or (:path result) path)
-       " (" (count (or (:content result) "")) " chars)"))
+(defn- scratchpad-search-text [{:keys [query scope revision snippets]}]
+  (if (empty? snippets)
+    (str "No scratchpad results for: " query)
+    (str "Scratchpad results for: " query
+         " scope=" (:type scope)
+         (when-let [id (:id scope)] (str "/" id))
+         " revision=" revision
+         "\n"
+         (str/join "\n"
+                   (map (fn [{:keys [line text]}]
+                          (str "- line " line ": " (truncate-text text max-line-chars)))
+                        snippets)))))
 
-(defn- require-fact-fields! [{:keys [subject predicate object]}]
-  (doseq [[field value] {:subject subject :predicate predicate :object object}]
-    (when (str/blank? (or value ""))
-      (throw (tools/validation-error "fact fields must be non-blank strings"
-                                     {:field field})))))
+(defn- scratchpad-replace-text [{:keys [scope path revision previous-revision]}]
+  (str "Updated scratchpad " (:type scope)
+       (when-let [id (:id scope)] (str "/" id))
+       " revision=" revision
+       " previous=" previous-revision
+       " path=" path))
 
-(defn- require-fact-selector! [{:keys [id subject predicate object]}]
-  (when (and (str/blank? (or id ""))
-             (or (str/blank? (or subject ""))
-                 (str/blank? (or predicate ""))
-                 (str/blank? (or object ""))))
-    (throw (tools/validation-error "provide id or subject/predicate/object"
-                                   {:id id
-                                    :subject subject
-                                    :predicate predicate
-                                    :object object}))))
-
-(defn- fact-map [{:keys [id subject predicate object confidence]}]
-  (cond-> {:subject subject
-           :predicate predicate
-           :object object}
-    id (assoc :id id)
-    confidence (assoc :confidence confidence)))
-
-(defn- fact-opts [{:keys [scope source-session-id source-message-ids source-request-id]}
-                  context]
-  {:scope (or scope
-              {:type :session
-               :id (:session-id context)})
-   :source-session-id (or source-session-id (:session-id context))
-   :source-message-ids source-message-ids
-   :source-request-id (or source-request-id (:request-id context))})
-
-(defn create-memory-search-tool [memory-service]
+(defn create-memory-recall-tool [memory-service]
   (tools/create-tool
    {:description
     (tools/create-tool-description
-     :memory_search
-     "Search durable memory facts and configured prompt files. Returns compact text snippets."
+     :memory_recall
+     "Recall relevant memory records. Returns compact source-cited snippets."
      :category :memory
      :input-schema [:map {:closed true}
                     [:query :string]
@@ -228,119 +168,114 @@
     (fn [{:keys [query limit scope]} context]
       (ensure-permission! context :memory-read)
       (if (str/blank? (or query ""))
-        (search-results-text query nil)
-        (search-results-text
-         query
-         (memory-search-candidates memory-service
-                                   query
-                                   (cond-> {:limit limit}
-                                     scope (assoc :scope scope)
-                                     (:session-id context) (assoc :session-id (:session-id context))
-                                     (:agent-id context) (assoc :agent-id (:agent-id context)))))))}))
+        (recall-results-text query nil)
+        (let [results (:results
+                       (recall/recall
+                        memory-service
+                        query
+                        (cond-> {:limit (memory-tool-limit memory-service limit)}
+                          scope (assoc :scope scope)
+                          (:session-id context) (assoc :session-id (:session-id context))
+                          (:agent-id context) (assoc :agent-id (:agent-id context)))))]
+          (recall-results-text query results))))}))
 
-(def ^:private fact-save-schema
-  [:map {:closed true}
-   [:id {:optional true} [:maybe :string]]
-   [:subject {:optional true} [:maybe :string]]
-   [:predicate {:optional true} [:maybe :string]]
-   [:object {:optional true} [:maybe :string]]
-   [:confidence {:optional true} [:maybe number?]]
-   [:scope {:optional true} [:maybe scope-schema]]
-   [:source-session-id {:optional true} [:maybe :string]]
-   [:source-message-ids {:optional true} [:maybe [:vector :string]]]
-   [:source-request-id {:optional true} [:maybe :string]]])
-
-(def ^:private fact-remove-schema
-  [:map {:closed true}
-   [:id {:optional true} [:maybe :string]]
-   [:subject {:optional true} [:maybe :string]]
-   [:predicate {:optional true} [:maybe :string]]
-   [:object {:optional true} [:maybe :string]]
-   [:scope {:optional true} [:maybe scope-schema]]
-   [:source-session-id {:optional true} [:maybe :string]]
-   [:source-request-id {:optional true} [:maybe :string]]])
-
-(defn create-memory-save-fact-tool [memory-service]
+(defn create-vault-search-tool [memory-service]
   (tools/create-tool
    {:description
     (tools/create-tool-description
-     :memory_save_fact
-     "Save a durable SQLite memory fact. Provide explicit subject, predicate, and object."
-     :category :memory
-     :input-schema fact-save-schema
-     :operation :act
-     :approval-sensitive? false
-     :source :builtin)
-    :execute-fn
-    (fn [input context]
-      (ensure-permission! context :memory-write)
-      (require-fact-fields! input)
-      (save-fact-text
-       (memory/save-memory-fact! memory-service
-                                 (fact-map input)
-                                 (fact-opts input context))))}))
-
-(defn create-memory-remove-fact-tool [memory-service]
-  (tools/create-tool
-   {:description
-    (tools/create-tool-description
-     :memory_remove_fact
-     "Remove a SQLite memory fact by id or exact subject, predicate, and object."
-     :category :memory
-     :input-schema fact-remove-schema
-     :operation :act
-     :approval-sensitive? false
-     :source :builtin)
-    :execute-fn
-    (fn [input context]
-      (ensure-permission! context :memory-write)
-      (require-fact-selector! input)
-      (remove-fact-text
-       (memory/remove-memory-fact! memory-service
-                                   (select-keys input [:id :subject :predicate :object])
-                                   (fact-opts input context))))}))
-
-(defn create-memory-read-vault-tool [memory-service]
-  (tools/create-tool
-   {:description
-    (tools/create-tool-description
-     :memory_read_vault
-     "Read a configured memory vault file."
+     :vault_search
+     "Search indexed approved memory vault notes and chunks."
      :category :memory
      :input-schema [:map {:closed true}
-                    [:path [:maybe :string]]]
+                    [:query :string]
+                    [:limit {:optional true} [:maybe :int]]]
      :operation :read
      :parallel-safe? true
      :source :builtin)
     :execute-fn
-    (fn [{:keys [path]} context]
+    (fn [{:keys [query limit]} context]
       (ensure-permission! context :memory-read)
-      (read-vault-text path (memory/read-vault-file memory-service path)))}))
+      (vault-search-text query
+                         (memory/search-vault memory-service query
+                                              (cond-> {:limit (memory-tool-limit memory-service limit)}
+                                                (:session-id context) (assoc :session-id (:session-id context))))))}))
 
-(defn create-memory-write-vault-tool [memory-service]
+(defn create-scratchpad-read-tool [memory-service]
   (tools/create-tool
    {:description
     (tools/create-tool-description
-     :memory_write_vault
-     "Write a configured memory vault file."
+     :scratchpad_read
+     "Read global or session scratchpad working memory. Returns full text and revision."
      :category :memory
      :input-schema [:map {:closed true}
-                    [:path [:maybe :string]]
-                    [:content {:optional true} [:maybe :string]]]
+                    [:scope {:optional true} [:maybe scratchpad-scope-schema]]]
+     :operation :read
+     :parallel-safe? true
+     :source :builtin)
+    :execute-fn
+    (fn [{:keys [scope]} context]
+      (ensure-permission! context :memory-read)
+      (scratchpad-read-text
+       (memory/read-scratchpad memory-service
+                               (cond-> {}
+                                 scope (assoc :scope scope)
+                                 (:session-id context) (assoc :session-id (:session-id context))))))}))
+
+(defn create-scratchpad-search-tool [memory-service]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :scratchpad_search
+     "Search global or session scratchpad working memory."
+     :category :memory
+     :input-schema [:map {:closed true}
+                    [:query :string]
+                    [:scope {:optional true} [:maybe scratchpad-scope-schema]]]
+     :operation :read
+     :parallel-safe? true
+     :source :builtin)
+    :execute-fn
+    (fn [{:keys [query scope]} context]
+      (ensure-permission! context :memory-read)
+      (scratchpad-search-text
+       (memory/search-scratchpad memory-service
+                                 query
+                                 (cond-> {}
+                                   scope (assoc :scope scope)
+                                   (:session-id context) (assoc :session-id (:session-id context))))))}))
+
+(defn create-scratchpad-replace-tool [memory-service]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :scratchpad_replace
+     "Exact replace in scratchpad working memory using expected revision."
+     :category :memory
+     :input-schema [:map {:closed true}
+                    [:old-text :string]
+                    [:new-text :string]
+                    [:expected-revision :string]
+                    [:scope {:optional true} [:maybe scratchpad-scope-schema]]]
      :operation :act
      :approval-sensitive? false
      :source :builtin)
     :execute-fn
-    (fn [{:keys [path content]} context]
+    (fn [{:keys [old-text new-text expected-revision scope]} context]
       (ensure-permission! context :memory-write)
-      (write-vault-text path (memory/write-vault-file! memory-service path content)))}))
+      (scratchpad-replace-text
+       (memory/replace-scratchpad! memory-service
+                                   (cond-> {:old-text old-text
+                                            :new-text new-text
+                                            :expected-revision expected-revision}
+                                     scope (assoc :scope scope)
+                                     (:session-id context) (assoc :session-id (:session-id context))))))}))
 
 (defn create-memory-tools [memory-service]
-  [(create-memory-search-tool memory-service)
-   (create-memory-save-fact-tool memory-service)
-   (create-memory-remove-fact-tool memory-service)
-   (create-memory-read-vault-tool memory-service)
-   (create-memory-write-vault-tool memory-service)])
+  [(create-memory-recall-tool memory-service)
+   (create-vault-search-tool memory-service)
+   (create-scratchpad-read-tool memory-service)
+   (create-scratchpad-search-tool memory-service)
+   (create-scratchpad-replace-tool memory-service)])
 
 (defn- message-search-text [query rows]
   (if (empty? rows)

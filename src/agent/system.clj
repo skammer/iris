@@ -120,8 +120,8 @@
                                     #(chat/create-service))
                     :llm-provider (system-health/with-component-health health-registry :llm-provider
                                     #(llm-service/create-llm-provider (:llm new-cfg)))
-                    :fact-llm-provider (system-health/with-component-health health-registry :llm-provider
-                                         #(llm-service/create-fact-llm-provider new-cfg))
+                    :note-llm-provider (system-health/with-component-health health-registry :llm-provider
+                                         #(llm-service/create-note-llm-provider new-cfg))
                     :observer observer
                     :trace trace
                     :memory-service memory-service

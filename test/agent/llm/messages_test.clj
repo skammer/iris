@@ -58,7 +58,7 @@
           :content ""
           :tool_calls [{:id "call-2"
                          :type "function"
-                         :function {:name "memory_search"
+                         :function {:name "memory_recall"
                                     :arguments "{\"query\":\"iris\"}"}}]}]
          (llm-messages/internal->ollama
           [{:role :user
@@ -70,7 +70,7 @@
            {:role :assistant
             :content [{:type :tool-call
                        :id "call-2"
-                       :name "memory_search"
+                       :name "memory_recall"
                        :arguments {:query "iris"}}]}]))))
 
 (deftest converts-audio-video-and-files-to-openai-compatible-parts-test

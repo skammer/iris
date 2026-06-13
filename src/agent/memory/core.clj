@@ -1,10 +1,11 @@
 (ns agent.memory.core
-  "Memory service facade. Stores searchable facts in SQLite, reads prompt/vault
+  "Memory service facade. Reads vault
    files from bounded roots, recalls relevant context for chat, and extracts
-   durable facts from completed turns."
+   candidate vault notes from completed turns."
   (:require
    [agent.llm.core :as llm]
-   [agent.memory.schema :as memory-schema]
+   [agent.memory.scratchpad :as scratchpad]
+   [agent.memory.vault :as vault]
    [agent.persistence.sqlite :as sqlite]
    [agent.prompts :as prompts]
    [cheshire.core :as json]
@@ -14,20 +15,10 @@
 
 (def default-search-limit 10)
 (def default-min-search-score 0.3)
-
-(defn- existing-file [path]
-  (let [file (io/file path)]
-    (when (.isFile file)
-      file)))
-
-(defn- prompt-documents [paths]
-  (->> paths
-       (map existing-file)
-       (remove nil?)
-       (map (fn [file]
-              {:path (.getAbsolutePath file)
-               :content (slurp file)}))
-       vec))
+(def ^:private allowed-vault-statuses #{"candidate" "approved" "auto_session" "rejected" "superseded"})
+(def ^:private allowed-vault-scopes #{"global" "session" "agent" "project"})
+(def ^:private allowed-vault-move-roots #{"inbox" "preferences" "decisions" "projects"
+                                           "runbooks" "sessions" "references" "archive"})
 
 (defn- canonical-path [path]
   (.getCanonicalPath (io/file path)))
@@ -59,6 +50,13 @@
                        :roots fs-roots})))
     target))
 
+(defn- vault-root-for-path [memory-service path]
+  (let [target (canonical-path path)]
+    (some #(when (or (= target %)
+                     (str/starts-with? target (str % java.io.File/separator)))
+             %)
+          (:vault-roots memory-service))))
+
 (defn- token-set [value]
   (->> (str/split (str/lower-case (or value "")) #"\W+")
        (remove str/blank?)
@@ -71,9 +69,6 @@
     (if (zero? union-count)
       0.0
       (/ (double (count (set/intersection a b))) union-count))))
-
-(defn- fact-text [fact]
-  (str (:subject fact) " " (:predicate fact) " " (:object fact)))
 
 (defn- contains-query-score [query text]
   (let [query* (str/lower-case (str/trim (or query "")))
@@ -92,7 +87,6 @@
   (case surface
     :message (:content item)
     :event (json/generate-string (:payload item))
-    :fact (fact-text item)
     ""))
 
 (defn- score-memory-item [query surface item]
@@ -101,7 +95,6 @@
         exact (contains-query-score query text)
         confidence (confidence-score (:confidence item))
         surface-weight (case surface
-                         :fact 1.1
                          :message 1.0
                          :event 0.8
                          1.0)
@@ -140,8 +133,7 @@
         dedupe? (not= false (:dedupe? opts))]
     (->> (concat
           (map #(score-memory-item query :message %) (:messages results))
-          (map #(score-memory-item query :event %) (:events results))
-          (map #(score-memory-item query :fact %) (:facts results)))
+          (map #(score-memory-item query :event %) (:events results)))
          (sort-by :score >)
          (filter #(and (pos? (:score %)) (>= (:score %) min-score)))
          (#(if dedupe? (dedupe-ranked-results %) %))
@@ -169,25 +161,10 @@
   (min (positive-limit requested (:search-default-limit memory-service))
        (:search-max-limit memory-service)))
 
-(defn- similar-duplicate [memory-service fact opts]
-  (when-let [threshold (get-in memory-service [:config :facts :dedup :similarity-threshold])]
-    (let [scope (memory-schema/normalize-scope-option opts)
-          candidates (sqlite/search-memory-facts (:store memory-service)
-                                                 nil
-                                                 {:limit 1000
-                                                  :scope scope
-                                                  :include-global? false})
-          fact* (fact-text fact)]
-      (some (fn [candidate]
-              (when (>= (jaccard fact* (fact-text candidate)) threshold)
-                candidate))
-            candidates))))
-
 (defn create-memory-service
-  [{:keys [prompt search vault fs-roots] :as cfg} store]
+  [{:keys [search vault fs-roots] :as cfg} store]
   (let [{:keys [default-limit max-limit]} (search-limit-config search)]
     {:config cfg
-     :prompt-paths (vec (get prompt :paths ["MEMORY.md"]))
      :search-default-limit default-limit
      :search-max-limit max-limit
      :search-min-score (search-min-score-config search)
@@ -198,32 +175,17 @@
 
 (defn list-surfaces
   [memory-service]
-  [{:name :prompt
-    :type :file
-    :writable false
-    :paths (:prompt-paths memory-service)}
-   {:name :search
+  [{:name :search
     :type :sqlite
     :writable false
     :default-limit (:search-default-limit memory-service)
     :max-limit (:search-max-limit memory-service)
     :min-score (:search-min-score memory-service)}
-   {:name :facts
-    :type :sqlite
-    :writable true
-    :default-limit (:search-default-limit memory-service)
-    :max-limit (:search-max-limit memory-service)}
    {:name :vault
     :type :file
     :writable (:vault-writable? memory-service)
     :enabled (boolean (seq (:vault-roots memory-service)))
     :paths (:vault-roots memory-service)}])
-
-(defn read-prompt-memory
-  [memory-service]
-  (let [docs (prompt-documents (:prompt-paths memory-service))]
-    {:documents docs
-     :combined (str/join "\n\n" (map :content docs))}))
 
 (defn search-memory
   ([memory-service query] (search-memory memory-service query {}))
@@ -239,71 +201,21 @@
                                       {:limit limit
                                        :entity-type (:entity-type opts)
                                        :entity-id (:entity-id opts)})
-         facts (sqlite/search-memory-facts (:store memory-service)
-                                           query
-                                           (merge {:limit limit} opts))
          results {:query query
                   :messages messages
-                  :events events
-                  :facts facts}]
+                  :events events}]
      (assoc results :ranked (rank-memory-results query results {:limit limit
                                                                 :min-score min-score
                                                                 :dedupe? (:dedupe? opts)})))))
 
-(defn save-memory-fact!
-  ([memory-service fact] (save-memory-fact! memory-service fact {}))
-  ([memory-service fact opts]
-   (memory-schema/validate-fact! fact)
-   (let [fact* (merge opts fact)
-         saved (if-let [duplicate (similar-duplicate memory-service fact opts)]
-                 (sqlite/merge-memory-fact-source! (:store memory-service) duplicate fact*)
-                 (sqlite/save-memory-fact! (:store memory-service) fact*))]
-     (sqlite/log-event! (:store memory-service)
-                        {:event-type :memory.fact.saved
-                         :entity-type :memory
-                         :entity-id (:id saved)
-                         :request-id (:source-request-id saved)
-                         :payload {:fact-id (:id saved)
-                                   :created? (:created? saved)
-                                   :scope (:scope saved)
-                                   :subject (:subject saved)
-                                   :predicate (:predicate saved)
-                                   :source-session-id (:source-session-id saved)}})
-     saved)))
+(defn reindex-vault!
+  [memory-service]
+  (vault/reindex! memory-service))
 
-(defn remove-memory-fact!
-  ([memory-service fact] (remove-memory-fact! memory-service fact {}))
-  ([memory-service fact opts]
-   (memory-schema/validate-fact-selector! fact)
-   (let [fact* (merge opts fact)
-         removed (sqlite/remove-memory-fact! (:store memory-service) fact*)]
-     (sqlite/log-event! (:store memory-service)
-                        {:event-type :memory.fact.removed
-                         :entity-type :memory
-                         :entity-id (or (:id fact*) (:id removed))
-                         :request-id (:source-request-id fact*)
-                         :payload {:id (or (:id fact*) (:id removed))
-                                   :removed? (:removed? removed)
-                                   :removed-count (:removed-count removed)
-                                   :scope (:scope removed)
-                                   :subject (:subject fact*)
-                                   :predicate (:predicate fact*)
-                                   :object (:object fact*)}})
-     removed)))
-
-(defn reset-facts! [memory-service]
-  (let [result (sqlite/reset-memory-facts! (:store memory-service))]
-    (sqlite/log-event! (:store memory-service)
-                       {:event-type :memory.facts.reset
-                        :entity-type :memory
-                        :entity-id "facts"
-                        :payload result})
-    result))
-
-(defn search-facts
-  ([memory-service query] (search-facts memory-service query {}))
+(defn search-vault
+  ([memory-service query] (search-vault memory-service query {}))
   ([memory-service query opts]
-   (sqlite/search-memory-facts (:store memory-service)
+   (sqlite/search-vault-chunks (:store memory-service)
                                query
                                (assoc opts :limit (effective-search-limit memory-service (:limit opts))))))
 
@@ -335,58 +247,169 @@
     {:path path*
      :written true}))
 
+(defn- normalize-vault-iris-change [{:keys [scope status]}]
+  (let [scope* (some-> scope name)
+        status* (some-> status name)]
+    (when (and scope* (not (allowed-vault-scopes scope*)))
+      (throw (ex-info "Unsupported vault note scope"
+                      {:type :invalid-vault-note-scope
+                       :scope scope*
+                       :allowed allowed-vault-scopes})))
+    (when (and status* (not (allowed-vault-statuses status*)))
+      (throw (ex-info "Unsupported vault note status"
+                      {:type :invalid-vault-note-status
+                       :status status*
+                       :allowed allowed-vault-statuses})))
+    (cond-> {}
+      scope* (assoc :scope scope*)
+      status* (assoc :status status*))))
+
+(defn update-vault-note-iris!
+  [memory-service path changes]
+  (when-not (:vault-writable? memory-service)
+    (throw (ex-info "Vault memory is read-only" {:type :vault-read-only})))
+  (let [path* (ensure-vault-path! memory-service path)
+        changes* (normalize-vault-iris-change changes)
+        result (vault/update-note-iris! path* changes*)]
+    (reindex-vault! memory-service)
+    (sqlite/log-event! (:store memory-service)
+                       {:event-type :memory.vault.note_updated
+                        :entity-type :memory
+                        :entity-id path*
+                        :payload result})
+    result))
+
+(defn- safe-vault-folder [folder]
+  (let [folder* (str/replace (str/trim (or folder "")) #"\\" "/")
+        parts (remove str/blank? (str/split folder* #"/"))
+        top (first parts)]
+    (when (or (str/blank? folder*)
+              (str/starts-with? folder* "/")
+              (some #(#{"." ".."} %) parts)
+              (not (contains? allowed-vault-move-roots top)))
+      (throw (ex-info "Unsupported vault note target folder"
+                      {:type :invalid-vault-note-folder
+                       :folder folder
+                       :allowed allowed-vault-move-roots})))
+    (str/join java.io.File/separator parts)))
+
+(defn move-vault-note!
+  [memory-service path folder]
+  (when-not (:vault-writable? memory-service)
+    (throw (ex-info "Vault memory is read-only" {:type :vault-read-only})))
+  (let [source-path (ensure-vault-path! memory-service path)
+        root (or (vault-root-for-path memory-service source-path)
+                 (throw (ex-info "Path is outside configured memory vault roots"
+                                 {:type :path-not-allowed
+                                  :path source-path
+                                  :roots (:vault-roots memory-service)})))
+        folder* (safe-vault-folder folder)
+        target-path (.getCanonicalPath (io/file root folder* (.getName (io/file source-path))))]
+    (ensure-vault-path! memory-service target-path)
+    (let [result (vault/move-note! source-path target-path)]
+      (reindex-vault! memory-service)
+      (sqlite/log-event! (:store memory-service)
+                         {:event-type :memory.vault.note_moved
+                          :entity-type :memory
+                          :entity-id (:path result)
+                          :payload result})
+      result)))
+
+(defn- effective-scratchpad-scope [scope opts]
+  (scratchpad/normalize-scope
+   (or scope
+       (when-let [session-id (:session-id opts)]
+         {:type :session :id session-id})
+       {:type :global})))
+
+(defn read-scratchpad
+  ([memory-service] (read-scratchpad memory-service {}))
+  ([memory-service opts]
+   (scratchpad/read-scratchpad memory-service (effective-scratchpad-scope (:scope opts) opts))))
+
+(defn search-scratchpad
+  [memory-service query opts]
+  (scratchpad/search-scratchpad memory-service
+                                (effective-scratchpad-scope (:scope opts) opts)
+                                query))
+
+(defn replace-scratchpad!
+  [memory-service {:keys [old-text new-text expected-revision scope] :as opts}]
+  (when-not (:vault-writable? memory-service)
+    (throw (ex-info "Vault memory is read-only" {:type :vault-read-only})))
+  (let [scope* (effective-scratchpad-scope scope opts)
+        result (scratchpad/replace-scratchpad! memory-service
+                                               scope*
+                                               (or old-text "")
+                                               (or new-text "")
+                                               expected-revision)]
+    (sqlite/log-event! (:store memory-service)
+                       {:event-type :memory.scratchpad.replaced
+                        :entity-type :memory
+                        :entity-id (:path result)
+                        :payload (select-keys result [:scope :path :revision :previous-revision])})
+    result))
+
 (defn- extraction-schema []
   {:type "object"
    :additionalProperties false
-   :properties {:facts {:type "array"
+   :properties {:notes {:type "array"
                         :items {:type "object"
                                 :additionalProperties false
-                                :properties {:subject {:type "string"
-                                                       :description "Stable entity the fact is about, for example user, team, current session, or a named project."}
-                                             :predicate {:type "string"
-                                                         :description "Short relationship or preference phrase, for example prefers, uses, decided, works on, requires."}
-                                             :object {:type "string"
-                                                      :description "Durable value of the fact. Do not include secrets, credentials, transient chat details, or unsupported guesses."}
+                                :properties {:type {:type "string"
+                                                    :description "OKF note type, for example Preference, Decision, ProjectNote, Runbook, or Reference."}
+                                             :title {:type "string"
+                                                     :description "Short stable note title."}
+                                             :description {:type "string"
+                                                           :description "One sentence summary."}
+                                             :body {:type "string"
+                                                    :description "Concise Markdown body. Do not include secrets, credentials, transient chat details, or unsupported guesses."}
+                                             :tags {:type "array"
+                                                    :items {:type "string"}}
                                              :scope {:type "string"
-                                                     :enum ["global" "session" "agent"]
-                                                     :description "global for durable cross-session user/team facts, session for temporary session context, agent for agent-specific behavior."}
+                                                     :enum ["global" "session" "agent" "project"]
+                                                     :description "Scope the candidate note would belong to after review."}
                                              :confidence {:type "number"
-                                                          :description "Confidence from 0.0 to 1.0 that this is a durable supported memory fact."}}
-                                :required ["subject" "predicate" "object"]}}}
-   :required ["facts"]})
+                                                          :description "Confidence from 0.0 to 1.0 that this is durable supported memory."}}
+                                :required ["type" "title" "description" "body"]}}}
+   :required ["notes"]})
 
-(defn- parse-fact-response [content]
+(defn- parse-note-response [content]
   (let [value (cond
                 (map? content) content
                 (str/blank? (or content "")) {}
                 :else (json/parse-string content true))
-        facts (if (vector? value) value (:facts value))]
-    (->> facts
+        notes (if (vector? value) value (:notes value))]
+    (->> notes
          (filter map?)
-         (filter #(every? (fn [k] (string? (get % k))) [:subject :predicate :object]))
-         (mapv #(select-keys % [:subject :predicate :object :scope :confidence])))))
+         (filter #(every? (fn [k] (string? (get % k))) [:title :description :body]))
+         (mapv (fn [note]
+                 (-> note
+                     (select-keys [:type :title :description :body :tags :scope :confidence])
+                     (update :type #(or % "Reference"))
+                     (update :tags #(vec (or % [])))))))))
 
 (defn- extractor-format [extractor]
   (let [format (or (:format extractor) :json-schema)]
     (case format
       (:json-schema "json-schema") :json-schema
       (:json-object "json-object") :json-object
-      (throw (ex-info "Unsupported memory fact extractor format"
-                      {:type :unsupported-fact-extractor-format
+      (throw (ex-info "Unsupported memory note extractor format"
+                      {:type :unsupported-note-extractor-format
                        :format format
                        :allowed [:json-schema :json-object]})))))
 
 (defn- output-options [extractor]
   (case (extractor-format extractor)
     :json-schema
-    {:structured-output {:name "memory_facts"
+    {:structured-output {:name "memory_notes"
                          :strict? (not (false? (:strict? extractor)))
                          :schema (extraction-schema)}}
 
     :json-object
     {:response-format {:type "json_object"}}))
 
-(defn extract-facts
+(defn extract-notes
   [provider {:keys [user-message assistant-message model session-id extractor]}]
   (let [response (llm/invoke
                   provider
@@ -395,44 +418,70 @@
                     :session-id session-id
                     :temperature 0.0
                     :messages [{:role "system"
-                                :content (prompts/load-prompt "fact-extraction")}
+                                :content (prompts/load-prompt "note-extraction")}
                                {:role "user"
                                 :content (json/generate-string
                                           {:user user-message
                                            :assistant assistant-message})}]}
                    (output-options extractor)))]
-    (parse-fact-response (:content response))))
+    (parse-note-response (:content response))))
 
-(defn extract-and-save-facts!
+(defn- note-origin [opts message-id]
+  (cond-> {:type "message"}
+    (:session-id opts) (assoc :session-id (:session-id opts))
+    message-id (assoc :message-id message-id)
+    (:source-request-id opts) (assoc :request-id (:source-request-id opts))))
+
+(defn- note-origins [opts]
+  (let [[user-message-id assistant-message-id] (:source-message-ids opts)]
+    (cond-> [{:type "extraction"
+              :session-id (:session-id opts)
+              :request-id (:source-request-id opts)}]
+      user-message-id (conj (note-origin opts user-message-id))
+      assistant-message-id (conj (note-origin opts assistant-message-id)))))
+
+(defn- note-scope [memory-service note]
+  (let [scope (or (:scope note)
+                  (name (or (get-in memory-service [:config :notes :default-scope])
+                            :session)))]
+    (if (#{"global" "session" "agent" "project"} scope)
+      scope
+      "session")))
+
+(defn extract-and-save-notes!
   [memory-service provider exchange opts]
-  (let [extractor (get-in memory-service [:config :facts :extractor])]
+  (let [extractor (get-in memory-service [:config :notes :extractor])]
     (if (false? (:enabled extractor))
       []
       (try
         (let [model (or (:model extractor) (:model opts))
-              facts (extract-facts provider (assoc exchange
+              notes (extract-notes provider (assoc exchange
                                                    :model model
                                                    :session-id (:session-id opts)
-                                                   :extractor extractor))]
-          (mapv (fn [fact]
-                  (let [scope-type (or (:scope fact)
-                                       (name (or (get-in memory-service [:config :facts :default-scope])
-                                                 :session)))
-                        scope (memory-schema/normalize-scope
-                               {:type scope-type
-                                :id (case scope-type
-                                      "session" (:session-id opts)
-                                      "agent" (:agent-id opts)
-                                      nil)})]
-                    (save-memory-fact! memory-service
-                                       (dissoc fact :scope)
-                                       (merge opts
-                                              {:episode-content (json/generate-string exchange)
-                                               :scope scope}))))
-                facts))
+                                                   :extractor extractor))
+              saved (mapv (fn [note]
+                            (vault/write-candidate-note!
+                             memory-service
+                             (merge note
+                                    {:scope (note-scope memory-service note)
+                                     :origins (note-origins opts)
+                                     :source-request-id (:source-request-id opts)
+                                     :evidence {:user (:user-message exchange)
+                                                :assistant (:assistant-message exchange)}})))
+                          notes)]
+          (when (seq saved)
+            (reindex-vault! memory-service)
+            (sqlite/log-event! (:store memory-service)
+                               {:event-type :memory.notes.extracted
+                                :entity-type :session
+                                :entity-id (:session-id opts)
+                                :request-id (:source-request-id opts)
+                                :payload {:note-count (count saved)
+                                          :paths (mapv :path saved)}}))
+          saved)
         (catch Exception e
           (sqlite/log-event! (:store memory-service)
-                             {:event-type :memory.fact.extraction_failed
+                             {:event-type :memory.notes.extraction_failed
                               :entity-type :session
                               :entity-id (:session-id opts)
                               :request-id (:source-request-id opts)
@@ -441,15 +490,12 @@
 
 (defn health-check
   [memory-service]
-  (let [prompt (prompt-documents (:prompt-paths memory-service))]
-    {:healthy true
-     :prompt {:document-count (count prompt)
-              :paths (mapv :path prompt)}
-     :search {:healthy true
-              :default-limit (:search-default-limit memory-service)
-              :max-limit (:search-max-limit memory-service)}
-     :facts {:healthy true
-             :count (sqlite/count-memory-facts (:store memory-service))}
-     :vault {:healthy true
-             :paths (:vault-roots memory-service)
-             :writable (:vault-writable? memory-service)}}))
+  {:healthy true
+   :search {:healthy true
+            :default-limit (:search-default-limit memory-service)
+            :max-limit (:search-max-limit memory-service)}
+   :vault {:healthy true
+           :paths (:vault-roots memory-service)
+           :writable (:vault-writable? memory-service)
+           :note-count (sqlite/count-vault-notes (:store memory-service))
+           :chunk-count (sqlite/count-vault-chunks (:store memory-service))}})

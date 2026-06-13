@@ -214,10 +214,8 @@
    :timestamp (util/now-str)
    :payload {:kind :memory-recalled
              :query prompt
-             :message-count (count (get-in recall [:search :messages]))
-             :event-count (count (get-in recall [:search :events]))
-             :fact-count (count (get-in recall [:search :facts]))
-             :prompt-document-count (count (get-in recall [:prompt :documents]))}})
+             :result-count (count (:results recall))
+             :surface-counts (:surface-counts recall)}})
 
 (defn- runtime-loop-options
   "Builds the agent.runtime.loop/run! options map from a prepared turn env plus

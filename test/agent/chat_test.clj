@@ -118,7 +118,7 @@
         config (config-fn (:config base))]
     (assoc base
            :llm-provider provider
-           :fact-llm-provider provider
+           :note-llm-provider provider
            :store store
            :event-bus event-bus
            :event-sink event-sink
@@ -441,7 +441,7 @@
                                                :plan-file (.getAbsolutePath plan)
                                                :summary-max-chars 400
                                                :validation-max-chars 400})
-                                 (assoc-in [:memory :facts :extractor :enabled] false)))
+                                 (assoc-in [:memory :notes :extractor :enabled] false)))
         session (sessions/create-session! system "loop-start")]
     (try
       (spit plan "- [ ] one")
@@ -532,7 +532,7 @@
         provider (->PlannerProvider responses requests)
         system (test-system path provider #(-> %
                                                (assoc-in [:chat :max-steps] 1)
-                                               (assoc-in [:memory :facts :extractor :enabled] false)))
+                                               (assoc-in [:memory :notes :extractor :enabled] false)))
         session (sessions/create-session! system "max-steps")]
     (try
       (let [result (chat/run! system {:session-id (:id session)
@@ -547,7 +547,7 @@
         started (promise)
         response (promise)
         provider (->BlockingProvider started response)
-        system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
+        system (test-system path provider #(assoc-in % [:memory :notes :extractor :enabled] false))
         session (sessions/create-session! system "cancel")]
     (try
       (let [result-f (future
@@ -568,7 +568,7 @@
         started (promise)
         response (promise)
         provider (->BlockingProvider started response)
-        system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
+        system (test-system path provider #(assoc-in % [:memory :notes :extractor :enabled] false))
         session (sessions/create-session! system "service-stop")]
     (try
       (let [result-f (future
@@ -590,8 +590,8 @@
         entered (promise)
         provider-a (->PlannerProvider (atom ["unused"]) (atom []))
         provider-b (->PlannerProvider (atom ["unused"]) (atom []))
-        system-a (test-system path-a provider-a #(assoc-in % [:memory :facts :extractor :enabled] false))
-        system-b (test-system path-b provider-b #(assoc-in % [:memory :facts :extractor :enabled] false))
+        system-a (test-system path-a provider-a #(assoc-in % [:memory :notes :extractor :enabled] false))
+        system-b (test-system path-b provider-b #(assoc-in % [:memory :notes :extractor :enabled] false))
         session-a (sessions/create-session! system-a "a")]
     (try
       (with-redefs [runtime-loop/run!
@@ -637,7 +637,7 @@
         responses (atom [first-response "second answer"])
         requests (atom [])
         provider (->PlannerProvider responses requests)
-        system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
+        system (test-system path provider #(assoc-in % [:memory :notes :extractor :enabled] false))
         session (sessions/create-session! system "queue")]
     (try
       (let [first-f (future
@@ -673,7 +673,7 @@
                          "second done"])
         requests (atom [])
         provider (->PlannerProvider responses requests)
-        system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
+        system (test-system path provider #(assoc-in % [:memory :notes :extractor :enabled] false))
         session (sessions/create-session! system "tool-queue")]
     (try
       (with-redefs [kernel-runtime/execute-step!
@@ -720,7 +720,7 @@
         responses (atom [first-response "after cancel answer"])
         requests (atom [])
         provider (->PlannerProvider responses requests)
-        system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
+        system (test-system path provider #(assoc-in % [:memory :notes :extractor :enabled] false))
         session (sessions/create-session! system "cancel-queue")]
     (try
       (let [first-f (future
@@ -755,7 +755,7 @@
                               (let [provider-key (get-in cfg [:llm :active-provider])
                                     model (get-in cfg [:llm :providers provider-key :model])]
                                 (-> cfg
-                                    (assoc-in [:memory :facts :extractor :enabled] false)
+                                    (assoc-in [:memory :notes :extractor :enabled] false)
                                     (assoc-in [:llm :providers provider-key :models model :chat-profile]
                                               {:small-model? false})))))
         session (sessions/create-session! system "truncation")]
@@ -782,7 +782,7 @@
         responses (atom ["recovered"])
         requests (atom [])
         provider (->PlannerProvider responses requests)
-        system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
+        system (test-system path provider #(assoc-in % [:memory :notes :extractor :enabled] false))
         session (sessions/create-session! system "missing-tool-result")]
     (try
       (sqlite/append-message! (:store system) (:id session) "user" "list")
@@ -811,7 +811,7 @@
         responses (atom ["recovered"])
         requests (atom [])
         provider (->PlannerProvider responses requests)
-        system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
+        system (test-system path provider #(assoc-in % [:memory :notes :extractor :enabled] false))
         session (sessions/create-session! system "orphan-tool-result")]
     (try
       (sqlite/append-message! (:store system) (:id session) "tool" "late"
@@ -919,7 +919,7 @@
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider #(-> %
-                                               (assoc-in [:memory :facts :extractor :enabled] false)
+                                               (assoc-in [:memory :notes :extractor :enabled] false)
                                                (assoc-in [:memory :prompt :paths] [])
                                                (assoc-in [:memory :search :max-limit] 0)
                                                (assoc-in [:chat :compaction :max-context-tokens] 10000)
@@ -958,7 +958,7 @@
 (deftest tool-output-content-truncates-large-results-test
   (let [large-result (apply str (repeat 9000 "x"))
         content (runtime-messages/tool-output-content {:status :completed
-                                                       :tool-name :memory_search
+                                                       :tool-name :memory_recall
                                                        :result large-result
                                                        :input {:query "x"}})]
     (is (str/includes? content "[truncated "))
@@ -1150,7 +1150,7 @@
                       (let [provider-key (get-in cfg [:llm :active-provider])
                             model (get-in cfg [:llm :providers provider-key :model])]
                         (-> cfg
-                            (assoc-in [:memory :facts :extractor :enabled] false)
+                            (assoc-in [:memory :notes :extractor :enabled] false)
                             (assoc-in [:llm :providers provider-key :models model :chat-profile]
                                       {:tool-routing? true
                                        :tool-categories #{}})))))
@@ -1176,32 +1176,35 @@
       (finally
         (io/delete-file path true)))))
 
-(deftest chat-loop-auto-extracts-scoped-facts-test
+(deftest chat-loop-auto-extracts-candidate-vault-notes-test
   (let [path (temp-db-path)
+        root (temp-dir)
         responses (atom ["noted"
                          (json/generate-string
-                          {:facts [{:subject "user"
-                                    :predicate "prefers"
-                                    :object "concise answers"
+                          {:notes [{:type "Preference"
+                                    :title "Concise answers"
+                                    :description "User prefers concise answers."
+                                    :body "User prefers concise answers."
+                                    :tags ["preference"]
                                     :scope "session"
                                     :confidence 0.9}]})])
         requests (atom [])
         provider (->PlannerProvider responses requests)
-        system (test-system path provider identity)
-        session (sessions/create-session! system "facts")]
+        system (test-system path provider #(assoc-in % [:memory :vault :paths] [(.getAbsolutePath root)]))
+        session (sessions/create-session! system "notes")]
     (try
       (chat/run! system {:session-id (:id session)
                          :messages [{:role "user" :content "I prefer concise answers"}]})
-      (let [facts (memory/search-facts (:memory-service system)
-                                       "concise"
-                                       {:scope {:type :session :id (:id session)}})
-            other-session (memory/search-facts (:memory-service system)
-                                               "concise"
-                                               {:scope {:type :session :id "other"}})]
-        (is (= 1 (count facts)))
-        (is (= "prefers" (:predicate (first facts))))
-        (is (empty? other-session)))
+      (let [notes (file-seq (io/file root))
+            note (some #(when (and (.isFile %) (str/ends-with? (.getName %) ".md")) %) notes)
+            content (slurp note)]
+        (is (= 1 (sqlite/count-vault-notes (:store system))))
+        (is (str/includes? (.getCanonicalPath note) "/inbox/"))
+        (is (str/includes? content "status: \"candidate\""))
+        (is (str/includes? content "User prefers concise answers."))
+        (is (empty? (memory/search-vault (:memory-service system) "concise" {:limit 10}))))
       (finally
+        (io/delete-file root true)
         (io/delete-file path true)))))
 
 (deftest chat-loop-continues-when-memory-recall-fails-test
@@ -1209,11 +1212,11 @@
         responses (atom ["ok"])
         requests (atom [])
         provider (->PlannerProvider responses requests)
-        system (test-system path provider #(assoc-in % [:memory :facts :extractor :enabled] false))
+        system (test-system path provider #(assoc-in % [:memory :notes :extractor :enabled] false))
         session (sessions/create-session! system "memory-fails")]
     (try
-      (with-redefs [memory/read-prompt-memory (fn [_]
-                                                (throw (ex-info "memory boom" {:type :memory-test})))]
+      (with-redefs [memory/search-memory (fn [& _]
+                                           (throw (ex-info "memory boom" {:type :memory-test})))]
         (let [result (chat/run! system {:session-id (:id session)
                                         :messages [{:role "user" :content "hi"}]})
               events (sqlite/list-events (:store system) {:entity-type :session
@@ -1226,12 +1229,50 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest chat-recall-does-not-inject-legacy-memory-md-test
+  (let [path (temp-db-path)
+        root (temp-dir)
+        memory-file (io/file root "MEMORY.md")
+        responses (atom ["ok"])
+        requests (atom [])
+        provider (->PlannerProvider responses requests)
+        system (test-system path provider #(assoc-in % [:memory :prompt :paths]
+                                                     [(.getAbsolutePath memory-file)]))
+        session (sessions/create-session! system "no-memory-md")]
+    (try
+      (spit memory-file "forbidden legacy prompt marker")
+      (chat/run! system {:session-id (:id session)
+                         :messages [{:role "user" :content "hello"}]})
+      (let [memory-message (->> @requests
+                                first
+                                :request
+                                :messages
+                                (some #(when (str/starts-with? (message-text %)
+                                                               "Relevant memory JSON: ")
+                                         (message-text %))))]
+        (is (some? memory-message))
+        (is (not (str/includes? memory-message "forbidden legacy prompt marker")))
+        (is (not (str/includes? memory-message "\"prompt\""))))
+      (finally
+        (io/delete-file root true)
+        (io/delete-file path true)))))
+
 (deftest memory-message-truncation-remains-valid-json-test
   (let [content (:content (chat-memory/memory-message
-                           {:prompt {:documents (vec (repeat 1000 {:content (apply str (repeat 40 "x"))}))}
-                            :search {:messages []
-                                     :events []
-                                     :facts []}}))
+                           {:query "x"
+                            :results (vec (repeat 1000 {:surface :message
+                                                        :type "assistant"
+                                                        :id "m"
+                                                        :scope {:type :session :id "s"}
+                                                        :status :current
+                                                        :text (apply str (repeat 40 "x"))
+                                                        :score 0.5
+                                                        :source {:message-id "m"}
+                                                        :reason :lexical-overlap
+                                                        :tags []}))
+                            :surface-counts {:messages 1000
+                                             :events 0
+                                             :vault-chunks 0}}))
         json-text (subs content (count "Relevant memory JSON: "))
         parsed (json/parse-string json-text true)]
     (is (true? (:truncated parsed)))

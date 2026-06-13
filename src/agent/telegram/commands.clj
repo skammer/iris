@@ -15,9 +15,11 @@
      :rest (or (second parts) "")}))
 
 (defn- memory-status [system session-id]
-  (let [facts (sqlite/count-memory-facts (:store system))
+  (let [notes (sqlite/count-vault-notes (:store system))
+        chunks (sqlite/count-vault-chunks (:store system))
         messages (count (sqlite/list-messages (:store system) session-id))]
-    (str "Memory: " facts " facts, " messages " session messages.")))
+    (str "Memory: " notes " vault notes, " chunks " chunks, "
+         messages " session messages.")))
 
 (defn- status-text [system session-id]
   (str "OK. Session: " session-id

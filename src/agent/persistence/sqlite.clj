@@ -179,24 +179,22 @@
   ([store query] (events/search-events store query))
   ([store query opts] (events/search-events store query opts)))
 
-(defn save-memory-fact! [store fact]
-  (memory/save-fact! store fact))
+(defn replace-vault-index! [store notes]
+  (memory/replace-vault-index! store notes))
 
-(defn remove-memory-fact! [store fact]
-  (memory/remove-fact! store fact))
+(defn search-vault-chunks
+  ([store query] (memory/search-vault-chunks store query))
+  ([store query opts] (memory/search-vault-chunks store query opts)))
 
-(defn reset-memory-facts! [store]
-  (memory/reset-facts! store))
+(defn list-vault-notes
+  ([store] (memory/list-vault-notes store))
+  ([store opts] (memory/list-vault-notes store opts)))
 
-(defn merge-memory-fact-source! [store existing fact]
-  (memory/merge-fact-source! store existing fact))
+(defn count-vault-notes [store]
+  (memory/count-vault-notes store))
 
-(defn search-memory-facts
-  ([store query] (memory/search-facts store query))
-  ([store query opts] (memory/search-facts store query opts)))
-
-(defn count-memory-facts [store]
-  (memory/count-facts store))
+(defn count-vault-chunks [store]
+  (memory/count-vault-chunks store))
 
 (defn save-todo-list! [store todo-list]
   (todos/save-list! store todo-list))
@@ -235,7 +233,8 @@
                :session-count (sessions/count-sessions store)
                :event-count (events/count-events store)
                :tool-approval-count (tools/count-tool-approvals store)
-	               :memory-fact-count (memory/count-facts store)
+	               :vault-note-count (memory/count-vault-notes store)
+	               :vault-chunk-count (memory/count-vault-chunks store)
 	               :todo-list-count (todos/count-lists store)
                :schema-version (migrations/schema-version store)
                :latest-schema-version migrations/latest-schema-version

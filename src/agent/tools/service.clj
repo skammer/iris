@@ -27,8 +27,9 @@
 
 (def ^:private tool-family-aliases
   {:fs #{:fs_read :fs_write :fs_create :fs_replace :fs_list :fs_delete :fs_mkdir}
-   :memory #{:memory_search :memory_save_fact :memory_remove_fact
-             :memory_read_vault :memory_write_vault :message_search}
+   :memory #{:memory_recall :vault_search
+             :scratchpad_read :scratchpad_search :scratchpad_replace
+             :message_search}
    :todo #{:todo_write :todo_get :todo_list :todo_search}})
 
 (defn- expand-tool-name [tool]
@@ -69,6 +70,12 @@
            :reason "Tool scope missing"}
 
           :else nil)))))
+
+(defn- fs-cfg-with-vault-roots [fs-cfg memory-service]
+  (let [fs-cfg* (or fs-cfg {})
+        roots (vec (distinct (concat (or (:roots fs-cfg*) ["."])
+                                     (:vault-roots memory-service))))]
+    (assoc fs-cfg* :roots roots)))
 
 (defn- reload-tool
   [system-control]
@@ -183,7 +190,7 @@
        (as-> registry*
              (reduce tools/register-tool
                      registry*
-                     (fs-tool/create-fs-tools fs-cfg)))
+                     (fs-tool/create-fs-tools (fs-cfg-with-vault-roots fs-cfg memory-service))))
 
        memory-service
        (as-> registry*

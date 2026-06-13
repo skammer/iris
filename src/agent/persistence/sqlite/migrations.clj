@@ -10,7 +10,7 @@
    (java.nio.charset StandardCharsets)
    (java.security MessageDigest)))
 
-(def latest-schema-version 3)
+(def latest-schema-version 5)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -29,6 +29,16 @@
     :id "003-drop-federation"
     :name "drop-federation"
     :up-resource "agent/persistence/sqlite/migrations/003-drop-federation.up.sql"
+    :irreversible? true}
+   {:version 4
+    :id "004-vault-memory-index"
+    :name "vault-memory-index"
+    :up-resource "agent/persistence/sqlite/migrations/004-vault-memory-index.up.sql"
+    :irreversible? true}
+   {:version 5
+    :id "005-drop-memory-facts"
+    :name "drop-memory-facts"
+    :up-resource "agent/persistence/sqlite/migrations/005-drop-memory-facts.up.sql"
     :irreversible? true}])
 
 (defn descriptor-by-version [version]
