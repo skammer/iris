@@ -33,6 +33,7 @@ This Obsidian vault contains documentation for the Clojure-based AI agent projec
 - **decisions-2026.md**: Architectural and implementation decisions
 - **issue-tracking.md**: Problems encountered and solutions
 - **future-considerations.md**: Ideas for future enhancements
+- **archive/**: Completed historical refactor/release reports
 
 ### 6. References
 - **external-resources.md**: Links to documentation, papers, tools

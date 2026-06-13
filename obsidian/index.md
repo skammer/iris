@@ -30,6 +30,9 @@
 ## Decision Logs
 - [[refactoring-2026-06-findings]] - Deep-review findings (bugs, dead code, duplication)
 - [[refactoring-2026-06-plan]] - Phased refactoring plan + decisions
+- [[archive/REFACTORING_PLAN]] - Archived June 2026 refactoring sweep log
+- [[archive/REPORT]] - Archived May 2026 remaining-issues report
+- [[archive/RELEASE_REPORT]] - Archived May 2026 release review
 - [[decisions-2026]] - Architectural decisions
 - [[issue-tracking]] - Problems and solutions
 - [[future-considerations]] - Future enhancements
