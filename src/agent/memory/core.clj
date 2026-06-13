@@ -1,6 +1,7 @@
 (ns agent.memory.core
-  "Memory service facade. SQLite facts are the durable store; prompt and vault
-   files are bounded filesystem surfaces."
+  "Memory service facade. Stores searchable facts in SQLite, reads prompt/vault
+   files from bounded roots, recalls relevant context for chat, and extracts
+   durable facts from completed turns."
   (:require
    [agent.llm.core :as llm]
    [agent.memory.schema :as memory-schema]

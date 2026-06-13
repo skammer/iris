@@ -1,5 +1,7 @@
 (ns agent.system.events
-  "System event broker, replay, and sinks."
+  "Durable event pipeline. Logs system/runtime events to SQLite, mirrors them
+   into telemetry/trace observers, publishes live copies through the broker,
+   and replays persisted events for streaming clients."
   (:require
    [agent.broker.core :as broker]
    [agent.broker.local :as local-broker]

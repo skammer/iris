@@ -1,5 +1,7 @@
 (ns agent.runtime.loop
-  "Evented chat-agent loop. No persistence or transport concerns live here."
+  "Core agent loop for one chat turn. Plans model calls, streams deltas, executes
+   tools, handles approvals/retries/fallbacks, and emits normalized events while
+   leaving persistence and transports to the chat layer."
   (:refer-clojure :exclude [run!])
   (:require
    [agent.defaults :as defaults]

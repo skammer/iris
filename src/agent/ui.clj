@@ -1,5 +1,6 @@
 (ns agent.ui
-  "Server-rendered Datastar UI."
+  "Server-rendered Datastar UI. Builds dashboard, chat, tools, memory, events,
+   logs, and approval fragments from current system state for live SSE patches."
   (:require
    [agent.channels.core :as channel-adapters]
    [agent.chat :as chat]

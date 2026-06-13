@@ -1,5 +1,7 @@
 (ns agent.config
-  "Configuration loading for the rewritten runtime."
+  "Load, merge, migrate, and validate Iris config. This namespace owns the
+   canonical config shape used by system construction, providers, tools,
+   channels, storage, telemetry, and runtime limits."
   (:require
    [agent.config.env :as config-env]
    [agent.defaults :as defaults]

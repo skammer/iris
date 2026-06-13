@@ -1,5 +1,7 @@
 (ns agent.runtime.tools
-  "Batch tool execution over agent.tools.core registries."
+  "Runtime tool batch execution. Validates planner tool calls, applies routing
+   and approval policy, runs tools sequentially or in parallel, and returns
+   receipts/events the loop can feed back to the model."
   (:require
    [agent.runtime.calls :as calls]
    [agent.runtime.cancel :as cancel]

@@ -1,5 +1,7 @@
 (ns agent.channels.core
-  "Pluggable channel adapter contracts for rewritten runtime."
+  "External channel adapter contracts. A channel is an integration surface such
+   as Telegram: it can be started/stopped, report health, describe capabilities,
+   and optionally send outbound messages or typing indicators."
   (:require
    [clojure.string :as str]
    [clojure.set :as set]))

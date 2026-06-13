@@ -1,5 +1,7 @@
 (ns agent.persistence.sqlite
-  "SQLite-backed persistence facade."
+  "SQLite persistence facade. Owns database lifecycle/migrations and exposes
+   cohesive session, event, tool approval, memory, and todo operations to the
+   rest of the system."
   (:require
    [agent.persistence.sqlite.common :as common]
    [agent.persistence.sqlite.events :as events]

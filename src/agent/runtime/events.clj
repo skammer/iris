@@ -1,5 +1,6 @@
 (ns agent.runtime.events
-  "Runtime event construction helpers for the chat-agent loop."
+  "Runtime event builders. Converts loop state, model output, tool turns, and
+   terminal conditions into schema-validated events for downstream subscribers."
   (:require
    [agent.llm.messages :as llm-messages]
    [agent.runtime.messages :as runtime-messages]

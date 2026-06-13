@@ -1,5 +1,7 @@
 (ns agent.tools.service
-  "Tool registry factory, policy, and execution facade."
+  "Production tool registry assembly. Applies configured policy, wires telemetry
+   hooks, registers built-in tools and MCP tools, and exposes lookup/execution
+   helpers used by the runtime."
   (:require
    [agent.logging :as logging]
    [agent.mcp.core :as mcp]

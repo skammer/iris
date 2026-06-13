@@ -1,5 +1,7 @@
 (ns agent.mcp.core
-  "MCP Streamable HTTP client and tool ABI adapters."
+  "MCP Streamable HTTP integration. Creates JSON-RPC clients, lists remote MCP
+   tools, adapts their schemas into Iris tools, executes calls, and records
+   telemetry for remote tool latency/failures."
   (:require
    [agent.telemetry :as telemetry]
    [agent.tools.core :as tools]

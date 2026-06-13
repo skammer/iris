@@ -1,5 +1,7 @@
 (ns agent.chat
-  "First-class session chat loop public facade."
+  "Public chat facade. Exposes chat service lifecycle, per-session state,
+   cancellation, streaming state, and queued turn execution while hiding the
+   queue/turn/service split from callers."
   (:refer-clojure :exclude [run!])
   (:require
    [agent.chat.queue :as queue]

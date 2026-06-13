@@ -1,5 +1,7 @@
 (ns agent.chat.subscribers
-  "Runtime event subscribers for persistence, streaming, and tool callbacks."
+  "Chat-turn side effects driven by runtime events. Persists final messages,
+   accumulates streaming deltas, invokes tool callbacks, and forwards every
+   event to the system event sink."
   (:require
    [agent.chat.history :as history]
    [agent.chat.service :as service]

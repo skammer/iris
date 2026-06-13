@@ -1,5 +1,7 @@
 (ns agent.skills
-  "Filesystem-backed skill discovery for rewritten runtime."
+  "Filesystem-backed skill discovery. Reads SKILL.md files from configured
+   roots, extracts metadata/frontmatter, and returns paged summaries for API,
+   UI, and prompt construction."
   (:require
    [clojure.java.io :as io]
    [clojure.string :as str]))

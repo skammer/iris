@@ -1,6 +1,6 @@
 (ns agent.chat.memory
-  "Chat memory recall and turn-fact extraction. Extracted from agent.chat to keep
-   the chat front-end focused on the turn/queue lifecycle."
+  "Chat memory integration. Builds bounded recall context before a turn and
+   extracts durable facts from the completed user/assistant exchange."
   (:require
    [agent.chat.util :as util]
    [agent.config :as config]

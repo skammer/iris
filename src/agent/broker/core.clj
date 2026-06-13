@@ -1,5 +1,7 @@
 (ns agent.broker.core
-  "Broker abstraction for local/runtime event transport."
+  "In-process event broker contract. Publishers emit subject/payload messages;
+   subscribers receive matching live messages, optional replay results, or
+   request/reply responses without knowing the concrete backend."
   (:require
    [clojure.string :as str]))
 

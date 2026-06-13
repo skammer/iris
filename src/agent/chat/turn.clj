@@ -1,5 +1,7 @@
 (ns agent.chat.turn
-  "Single chat turn execution."
+  "Single chat turn orchestration. Prepares history, memory, model/profile, and
+   kernel ops; wires runtime events to persistence/streaming subscribers; then
+   runs agent.runtime.loop for one user turn."
   (:require
    [agent.chat.history :as history]
    [agent.chat.kernel-ops :as chat-kernel-ops]

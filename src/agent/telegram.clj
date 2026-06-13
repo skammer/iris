@@ -1,5 +1,7 @@
 (ns agent.telegram
-  "Telegram long-polling adapter."
+  "Telegram channel adapter. Polls Telegram updates, maps chats to Iris sessions,
+   streams chat turns back to Telegram, handles approvals/media/commands, and
+   exposes adapter lifecycle and health."
   (:require
    [agent.broker.core :as broker]
    [agent.chat :as chat]

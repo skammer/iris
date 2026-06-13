@@ -1,5 +1,6 @@
 (ns agent.telemetry
-  "First-class cost/latency telemetry collector and μ/log emission."
+  "Process-local telemetry collector. Aggregates provider/tool latencies, token
+   usage, cost, and recent system events, then mirrors observations into μ/log."
   (:require
    [agent.logging :as logging]))
 

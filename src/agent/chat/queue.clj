@@ -1,5 +1,7 @@
 (ns agent.chat.queue
-  "Per-session chat turn queue."
+  "Per-session chat turn queue. Serializes turns for each session, supports
+   cancellation, emits queue/session status events, and runs queued prompts
+   through agent.chat.turn."
   (:refer-clojure :exclude [run!])
   (:require
    [agent.chat.history :as history]

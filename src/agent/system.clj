@@ -1,5 +1,7 @@
 (ns agent.system
-  "System lifecycle only."
+  "Top-level Iris lifecycle. Builds the component graph, keeps the live system
+   reference used by reloads, starts/stops API and channel adapters, and swaps
+   runtime config without forcing callers to know component wiring."
   (:require
    [agent.api :as api]
    [agent.channels.core :as channel-adapters]

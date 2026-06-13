@@ -1259,10 +1259,6 @@ textarea {
   gap: 8px;
 }
 
-.event-item {
-  border-left: 2px solid var(--accent);
-}
-
 .result {
   border-left: 2px solid var(--border-visible);
 }

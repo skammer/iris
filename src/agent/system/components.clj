@@ -1,5 +1,7 @@
 (ns agent.system.components
-  "System component factories."
+  "System component factories and dependency wiring. Creates config, storage,
+   telemetry, event sink, broker, LLM providers, tools, skills, memory, chat,
+   and channel adapters in the order they depend on each other."
   (:require
    [agent.channels.core :as channel-adapters]
    [agent.chat :as chat]

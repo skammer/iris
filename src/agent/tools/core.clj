@@ -1,5 +1,7 @@
 (ns agent.tools.core
-  "Rewritten tool registry and execution helpers."
+  "Tool registry and execution kernel. Defines tool contracts, input validation,
+   permission checks, approval hooks, lifecycle hooks, and normalized execution
+   receipts consumed by the runtime loop."
   (:require
    [agent.util :as util]
    [clojure.set :as set]

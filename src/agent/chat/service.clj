@@ -1,5 +1,6 @@
 (ns agent.chat.service
-  "Chat service state and session status events."
+  "Chat service state. Holds active tasks, session status, streaming buffers,
+   cancellation tokens, and helpers that emit state changes for UI/API clients."
   (:require
    [agent.chat.util :as chat-util]
    [agent.config :as config]

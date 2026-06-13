@@ -1,5 +1,6 @@
 (ns agent.kernel
-  "Pure tool-loop directive contract."
+  "Small pure contract for planner directives and step results. Keeps the
+   model/planner output shape validated before the host runtime executes tools."
   (:require
    [agent.kernel.schema :as schema]))
 

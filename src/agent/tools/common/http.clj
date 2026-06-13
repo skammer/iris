@@ -1,5 +1,6 @@
 (ns agent.tools.common.http
-  "Rewritten HTTP tool."
+  "HTTP request tool with method allowlisting, bounded response handling, JSON
+   parsing, and private-address protection for agent-initiated network calls."
   (:require
    [agent.tools.core :as tools]
    [cheshire.core :as json]

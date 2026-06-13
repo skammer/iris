@@ -1,6 +1,7 @@
 (ns agent.llm.core
-  "Core LLM protocols and interfaces for the agent system.
-  Provides abstract interfaces for LLM providers with extended capabilities."
+  "Provider-neutral LLM contracts. Defines normalized invoke/stream/embed/model
+   APIs, shared request/response helpers, provider errors, retries, and token
+   estimation used above concrete provider implementations."
   (:require
    [agent.llm.messages :as llm-messages]
    [cheshire.core :as json]

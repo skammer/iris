@@ -1,5 +1,7 @@
 (ns agent.broker.local
-  "In-process broker backend with wildcard subscriptions."
+  "Local core.async broker backend. Stores subscriptions in memory, routes
+   exact or prefix-wildcard subjects, isolates slow subscribers with buffers,
+   and delegates replay to the system event store."
   (:require
    [agent.broker.core :as broker]
    [agent.defaults :as defaults]

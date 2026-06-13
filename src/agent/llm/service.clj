@@ -1,5 +1,6 @@
 (ns agent.llm.service
-  "LLM provider factory and small runtime helpers."
+  "LLM provider factory. Chooses the active configured provider, constructs the
+   concrete adapter, and builds the fact-extraction provider used by memory."
   (:require
    [agent.config :as config]
    [agent.llm.providers.ollama :as ollama]

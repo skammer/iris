@@ -1,5 +1,6 @@
 (ns agent.kernel.ops
-  "Kernel runtime host operations.")
+  "Protocols the pure kernel uses to call host capabilities: tool execution,
+   event emission, supported directives, and batched tool execution.")
 
 (defprotocol KernelOps
   (execute-agent-tool! [this agent-id tool-name input context])
