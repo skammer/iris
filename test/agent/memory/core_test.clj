@@ -46,6 +46,26 @@
   (generate [this messages opts]
     (llm-core/invoke this (assoc opts :messages messages))))
 
+(defn- deterministic-embedding [text]
+  (let [text* (str/lower-case (or text ""))]
+    (cond
+      (re-find #"bike|bicycle|cycling|transport" text*) [1.0 0.0 0.0]
+      (re-find #"espresso|coffee" text*) [0.0 1.0 0.0]
+      :else [0.0 0.0 1.0])))
+
+(defrecord EmbeddingProvider [requests]
+  llm-core/ILLMProvider
+  (complete [_ _ _] "")
+  (stream [_ _ _] nil)
+  (embed [_ text opts]
+    (swap! requests conj {:text text :opts opts})
+    (if (string? text)
+      (deterministic-embedding text)
+      (mapv deterministic-embedding text)))
+  (list-models [_] [])
+  (get-capabilities [_ _] {:supports-embedding true})
+  (estimate-cost [_ _ _] {:tokens 1 :cost-usd 0.0}))
+
 (defn temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-memory-" ".db")))
 
@@ -54,14 +74,17 @@
             "iris-memory-"
             (make-array java.nio.file.attribute.FileAttribute 0))))
 
-(defn test-service [store cfg]
-  (memory/create-memory-service
-   (merge {:search {:default-limit 10}
-           :notes {:extractor {:enabled false}
-                   :default-scope :session}
-           :vault {:paths []}}
-          cfg)
-   store))
+(defn test-service
+  ([store cfg] (test-service store cfg {}))
+  ([store cfg opts]
+   (memory/create-memory-service
+    (merge {:search {:default-limit 10}
+            :notes {:extractor {:enabled false}
+                    :default-scope :session}
+            :vault {:paths []}}
+           cfg)
+    store
+    opts)))
 
 (deftest memory-service-exposes-surfaces-and-search-test
   (let [db-path (temp-db-path)
@@ -301,6 +324,85 @@
         (is (= ["mem_global"] (mapv :note-id without-session)))
         (is (= #{"mem_global" "mem_session_a" "mem_auto_session"} ids-with-session))
         (is (not (contains? ids-with-session "mem_session_b"))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
+(deftest vault-embeddings-add-semantic-search-with-scope-filters-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        global (io/file root "approved/bicycle.md")
+        session-a (io/file root "sessions/a.md")
+        session-b (io/file root "sessions/b.md")
+        store (sqlite/create-store {:path db-path})
+        requests (atom [])
+        provider (->EmbeddingProvider requests)
+        cfg {:vault {:paths [(.getAbsolutePath root)]}
+             :embeddings {:enabled? true
+                          :surfaces [:vault-notes :vault-chunks]
+                          :batch-size 2
+                          :candidate-limit 10}}
+        service (test-service store
+                              cfg
+                              {:embedding-provider provider
+                               :embedding-model "test-embed"})]
+    (try
+      (doseq [file [global session-a session-b]]
+        (.mkdirs (.getParentFile file)))
+      (spit global
+            (str "---\n"
+                 "id: mem_bicycle\n"
+                 "type: Reference\n"
+                 "title: Bicycle repair\n"
+                 "iris:\n"
+                 "  scope: global\n"
+                 "  status: approved\n"
+                 "---\n\n"
+                 "Tire levers and chain lubricant help with bicycle repair.\n"))
+      (spit session-a
+            (str "---\n"
+                 "id: mem_session_bicycle_a\n"
+                 "type: ProjectNote\n"
+                 "title: Session A transport\n"
+                 "iris:\n"
+                 "  scope: session\n"
+                 "  status: approved\n"
+                 "  origins:\n"
+                 "  - type: message\n"
+                 "    session_id: s1\n"
+                 "---\n\n"
+                 "Cycling transport details for session one.\n"))
+      (spit session-b
+            (str "---\n"
+                 "id: mem_session_bicycle_b\n"
+                 "type: ProjectNote\n"
+                 "title: Session B transport\n"
+                 "iris:\n"
+                 "  scope: session\n"
+                 "  status: approved\n"
+                 "  origins:\n"
+                 "  - type: message\n"
+                 "    session_id: s2\n"
+                 "---\n\n"
+                 "Cycling transport details for session two.\n"))
+      (let [report (memory/reindex-vault! service)
+            semantic (memory/search-vault service "fix my bike" {:limit 10 :session-id "s1"})
+            semantic-ids (set (map :note-id semantic))
+            offline-service (test-service store cfg)
+            offline-fts (memory/search-vault offline-service "Bicycle repair" {:limit 10})]
+        (is (= 3 (:vault-chunk-embedding-count report)))
+        (is (= 3 (:memory-embedding-count report)))
+        (is (empty? (:missing-embeddings report)))
+        (is (empty? (:missing-note-embeddings report)))
+        (is (empty? (:embedding-errors report)))
+        (is (= 3 (count (sqlite/list-vault-chunk-embeddings store))))
+        (is (= 3 (count (sqlite/list-memory-embeddings store {:surface "vault_note"}))))
+        (is (= #{"mem_bicycle" "mem_session_bicycle_a"} semantic-ids))
+        (is (not (contains? semantic-ids "mem_session_bicycle_b")))
+        (is (some #(= :semantic-match (:reason %)) semantic))
+        (is (= ["mem_bicycle"] (mapv :note-id offline-fts)))
+        (is (every? #(= "test-embed" (get-in % [:opts :model])) @requests)))
       (finally
         (sqlite/close-store! store)
         (io/delete-file root true)

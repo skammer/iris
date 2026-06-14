@@ -46,7 +46,14 @@
    (memory/create-memory-service cfg store))
   ([cfg tools-cfg store]
    (memory/create-memory-service (assoc cfg :fs-roots (get-in tools-cfg [:fs :roots]))
-                                 store)))
+                                 store))
+  ([cfg tools-cfg store llm-cfg llm-provider]
+   (let [provider-cfg (config/active-provider-config llm-cfg)]
+     (memory/create-memory-service
+      (assoc cfg :fs-roots (get-in tools-cfg [:fs :roots]))
+      store
+      {:embedding-provider llm-provider
+       :embedding-model (:embedding-model provider-cfg)}))))
 
 (defn create-channel-adapter-registry
   ([cfg] (create-channel-adapter-registry cfg nil))
@@ -100,13 +107,17 @@
         broker-instance (system-health/with-component-health health-registry :broker
                           #(events/create-broker store))
         event-sink (events/create-event-sink store broker-instance telemetry-collector observer trace)
-        memory-service (system-health/with-component-health health-registry :memory
-                         #(create-memory-service (:memory cfg) (:tools cfg) store))
         llm-registry (llm-registry/create-registry llm-cfg)
         llm-provider (system-health/with-component-health health-registry :llm-provider
                        #(llm-service/create-llm-provider llm-cfg))
         note-llm-provider (system-health/with-component-health health-registry :llm-provider
                             #(llm-service/create-note-llm-provider cfg))
+        memory-service (system-health/with-component-health health-registry :memory
+                         #(create-memory-service (:memory cfg)
+                                                 (:tools cfg)
+                                                 store
+                                                 llm-cfg
+                                                 llm-provider))
         chat-service (system-health/with-component-health health-registry :chat
                        #(chat/create-service))]
     (logging/log! :agent.system.lifecycle/created

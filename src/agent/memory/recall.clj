@@ -81,9 +81,9 @@
    :scope (result-scope :vault_chunk item)
    :status (keyword (or (:iris-status item) "approved"))
    :text (:text item)
-   :score 1.0
+   :score (or (:score item) 1.0)
    :source (result-source :vault_chunk item)
-   :reason :fts-match
+   :reason (or (:reason item) :fts-match)
    :tags (:tags item)})
 
 (defn recall

@@ -10,7 +10,7 @@
    (java.nio.charset StandardCharsets)
    (java.security MessageDigest)))
 
-(def latest-schema-version 5)
+(def latest-schema-version 6)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -39,6 +39,11 @@
     :id "005-drop-memory-facts"
     :name "drop-memory-facts"
     :up-resource "agent/persistence/sqlite/migrations/005-drop-memory-facts.up.sql"
+    :irreversible? true}
+   {:version 6
+    :id "006-memory-embeddings"
+    :name "memory-embeddings"
+    :up-resource "agent/persistence/sqlite/migrations/006-memory-embeddings.up.sql"
     :irreversible? true}])
 
 (defn descriptor-by-version [version]

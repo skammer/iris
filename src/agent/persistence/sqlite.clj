@@ -179,8 +179,9 @@
   ([store query] (events/search-events store query))
   ([store query opts] (events/search-events store query opts)))
 
-(defn replace-vault-index! [store notes]
-  (memory/replace-vault-index! store notes))
+(defn replace-vault-index!
+  ([store notes] (memory/replace-vault-index! store notes))
+  ([store notes opts] (memory/replace-vault-index! store notes opts)))
 
 (defn search-vault-chunks
   ([store query] (memory/search-vault-chunks store query))
@@ -199,6 +200,18 @@
 (defn list-vault-chunks
   ([store] (memory/list-vault-chunks store))
   ([store opts] (memory/list-vault-chunks store opts)))
+
+(defn list-memory-embeddings
+  ([store] (memory/list-memory-embeddings store))
+  ([store opts] (memory/list-memory-embeddings store opts)))
+
+(defn list-vault-chunk-embeddings
+  ([store] (memory/list-vault-chunk-embeddings store))
+  ([store opts] (memory/list-vault-chunk-embeddings store opts)))
+
+(defn list-vault-chunk-embedding-candidates
+  ([store] (memory/list-vault-chunk-embedding-candidates store))
+  ([store opts] (memory/list-vault-chunk-embedding-candidates store opts)))
 
 (defn save-todo-list! [store todo-list]
   (todos/save-list! store todo-list))

@@ -15,6 +15,7 @@
 
 (def default-search-limit 10)
 (def default-min-search-score 0.3)
+(def default-embedding-candidate-limit 1000)
 (def ^:private allowed-vault-statuses #{"candidate" "approved" "auto_session" "rejected" "superseded"})
 (def ^:private allowed-vault-scopes #{"global" "session" "agent" "project"})
 (def ^:private allowed-vault-move-roots #{"inbox" "preferences" "decisions" "projects"
@@ -162,7 +163,8 @@
        (:search-max-limit memory-service)))
 
 (defn create-memory-service
-  [{:keys [search vault fs-roots] :as cfg} store]
+  ([cfg store] (create-memory-service cfg store {}))
+  ([{:keys [search vault fs-roots] :as cfg} store {:keys [embedding-provider embedding-model]}]
   (let [{:keys [default-limit max-limit]} (search-limit-config search)]
     {:config cfg
      :search-default-limit default-limit
@@ -171,7 +173,9 @@
      :vault-roots (canonical-roots (get vault :paths []))
      :vault-writable? (true? (:writable? vault))
      :fs-roots (canonical-roots (or fs-roots []))
-     :store store}))
+     :embedding-provider embedding-provider
+     :embedding-model embedding-model
+     :store store})))
 
 (defn list-surfaces
   [memory-service]
@@ -212,12 +216,142 @@
   [memory-service]
   (vault/reindex! memory-service))
 
+(defn- embeddings-enabled? [memory-service]
+  (true? (get-in memory-service [:config :embeddings :enabled?])))
+
+(defn- embedding-candidate-limit [memory-service requested]
+  (let [configured (get-in memory-service [:config :embeddings :candidate-limit])]
+    (positive-limit configured (max default-embedding-candidate-limit
+                                    (effective-search-limit memory-service requested)))))
+
+(defn- dot-product [left right]
+  (reduce + 0.0 (map * left right)))
+
+(defn- magnitude [values]
+  (Math/sqrt (reduce + 0.0 (map #(* % %) values))))
+
+(defn- cosine-score [left right]
+  (let [left* (mapv double left)
+        right* (mapv double right)
+        denominator (* (magnitude left*) (magnitude right*))]
+    (if (or (zero? denominator)
+            (not= (count left*) (count right*)))
+      0.0
+      (/ (+ 1.0 (/ (dot-product left* right*) denominator)) 2.0))))
+
+(defn- query-embedding [memory-service query]
+  (when-let [provider (:embedding-provider memory-service)]
+    (let [opts (cond-> {}
+                 (:embedding-model memory-service)
+                 (assoc :model (:embedding-model memory-service)))
+          embedding (llm/embed provider query opts)]
+      (when (and (sequential? embedding)
+                 (every? number? embedding))
+        (vec embedding)))))
+
+(defn- vector-vault-results [memory-service query opts]
+  (if (and (embeddings-enabled? memory-service)
+           (not (str/blank? (or query ""))))
+    (try
+      (let [candidates (sqlite/list-vault-chunk-embedding-candidates
+                        (:store memory-service)
+                        {:session-id (:session-id opts)
+                         :limit (embedding-candidate-limit memory-service (:limit opts))})]
+        (if-let [embedding (and (seq candidates)
+                                (query-embedding memory-service query))]
+          (->> candidates
+               (map #(-> %
+                         (assoc :vector-score (cosine-score embedding (:embedding %)))
+                         (dissoc :embedding)))
+               (filter #(pos? (:vector-score %)))
+               vec)
+          []))
+      (catch Exception _
+        []))
+    []))
+
+(defn- indexed-scores [items score-key]
+  (let [total (max 1 (count items))]
+    (map-indexed (fn [idx item]
+                   (assoc item score-key
+                          (if (= 1 total)
+                            1.0
+                            (- 1.0 (/ idx (double (dec total)))))))
+                 items)))
+
+(defn- parse-instant [value]
+  (try
+    (some-> value java.time.Instant/parse)
+    (catch Exception _
+      nil)))
+
+(defn- recency-score [updated-at]
+  (if-let [instant (parse-instant updated-at)]
+    (let [days (/ (double (.toMillis (java.time.Duration/between instant (java.time.Instant/now))))
+                  86400000.0)]
+      (/ 1.0 (+ 1.0 (max 0.0 (/ days 30.0)))))
+    0.5))
+
+(defn- scope-score [item opts]
+  (case (:iris-scope item)
+    "session" (if (:session-id opts) 1.0 0.0)
+    "global" 0.9
+    "project" 0.85
+    0.6))
+
+(defn- hybrid-vault-score [item opts]
+  (let [fts (double (or (:fts-score item) 0.0))
+        vector (double (or (:vector-score item) 0.0))
+        scope (scope-score item opts)
+        recency (recency-score (:updated-at item))
+        confidence (confidence-score (:iris-confidence item))
+        surface-weight 1.0
+        score (* surface-weight
+                 (+ (* 0.45 fts)
+                    (* 0.35 vector)
+                    (* 0.08 scope)
+                    (* 0.05 recency)
+                    (* 0.05 confidence)
+                    (* 0.02 surface-weight)))]
+    [score {:fts fts
+            :vector vector
+            :scope scope
+            :recency recency
+            :confidence confidence
+            :surface-weight surface-weight}]))
+
+(defn- merge-vault-results [fts-results vector-results opts limit]
+  (let [fts* (indexed-scores fts-results :fts-score)
+        by-id (reduce (fn [acc item]
+                        (merge-with merge acc {(:chunk-id item) item}))
+                      {}
+                      (concat fts* vector-results))]
+    (->> (vals by-id)
+         (map (fn [item]
+                (let [[score breakdown] (hybrid-vault-score item opts)
+                      reason (cond
+                               (and (pos? (:fts breakdown))
+                                    (pos? (:vector breakdown))) :hybrid-match
+                               (pos? (:vector breakdown)) :semantic-match
+                               :else :fts-match)]
+                  (assoc item
+                         :score score
+                         :score-breakdown breakdown
+                         :reason reason))))
+         (sort-by :score >)
+         (take limit)
+         vec)))
+
 (defn search-vault
   ([memory-service query] (search-vault memory-service query {}))
   ([memory-service query opts]
-   (sqlite/search-vault-chunks (:store memory-service)
-                               query
-                               (assoc opts :limit (effective-search-limit memory-service (:limit opts))))))
+   (let [limit (effective-search-limit memory-service (:limit opts))
+         opts* (assoc opts :limit limit)
+         fts-results (sqlite/search-vault-chunks (:store memory-service)
+                                                 query
+                                                 opts*)
+         vector-results (vector-vault-results memory-service query opts*)]
+     (merge-vault-results fts-results vector-results opts* limit))))
 
 (defn read-vault-file
   [memory-service path]

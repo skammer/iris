@@ -552,6 +552,13 @@ Exit criteria:
 
 ### Phase 5: Add embeddings
 
+Status:
+- Done in current refactor pass.
+- Added disabled-by-default `:memory :embeddings` indexing policy.
+- Added `memory_embeddings` and `vault_chunk_embeddings` as rebuildable derived tables.
+- Reindex embeds approved vault notes/chunks via existing `agent.llm.core/embed` provider and active provider `:embedding-model`.
+- Vault recall now uses hybrid FTS/vector/scope/recency/confidence/surface scoring; FTS remains the offline fallback.
+
 Goal:
 - Semantic recall without losing exact search.
 

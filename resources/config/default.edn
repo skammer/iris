@@ -199,6 +199,11 @@
                    :min-score 0.3}
           :vault {:paths ["memory"]
                   :writable? true}
+          :embeddings {:enabled? false
+                       :surfaces [:vault-notes :vault-chunks]
+                       :batch-size 16
+                       :candidate-limit 1000
+                       :rebuild-mode :replace}
           :notes {:extractor {:enabled true
                               :provider nil
                               :model nil

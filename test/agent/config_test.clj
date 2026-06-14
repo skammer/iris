@@ -101,6 +101,12 @@
               :max-limit 10
               :min-score 0.3}
              (get-in cfg [:memory :search])))
+      (is (= {:enabled? false
+              :surfaces [:vault-notes :vault-chunks]
+              :batch-size 16
+              :candidate-limit 1000
+              :rebuild-mode :replace}
+             (get-in cfg [:memory :embeddings])))
       (is (= :session (get-in cfg [:memory :notes :default-scope])))
       (is (= {:enabled false
               :bot-token nil

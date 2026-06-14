@@ -107,19 +107,23 @@
 
 (defn- rebuild-hot-system [old-system new-cfg]
   (let [health-registry (:health-registry old-system)
+        llm-cfg (config/llm-config new-cfg)
+        llm-provider (system-health/with-component-health health-registry :llm-provider
+                       #(llm-service/create-llm-provider llm-cfg))
         memory-service (system-health/with-component-health health-registry :memory
                          #(components/create-memory-service (:memory new-cfg)
                                                            (:tools new-cfg)
-                                                           (:store old-system)))
+                                                           (:store old-system)
+                                                           llm-cfg
+                                                           llm-provider))
         observer (components/create-observer (:telemetry old-system) (:observer new-cfg))
         trace (components/create-trace new-cfg)
         base (assoc old-system
                     :config new-cfg
-                    :llm-registry (llm-registry/create-registry (config/llm-config new-cfg))
+                    :llm-registry (llm-registry/create-registry llm-cfg)
                     :chat-service (system-health/with-component-health health-registry :chat
                                     #(chat/create-service))
-                    :llm-provider (system-health/with-component-health health-registry :llm-provider
-                                    #(llm-service/create-llm-provider (:llm new-cfg)))
+                    :llm-provider llm-provider
                     :note-llm-provider (system-health/with-component-health health-registry :llm-provider
                                          #(llm-service/create-note-llm-provider new-cfg))
                     :observer observer
