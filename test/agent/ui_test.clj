@@ -416,16 +416,43 @@
                                     :decision :conditional
                                     :reason "narrow scope"
                                     :duration-ms 12}})
+      (sqlite/log-event! store
+                         {:event-type :tool-execution-end
+                          :entity-type :tool
+                          :entity-id "magi"
+                          :payload {:tool-name "magi"
+                                    :status "succeeded"
+                                    :input {:question "double check"}
+                                    :result {:filter {:kind :yes-no
+                                                      :domain :policy
+                                                      :risk :low
+                                                      :question "double check"
+                                                      :expected-response :permit
+                                                      :context {}}
+                                             :agents {:melchior {:response :yes}
+                                                      :balthasar {:response :yes}
+                                                      :casper {:response :yes}}
+                                             :judge {:decision :yes
+                                                     :reason "all yes"}
+                                             :decision :yes
+                                             :reason "all yes"}
+                                    :duration-ms 7}})
       (let [html (ui/magi-fragment {:store store})]
         (is (str/includes? html "MAGI OVERSIGHT"))
-        (is (str/includes? html "Decision Log"))
+        (is (str/includes? html "Invocation Log"))
+        (is (str/includes? html "Decision Console"))
+        (is (str/includes? html "latest 1000 records"))
+        (is (str/includes? html "approval"))
+        (is (str/includes? html "tool"))
         (is (str/includes? html "BALTHASAR"))
         (is (str/includes? html "MELCHIOR"))
         (is (str/includes? html "input"))
         (is (str/includes? html "filter"))
         (is (str/includes? html "judge"))
+        (is (str/includes? html "event"))
         (is (str/includes? html "CONDITIONAL"))
-        (is (str/includes? html "printf")))
+        (is (str/includes? html "printf"))
+        (is (str/includes? html "double check")))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))

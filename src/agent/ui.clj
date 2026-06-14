@@ -536,7 +536,22 @@
 (defn- magi-decision-events [system]
   (sqlite/list-events (:store system)
                       {:event-type :tool.approval.magi_evaluated
-                       :limit 50}))
+                       :limit 1000}))
+
+(defn- magi-tool-event? [{:keys [event-type payload]}]
+  (and (= "tool-execution-end" event-type)
+       (= "magi" (:tool-name payload))))
+
+(defn- magi-invocation-events [system]
+  (let [approval-events (magi-decision-events system)
+        tool-events (->> (sqlite/list-events (:store system)
+                                             {:event-type :tool-execution-end
+                                              :limit 1000})
+                         (filter magi-tool-event?))]
+    (->> (concat approval-events tool-events)
+         (sort-by #(long (or (:id %) 0)) >)
+         (take 1000)
+         vec)))
 
 (defn- decision-class [decision]
   (str "magi-decision magi-decision--" (or (some-> decision name) "unknown")))
@@ -551,6 +566,58 @@
 
 (defn- compact-json [value]
   (json/generate-string value {:pretty true}))
+
+(defn- decision-label [decision]
+  (or (some-> decision name str/upper-case) "-"))
+
+(defn- magi-event-result [{:keys [payload] :as event}]
+  (if (= "tool.approval.magi_evaluated" (:event-type event))
+    payload
+    (:result payload)))
+
+(defn- magi-invocation-row [{:keys [id event-type created-at payload] :as event}]
+  (let [approval? (= "tool.approval.magi_evaluated" event-type)
+        result (magi-event-result event)
+        judge* (or (:judge result)
+                   (select-keys result [:decision :reason]))
+        filter* (:filter result)
+        agents (:agents result)
+        input* (or (:input payload)
+                   (:input result)
+                   (get-in filter* [:context :input]))
+        source (if approval? "approval" "tool")
+        tool-name (or (:tool-name payload)
+                      (:tool-name result)
+                      (get-in filter* [:context :tool-name])
+                      "magi")
+        duration-ms (or (:duration-ms payload) (:duration-ms result))
+        reason (or (:reason judge*) (:reason result) (:reason payload))]
+    [:details.magi-invocation
+     [:summary.magi-invocation__summary
+      [:span.magi-log-id (str "#" (or id "-"))]
+      [:span source]
+      [:span (or tool-name "-")]
+      [:strong {:class (decision-class (:decision judge*))}
+       (decision-label (:decision judge*))]
+      [:span.magi-log-reason (or reason "-")]
+      [:span (str (or duration-ms 0) "ms")]
+      [:span (or created-at "-")]]
+     [:div.magi-invocation__detail
+      [:div.magi-readout
+       [:span "input"]
+       [:pre (compact-json input*)]]
+      [:div.magi-readout
+       [:span "filter"]
+       [:pre (compact-json filter*)]]
+      [:div.magi-readout
+       [:span "agents"]
+       [:pre (compact-json agents)]]
+      [:div.magi-readout
+       [:span "judge"]
+       [:pre (compact-json judge*)]]
+      [:div.magi-readout.magi-readout--wide
+       [:span "event"]
+       [:pre (compact-json event)]]]]))
 
 (defn- magi-decision-card [{:keys [id entity-id created-at payload]}]
   (let [{:keys [tool-name input filter agents judge decision reason providers duration-ms]} payload
@@ -592,23 +659,46 @@
       [:span (or created-at "-")]]]))
 
 (defn magi-fragment [system]
-  (let [events (magi-decision-events system)
-        latest (first events)]
+  (let [invocations (magi-invocation-events system)
+        decision-events (filter #(= "tool.approval.magi_evaluated" (:event-type %)) invocations)
+        latest (first invocations)]
     (ui-render/render
      [:section#magi-panel.magi-panel
-      {"data-on-interval__duration.5s.leading" "@get('/ui/magi')"}
       [:div.magi-console
        [:div.magi-console__header
         [:div
          [:div.magi-kicker "MAGI OVERSIGHT"]
-         [:h1 "Decision Log"]]
+         [:h1 "Invocation Log"]]
         [:div.magi-console__count
          [:span "records"]
-         [:strong (str (count events))]]]
+         [:strong (str (count invocations))]
+         [:button.magi-refresh
+          {:type "button"
+           "data-on:click" "@get('/ui/magi')"}
+          "Refresh"]]]
        (if latest
          [:div.magi-log
-          (for [event events]
-            (magi-decision-card event))]
+          [:section.magi-invocation-log
+           [:div.magi-section-head
+            [:h2 "Invocation Log"]
+            [:span "latest 1000 records"]]
+           [:div.magi-invocation__head
+            [:span "id"]
+            [:span "source"]
+            [:span "tool"]
+            [:span "decision"]
+            [:span "reason"]
+            [:span "time"]
+            [:span "created"]]
+           (for [event invocations]
+             (magi-invocation-row event))]
+          (when (seq decision-events)
+            [:section.magi-decision-preview
+             [:div.magi-section-head
+              [:h2 "Decision Console"]
+              [:span "approval decisions"]]
+             (for [event (take 20 decision-events)]
+               (magi-decision-card event))])]
          [:div.magi-empty
           [:div.magi-diagram.magi-diagram--empty
            [:div.magi-center [:span "MAGI"]]
