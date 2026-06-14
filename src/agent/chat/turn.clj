@@ -229,6 +229,30 @@
              :why (mapv #(select-keys % [:surface :id :reason :score :why])
                          (:results recall))}})
 
+(def ^:private magi-context-message-limit 8)
+(def ^:private magi-context-content-chars 1200)
+
+(defn- magi-message [message]
+  (let [role (some-> (:role message) name)
+        content (some-> (llm-messages/content-text message) str/trim not-empty)]
+    (when (and (#{"user" "assistant" "tool"} role) content)
+      {:role role
+       :content (util/truncate content
+                               magi-context-content-chars
+                               #(str " [truncated " % " chars]"))})))
+
+(defn- magi-context [{:keys [session-id request-id prompt history]}]
+  (cond-> {:session-id session-id
+           :request-id request-id}
+    (some-> prompt str/trim not-empty)
+    (assoc :user-request (str/trim prompt))
+
+    true
+    (assoc :recent-messages (->> history
+                                 (keep magi-message)
+                                 (take-last magi-context-message-limit)
+                                 vec))))
+
 (defn- runtime-loop-options
   "Builds the agent.runtime.loop/run! options map from a prepared turn env plus
    the live wiring (event sink, kernel ops, thinking callback) created by
@@ -298,7 +322,8 @@
                  (subscribers/loop-event-sink system subscribers)
                  (get-in system [:chat-service :stream-flush-scheduler]))
         event-sink (:emit! flusher)
-        ops (chat-kernel-ops/->ChatKernelOps system session-id request-id context)]
+        tool-context (assoc (or context {}) :magi-context (magi-context env))
+        ops (chat-kernel-ops/->ChatKernelOps system session-id request-id tool-context)]
     (event-sink (memory-recalled-event env))
     (try
       (let [result (runtime-loop/run! (runtime-loop-options system

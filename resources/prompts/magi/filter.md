@@ -25,5 +25,6 @@ Rules:
 - Use yes-no only when the question can be answered as approval or denial.
 - Use info when the request asks for analysis, opinion, explanation, or classification rather than permission.
 - Use unsupported when context is insufficient for MAGI oversight.
+- Preserve supplied request context needed by the triumvirate. Do not return an empty context when input context contains relevant tool, request, permission, or conversation facts.
 - Preserve only facts supplied in the input.
 - Never invent missing context.

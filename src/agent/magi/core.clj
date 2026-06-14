@@ -220,8 +220,9 @@
                          (get-in service [:prompts :filter])
                          payload
                          filter-schema
-                         (timeout-ms service))]
-    (normalize-filter-output raw)))
+                         (timeout-ms service))
+        normalized (normalize-filter-output raw)]
+    (update normalized :context #(merge (:context payload) (or % {})))))
 
 (defn- agent-payload [filter-result]
   {:kind (name (:kind filter-result))
@@ -410,14 +411,16 @@
    :domain :tool-approval
    :expected-response :permit
    :question "Should Iris allow this tool execution?"
-   :context {:tool-name (some-> (:name tool-description) name)
-             :category (some-> (:category tool-description) name)
-             :operation (some-> (:operation tool-description) name)
-             :routing-categories (mapv name (:routing-categories tool-description))
-             :approval-id (:id approval)
-             :requested-by (:requested-by approval)
-             :requested-permissions (mapv name (:requested-permissions approval))
-             :reason (:reason approval)
-             :input input
-             :user (:user context)
-             :request-id (:request-id context)}})
+   :context (cond-> {:tool-name (some-> (:name tool-description) name)
+                     :category (some-> (:category tool-description) name)
+                     :operation (some-> (:operation tool-description) name)
+                     :routing-categories (mapv name (:routing-categories tool-description))
+                     :approval-id (:id approval)
+                     :requested-by (:requested-by approval)
+                     :requested-permissions (mapv name (:requested-permissions approval))
+                     :reason (:reason approval)
+                     :input input
+                     :user (:user context)
+                     :request-id (:request-id context)}
+              (:magi-context context)
+              (assoc :request-context (:magi-context context)))})

@@ -130,6 +130,23 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest magi-context-carries-user-request-and-recent-messages-test
+  (let [ctx (@#'turn/magi-context
+             {:session-id "session-1"
+              :request-id "request-1"
+              :prompt "curl my public ip"
+              :history [{:role "system" :content "hidden"}
+                        {:role "user" :content "curl my public ip"}
+                        {:role "assistant" :content "I will check"}
+                        {:role "tool" :content "blocked"}]})]
+    (is (= "session-1" (:session-id ctx)))
+    (is (= "request-1" (:request-id ctx)))
+    (is (= "curl my public ip" (:user-request ctx)))
+    (is (= [{:role "user" :content "curl my public ip"}
+            {:role "assistant" :content "I will check"}
+            {:role "tool" :content "blocked"}]
+           (:recent-messages ctx)))))
+
 (deftest run-turn-tool-call-turn-persists-protocol-and-notifies-callback-test
   (let [path (harness/temp-db-path)
         responses (atom [(tool-call-response "call_fs_1" :fs_list {:path "."})
