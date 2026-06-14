@@ -361,7 +361,9 @@
           (:allow decision) nil
           (:block decision) (throw (tool-error :approval-required
                                                (or (:reason decision) "Sensitive tool requires approved request")
-                                               {:tool-name (:name tool-description)}))
+                                               (cond-> {:tool-name (:name tool-description)}
+                                                 (:approval-id decision) (assoc :approval-id (:approval-id decision))
+                                                 (:type decision) (assoc :type (:type decision)))))
           :else (throw (tool-error :approval-required
                                    "Sensitive tool approval policy did not allow execution"
                                    {:tool-name (:name tool-description)})))))))

@@ -9,6 +9,7 @@
    [agent.llm.registry :as llm-registry]
    [agent.llm.service :as llm-service]
    [agent.logging :as logging]
+   [agent.magi.core :as magi]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.trace :as runtime-trace]
@@ -79,7 +80,8 @@
        :channel-adapters-cfg (:channel-adapters cfg)
        :system-control (:system-control system)
        :observer (:observer system)
-       :trace (:trace system)})))
+       :trace (:trace system)
+       :magi-service (:magi-service system)})))
 
 (defn attach-telegram-service
   "Create the Telegram adapter and channel-adapter registry for `system`.
@@ -110,6 +112,7 @@
         llm-registry (llm-registry/create-registry llm-cfg)
         llm-provider (system-health/with-component-health health-registry :llm-provider
                        #(llm-service/create-llm-provider llm-cfg))
+        magi-service (magi/create-service cfg {:default-provider llm-provider})
         note-llm-provider (system-health/with-component-health health-registry :llm-provider
                             #(llm-service/create-note-llm-provider cfg))
         memory-service (system-health/with-component-health health-registry :memory
@@ -133,6 +136,7 @@
                        :health-registry health-registry
                        :llm-registry llm-registry
                        :llm-provider llm-provider
+                       :magi-service magi-service
                        :note-llm-provider note-llm-provider
                        :store store
                        :telemetry telemetry-collector

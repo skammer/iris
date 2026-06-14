@@ -4,6 +4,7 @@
    helpers used by the runtime."
   (:require
    [agent.logging :as logging]
+   [agent.magi.core :as magi]
    [agent.mcp.core :as mcp]
    [agent.runtime.trace :as runtime-trace]
    [agent.telemetry :as telemetry]
@@ -11,6 +12,7 @@
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.common.fs :as fs-tool]
    [agent.tools.common.http :as http-tool]
+   [agent.tools.common.magi :as magi-tool]
    [agent.tools.common.memory :as memory-tool]
    [agent.tools.common.shell :as shell-tool]
    [agent.tools.common.telegram :as telegram-tool]
@@ -143,7 +145,7 @@
    {:cfg <:tools config> :event-sink :store :telemetry :memory-service
     :channel-adapters-cfg :system-control :observer :trace}"
   [{:keys [cfg event-sink store memory-service channel-adapters-cfg
-           system-control observer trace]
+           system-control observer trace magi-service]
     telemetry-collector :telemetry}]
    (let [http-cfg (get cfg :http)
          fs-cfg (get cfg :fs)
@@ -154,7 +156,11 @@
          policy-hook (create-tool-policy-hook cfg)
          registry (tools/create-registry
                    {:event-sink event-sink
-                    :approval-check (tool-approvals/create-policy-hook store)
+                    :approval-check (tool-approvals/create-policy-hook
+                                     {:store store
+                                      :magi-service magi-service
+                                      :event-sink event-sink
+                                      :approval-ttl-seconds (get-in cfg [:approvals :ttl-seconds])})
                     :before-execute policy-hook
                     :after-execute (fn [{:keys [tool context duration-ms is-error error input result] :as hook}]
                                      (let [observation {:tool-name (:name tool)
@@ -215,6 +221,9 @@
 
        system-control
        (tools/register-tool (reload-tool system-control))
+
+       (and magi-service (magi/tool-enabled? magi-service))
+       (tools/register-tool (magi-tool/create-magi-tool magi-service))
 
        (and (:enabled mcp-cfg) (seq (:servers mcp-cfg)))
        (register-mcp-tools mcp-cfg event-sink telemetry-collector))))

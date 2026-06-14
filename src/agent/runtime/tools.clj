@@ -35,6 +35,7 @@
      :status :error
      :error-type (:type data)
      :error (.getMessage ex)
+     :error-data (dissoc data :preflight)
      :input (:input preflight)
      :terminate? false}))
 

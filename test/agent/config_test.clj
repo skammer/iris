@@ -83,15 +83,31 @@
 	      (is (not (contains? (get-in cfg [:chat :guardrails :doom-loop]) :action)))
       (is (false? (get-in cfg [:tools :yolo?])))
       (is (= 6 (get-in cfg [:tools :max-parallelism])))
-      (is (= [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write]
+      (is (= [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate]
              (get-in cfg [:tools :permissions :api])))
-      (is (= [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec]
+      (is (= [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec :magi-evaluate]
              (get-in cfg [:tools :permissions :chat])))
       (is (= {:allowlist []
               :blocklist []
               :tool-scopes {}}
              (get-in cfg [:tools :policy])))
       (is (= 900 (get-in cfg [:tools :approvals :ttl-seconds])))
+      (is (= {:enabled? false
+              :mode :assistive
+              :fallback :human
+              :apply-to #{:tool-approvals}
+              :tool-categories #{:all}
+              :tool {:enabled true}
+              :execution :parallel
+              :allow-critical? false
+              :timeout-ms 30000
+              :max-context-chars 12000
+              :filter {:provider nil :model nil}
+              :judge {:provider nil :model nil}
+              :agents {:melchior {:provider nil :model nil}
+                       :balthasar {:provider nil :model nil}
+                       :casper {:provider nil :model nil}}}
+             (:magi cfg)))
       (is (= {:enabled true
               :provider nil
               :model nil
@@ -177,6 +193,21 @@
   (with-isolated-config [_root {"AGENT_TOOLS_MAX_PARALLELISM" "4"}]
     (let [cfg (config/load-config)]
       (is (= 4 (get-in cfg [:tools :max-parallelism]))))))
+
+(deftest magi-env-overrides-test
+  (with-isolated-config [_root {"AGENT_MAGI_ENABLED" "true"
+                                "AGENT_MAGI_MODE" "auto-approve"
+                                "AGENT_MAGI_FALLBACK" "deny"
+                                "AGENT_MAGI_TOOL_CATEGORIES" "shell,fs"
+                                "AGENT_MAGI_AGENT_MELCHIOR_PROVIDER" "ollama"
+                                "AGENT_MAGI_AGENT_MELCHIOR_MODEL" "magi-model"}]
+    (let [cfg (config/load-config)]
+      (is (true? (get-in cfg [:magi :enabled?])))
+      (is (= :auto-approve (get-in cfg [:magi :mode])))
+      (is (= :deny (get-in cfg [:magi :fallback])))
+      (is (= [:shell :fs] (get-in cfg [:magi :tool-categories])))
+      (is (= {:provider :ollama :model "magi-model"}
+             (get-in cfg [:magi :agents :melchior]))))))
 
 (deftest default-data-paths-use-global-data-dir-test
   (with-isolated-config [root {}]

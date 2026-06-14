@@ -120,6 +120,21 @@
    {:names "AGENT_LOOP_PLAN_FILE" :apply (assoc-path [:loop :plan-file])}
    {:names "AGENT_LOOP_SUMMARY_MAX_CHARS" :parse parse-long* :apply (assoc-path [:loop :summary-max-chars])}
    {:names "AGENT_LOOP_VALIDATION_MAX_CHARS" :parse parse-long* :apply (assoc-path [:loop :validation-max-chars])}
+   {:names "AGENT_MAGI_ENABLED" :parse parse-bool :apply (assoc-path [:magi :enabled?])}
+   {:names "AGENT_MAGI_MODE" :parse parse-keyword* :apply (assoc-path [:magi :mode])}
+   {:names "AGENT_MAGI_FALLBACK" :parse parse-keyword* :apply (assoc-path [:magi :fallback])}
+   {:names "AGENT_MAGI_TOOL_CATEGORIES" :parse parse-keyword-csv :apply (assoc-path [:magi :tool-categories])}
+   {:names "AGENT_MAGI_TIMEOUT_MS" :parse parse-long* :apply (assoc-path [:magi :timeout-ms])}
+   {:names "AGENT_MAGI_FILTER_PROVIDER" :parse parse-keyword* :apply (assoc-path [:magi :filter :provider])}
+   {:names "AGENT_MAGI_FILTER_MODEL" :apply (assoc-path [:magi :filter :model])}
+   {:names "AGENT_MAGI_JUDGE_PROVIDER" :parse parse-keyword* :apply (assoc-path [:magi :judge :provider])}
+   {:names "AGENT_MAGI_JUDGE_MODEL" :apply (assoc-path [:magi :judge :model])}
+   {:names "AGENT_MAGI_AGENT_MELCHIOR_PROVIDER" :parse parse-keyword* :apply (assoc-path [:magi :agents :melchior :provider])}
+   {:names "AGENT_MAGI_AGENT_MELCHIOR_MODEL" :apply (assoc-path [:magi :agents :melchior :model])}
+   {:names "AGENT_MAGI_AGENT_BALTHASAR_PROVIDER" :parse parse-keyword* :apply (assoc-path [:magi :agents :balthasar :provider])}
+   {:names "AGENT_MAGI_AGENT_BALTHASAR_MODEL" :apply (assoc-path [:magi :agents :balthasar :model])}
+   {:names "AGENT_MAGI_AGENT_CASPER_PROVIDER" :parse parse-keyword* :apply (assoc-path [:magi :agents :casper :provider])}
+   {:names "AGENT_MAGI_AGENT_CASPER_MODEL" :apply (assoc-path [:magi :agents :casper :model])}
    {:names "AGENT_MEMORY_SEARCH_DEFAULT_LIMIT" :parse parse-long* :apply (assoc-path [:memory :search :default-limit])}
    {:names "AGENT_MEMORY_SEARCH_MAX_LIMIT" :parse parse-long* :apply (assoc-path [:memory :search :max-limit])}
    {:names "AGENT_MEMORY_SEARCH_MIN_SCORE" :parse parse-double* :apply (assoc-path [:memory :search :min-score])}

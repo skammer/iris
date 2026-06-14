@@ -49,14 +49,23 @@
       (str "Agent requested " (name tool-name))))
 
 (defn- request-approval! [system session-id receipt]
-  (let [tool-name (keyword (:tool-name receipt))]
-    (tool-approvals/create-request!
-     (:store system)
-     {:tool-name tool-name
-      :input (:input receipt)
-      :requested-by (or session-id "chat")
-      :reason (approval-reason tool-name (:input receipt))
-      :expires-at (tool-approvals/default-expires-at system)})))
+  (let [tool-name (keyword (:tool-name receipt))
+        tool (tools/get-tool (:tool-registry system) tool-name)
+        tool-description (when tool (tools/describe tool))]
+    (if-let [approval-id (:approval-id receipt)]
+      (tool-approvals/get-request (:store system) approval-id)
+      (tool-approvals/request-with-magi!
+       (:store system)
+       {:magi-service (:magi-service system)
+        :event-sink (:event-sink system)}
+       {:tool-name tool-name
+        :input (:input receipt)
+        :requested-by (or session-id "chat")
+        :reason (approval-reason tool-name (:input receipt))
+        :expires-at (tool-approvals/default-expires-at system)}
+       tool-description
+       {:user (or session-id "chat")
+        :request-id (:request-id receipt)}))))
 
 (defn- error-content [error]
   (str "Chat failed: " (.getMessage ^Throwable error)))

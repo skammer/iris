@@ -11,6 +11,7 @@
    [agent.llm.registry :as llm-registry]
    [agent.llm.service :as llm-service]
    [agent.logging :as logging]
+   [agent.magi.core :as magi]
    [agent.persistence.sqlite :as sqlite]
    [agent.system.components :as components]
    [agent.system.health :as system-health]
@@ -110,6 +111,7 @@
         llm-cfg (config/llm-config new-cfg)
         llm-provider (system-health/with-component-health health-registry :llm-provider
                        #(llm-service/create-llm-provider llm-cfg))
+        magi-service (magi/create-service new-cfg {:default-provider llm-provider})
         memory-service (system-health/with-component-health health-registry :memory
                          #(components/create-memory-service (:memory new-cfg)
                                                            (:tools new-cfg)
@@ -124,6 +126,7 @@
                     :chat-service (system-health/with-component-health health-registry :chat
                                     #(chat/create-service))
                     :llm-provider llm-provider
+                    :magi-service magi-service
                     :note-llm-provider (system-health/with-component-health health-registry :llm-provider
                                          #(llm-service/create-note-llm-provider new-cfg))
                     :observer observer

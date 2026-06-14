@@ -1,6 +1,7 @@
 (ns agent.tools.approvals
   "Persisted approval flow for sensitive tool executions."
   (:require
+   [agent.magi.core :as magi]
    [agent.persistence.sqlite :as sqlite]
    [agent.security :as security]
    [agent.tools.core :as tools]
@@ -33,6 +34,10 @@
   (str (.plusSeconds (Instant/now)
                      (long (get-in system [:config :tools :approvals :ttl-seconds] 900)))))
 
+(defn expires-at
+  [ttl-seconds]
+  (str (.plusSeconds (Instant/now) (long (or ttl-seconds 900)))))
+
 (defn- expired? [expires-at]
   (when (seq expires-at)
     (.isAfter (Instant/now) (Instant/parse expires-at))))
@@ -47,6 +52,46 @@
                                  :requested-by requested-by
                                  :reason reason
                                  :expires-at expires-at}))
+
+(defn- emit! [event-sink event]
+  (when event-sink
+    (event-sink event)))
+
+(defn log-requested!
+  [event-sink approval]
+  (emit! event-sink
+         {:event-type :tool.approval.requested
+          :entity-type :tool_approval
+          :entity-id (:id approval)
+          :payload {:tool-name (:tool-name approval)
+                    :requested-by (:requested-by approval)
+                    :requested-permissions (mapv name (:requested-permissions approval))
+                    :expires-at (:expires-at approval)}}))
+
+(defn log-decision!
+  [event-sink approval status actor reason]
+  (emit! event-sink
+         {:event-type (keyword (str "tool.approval." (name status)))
+          :entity-type :tool_approval
+          :entity-id (:id approval)
+          :payload {:tool-name (:tool-name approval)
+                    :actor actor
+                    :decision status
+                    :reason reason}}))
+
+(defn- log-magi-evaluated!
+  [event-sink approval result duration-ms]
+  (emit! event-sink
+         {:event-type :tool.approval.magi_evaluated
+          :entity-type :tool_approval
+          :entity-id (:id approval)
+          :payload {:tool-name (:tool-name approval)
+                    :decision (:decision result)
+                    :reason (:reason result)
+                    :filter (:filter result)
+                    :agents (:agents result)
+                    :providers (:providers result)
+                    :duration-ms duration-ms}}))
 
 (defn list-requests
   ([store] (list-requests store {}))
@@ -64,6 +109,69 @@
 (defn deny!
   [store approval-id actor reason]
   (sqlite/decide-tool-approval! store approval-id :denied actor reason))
+
+(defn- approval-reason [decision result]
+  (let [reason (some-> (:reason result) str str/trim not-empty)]
+    (case decision
+      :yes "magi: yes"
+      :no (str "magi: no" (when reason (str " - " reason)))
+      :conditional (str "magi: conditional - denied until retry satisfies: "
+                        (or reason "specified condition"))
+      :info (str "magi: info" (when reason (str " - " reason)))
+      :error (str "magi: error" (when reason (str " - " reason)))
+      (str "magi: " (name decision)))))
+
+(defn- magi-action [magi-service result]
+  (let [decision (:decision result)]
+    (case (magi/mode magi-service)
+      :assistive :pending
+      :auto-approve
+      (case decision
+        :yes :approve
+        (:no :conditional) :deny
+        (:info :error) (case (magi/fallback magi-service)
+                         :deny :deny
+                         :human :pending
+                         :pending))
+      :pending)))
+
+(defn- maybe-decision-status [action]
+  (case action
+    :approve :approved
+    :deny :denied
+    nil))
+
+(defn evaluate-magi-for-approval!
+  [store {:keys [magi-service event-sink]} approval tool-description input context]
+  (if-not (and magi-service
+               (magi/approval-applicable? magi-service tool-description))
+    approval
+    (let [start (System/nanoTime)
+          result (magi/decide magi-service
+                              (magi/approval-question approval tool-description input context))
+          duration-ms (long (/ (- (System/nanoTime) start) 1000000))
+          action (magi-action magi-service result)
+          decision (maybe-decision-status action)
+          reason (approval-reason (:decision result) result)]
+      (log-magi-evaluated! event-sink approval result duration-ms)
+      (case action
+        :approve
+        (let [updated (approve! store (:id approval) "magi" reason)]
+          (log-decision! event-sink updated decision "magi" reason)
+          updated)
+
+        :deny
+        (let [updated (deny! store (:id approval) "magi" reason)]
+          (log-decision! event-sink updated decision "magi" reason)
+          updated)
+
+        approval))))
+
+(defn request-with-magi!
+  [store opts request tool-description context]
+  (let [approval (create-request! store request)]
+    (log-requested! (:event-sink opts) approval)
+    (evaluate-magi-for-approval! store opts approval tool-description (:input request) context)))
 
 (defn valid-approval?
   ([approval tool-name input]
@@ -165,14 +273,52 @@
      :permissions (approval-permissions approval)
      :approval approval}))
 
+(defn- default-approval-reason [tool-name input]
+  (or (some-> (or (:reason input) (get input "reason") (:purpose input) (get input "purpose"))
+              str
+              str/trim
+              not-empty)
+      (str "Agent requested " (name tool-name))))
+
+(defn- approval-block [reason]
+  {:block true
+   :reason reason})
+
+(defn- denied-block [reason]
+  {:block true
+   :type :tool-blocked
+   :reason reason})
+
 (defn create-policy-hook
-  [store]
-  (fn [{:keys [tool input context]}]
-    (let [tool-name (:name tool)]
-      (when (approval-required? tool-name input)
-        (let [approval-id (:approval-id context)
-              approval (when approval-id (get-request store approval-id))]
-          (if (valid-approval? approval tool-name input context)
-            {:allow true}
-            {:block true
-             :reason "Sensitive tool requires approved request"}))))))
+  [store-or-opts]
+  (let [{:keys [store magi-service event-sink approval-ttl-seconds]}
+        (if (map? store-or-opts)
+          store-or-opts
+          {:store store-or-opts})]
+    (fn [{:keys [tool input context]}]
+      (let [tool-name (:name tool)]
+        (when (approval-required? tool-name input)
+          (let [approval-id (:approval-id context)
+                approval (when approval-id (get-request store approval-id))]
+            (if (valid-approval? approval tool-name input context)
+              {:allow true}
+              (if (and magi-service
+                       (= :auto-approve (magi/mode magi-service))
+                       (magi/approval-applicable? magi-service tool))
+                (let [created (request-with-magi!
+                               store
+                               {:magi-service magi-service
+                                :event-sink event-sink}
+                               {:tool-name tool-name
+                                :input input
+                                :requested-by (or (:user context) "tool")
+                                :reason (default-approval-reason tool-name input)
+                                :expires-at (expires-at approval-ttl-seconds)}
+                               tool
+                               context)]
+                  (case (:status created)
+                    "approved" {:allow true
+                                :approval-id (:id created)}
+                    "denied" (denied-block (:decision-reason created))
+                    (approval-block (str "Sensitive tool requires approved request approval_id=" (:id created)))))
+                (approval-block "Sensitive tool requires approved request")))))))))

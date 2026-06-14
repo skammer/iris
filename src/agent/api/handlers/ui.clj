@@ -11,7 +11,6 @@
    [agent.memory.core :as memory]
    [agent.memory.recall :as memory-recall]
    [agent.sessions.service :as session-service]
-   [agent.system.events :as events]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [agent.ui :as ui]
@@ -455,21 +454,20 @@
   (let [body (h/read-form-body request)
         tool-name (keyword (:tool body))
         input (ui-tool-input body)
-        approval (tool-approvals/create-request!
+        tool-description (some-> (:tool-registry system)
+                                  (tools/get-tool tool-name)
+                                  tools/describe)
+        approval (tool-approvals/request-with-magi!
                   (:store system)
+                  {:magi-service (:magi-service system)
+                   :event-sink (:event-sink system)}
                   {:tool-name tool-name
                    :input input
                    :requested-by "ui"
                    :reason (:reason body)
-                   :expires-at (tool-approvals/default-expires-at system)})]
-    (events/log-event! system
-                       {:event-type :tool.approval.requested
-                        :entity-type :tool_approval
-                        :entity-id (:id approval)
-                        :payload {:tool-name (name tool-name)
-                                  :requested-by (:requested-by approval)
-                                  :requested-permissions (mapv name (:requested-permissions approval))
-                                  :expires-at (:expires-at approval)}})
+                   :expires-at (tool-approvals/default-expires-at system)}
+                  tool-description
+                  {:user "ui"})]
     (responses/html-response 201
                              (str (ui/tool-approvals-fragment
                                    (tool-approvals/list-requests (:store system) {:limit 50}))
@@ -486,14 +484,7 @@
         updated (case status
                   :approved (tool-approvals/approve! (:store system) approval-id actor reason)
                   :denied (tool-approvals/deny! (:store system) approval-id actor reason))]
-    (events/log-event! system
-                       {:event-type (keyword (str "tool.approval." (name status)))
-                        :entity-type :tool_approval
-                        :entity-id approval-id
-                        :payload {:tool-name (:tool-name updated)
-                                  :actor actor
-                                  :decision status
-                                  :reason reason}})
+    (tool-approvals/log-decision! (:event-sink system) updated status actor reason)
     (responses/html-response 200
                              (str (ui/tool-approvals-fragment
                                    (tool-approvals/list-requests (:store system) {:limit 50}))

@@ -33,6 +33,26 @@
                       {:provider provider
                        :type type})))))
 
+(defn resolve-provider-selection
+  [llm-cfg {:keys [provider model]}]
+  (let [provider* (or provider (config/active-provider-key llm-cfg))
+        provider-cfg (get-in llm-cfg [:providers provider*])]
+    {:provider provider*
+     :model (or model (:model provider-cfg))}))
+
+(defn llm-config-with-provider-override
+  [llm-cfg {:keys [provider model timeout-ms]}]
+  (let [provider* (or provider (config/active-provider-key llm-cfg))]
+    (cond-> llm-cfg
+      provider (assoc :active-provider provider)
+      model (assoc-in [:providers provider* :model] model)
+      timeout-ms (assoc-in [:providers provider* :timeout-ms] timeout-ms))))
+
+(defn create-llm-provider-with-override
+  [llm-cfg override]
+  (create-llm-provider
+   (llm-config-with-provider-override llm-cfg override)))
+
 (defn create-note-llm-provider
   [cfg]
   (let [extractor (get-in cfg [:memory :notes :extractor])

@@ -126,6 +126,21 @@
           :plan-file "LOOP_PLAN.md"
           :summary-max-chars 1200
           :validation-max-chars 12000}
+   :magi {:enabled? false
+          :mode :assistive
+          :fallback :human
+          :apply-to #{:tool-approvals}
+          :tool-categories #{:all}
+          :tool {:enabled true}
+          :execution :parallel
+          :allow-critical? false
+          :timeout-ms 30000
+          :max-context-chars 12000
+          :filter {:provider nil :model nil}
+          :judge {:provider nil :model nil}
+          :agents {:melchior {:provider nil :model nil}
+                   :balthasar {:provider nil :model nil}
+                   :casper {:provider nil :model nil}}}
    :tools {:http {:enabled true
                   :timeout-ms 30000
                   :max-timeout-ms 30000
@@ -135,10 +150,10 @@
                   :default-headers {"User-Agent" "iris/0.1"}}
            :yolo? false
            :max-parallelism 6
-           :permissions {:api [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write]
-                         :ui [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write]
-                         :agent [:http-request :memory-read :memory-write :todo-read :todo-write]
-                         :chat [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec]}
+           :permissions {:api [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate]
+                         :ui [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate]
+                         :agent [:http-request :memory-read :memory-write :todo-read :todo-write :magi-evaluate]
+                         :chat [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec :magi-evaluate]}
            :policy {:allowlist []
                     :blocklist []
                     :tool-scopes {}}
@@ -289,7 +304,7 @@
 (def context-file-names (into [config-file-name] markdown-file-names))
 (def template-file-names context-file-names)
 (def app-config-keys
-  [:llm :storage :tools :skills :memory :channel-adapters :runners
+  [:llm :storage :tools :skills :memory :magi :channel-adapters :runners
    :telemetry :observer :trace :logging :api :chat :loop])
 
 (defn- getenv [name]

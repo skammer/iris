@@ -1,0 +1,89 @@
+(ns agent.magi.core-test
+  (:require
+   [agent.config :as config]
+   [agent.llm.core :as llm]
+   [agent.magi.core :as magi]
+   [cheshire.core :as json]
+   [clojure.test :refer [deftest is]]))
+
+(defrecord StaticProvider [response requests]
+  llm/ILLMProviderInvoke
+  (invoke [_ request]
+    (swap! requests conj request)
+    {:role "assistant"
+     :content (if (string? response) response (json/generate-string response))
+     :tool-calls []
+     :usage nil
+     :raw nil})
+  (generate [this messages opts]
+    (llm/invoke this (assoc opts :messages messages))))
+
+(defn- provider [response]
+  (->StaticProvider response (atom [])))
+
+(defn- service [responses]
+  (magi/create-service
+   (assoc config/default-config :magi {:timeout-ms 1000})
+   {:providers (into {}
+                    (map (fn [[role response]]
+                           [role (provider response)]))
+                    responses)}))
+
+(deftest judge-response-mapping-test
+  (is (= :error (:decision (magi/judge-responses {:melchior {:response :yes}
+                                                  :balthasar {:response :error}
+                                                  :casper {:response :yes}}))))
+  (is (= :info (:decision (magi/judge-responses {:melchior {:response :yes}
+                                                 :balthasar {:response :info}
+                                                 :casper {:response :yes}}))))
+  (is (= :no (:decision (magi/judge-responses {:melchior {:response :yes}
+                                               :balthasar {:response :no}
+                                               :casper {:response :conditional}}))))
+  (is (= :conditional (:decision (magi/judge-responses {:melchior {:response :yes}
+                                                        :balthasar {:response :conditional}
+                                                        :casper {:response :yes}}))))
+  (is (= :yes (:decision (magi/judge-responses {:melchior {:response :yes}
+                                                :balthasar {:response :yes}
+                                                :casper {:response :yes}})))))
+
+(deftest decide-runs-filter-triumvirate-and-judge-test
+  (let [svc (service {:filter {:kind "yes-no"
+                               :domain "tool-approval"
+                               :risk "low"
+                               :question "Allow?"
+                               :expected_response "permit"
+                               :context {}}
+                      :melchior {:response "yes" :comment "ok"}
+                      :balthasar {:response "yes" :comment "ok"}
+                      :casper {:response "yes" :comment "ok"}
+                      :judge {:decision "yes" :reason "all yes"}})
+        result (magi/decide svc {:question "Allow?" :context {}})]
+    (is (= :yes (:decision result)))
+    (is (= [:melchior :balthasar :casper] (keys (:agents result))))
+    (is (= :yes-no (get-in result [:filter :kind])))))
+
+(deftest malformed-agent-output-becomes-error-test
+  (let [svc (service {:filter {:kind "yes-no"
+                               :domain "tool-approval"
+                               :risk "low"
+                               :question "Allow?"
+                               :expected_response "permit"
+                               :context {}}
+                      :melchior {:response "yes"}
+                      :balthasar {:response "maybe"}
+                      :casper {:response "yes"}
+                      :judge {:decision "error" :reason "bad agent"}})
+        result (magi/decide svc {:question "Allow?" :context {}})]
+    (is (= :error (:decision result)))
+    (is (= :error (get-in result [:agents :balthasar :response])))))
+
+(deftest provider-selection-falls-back-to-active-model-test
+  (let [svc (magi/create-service config/default-config
+                                 {:default-provider (provider {:kind "info"
+                                                              :domain "policy"
+                                                              :risk "low"
+                                                              :question "x"
+                                                              :expected_response "opine"
+                                                              :context {}})})]
+    (is (= {:provider :ollama :model "llama3.2:3b"}
+           (get-in svc [:provider-selections :melchior])))))

@@ -60,9 +60,11 @@
       (let [error-type (:error-type result)]
         (case error-type
           :approval-required
-          (assoc base
-                 :status :approval-required
-                 :reason (:error result))
+          (cond-> (assoc base
+                         :status :approval-required
+                         :reason (:error result))
+            (get-in result [:error-data :approval-id])
+            (assoc :approval-id (get-in result [:error-data :approval-id])))
 
           (:tool-blocked :permission-denied :path-not-allowed)
           (assoc base
