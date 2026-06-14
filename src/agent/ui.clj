@@ -2,6 +2,7 @@
   "Server-rendered Datastar UI. Builds dashboard, chat, tools, memory, events,
    logs, and approval fragments from current system state for live SSE patches."
   (:require
+   [agent.build-info :as build-info]
    [agent.channels.core :as channel-adapters]
    [agent.chat :as chat]
    [agent.config :as config]
@@ -182,6 +183,7 @@
 
 (defn dashboard-fragment [system]
   (let [storage (sqlite/health-check (:store system))
+        build (build-info/read-build-info)
         llm-config (get-in system [:config :llm])
         tools-health (tools/registry-health (:tool-registry system))
         memory-health (memory/health-check (:memory-service system))
@@ -214,6 +216,9 @@
        [:div.stat [:span.label "adapters"] [:span.value (:count adapter-health)]]]
       [:div.fact-strip
        (for [[label value] [["vault notes" (get-in memory-health [:vault :note-count] 0)]
+                            ["version" (:version build)]
+                            ["commit" (:commit-short build)]
+                            ["built" (or (ui-render/short-timestamp (:built-at build)) "-")]
                             ["schema" (get-in storage [:details :schema-version] "?")]
                             ["approvals" (get-in storage [:details :tool-approval-count] 0)]]]
          [:span.fact

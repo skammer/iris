@@ -1,5 +1,6 @@
 (ns agent.ui-test
   (:require
+   [agent.build-info :as build-info]
    [agent.chat :as chat]
    [agent.channels.core :as channel-adapters]
    [agent.memory.core :as memory]
@@ -35,14 +36,23 @@
                 tools/registry-health (constantly {:count 0})
                 memory/health-check (constantly {:vault {:note-count 0}})
                 channel-adapters/registry-health (constantly {:count 0})
-                tool-approvals/list-requests (constantly [])]
+                tool-approvals/list-requests (constantly [])
+                build-info/read-build-info (constantly {:version "abc123-dirty"
+                                                        :commit-short "abc123"
+                                                        :built-at "2026-06-14T10:20:30Z"})]
     (let [html (ui/dashboard-fragment
                 {:config {:llm {:active-provider :openai-compatible
                                 :providers {:openai-compatible {:type :openai-compatible
                                                                  :model "gpt-4o-mini"}}}}
                  :reload-state (atom {:status :idle})})]
       (is (str/includes? html ">model</span>"))
-      (is (str/includes? html ">gpt-4o-mini</span>")))))
+      (is (str/includes? html ">gpt-4o-mini</span>"))
+      (is (str/includes? html ">version</span>"))
+      (is (str/includes? html ">abc123-dirty</span>"))
+      (is (str/includes? html ">commit</span>"))
+      (is (str/includes? html ">abc123</span>"))
+      (is (str/includes? html ">built</span>"))
+      (is (str/includes? html ">06-14 10:20</span>")))))
 
 (deftest short-id-shortens-uuids-only
   (is (= "303ea8ca" (ui-render/short-id "303ea8ca-9665-4edd-bd97-b5c3cec87438")))

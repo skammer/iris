@@ -10,6 +10,7 @@ remote_user="${IRIS_DEPLOY_USER:-}"
 remote_dir="${IRIS_DEPLOY_DIR:-.local/bin}"
 remote_jar_name="${IRIS_DEPLOY_JAR_NAME:-iris.jar}"
 remote_bin_name="${IRIS_DEPLOY_BIN:-iris}"
+remote_config_dir="${IRIS_DEPLOY_CONFIG_DIR:-.config/iris}"
 remote_port="${IRIS_DEPLOY_PORT:-22}"
 ssh_opts="${IRIS_DEPLOY_SSH_OPTS:-}"
 
@@ -44,6 +45,14 @@ printf 'Creating remote dir: %s:%s\n' "${remote}" "${remote_dir}"
 ssh "${ssh_args[@]}" "${remote}" "${mkdir_command}"
 printf 'Uploading JAR: %s -> %s:%s/%s\n' "${jar_path}" "${remote}" "${remote_dir}" "${remote_jar_name}"
 scp "${scp_args[@]}" "${jar_path}" "${remote}:${remote_dir}/${remote_jar_name}"
+
+remote_skills_dir="${remote_config_dir%/}/skills"
+printf -v remote_skills_dir_quoted '%q' "${remote_skills_dir}"
+if [[ -d "skills" ]]; then
+  printf 'Uploading bundled skills: skills/ -> %s:%s/\n' "${remote}" "${remote_skills_dir}"
+  ssh "${ssh_args[@]}" "${remote}" "mkdir -p ${remote_skills_dir_quoted}"
+  scp "${scp_args[@]}" -r skills/. "${remote}:${remote_skills_dir}/"
+fi
 
 printf 'Installing launcher: %s:%s/%s\n' "${remote}" "${remote_dir}" "${remote_bin_name}"
 ssh "${ssh_args[@]}" "${remote}" "bash -s" -- "${remote_dir}" "${remote_jar_name}" "${remote_bin_name}" <<'REMOTE_SCRIPT'
