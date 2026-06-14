@@ -83,7 +83,7 @@
                   " | vault chunks: " (get-in results [:surface-counts :vault-chunks] 0))]
     (if (seq (:results results))
       [:div.memory-result-list
-       (for [{:keys [surface type id scope status text score source reason]} (:results results)]
+       (for [{:keys [surface type id scope status text score source reason why]} (:results results)]
          [:article.result
           [:strong (str (name surface) " " (name type))]
           [:div.meta.code
@@ -95,8 +95,9 @@
                   (str " | " (name (:type scope)) "/" (or (:id scope) "-"))))]
           (ui-render/message-content text)
           [:details
-           [:summary "source"]
-           [:pre.code (ui-render/pretty-json source)]]])]
+           [:summary "source / why"]
+           [:pre.code (ui-render/pretty-json {:source source
+                                              :why why})]]])]
       [:div.empty "No memory matches."])]))
 
 (defn- vault-note-action [idx path label status scope]
@@ -125,18 +126,75 @@
                                     "{contentType: 'form', selector: '#" form-id "'})")}
       "Move"]]))
 
-(defn- vault-note-row [idx {:keys [path title type iris-status iris-scope updated-at]}]
+(defn- vault-note-row [idx {:keys [path title type iris-status iris-scope updated-at
+                                   iris-confidence origins frontmatter description]}]
   [:div.row.memory-note-row
    [:span.row__id {:title path}
     (or title path)]
    [:span.row__meta
-    (str (or type "Reference") " | " (or iris-status "-") " | " (or iris-scope "-"))]
+    (str (or type "Reference")
+         " | " (or iris-status "-")
+         " | " (or iris-scope "-")
+         " | c=" (or iris-confidence "-"))]
    [:span.row__time (ui-render/short-timestamp updated-at)]
    [:span.row__actions
     (vault-note-action idx path "Approve" "approved" (or iris-scope "global"))
     (vault-note-action idx path "Approve global" "approved" "global")
     (vault-note-action idx path "Reject" "rejected" (or iris-scope "global"))
-    (vault-note-move-form idx path)]])
+    (vault-note-move-form idx path)]
+   [:details.memory-note-source
+    [:summary "source"]
+    [:pre.code (ui-render/pretty-json {:path path
+                                       :title title
+                                       :description description
+                                       :origins origins
+                                       :frontmatter frontmatter})]]])
+
+(defn- review-row [kind note]
+  [:div.row.memory-note-row
+   [:span.row__id {:title (:path note)}
+    (str kind ": " (or (:title note) (:id note) (:path note)))]
+   [:span.row__meta
+    (str (or (:type note) "-")
+         " | " (or (:iris-status note) "-")
+         " | " (or (:iris-scope note) "-")
+         " | c=" (or (:iris-confidence note) "-"))]
+   [:span.row__time (ui-render/short-timestamp (:updated-at note))]])
+
+(defn- quality-panel [quality]
+  (let [conflict-notes (mapcat :notes (:conflicts quality))
+        queue (concat
+               (map #(vector "candidate" %) (:candidate-notes quality))
+               (map #(vector "low confidence" %) (:low-confidence-notes quality))
+               (map #(vector (str "stale " (name (:stale-reason %))) %) (:stale-notes quality))
+               (map #(vector "broken origin" %) (:broken-origin-notes quality))
+               (map #(vector "orphan note" %) (:orphan-notes quality))
+               (map #(vector "empty chunks" %) (:notes-without-chunks quality))
+               (map #(vector "conflict" %) conflict-notes))]
+    [:section.panel.memory-overview
+     [:h2 "Memory Quality"]
+     [:div.memory-stats
+      (memory-health-stat "review" (:review-queue-count quality))
+      (memory-health-stat "candidates" (:candidate-backlog quality))
+      (memory-health-stat "conflicts" (count (:conflicts quality)))
+      (memory-health-stat "stale" (count (:stale-notes quality)))
+      (memory-health-stat "orphans" (+ (count (:orphan-notes quality))
+                                       (count (:orphan-chunks quality))))]
+     [:details
+      [:summary "metrics"]
+      [:pre.code (ui-render/pretty-json
+                  (select-keys quality
+                               [:note-count-by-type
+                                :note-count-by-status
+                                :origin-count-by-type
+                                :embedding-coverage
+                                :recall-latency]))]]
+     [:h3 "Review Queue"]
+     (if (seq queue)
+       [:div.rows
+        (for [[kind note] (take 20 queue)]
+          (review-row kind note))]
+       [:div.empty-line "none"])]))
 
 (defn- scratchpad-panel [scratchpad]
   [:section.panel.memory-overview
@@ -159,6 +217,7 @@
 	   ([system reset-result]
 	    (let [memory-service (:memory-service system)
 	         health (memory/health-check memory-service)
+          quality (:quality health)
 	         surfaces (memory/list-surfaces memory-service)
 	         notes (sqlite/list-vault-notes (:store memory-service) {:limit 50})
           global-scratchpad (try
@@ -197,8 +256,11 @@
                    "data-on:click" "@post('/ui/memory/vault/reindex')"}
           "Audit & Reindex"]]
 
-        (scratchpad-panel global-scratchpad)
+        (quality-panel quality)
 
+        (scratchpad-panel global-scratchpad)]
+
+       [:div.memory-right-stack
         [:section.panel.memory-overview
          [:h2 "Vault Notes"]
          (if (seq notes)

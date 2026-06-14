@@ -204,6 +204,8 @@
                        :batch-size 16
                        :candidate-limit 1000
                        :rebuild-mode :replace}
+          :quality {:low-confidence-threshold 0.6
+                    :stale-days 180}
           :notes {:extractor {:enabled true
                               :provider nil
                               :model nil

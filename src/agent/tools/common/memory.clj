@@ -85,13 +85,15 @@
     (str "Memory recall for: " query "\n"
          (str/join
           "\n"
-          (map (fn [{:keys [surface id text score scope status reason]}]
+          (map (fn [{:keys [surface id text score scope status reason why]}]
                  (str "- " (name surface)
                       (when id
                         (str " #" id))
                       (format " score=%.3f" (double score))
                       " " (name status)
                       " " (name reason)
+                      (when-let [breakdown (:score-breakdown why)]
+                        (str " why=" (pr-str breakdown)))
                       (when scope
                         (str " scope=" (name (:type scope))
                              (when-let [scope-id (:id scope)]
@@ -106,11 +108,14 @@
     (str "Vault results for: " query "\n"
          (str/join
           "\n"
-          (map (fn [{:keys [path note-id chunk-id heading text iris-status iris-scope]}]
+          (map (fn [{:keys [path note-id chunk-id heading text iris-status iris-scope
+                            reason score-breakdown]}]
                  (str "- " chunk-id
                       (when note-id (str " note=" note-id))
                       " " iris-status
                       " scope=" iris-scope
+                      (when reason (str " reason=" (name reason)))
+                      (when score-breakdown (str " why=" (pr-str score-breakdown)))
                       " path=" path
                       (when heading (str " heading=" heading))
                       ": "

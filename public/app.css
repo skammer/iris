@@ -293,7 +293,15 @@ theme-toggle {
 }
 
 .workspace-grid.memory-workspace {
+  align-content: start;
+  grid-auto-rows: auto;
   grid-template-columns: minmax(0, 1fr) minmax(420px, 1fr);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.workspace-grid.memory-workspace .panel {
+  overflow: visible;
 }
 
 .workspace-grid.single {
@@ -1167,6 +1175,7 @@ textarea {
 }
 
 .memory-left-stack,
+.memory-right-stack,
 .memory-overview,
 .memory-lab {
   display: grid;

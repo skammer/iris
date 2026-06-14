@@ -62,40 +62,58 @@
       (pos? (double (or confidence 0.0))) :confidence
       :else :ranked-search)))
 
+(defn- why [reason score score-breakdown extra]
+  (cond-> {:reason reason
+           :score score}
+    (seq score-breakdown) (assoc :score-breakdown score-breakdown)
+    (seq extra) (merge extra)))
+
 (defn- ranked->result [{:keys [surface item score] :as ranked}]
-  {:surface surface
-   :type (result-type surface item)
-   :id (result-id surface item)
-   :scope (result-scope surface item)
-   :status :current
-   :text (result-text surface item)
-   :score score
-   :source (result-source surface item)
-   :reason (recall-reason ranked)
-   :tags []})
+  (let [reason (recall-reason ranked)]
+    {:surface surface
+     :type (result-type surface item)
+     :id (result-id surface item)
+     :scope (result-scope surface item)
+     :status :current
+     :text (result-text surface item)
+     :score score
+     :source (result-source surface item)
+     :reason reason
+     :why (why reason score (:score-breakdown ranked) {})
+     :tags []}))
 
 (defn- vault->result [item]
-  {:surface :vault_chunk
-   :type (result-type :vault_chunk item)
-   :id (:chunk-id item)
-   :scope (result-scope :vault_chunk item)
-   :status (keyword (or (:iris-status item) "approved"))
-   :text (:text item)
-   :score (or (:score item) 1.0)
-   :source (result-source :vault_chunk item)
-   :reason (or (:reason item) :fts-match)
-   :tags (:tags item)})
+  (let [score (or (:score item) 1.0)
+        reason (or (:reason item) :fts-match)]
+    {:surface :vault_chunk
+     :type (result-type :vault_chunk item)
+     :id (:chunk-id item)
+     :scope (result-scope :vault_chunk item)
+     :status (keyword (or (:iris-status item) "approved"))
+     :text (:text item)
+     :score score
+     :source (result-source :vault_chunk item)
+     :reason reason
+     :why (why reason
+               score
+               (:score-breakdown item)
+               {:retrieval-score (:retrieval-score item)})
+     :tags (:tags item)}))
 
 (defn recall
   "Return compact normalized recall records for chat/API/tool callers."
   ([memory-service query] (recall memory-service query {}))
   ([memory-service query opts]
-   (let [search (memory/search-memory memory-service query opts)
+   (let [started (System/nanoTime)
+         search (memory/search-memory memory-service query opts)
          vault (memory/search-vault memory-service query opts)
          results (vec (concat (map ranked->result (:ranked search))
-                              (map vault->result vault)))]
+                              (map vault->result vault)))
+         latency-ms (long (/ (- (System/nanoTime) started) 1000000))]
+     (memory/record-recall-latency! memory-service latency-ms)
      {:query query
       :limit (:limit opts)
+      :latency-ms latency-ms
       :results results
       :surface-counts {:messages (count (:messages search))
                        :events (count (:events search))

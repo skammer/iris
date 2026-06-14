@@ -215,7 +215,10 @@
    :payload {:kind :memory-recalled
              :query prompt
              :result-count (count (:results recall))
-             :surface-counts (:surface-counts recall)}})
+             :surface-counts (:surface-counts recall)
+             :latency-ms (:latency-ms recall)
+             :why (mapv #(select-keys % [:surface :id :reason :score :why])
+                         (:results recall))}})
 
 (defn- runtime-loop-options
   "Builds the agent.runtime.loop/run! options map from a prepared turn env plus

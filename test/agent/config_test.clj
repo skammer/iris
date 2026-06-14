@@ -107,6 +107,9 @@
               :candidate-limit 1000
               :rebuild-mode :replace}
              (get-in cfg [:memory :embeddings])))
+      (is (= {:low-confidence-threshold 0.6
+              :stale-days 180}
+             (get-in cfg [:memory :quality])))
       (is (= :session (get-in cfg [:memory :notes :default-scope])))
       (is (= {:enabled false
               :bot-token nil

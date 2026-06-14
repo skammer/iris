@@ -598,6 +598,12 @@ Exit criteria:
 
 ### Phase 6: Quality controls
 
+Status:
+- Done in current refactor pass.
+- Added quality report/health metrics for note counts, candidate backlog, conflicts, low confidence, stale notes, broken origins, orphan indexed notes/chunks, embedding coverage, and recall latency.
+- Recall results now carry `:why` breakdowns; chat memory debug events include latency and recall reasons.
+- Memory UI now exposes a quality/review queue and source/frontmatter/origin inspection.
+
 Goal:
 - Prevent memory rot.
 

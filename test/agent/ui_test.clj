@@ -327,6 +327,7 @@
         (is (str/includes? html "new_text"))
 	        (is (str/includes? html "workspace-grid memory-workspace"))
         (is (str/includes? html "memory-left-stack"))
+        (is (str/includes? html "memory-right-stack"))
         (is (not (str/includes? html "memory-facts"))))
       (finally
         (sqlite/close-store! store)
