@@ -144,6 +144,38 @@
                                 :limit "10"
                                 :all-sessions? "false"})))))
 
+(deftest tool-description-adds-purpose-to-closed-map-inputs-test
+  (let [description (tools/create-tool-description
+                     :echo
+                     "Echo"
+                     :input-schema [:map {:closed true}
+                                    [:message :string]])]
+    (is (= "string" (get-in description [:input-schema :properties :purpose :type])))
+    (is (not (contains? (set (get-in description [:input-schema :required])) "purpose")))))
+
+(deftest tool-purpose-is-audit-input-not-effect-input-test
+  (let [events (atom [])
+        effect-inputs (atom [])
+        tool (tools/create-tool
+              {:description (tools/create-tool-description
+                             :echo
+                             "Echo"
+                             :input-schema [:map {:closed true}
+                                            [:message :string]])
+               :execute-fn (fn [input _context]
+                             (reset! effect-inputs input)
+                             {:echoed (:message input)
+                              :purpose-seen? (contains? input :purpose)})})
+        registry (-> (tools/create-registry {:event-sink #(swap! events conj %)})
+                     (tools/register-tool tool))]
+    (is (= {:echoed "hi" :purpose-seen? false}
+           (tools/execute-tool registry :echo {:message "hi"
+                                               :purpose "answer the user"}
+                               {})))
+    (is (= {:message "hi"} @effect-inputs))
+    (is (= {:message "hi" :purpose "answer the user"}
+           (get-in (first @events) [:payload :input])))))
+
 (deftest registry-requires-approval-policy-for-sensitive-tools-test
   (let [tool (tools/create-tool
               {:description (tools/create-tool-description

@@ -42,7 +42,7 @@
       {:role "system" :content section})))
 
 (defn- approval-reason [tool-name input]
-  (or (some-> (or (:reason input) (get input "reason") (:purpose input) (get input "purpose"))
+  (or (some-> (or (:purpose input) (get input "purpose") (:reason input) (get input "reason"))
               str
               str/trim
               not-empty)

@@ -15,10 +15,15 @@
   (describe [this])
   (health-check [this]))
 
+(defn- effect-input [input]
+  (if (map? input)
+    (dissoc input :purpose)
+    input))
+
 (defrecord BasicTool [description execute-fn validate-fn health-fn sensitive-fn]
   ITool
   (execute [_ input context]
-    (execute-fn (validate-fn input) context))
+    (execute-fn (effect-input (validate-fn input)) context))
   (describe [_]
     (dissoc description :malli-schema :sensitive-predicate))
   (health-check [_]
@@ -120,6 +125,25 @@
       (throw (validation-error "input-schema must be a valid Malli schema"
                                {:input-schema input-schema
                                 :error (.getMessage e)})))))
+
+(def ^:private purpose-entry
+  [:purpose
+   {:optional true
+    :description "Short reason why this tool call is needed for the user's request."}
+   :string])
+
+(defn- map-entry-key [entry]
+  (first entry))
+
+(defn- add-purpose-field [input-schema]
+  (if (and (vector? input-schema)
+           (= :map (first input-schema))
+           (not (some #(= :purpose (map-entry-key %)) (schema-children input-schema))))
+    (let [children (rest input-schema)]
+      (if (map? (first children))
+        (into [:map (first children)] (concat (rest children) [purpose-entry]))
+        (into [:map] (concat children [purpose-entry]))))
+    input-schema))
 
 (def ^:private act-permission-fragments
   ["write" "exec" "reload" "send" "request" "call" "delete" "create" "mutate"])
@@ -227,7 +251,8 @@
                             sensitive false}}]
   (when-not input-schema
     (throw (validation-error "input-schema is required" {:tool-name name})))
-  (let [sensitive? (if (ifn? sensitive) true (boolean sensitive))
+  (let [input-schema* (add-purpose-field input-schema)
+        sensitive? (if (ifn? sensitive) true (boolean sensitive))
         approval-sensitive?* (if (some? approval-sensitive?)
                                (boolean approval-sensitive?)
                                sensitive?)
@@ -239,8 +264,8 @@
      :description description
      :version version
      :category category
-     :input-schema (json-input-schema input-schema)
-     :malli-schema input-schema
+     :input-schema (json-input-schema input-schema*)
+     :malli-schema input-schema*
      :required-permissions required-permissions*
      :timeout-ms timeout-ms
      :source source
@@ -458,7 +483,7 @@
                                          tool-name
                                          validated-input
                                          context*
-                                         #((:execute-fn tool) validated-input context*))
+                                         #((:execute-fn tool) (effect-input validated-input) context*))
                  duration-ms (util/duration-ms start-ns)
                  final-result (if-let [postprocess (:after-execute registry)]
                                 (let [hook-result (postprocess (assoc (hook-context tool-description validated-input context*)

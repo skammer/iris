@@ -75,6 +75,9 @@
 (defn operator-board [system _request]
   (responses/html-response 200 (ui/operator-board-fragment system)))
 
+(defn magi [system _request]
+  (responses/html-response 200 (ui/magi-fragment system)))
+
 (defn sessions [system request]
   (responses/html-response 200
                            (ui/sessions-fragment system

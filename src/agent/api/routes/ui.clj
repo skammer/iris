@@ -77,6 +77,7 @@
                             :parameters {:form [:map [:session_id schemas/NonBlankString]]}}}]
    ["/ui/events" {:get {:handler/id :ui-events}}]
    ["/ui/logs" {:get {:handler/id :ui-logs}}]
+   ["/ui/magi" {:get {:handler/id :ui-magi}}]
    ["/ui/events/live" {:get {:handler/id :ui-events-live}}]
    ["/ui/memory/search" {:post {:handler/id :ui-memory-search
                                 :parameters {:form ui-memory-search-form}}}]

@@ -74,11 +74,13 @@
       (is (= "ok"
              (:stdout (tools/execute-tool reg
                                           :shell
-                                          {:argv ["printf" "ok"]}
+                                          {:argv ["printf" "ok"]
+                                           :purpose "confirm shell output"}
                                           {:permissions #{:shell-exec}
                                            :user "tester"}))))
       (let [approval (first (sqlite/list-tool-approvals store {:limit 10}))]
         (is (= "approved" (:status approval)))
+        (is (= "confirm shell output" (:reason approval)))
         (is (= "magi" (:actor approval)))
         (is (= "magi: yes" (:decision-reason approval))))
       (is (some #(= :tool.approval.magi_evaluated (:event-type %)) @events))

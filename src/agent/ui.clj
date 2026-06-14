@@ -22,6 +22,7 @@
          session-detail-fragment
          session-messages-fragment
          events-fragment
+         magi-fragment
          logs-fragment
 	         memory-workspace-fragment
 	         memory-search-results-fragment
@@ -34,6 +35,7 @@
    {:key :chat :label "Chat"}
    {:key :tools :label "Tools"}
    {:key :memory :label "Memory"}
+   {:key :magi :label "MAGI"}
    {:key :logs :label "Logs"}])
 
 (def memory-search-results-fragment ui-memory/memory-search-results-fragment)
@@ -50,6 +52,7 @@
     :chat (if session-id (str "/chat/" session-id) "/chat")
     :tools "/tools"
     :memory "/memory"
+    :magi "/magi"
     :logs "/logs"
     "/chat"))
 
@@ -62,6 +65,7 @@
       "chat" (cond-> {:tab :chat} id (assoc :session-id id))
       "tools" {:tab :tools}
       "memory" {:tab :memory}
+      "magi" {:tab :magi}
       "logs" {:tab :logs}
       {:tab :chat})))
 
@@ -173,6 +177,9 @@
                          (tool-approvals/list-requests (:store system) {:limit 50})))
                        [:div#tool-results-panel.empty "Request approval, approve, then run."]]])
              :memory (memory-workspace-fragment system)
+             :magi (ui-render/render-many
+                    [:section.workspace-grid.single
+                     (ui-render/trusted-fragment (magi-fragment system))])
              :logs (ui-render/render-many
                     [:section.workspace-grid.single
                      (ui-render/trusted-fragment (logs-fragment system))])
@@ -525,6 +532,90 @@
 
           :else
           [:div.empty "Trace enabled, no entries yet."])]]])))
+
+(defn- magi-decision-events [system]
+  (sqlite/list-events (:store system)
+                      {:event-type :tool.approval.magi_evaluated
+                       :limit 50}))
+
+(defn- decision-class [decision]
+  (str "magi-decision magi-decision--" (or (some-> decision name) "unknown")))
+
+(defn- magi-agent-panel [label agent]
+  (let [response (:response agent)]
+    [:div.magi-node {:class (str "magi-node--" (or (some-> response name) "unknown"))}
+     [:span.magi-node__label label]
+     [:strong.magi-node__response (or (some-> response name str/upper-case) "-")]
+     (when-let [comment (some-> (:comment agent) str str/trim not-empty)]
+       [:span.magi-node__comment comment])]))
+
+(defn- compact-json [value]
+  (json/generate-string value {:pretty true}))
+
+(defn- magi-decision-card [{:keys [id entity-id created-at payload]}]
+  (let [{:keys [tool-name input filter agents judge decision reason providers duration-ms]} payload
+        judge* (or judge {:decision decision :reason reason})
+        filter-context (:context filter)
+        input* (or input (:input filter-context))]
+    [:article.magi-decision-card
+     [:div.magi-frame]
+     [:div.magi-head
+      [:div.magi-titleblock
+       [:div.magi-kicker "QUESTION"]
+       [:h2 (str "CODE: " (or id "-"))]
+       [:div.magi-file (str "FILE: " (or tool-name "MAGI") "_CHK")]]
+      [:div.magi-status {:class (decision-class (:decision judge*))}
+       [:span "DECISION"]
+       [:strong (or (some-> (:decision judge*) name str/upper-case) "-")]]]
+     [:div.magi-diagram
+      [:div.magi-center
+       [:span "MAGI"]]
+      (magi-agent-panel "BALTHASAR • 2" (:balthasar agents))
+      (magi-agent-panel "CASPER • 3" (:casper agents))
+      (magi-agent-panel "MELCHIOR • 1" (:melchior agents))]
+     [:div.magi-details
+      [:div.magi-readout
+       [:span "input"]
+       [:pre (compact-json input*)]]
+      [:div.magi-readout
+       [:span "filter"]
+       [:pre (compact-json filter)]]
+      [:div.magi-readout
+       [:span "judge"]
+       [:pre (compact-json judge*)]]
+      [:div.magi-readout
+       [:span "providers"]
+       [:pre (compact-json providers)]]]
+     [:div.magi-footer
+      [:span (str "access code: " (or entity-id "-"))]
+      [:span (str "duration: " (or duration-ms 0) "ms")]
+      [:span (or created-at "-")]]]))
+
+(defn magi-fragment [system]
+  (let [events (magi-decision-events system)
+        latest (first events)]
+    (ui-render/render
+     [:section#magi-panel.magi-panel
+      {"data-on-interval__duration.5s.leading" "@get('/ui/magi')"}
+      [:div.magi-console
+       [:div.magi-console__header
+        [:div
+         [:div.magi-kicker "MAGI OVERSIGHT"]
+         [:h1 "Decision Log"]]
+        [:div.magi-console__count
+         [:span "records"]
+         [:strong (str (count events))]]]
+       (if latest
+         [:div.magi-log
+          (for [event events]
+            (magi-decision-card event))]
+         [:div.magi-empty
+          [:div.magi-diagram.magi-diagram--empty
+           [:div.magi-center [:span "MAGI"]]
+           (magi-agent-panel "BALTHASAR • 2" nil)
+           (magi-agent-panel "CASPER • 3" nil)
+           (magi-agent-panel "MELCHIOR • 1" nil)]
+          [:div.empty "No MAGI decisions yet."]])]])))
 
 (defn tools-fragment [system]
   (let [tool-list (tools/list-tools (:tool-registry system))]

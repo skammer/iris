@@ -392,6 +392,44 @@
         (io/delete-file path true)
         (io/delete-file dir true)))))
 
+(deftest magi-fragment-shows-decision-log
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (sqlite/log-event! store
+                         {:event-type :tool.approval.magi_evaluated
+                          :entity-type :tool_approval
+                          :entity-id "approval-1"
+                          :payload {:tool-name "shell"
+                                    :input {:argv ["printf" "ok"]}
+                                    :filter {:kind :yes-no
+                                             :domain :tool-approval
+                                             :risk :low
+                                             :question "Allow?"
+                                             :expected-response :permit
+                                             :context {}}
+                                    :agents {:melchior {:response :yes :comment "ok"}
+                                             :balthasar {:response :conditional :comment "narrow scope"}
+                                             :casper {:response :yes :comment "ok"}}
+                                    :judge {:decision :conditional
+                                            :reason "narrow scope"}
+                                    :decision :conditional
+                                    :reason "narrow scope"
+                                    :duration-ms 12}})
+      (let [html (ui/magi-fragment {:store store})]
+        (is (str/includes? html "MAGI OVERSIGHT"))
+        (is (str/includes? html "Decision Log"))
+        (is (str/includes? html "BALTHASAR"))
+        (is (str/includes? html "MELCHIOR"))
+        (is (str/includes? html "input"))
+        (is (str/includes? html "filter"))
+        (is (str/includes? html "judge"))
+        (is (str/includes? html "CONDITIONAL"))
+        (is (str/includes? html "printf")))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest tool-message-summary-shows-arguments
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})]

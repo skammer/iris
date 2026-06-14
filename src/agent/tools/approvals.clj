@@ -86,8 +86,11 @@
           :entity-type :tool_approval
           :entity-id (:id approval)
           :payload {:tool-name (:tool-name approval)
+                    :input (:input approval)
                     :decision (:decision result)
                     :reason (:reason result)
+                    :judge {:decision (:decision result)
+                            :reason (:reason result)}
                     :filter (:filter result)
                     :agents (:agents result)
                     :providers (:providers result)
@@ -274,7 +277,7 @@
      :approval approval}))
 
 (defn- default-approval-reason [tool-name input]
-  (or (some-> (or (:reason input) (get input "reason") (:purpose input) (get input "purpose"))
+  (or (some-> (or (:purpose input) (get input "purpose") (:reason input) (get input "reason"))
               str
               str/trim
               not-empty)
