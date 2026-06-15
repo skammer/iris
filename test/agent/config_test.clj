@@ -267,6 +267,18 @@
         (finally
           (io/delete-file file true))))))
 
+(deftest deepseek-provider-type-loads-with-json-object-structured-output-test
+  (with-isolated-config [root {}]
+    (let [file (java.io.File/createTempFile "iris-config-" ".edn")]
+      (spit file "{:llm {:active-provider :deepseek\n       :providers {:deepseek {:type :deepseek\n                              :api-key \"test-key\"\n                              :model \"deepseek-chat\"}}}}")
+      (try
+        (let [cfg (config/load-config (.getAbsolutePath file))]
+          (is (= :deepseek (config/active-provider-key (:llm cfg))))
+          (is (= :deepseek (get-in cfg [:llm :providers :deepseek :type])))
+          (is (= "deepseek-chat" (config/active-model (:llm cfg)))))
+        (finally
+          (io/delete-file file true))))))
+
 (deftest per-model-chat-profile-beats-named-and-default-profile-test
   (with-isolated-config [root {}]
     (let [file (java.io.File/createTempFile "iris-config-" ".edn")]

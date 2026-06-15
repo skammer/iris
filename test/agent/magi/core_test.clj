@@ -70,8 +70,7 @@
                                                       :domain "tool-approval"
                                                       :risk "low"
                                                       :question "Allow?"
-                                                      :expected_response "permit"
-                                                      :context {}}
+                                                      :expected_response "permit"}
                                                      (atom []))
                           :melchior (->StaticProvider {:response "yes"} melchior-requests)
                           :balthasar (provider {:response "yes"})

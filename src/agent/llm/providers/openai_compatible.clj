@@ -244,6 +244,8 @@
                                                    :max-delay
                                                    :top-p
                                                    :top_p
+                                                   :structured-output-format
+                                                   :structured_output_format
                                                    :user
                                                    :extra-body])
                                      config)
@@ -273,6 +275,8 @@
                         :max-delay
                         :top-p
                         :top_p
+                        :structured-output-format
+                        :structured_output_format
                         :user
                         :extra-headers
                         :extra-body])
@@ -283,3 +287,10 @@
            :app-name app-name
            :config config
            :api-key-resolver api-key-resolver})))
+
+(defn create-deepseek-provider
+  [{:keys [base-url] :as opts}]
+  (create-openai-compatible-provider
+   (merge {:base-url (or base-url "https://api.deepseek.com/v1")
+           :structured-output-format :json-object}
+          opts)))

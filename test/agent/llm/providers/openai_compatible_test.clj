@@ -592,6 +592,54 @@
         (is (= "{\"ok\":true}" (:content response)))
         (is (= 8 (get-in response [:usage :cached-tokens])))))))
 
+(deftest deepseek-structured-output-uses-json-object-mode-test
+  (let [body* (atom nil)]
+    (with-redefs [http/post (fn [_ request]
+                              (reset! body* (json/parse-string (:body request) true))
+                              {:status 200
+                               :headers {"Content-Type" "text/event-stream"}
+                               :body (byte-stream
+                                      (str "data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"ok\\\":\"}}]}\n\n"
+                                           "data: {\"choices\":[{\"delta\":{\"content\":\"true}\"},\"finish_reason\":\"stop\"}]}\n\n"
+                                           "data: [DONE]\n\n"))})]
+      (let [llm (provider/create-deepseek-provider {:api-key "ds-key"
+                                                    :model "deepseek-chat"})
+            response (llm-core/invoke
+                      llm
+                      {:messages [{:role "system" :content "Output JSON only."}
+                                  {:role "user" :content "Return JSON."}]
+                       :structured-output {:name "answer"
+                                           :schema {:type "object"
+                                                    :properties {:ok {:type "boolean"}}
+                                                    :required ["ok"]
+                                                    :additionalProperties false}}})]
+        (is (= {:type "json_object"} (:response_format @body*)))
+        (is (true? (:stream @body*)))
+        (is (= "{\"ok\":true}" (:content response)))))))
+
+(deftest deepseek-base-url-autodetect-uses-json-object-mode-test
+  (let [body* (atom nil)]
+    (with-redefs [http/post (fn [_ request]
+                              (reset! body* (json/parse-string (:body request) true))
+                              {:status 200
+                               :headers {"Content-Type" "text/event-stream"}
+                               :body (byte-stream
+                                      (str "data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"ok\\\":true}\"},\"finish_reason\":\"stop\"}]}\n\n"
+                                           "data: [DONE]\n\n"))})]
+      (let [llm (provider/create-openai-compatible-provider {:api-key "ds-key"
+                                                             :base-url "https://api.deepseek.com/v1"
+                                                             :model "deepseek-chat"})]
+        (llm-core/invoke
+         llm
+         {:messages [{:role "system" :content "Output JSON only."}
+                     {:role "user" :content "Return JSON."}]
+          :structured-output {:name "answer"
+                              :schema {:type "object"
+                                       :properties {:ok {:type "boolean"}}
+                                       :required ["ok"]
+                                       :additionalProperties false}}})
+        (is (= {:type "json_object"} (:response_format @body*)))))))
+
 (deftest capabilities-use-model-metadata-test
   (let [llm (provider/create-openai-compatible-provider
              {:api-key "oa-key"

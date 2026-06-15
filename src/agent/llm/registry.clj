@@ -45,6 +45,18 @@
     :reasoning-levels #{:off :low :medium :high :xhigh}
     :cache-support {:prompt-cache? true :retention #{:ephemeral}}
     :transport-support #{:http :sse}
+    :usage-cost-support {:usage? true :cost? false}}
+
+   :deepseek
+   {:api-kind :deepseek
+    :display-name "DeepSeek"
+    :context-window nil
+    :max-output-tokens nil
+    :input-modalities #{:text}
+    :tool-support {:native? true}
+    :reasoning-levels #{:off}
+    :cache-support {:prompt-cache? true :retention #{:in-memory}}
+    :transport-support #{:http :sse}
     :usage-cost-support {:usage? true :cost? false}}})
 
 (defn- normalize-provider-key [value]

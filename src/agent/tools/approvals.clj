@@ -283,9 +283,12 @@
               not-empty)
       (str "Agent requested " (name tool-name))))
 
-(defn- approval-block [reason]
-  {:block true
-   :reason reason})
+(defn- approval-block
+  ([reason] (approval-block reason nil))
+  ([reason approval-id]
+   (cond-> {:block true
+            :reason reason}
+     approval-id (assoc :approval-id approval-id))))
 
 (defn- denied-block [reason]
   {:block true
@@ -323,5 +326,6 @@
                     "approved" {:allow true
                                 :approval-id (:id created)}
                     "denied" (denied-block (:decision-reason created))
-                    (approval-block (str "Sensitive tool requires approved request approval_id=" (:id created)))))
+                    (approval-block (str "Sensitive tool requires approved request approval_id=" (:id created))
+                                    (:id created))))
                 (approval-block "Sensitive tool requires approved request")))))))))

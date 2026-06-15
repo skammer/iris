@@ -35,9 +35,8 @@
                 :domain {:type "string" :enum ["tool-approval" "memory-promotion" "policy" "other"]}
                 :risk {:type "string" :enum ["low" "medium" "high" "critical"]}
                 :question {:type "string"}
-                :expected_response {:type "string" :enum ["permit" "classify" "opine"]}
-                :context {:type "object"}}
-   :required ["kind" "domain" "risk" "question" "expected_response" "context"]
+                :expected_response {:type "string" :enum ["permit" "classify" "opine"]}}
+   :required ["kind" "domain" "risk" "question" "expected_response"]
    :additionalProperties false})
 
 (def ^:private agent-schema

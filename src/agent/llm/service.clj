@@ -29,6 +29,10 @@
       (openai-compatible/create-openai-compatible-provider
        (assoc provider-cfg :default-model model))
 
+      :deepseek
+      (openai-compatible/create-deepseek-provider
+       (assoc provider-cfg :default-model model))
+
       (throw (ex-info (str "Unsupported provider type: " type)
                       {:provider provider
                        :type type})))))

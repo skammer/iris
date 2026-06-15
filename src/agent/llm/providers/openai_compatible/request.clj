@@ -5,11 +5,32 @@
    [agent.llm.messages :as llm-messages]
    [clojure.string :as str]))
 
-(defn structured-output-format [{:keys [name schema strict?]}]
-  {:type "json_schema"
-   :json_schema {:name (or name "structured_output")
-                 :schema schema
-                 :strict (not (false? strict?))}})
+(defn- normalize-structured-output-format [value]
+  (cond
+    (nil? value) nil
+    (keyword? value) value
+    (string? value) (keyword (str/lower-case (str/replace value "_" "-")))
+    :else value))
+
+(defn- deepseek? [base-url]
+  (str/includes? (str/lower-case (or base-url "")) "api.deepseek.com"))
+
+(defn- structured-output-mode [base-url config opts]
+  (or (normalize-structured-output-format (:structured-output-format opts))
+      (normalize-structured-output-format (:structured_output_format opts))
+      (normalize-structured-output-format (:structured-output-format config))
+      (normalize-structured-output-format (:structured_output_format config))
+      (when (deepseek? base-url) :json-object)
+      :json-schema))
+
+(defn structured-output-format [base-url config opts]
+  (if (= :json-object (structured-output-mode base-url config opts))
+    {:type "json_object"}
+    (let [{:keys [name schema strict?]} (:structured-output opts)]
+      {:type "json_schema"
+       :json_schema {:name (or name "structured_output")
+                     :schema schema
+                     :strict (not (false? strict?))}})))
 
 (defn responses-output-format [{:keys [name schema strict?]}]
   {:format {:type "json_schema"
@@ -119,7 +140,7 @@
       user (assoc :user user)
       (:tools opts) (assoc :tools (:tools opts))
       (:tool-choice opts) (assoc :tool_choice (:tool-choice opts))
-      (:structured-output opts) (assoc :response_format (structured-output-format (:structured-output opts)))
+      (:structured-output opts) (assoc :response_format (structured-output-format base-url config opts))
       (:response-format opts) (assoc :response_format (:response-format opts))
       (:cache-control opts) (assoc :cache_control (:cache-control opts))
       (:cache_control opts) (assoc :cache_control (:cache_control opts)))))

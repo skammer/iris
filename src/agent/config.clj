@@ -422,16 +422,17 @@
          maps))
 
 (def ^:private provider-keys
-  #{:ollama :openrouter :openai-compatible})
+  #{:ollama :openrouter :openai-compatible :deepseek})
 
 (def ^:private provider-default-types
   {:ollama :ollama
    :openrouter :openrouter
-   :openai-compatible :openai-compatible})
+   :openai-compatible :openai-compatible
+   :deepseek :deepseek})
 
 (def ^:private legacy-llm-provider-option-keys
   [:model :api :temperature :max-tokens :stream? :prompt-cache?
-   :stream-structured-output? :timeout-ms :site-url :app-name])
+   :stream-structured-output? :structured-output-format :timeout-ms :site-url :app-name])
 
 (defn- normalize-provider-config
   [provider-key provider-cfg]
@@ -476,10 +477,11 @@
 (def ^:private provider-required-keys
   {:ollama [:base-url :model]
    :openrouter [:base-url :model :api-key]
-   :openai-compatible [:base-url :model :api-key]})
+   :openai-compatible [:base-url :model :api-key]
+   :deepseek [:model :api-key]})
 
 (def ^:private openai-compatible-provider-types
-  #{:openrouter :openai-compatible})
+  #{:openrouter :openai-compatible :deepseek})
 
 (def ^:private openai-compatible-apis
   #{:chat :chat-completion :chat-completions :completions

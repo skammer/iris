@@ -9,8 +9,7 @@ Output JSON only:
   "domain": "tool-approval",
   "risk": "low",
   "question": "normalized question",
-  "expected_response": "permit",
-  "context": {}
+  "expected_response": "permit"
 }
 
 Allowed values:
@@ -25,6 +24,7 @@ Rules:
 - Use yes-no only when the question can be answered as approval or denial.
 - Use info when the request asks for analysis, opinion, explanation, or classification rather than permission.
 - Use unsupported when context is insufficient for MAGI oversight.
-- Preserve supplied request context needed by the triumvirate. Do not return an empty context when input context contains relevant tool, request, permission, or conversation facts.
+- Do not return, copy, summarize, or quote the supplied context.
+- The system preserves original context separately for the triumvirate.
 - Preserve only facts supplied in the input.
 - Never invent missing context.

@@ -111,3 +111,25 @@
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
+
+(deftest magi-auto-pending-block-carries-approval-id-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        events (atom [])
+        reg (registry store (magi-service :error "provider failed") events)]
+    (try
+      (let [error (try
+                    (tools/execute-tool reg
+                                        :shell
+                                        {:argv ["printf" "ok"]}
+                                        {:permissions #{:shell-exec}
+                                         :user "tester"})
+                    nil
+                    (catch clojure.lang.ExceptionInfo e e))
+            approval (first (sqlite/list-tool-approvals store {:limit 10}))]
+        (is (= :approval-required (:type (ex-data error))))
+        (is (= "pending" (:status approval)))
+        (is (= (:id approval) (:approval-id (ex-data error)))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
