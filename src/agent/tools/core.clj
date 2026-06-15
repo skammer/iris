@@ -363,7 +363,9 @@
                                      tool-name
                                      validated-input
                                      status
-                                     (assoc details :duration-ms (util/duration-ms start-ns)))}))
+                                     (cond-> (assoc details :duration-ms (util/duration-ms start-ns))
+                                       (:approval-reason context*)
+                                       (assoc :approval-reason (:approval-reason context*))))}))
 
 (defn- hook-context [tool-description input context]
   {:tool tool-description
@@ -383,11 +385,12 @@
                            {:tool-name (:name tool-description)})))
       (let [decision (approval-check (hook-context tool-description input context))]
         (cond
-          (:allow decision) nil
+          (:allow decision) decision
           (:block decision) (throw (tool-error :approval-required
                                                (or (:reason decision) "Sensitive tool requires approved request")
                                                (cond-> {:tool-name (:name tool-description)}
                                                  (:approval-id decision) (assoc :approval-id (:approval-id decision))
+                                                 (:reason decision) (assoc :reason (:reason decision))
                                                  (:type decision) (assoc :type (:type decision)))))
           :else (throw (tool-error :approval-required
                                    "Sensitive tool approval policy did not allow execution"
@@ -466,34 +469,40 @@
              (throw (tool-error :tool-blocked
                                 (or (:reason decision) "Tool execution blocked")
                                 {:tool-name tool-name}))))
-         (try
-           (enforce-approval! registry tool tool-description validated-input context*)
-           (catch Exception e
-             (emit-tool-end! emit*
-                             context*
-                             tool-description
-                             tool-name
-                             validated-input
-                             start-ns
-                             :blocked
-                             {:reason (.getMessage e)})
-             (throw e)))
+         (let [approval-decision (try
+                                   (enforce-approval! registry tool tool-description validated-input context*)
+                                   (catch Exception e
+                                     (emit-tool-end! emit*
+                                                     context*
+                                                     tool-description
+                                                     tool-name
+                                                     validated-input
+                                                     start-ns
+                                                     :blocked
+                                                     {:reason (.getMessage e)})
+                                     (throw e)))
+               context** (cond-> context*
+                           (:approval-id approval-decision)
+                           (assoc :approval-id (:approval-id approval-decision))
+
+                           (:reason approval-decision)
+                           (assoc :approval-reason (:reason approval-decision)))]
          (try
            (let [result (execute-effect! registry
                                          tool-name
                                          validated-input
-                                         context*
-                                         #((:execute-fn tool) (effect-input validated-input) context*))
+                                         context**
+                                         #((:execute-fn tool) (effect-input validated-input) context**))
                  duration-ms (util/duration-ms start-ns)
                  final-result (if-let [postprocess (:after-execute registry)]
-                                (let [hook-result (postprocess (assoc (hook-context tool-description validated-input context*)
+                                (let [hook-result (postprocess (assoc (hook-context tool-description validated-input context**)
                                                                       :result result
                                                                       :duration-ms duration-ms
                                                                       :is-error false))]
                                   (or (:result hook-result) result))
                                 result)]
              (emit-tool-end! emit*
-                             context*
+                             context**
                              tool-description
                              tool-name
                              validated-input
@@ -504,19 +513,19 @@
            (catch Exception e
              (let [duration-ms (util/duration-ms start-ns)]
                (when-let [postprocess (:after-execute registry)]
-                 (postprocess (assoc (hook-context tool-description validated-input context*)
+                 (postprocess (assoc (hook-context tool-description validated-input context**)
                                      :error e
                                      :duration-ms duration-ms
                                      :is-error true)))
                (emit-tool-end! emit*
-                               context*
+                               context**
                                tool-description
                                tool-name
                                validated-input
                                start-ns
                                :failed
                                {:error (.getMessage e)})
-               (throw e)))))))))
+               (throw e))))))))))
 
 (defn registry-health
   [registry]

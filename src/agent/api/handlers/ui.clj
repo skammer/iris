@@ -513,6 +513,7 @@
                                           input
                                           {:permissions permissions
                                            :approval-id approval-id
+                                           :approval-reason (:decision-reason approval)
                                            :user user
                                            :activity (:activity input)})})))
       (catch Exception e

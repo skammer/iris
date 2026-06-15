@@ -2,7 +2,8 @@
   (:require
    [agent.runtime.tools :as runtime-tools]
    [agent.tools.core :as tools]
-   [clojure.test :refer :all]))
+   [cheshire.core :as json]
+   [clojure.test :refer [deftest is]]))
 
 (defn test-tool
   [name f & {:keys [permissions sensitive execution-mode operation parallel-safe? approval-sensitive?
@@ -193,6 +194,30 @@
                 {:mode :sequential})]
     (is (= :error (get-in result [:results 0 :status])))
     (is (= :approval-required (get-in result [:results 0 :error-type])))))
+
+(deftest denied-tool-result-message-includes-reason-test
+  (let [events (atom [])
+        reason "needs narrower command"
+        reg (-> (tools/create-registry
+                 {:approval-check (fn [_]
+                                    {:block true
+                                     :type :tool-blocked
+                                     :reason reason})})
+                (tools/register-tool
+                 (test-tool :secret (fn [input _] input) :sensitive true)))
+        result (runtime-tools/execute-batch!
+                reg
+                [{:tool-name :secret :input {:value 1}}]
+                {:permissions #{:secret}}
+                {:mode :sequential
+                 :event-sink #(swap! events conj %)})
+        message-content (json/parse-string (get-in result [:messages 0 :content]) true)]
+    (is (= reason (:reason message-content)))
+    (is (= reason (get-in result [:results 0 :reason])))
+    (is (= reason
+           (some #(when (= :tool-execution-end (:event-type %))
+                    (get-in % [:payload :reason]))
+                 @events)))))
 
 (deftest tool-execution-events-emitted-once-through-batch-test
   ;; Both the runtime batch layer and tools.core/execute-tool used to emit

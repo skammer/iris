@@ -105,18 +105,21 @@
   [store approval-id]
   (sqlite/get-tool-approval store approval-id))
 
+(defn- clean-reason [reason]
+  (some-> reason str str/trim not-empty))
+
 (defn approve!
   [store approval-id actor reason]
-  (sqlite/decide-tool-approval! store approval-id :approved actor reason))
+  (sqlite/decide-tool-approval! store approval-id :approved actor (clean-reason reason)))
 
 (defn deny!
   [store approval-id actor reason]
-  (sqlite/decide-tool-approval! store approval-id :denied actor reason))
+  (sqlite/decide-tool-approval! store approval-id :denied actor (clean-reason reason)))
 
 (defn- approval-reason [decision result]
   (let [reason (some-> (:reason result) str str/trim not-empty)]
     (case decision
-      :yes "magi: yes"
+      :yes (str "magi: yes" (when reason (str " - " reason)))
       :no (str "magi: no" (when reason (str " - " reason)))
       :conditional (str "magi: conditional - denied until retry satisfies: "
                         (or reason "specified condition"))
@@ -210,8 +213,10 @@
   (when-not (= "approved" (:status approval))
     (throw (tools/tool-error :approval-not-approved
                              "Approval request is not approved"
-                             {:approval-id approval-id
-                              :status (:status approval)})))
+                             (cond-> {:approval-id approval-id
+                                      :status (:status approval)}
+                               (:decision-reason approval)
+                               (assoc :reason (:decision-reason approval))))))
   (when (expired? (:expires-at approval))
     (throw (tools/tool-error :approval-expired
                              "Approval request is expired"
@@ -251,8 +256,10 @@
     (when-not (= "approved" (:status approval))
       (throw (tools/tool-error :approval-not-approved
                                "Approval request is not approved"
-                               {:approval-id approval-id
-                                :status (:status approval)})))
+                               (cond-> {:approval-id approval-id
+                                        :status (:status approval)}
+                                 (:decision-reason approval)
+                                 (assoc :reason (:decision-reason approval))))))
     (when (expired? (:expires-at approval))
       (throw (tools/tool-error :approval-expired
                                "Approval request is expired"
@@ -307,7 +314,9 @@
           (let [approval-id (:approval-id context)
                 approval (when approval-id (get-request store approval-id))]
             (if (valid-approval? approval tool-name input context)
-              {:allow true}
+              {:allow true
+               :approval-id (:id approval)
+               :reason (:decision-reason approval)}
               (if (and magi-service
                        (= :auto-approve (magi/mode magi-service))
                        (magi/approval-applicable? magi-service tool))
@@ -324,7 +333,8 @@
                                context)]
                   (case (:status created)
                     "approved" {:allow true
-                                :approval-id (:id created)}
+                                :approval-id (:id created)
+                                :reason (:decision-reason created)}
                     "denied" (denied-block (:decision-reason created))
                     (approval-block (str "Sensitive tool requires approved request approval_id=" (:id created))
                                     (:id created))))

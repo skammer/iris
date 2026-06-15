@@ -50,6 +50,9 @@
              :yolo? (true? (get-in system [:config :tools :yolo?]))
              :user user*
              :request-id request-id}
+      (get-in approval [:approval :decision-reason])
+      (assoc :approval-reason (get-in approval [:approval :decision-reason]))
+
       activity (assoc :activity activity))))
 
 (defn list-tools [system _request]

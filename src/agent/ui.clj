@@ -753,13 +753,13 @@
    (when (= "pending" (:status approval))
      [[:form {:id (str "approve-" (:id approval))}
        [:input {:type "hidden" :name "actor" :value "operator"}]
-       [:input {:type "hidden" :name "reason" :value "approved in ui"}]
+       [:input {:type "text" :name "reason" :placeholder "approval reason"}]
        [:button {:type "button"
                  "data-on:click" (str "@post('/ui/tool-approvals/" (:id approval) "/approve', {contentType: 'form', selector: '#approve-" (:id approval) "'})")}
         "Approve"]]
       [:form {:id (str "deny-" (:id approval))}
        [:input {:type "hidden" :name "actor" :value "operator"}]
-       [:input {:type "hidden" :name "reason" :value "denied in ui"}]
+       [:input {:type "text" :name "reason" :placeholder "denial reason"}]
        [:button {:type "button"
                  "data-on:click" (str "@post('/ui/tool-approvals/" (:id approval) "/deny', {contentType: 'form', selector: '#deny-" (:id approval) "'})")}
         "Deny"]]])
@@ -781,6 +781,8 @@
           [:div.meta (str (:status approval) " / " (:created-at approval))]
           (when-let [reason (:reason approval)]
             [:div.meta (str "reason: " reason)])
+          (when-let [decision-reason (:decision-reason approval)]
+            [:div.meta (str "decision: " decision-reason)])
           [:div.code (json/generate-string (:input approval) {:pretty true})]
          [:div.actions (approval-actions approval)]])]
       [:div.empty "No tool approvals yet."])]))

@@ -28,16 +28,19 @@
 (def ^:private event! runtime-events/emit!)
 
 (defn- error-result [preflight ex]
-  (let [data (ex-data ex)]
-    {:source-index (:source-index preflight)
-     :tool-call-id (:tool-call-id preflight)
-     :tool-name (:tool-name preflight)
-     :status :error
-     :error-type (:type data)
-     :error (.getMessage ex)
-     :error-data (dissoc data :preflight)
-     :input (:input preflight)
-     :terminate? false}))
+  (let [data (ex-data ex)
+        message (.getMessage ex)]
+    (cond-> {:source-index (:source-index preflight)
+             :tool-call-id (:tool-call-id preflight)
+             :tool-name (:tool-name preflight)
+             :status :error
+             :error-type (:type data)
+             :error message
+             :error-data (dissoc data :preflight)
+             :input (:input preflight)
+             :terminate? false}
+      (or (:reason data) message)
+      (assoc :reason (or (:reason data) message)))))
 
 (defn- event-base [preflight]
   (let [context (:context preflight)]
@@ -57,7 +60,8 @@
            :receipt result}
     (:duration-ms result) (assoc :duration-ms (:duration-ms result))
     (:error result) (assoc :error (:error result))
-    (:error-type result) (assoc :error-type (:error-type result))))
+    (:error-type result) (assoc :error-type (:error-type result))
+    (:reason result) (assoc :reason (:reason result))))
 
 (defn- error-event-status [result]
   (if (contains? #{:tool-blocked :permission-denied :path-not-allowed}
@@ -71,8 +75,10 @@
    :name (some-> (:tool-name result) name)
    :content (if (= :ok (:status result))
               (util/result-content (:result result))
-              (util/result-content {:error (:error result)
-                                    :type (some-> (:error-type result) name)}))})
+              (util/result-content
+               (cond-> {:error (:error result)
+                        :type (some-> (:error-type result) name)}
+                 (:reason result) (assoc :reason (:reason result)))))})
 
 (defn- allowed-tool? [context tool-name]
   (let [allowed (set (map normalize-tool-name (:allowed-tools context)))]
