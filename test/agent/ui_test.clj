@@ -422,20 +422,18 @@
                           :entity-id "magi"
                           :payload {:tool-name "magi"
                                     :status "succeeded"
-                                    :input {:question "double check"}
-                                    :result {:filter {:kind :yes-no
-                                                      :domain :policy
-                                                      :risk :low
-                                                      :question "double check"
-                                                      :expected-response :permit
-                                                      :context {}}
-                                             :agents {:melchior {:response :yes}
-                                                      :balthasar {:response :yes}
-                                                      :casper {:response :yes}}
-                                             :judge {:decision :yes
-                                                     :reason "all yes"}
-                                             :decision :yes
-                                             :reason "all yes"}
+                                    :receipt {:input {:question "double check"}
+                                              :result {:filter {:kind :yes-no
+                                                                :domain :policy
+                                                                :risk :low
+                                                                :question "double check"
+                                                                :expected-response :permit
+                                                                :context {}}
+                                                       :agents {:melchior {:response :yes}
+                                                                :balthasar {:response :yes}
+                                                                :casper {:response :yes}}
+                                                       :decision :yes
+                                                       :reason "all yes"}}
                                     :duration-ms 7}})
       (let [html (ui/magi-fragment {:store store})]
         (is (str/includes? html "MAGI OVERSIGHT"))

@@ -735,6 +735,9 @@
                                                    :tool-name "list_dir"
                                                    :input {:path "./obsidian"}
                                                    :result {:files ["a.md"]}}})
+                                 (emit! :message-end {:content (apply str step1-deltas)
+                                                      :tool-turn? true
+                                                      :role "assistant"})
                                  (doseq [d step2-deltas]
                                    (Thread/sleep 700)
                                    (emit! :message-update {:delta d}))
@@ -752,7 +755,9 @@
         (is (some #(= "final answer" %) texts)
             "final answer must be sent as a real message")
         (is (= "final answer" (last texts))
-            "final answer is the last message sent"))
+            "final answer is the last message sent")
+        (is (= 1 (count (filter #(= "cherry paragraph" %) texts)))
+            "tool-turn message-end must not replay already streamed text into the next draft"))
       (let [draft-ids (set (map :draft-id @drafts))]
         (is (>= (count draft-ids) 2)
             "draft id should rotate after finalize so step 2 streams onto a fresh draft slot"))

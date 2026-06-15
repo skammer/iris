@@ -152,7 +152,8 @@
                   (when (and (not @saw-delta?)
                              (not (str/blank? (:content payload))))
                     (when-let [on-delta (:on-delta stream-controls)]
-                      (on-delta (:content payload)))))
+                      (on-delta (:content payload))))
+                  (reset! saw-delta? false))
                 (when (and event
                            (session-event? event session-id "message-end")
                            (:final? payload))
@@ -176,8 +177,7 @@
                            (session-event? event session-id "tool-execution-end"))
                   (when on-tool-call
                     (on-tool-call {:receipt (:receipt payload)
-                                   :tool-call (:tool-call payload)}))
-                  (reset! saw-delta? false))
+                                   :tool-call (:tool-call payload)})))
                 (recur result-value (or terminal?
                                         (and event
                                              (terminal-session-event? event session-id)))))))))

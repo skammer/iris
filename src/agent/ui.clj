@@ -573,7 +573,8 @@
 (defn- magi-event-result [{:keys [payload] :as event}]
   (if (= "tool.approval.magi_evaluated" (:event-type event))
     payload
-    (:result payload)))
+    (or (:result payload)
+        (get-in payload [:receipt :result]))))
 
 (defn- magi-invocation-row [{:keys [id event-type created-at payload] :as event}]
   (let [approval? (= "tool.approval.magi_evaluated" event-type)
@@ -583,6 +584,8 @@
         filter* (:filter result)
         agents (:agents result)
         input* (or (:input payload)
+                   (get-in payload [:receipt :input])
+                   (get-in payload [:receipt :call :input])
                    (:input result)
                    (get-in filter* [:context :input]))
         source (if approval? "approval" "tool")
