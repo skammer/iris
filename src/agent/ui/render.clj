@@ -193,7 +193,8 @@
 (defn- media-caption [block fallback]
   (or (:alt block) (:filename block) fallback))
 
-(declare user-message-content)
+(declare status-dot
+         user-message-content)
 
 (defn- media-block [block]
   (let [type (keyword (:type block))
@@ -348,41 +349,33 @@
     (catch Exception _ value)))
 
 (defn- tool-status-node [status]
-  (when status
-    [:span {:class (str "tool-status status--" status)} status]))
+  (when-not (str/blank? (str status))
+    (let [status* (str/lower-case (str status))]
+      [:span {:class (str "tool-status status--" status*)} status*])))
 
-(defn- tool-detail-template [id title status & body]
-  [:template {:id id}
-   [:div.tool-detail-content
-    [:div.tool-detail-content__meta
-     [:span.meta title]
-     (tool-status-node status)]
-    body]])
+(defn- tool-call-id [tool-call]
+  (or (:id tool-call)
+      (:tool-call-id tool-call)
+      (:tool_call_id tool-call)))
 
-(defn- tool-call [{:keys [id function]}]
-  (let [{:keys [name arguments]} function
-        params (parse-json-or-value arguments)
-        args (tool-display/args-preview params 800)
-        detail-id (safe-dom-id "tool-call-detail" (or id (str name "-" (hash arguments))))]
-    [:div.tool-call
-     [:button.tool-row
-      {:type "button"
-       "data-tool-detail" true
-       "data-tool-detail-template" detail-id
-       "data-tool-detail-title" (str "function: " name)
-       "data-tool-detail-status" "requested"}
-      [:span.tool-row__main
-       [:span.tool-row__name (str "→ " name)]
-       (tool-status-node "requested")
-       (when id [:span.tool-row__id.meta id])]
-      (when-not (str/blank? args)
-        [:span.tool-row__args.code args])]
-     (tool-detail-template
-      detail-id
-      (str "function: " name)
-      "requested"
-      [:h3 "Arguments"]
-      [:pre.tool-detail__pre.code (pretty-json params)])]))
+(defn- tool-call-name [tool-call]
+  (str (or (:name tool-call)
+           (:tool-name tool-call)
+           (:tool_name tool-call)
+           (get-in tool-call [:function :name])
+           "tool")))
+
+(defn- tool-call-arguments [tool-call]
+  (parse-json-or-value
+   (or (:arguments tool-call)
+       (:input tool-call)
+       (:args tool-call)
+       (get-in tool-call [:function :arguments])
+       {})))
+
+(defn- tool-result-block [{:keys [content-blocks]}]
+  (first (filter #(= :tool-result (some-> (:type %) keyword))
+                 content-blocks)))
 
 (defn- parse-tool-content [content]
   (try
@@ -390,55 +383,120 @@
       (json/parse-string content true))
     (catch Exception _ nil)))
 
-(defn- tool-result-summary
-  "Builds one-line tool result summary: name, status, args preview."
-  [system parsed tool-call-id]
-  (let [tool-name (or (:tool-name parsed) "tool")
-        status (some-> (:status parsed) name)
-        cfg (tool-display/channel-config system :web tool-name)
-        args (tool-display/args-preview (:input parsed)
-                                        (or (:args-preview-chars cfg)
-                                            (:preview-chars cfg)
-                                            800))]
-    [:span.tool-result__summary
-     [:span.tool-result__summary-head
-      [:span.tool-result__name tool-name]
-      (tool-status-node status)]
-     (when-not (str/blank? args)
-       [:span.tool-result__args.code args])
-     (when tool-call-id [:span.tool-result__id.meta tool-call-id])]))
+(defn- tool-result-data [{:keys [content tool-call-id] :as message}]
+  (let [block (tool-result-block message)
+        block-content (:content block)
+        parsed (parse-tool-content (or block-content content))]
+    {:message message
+     :block block
+     :parsed parsed
+     :tool-call-id (or tool-call-id (:tool-call-id block))
+     :tool-name (or (:tool-name parsed) (:name block))
+     :status (or (:status parsed) (:status block))
+     :input (:input parsed)
+     :result (if (contains? parsed :result)
+               (:result parsed)
+               (or block-content content))
+     :raw-content (or block-content content)}))
 
-(defn- tool-message [system {:keys [id content created-at tool-call-id]}]
-  (let [parsed (parse-tool-content content)
-        status (some-> (:status parsed) name)
-        tool-name (or (:tool-name parsed) "tool")
-        detail-id (safe-dom-id "tool-result-detail" (or id tool-call-id (hash content)))
-        body (if parsed
-               (pretty-json (dissoc parsed :tool-name :status))
-               (pretty-json content))]
-    [:article.message.message--tool
-     [:div.tool-result
-      [:button.tool-row.tool-result__head
-       {:type "button"
-        "data-tool-detail" true
-        "data-tool-detail-template" detail-id
-        "data-tool-detail-title" (str "tool: " tool-name)
-        "data-tool-detail-status" (or status "")}
-       (tool-result-summary system parsed tool-call-id)]
-      (tool-detail-template
-       detail-id
-       (str "tool: " tool-name)
-       status
+(defn- done-status? [status]
+  (contains? #{"ok" "completed" "succeeded" "success" "done"}
+             (some-> status name str/lower-case)))
+
+(defn- display-tool-status [result-data]
+  (let [status (:status result-data)]
+    (cond
+      (done-status? status) "done"
+      (not (str/blank? (str status))) (str/lower-case (str status))
+      result-data "done"
+      :else "requested")))
+
+(defn- concise-value [value max-chars]
+  (tool-display/args-preview value max-chars))
+
+(defn- result-preview [value max-chars]
+  (cond
+    (map? value)
+    (or (some (fn [k]
+                (when (sequential? (get value k))
+                  (str (count (get value k)) " " (name k))))
+              [:results :items :entries :rows :matches])
+        (not-empty (concise-value value max-chars)))
+
+    (sequential? value)
+    (str (count value) " items")
+
+    :else
+    (not-empty (concise-value value max-chars))))
+
+(defn- tool-entry [system assistant-message tool-call result-message]
+  (let [call-id (tool-call-id tool-call)
+        name* (tool-call-name tool-call)
+        args (tool-call-arguments tool-call)
+        result-data (when result-message (tool-result-data result-message))
+        tool-name (or (:tool-name result-data) name*)
+        cfg (tool-display/channel-config system :web tool-name)
+        args-preview (tool-display/args-preview args
+                                                (or (:args-preview-chars cfg)
+                                                    (:preview-chars cfg)
+                                                    800))
+        status (display-tool-status result-data)
+        preview (result-preview (:result result-data) (or (:preview-chars cfg) 800))
+        detail-id (safe-dom-id "tool-entry" (or call-id
+                                                (:id result-message)
+                                                (str name* "-" (hash tool-call))))]
+    [:details.tool-entry
+     {:id detail-id
+      "data-preserve-attr" "open"}
+     [:summary.tool-row.tool-entry__summary
+      [:span.tool-row__main
+       (status-dot status)
+       [:span.tool-row__name tool-name]
+       (tool-status-node status)
+       (when call-id [:span.tool-row__id.meta call-id])]
+      (when-not (str/blank? args-preview)
+        [:span.tool-row__args.code args-preview])
+      (when-not (str/blank? preview)
+        [:span.tool-result__args.code preview])]
+     [:div.tool-entry__detail
+      [:section.tool-entry__section
+       [:h3 "Call"]
+       [:pre.tool-detail__pre.code
+        (pretty-json {:message-id (:id assistant-message)
+                      :created-at (:created-at assistant-message)
+                      :tool-call tool-call
+                      :arguments args})]]
+      [:section.tool-entry__section
        [:h3 "Result"]
-       [:pre.tool-detail__pre.code body])]
-     [:div.meta created-at]]))
+       (if result-data
+         [:pre.tool-detail__pre.code
+          (pretty-json {:message-id (get-in result-data [:message :id])
+                        :created-at (get-in result-data [:message :created-at])
+                        :tool-call-id (:tool-call-id result-data)
+                        :status (:status result-data)
+                        :content-block (:block result-data)
+                        :parsed (:parsed result-data)
+                        :result (:result result-data)
+                        :raw-content (:raw-content result-data)})]
+         [:div.empty "No result yet."])]]]))
+
+(defn- orphan-tool-entry [system message]
+  (let [data (tool-result-data message)
+        tool-call {:id (:tool-call-id data)
+                   :name (or (:tool-name data) "tool")
+                   :arguments (or (:input data) {})}]
+    [:article.message.message--tool
+     (tool-entry system message tool-call message)
+     [:div.meta (:created-at message)]]))
 
 (def ^:private status-dot-classes
   {"running" "dot--live"
    "requested" "dot--live"
    "completed" "dot--ok"
    "succeeded" "dot--ok"
+   "success" "dot--ok"
    "ok" "dot--ok"
+   "done" "dot--ok"
    "failed" "dot--err"
    "error" "dot--err"
    "cancelled" "dot--err"
@@ -504,13 +562,35 @@
          (when (and cached (pos? cached)) (str " | " (format-tokens cached) " cache"))
          (when (pos? n-tools) (str " | " n-tools " tool" (when (> n-tools 1) "s"))))))
 
+(defn- message-meta-text
+  [{:keys [created-at metadata excluded-from-context? tool-calls]}]
+  (str created-at
+       (when (:queued metadata) " | queued")
+       (when excluded-from-context? " | out-of-context")
+       (message-meta-suffix metadata tool-calls)))
+
+(defn- tool-turn-message
+  [system {:keys [id role content content-blocks tool-calls metadata] :as msg} results-by-id]
+  (let [thinking (or (:thinking metadata)
+                     (content-block-thinking content-blocks)
+                     (tagged-thinking content))
+        content* (if thinking (strip-think-tags content) content)
+        content-visible? (not (str/blank? (str content*)))]
+    [:article.message.message--tool-turn
+     (when (or content-visible? thinking)
+       (list
+        [:div.message-role {:class role} role]
+        (thinking-content thinking id)
+        (when content-visible? (message-content content*))))
+     [:div.tool-calls
+      (for [tc tool-calls]
+        (tool-entry system msg tc (get results-by-id (tool-call-id tc))))]
+     [:div.meta (message-meta-text msg)]]))
+
 (defn message
   ([msg] (message nil msg))
-  ([system {:keys [id role content created-at content-blocks tool-calls metadata excluded-from-context?] :as msg}]
-   (let [meta-text (str created-at
-                        (when (:queued metadata) " | queued")
-                        (when excluded-from-context? " | out-of-context")
-                        (message-meta-suffix metadata tool-calls))
+  ([system {:keys [id role content content-blocks tool-calls metadata] :as msg}]
+   (let [meta-text (message-meta-text msg)
          thinking (or (:thinking metadata)
                       (content-block-thinking content-blocks)
                       (tagged-thinking content))
@@ -519,14 +599,10 @@
                     content)]
      (cond
        (= role "tool")
-       (tool-message system msg)
+       (orphan-tool-entry system msg)
 
        (seq tool-calls)
-       [:article.message.message--tool-calls
-        [:div.message-role {:class role} role]
-        (when (seq (str content)) (message-content content))
-        [:div.tool-calls (for [tc tool-calls] (tool-call tc))]
-        [:div.meta meta-text]]
+       (tool-turn-message system msg {})
 
        :else
        [:article.message
@@ -535,6 +611,37 @@
           (thinking-content thinking id))
         (rich-message-content role content* content-blocks)
         [:div.meta meta-text]]))))
+
+(defn- tool-result-message? [message]
+  (= "tool" (:role message)))
+
+(defn- result-message-call-id [message]
+  (:tool-call-id (tool-result-data message)))
+
+(defn- consume-tool-results [messages call-ids]
+  (loop [remaining (seq messages)
+         results {}]
+    (if-let [message* (first remaining)]
+      (let [result-id (when (tool-result-message? message*)
+                        (result-message-call-id message*))]
+        (if (and result-id (contains? call-ids result-id))
+          (recur (next remaining) (assoc results result-id message*))
+          {:results results
+           :remaining remaining}))
+      {:results results
+       :remaining nil})))
+
+(defn message-list
+  [system messages]
+  (loop [remaining (seq messages)
+         nodes []]
+    (if-let [msg (first remaining)]
+      (if-let [tool-calls (seq (:tool-calls msg))]
+        (let [call-ids (set (keep tool-call-id tool-calls))
+              {:keys [results remaining]} (consume-tool-results (next remaining) call-ids)]
+          (recur remaining (conj nodes (tool-turn-message system msg results))))
+        (recur (next remaining) (conj nodes (message system msg))))
+      nodes)))
 
 (defn thread-stats
   "Aggregate per-thread usage/tool stats from the FULL message list.

@@ -464,15 +464,17 @@
         (sqlite/append-message! store (:id session) "tool" payload {:tool-call-id "call_1"})
         (let [html (ui/session-messages-fragment {:store store} (:id session))]
           (is (str/includes? html "web"))
-          (is (str/includes? html "ok"))
+          (is (str/includes? html "done"))
           (is (str/includes? html "query: clojure"))
-          (is (str/includes? html "data-tool-detail"))
-          (is (not (str/includes? html "<details")))))
+          (is (str/includes? html "<details"))
+          (is (str/includes? html "tool-entry"))
+          (is (str/includes? html "data-preserve-attr=\"open\""))
+          (is (str/includes? html "answer"))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
-(deftest assistant-tool-calls-render-as-status-row-with-sidebar-details
+(deftest assistant-tool-calls-render-as-expandable-row
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})]
     (try
@@ -485,10 +487,34 @@
         (let [html (ui/session-messages-fragment {:store store} (:id session))]
           (is (str/includes? html "class=\"tool-row"))
           (is (str/includes? html "requested"))
-          (is (str/includes? html "data-tool-detail-template"))
-          (is (not (str/includes? html "<details")))
+          (is (str/includes? html "<details"))
+          (is (str/includes? html "tool-entry"))
           (is (str/includes? html "url: http://example.test"))
           (is (str/includes? html "method: GET"))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest assistant-tool-call-and-result-render-as-one-expandable-row
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [session (sqlite/create-session! store "tool-merge")
+            tool-calls [{:id "call_1"
+                         :type "function"
+                         :function {:name "web_search"
+                                    :arguments "{\"q\":\"clojure\"}"}}]
+            payload "{\"status\":\"ok\",\"tool-name\":\"web_search\",\"input\":{\"q\":\"clojure\"},\"result\":{\"results\":[{\"title\":\"one\"},{\"title\":\"two\"}]}}"]
+        (sqlite/append-message! store (:id session) "assistant" "" {:tool-calls tool-calls})
+        (sqlite/append-message! store (:id session) "tool" payload {:tool-call-id "call_1"})
+        (let [html (ui/session-messages-fragment {:store store} (:id session))]
+          (is (= 1 (count (re-seq #"<details class=\"tool-entry\"" html))))
+          (is (str/includes? html "web_search"))
+          (is (str/includes? html "done"))
+          (is (str/includes? html "2 results"))
+          (is (str/includes? html "Call"))
+          (is (str/includes? html "Result"))
+          (is (not (str/includes? html "message--tool\"")))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))

@@ -464,8 +464,7 @@
           (ui-render/thread-stats-bar messages)
           [:div.chat-stream__filler]
           (concat
-           (for [message messages]
-             (ui-render/message system message))
+           (ui-render/message-list system messages)
            (cond
              streaming? [(streaming-message streaming*)]
              :else nil)))
