@@ -310,7 +310,7 @@
    callbacks, and runtime events around the evented runtime loop:
    prepare inputs -> subscribe -> run loop -> finalize."
   [system {:keys [session-id on-delta on-thinking-delta on-tool-call stream? context] :as opts}]
-  (let [{:keys [request-id prompt user-message] :as env} (prepare-turn-env system opts)
+  (let [{:keys [request-id prompt] :as env} (prepare-turn-env system opts)
         persisted (atom {})
         subscribers [{:operation :persistence
                       :f (subscribers/persistence-subscriber system session-id prompt request-id persisted)}
@@ -331,11 +331,6 @@
                                                             {:event-sink event-sink
                                                              :ops ops
                                                              :on-thinking-delta on-thinking-delta}))]
-        (chat-memory/extract-turn-memory! system
-                                          session-id
-                                          user-message
-                                          (:assistant-message @persisted)
-                                          request-id)
         (assoc result :stream? (boolean (or stream? on-delta))))
       (finally
         ((:flush! flusher))))))

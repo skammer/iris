@@ -1176,18 +1176,10 @@
       (finally
         (io/delete-file path true)))))
 
-(deftest chat-loop-auto-extracts-candidate-vault-notes-test
+(deftest chat-loop-does-not-auto-extract-candidate-vault-notes-test
   (let [path (temp-db-path)
         root (temp-dir)
-        responses (atom ["noted"
-                         (json/generate-string
-                          {:notes [{:type "Preference"
-                                    :title "Concise answers"
-                                    :description "User prefers concise answers."
-                                    :body "User prefers concise answers."
-                                    :tags ["preference"]
-                                    :scope "session"
-                                    :confidence 0.9}]})])
+        responses (atom ["noted"])
         requests (atom [])
         provider (->PlannerProvider responses requests)
         system (test-system path provider #(assoc-in % [:memory :vault :paths] [(.getAbsolutePath root)]))
@@ -1195,14 +1187,10 @@
     (try
       (chat/run! system {:session-id (:id session)
                          :messages [{:role "user" :content "I prefer concise answers"}]})
-      (let [notes (file-seq (io/file root))
-            note (some #(when (and (.isFile %) (str/ends-with? (.getName %) ".md")) %) notes)
-            content (slurp note)]
-        (is (= 1 (sqlite/count-vault-notes (:store system))))
-        (is (str/includes? (.getCanonicalPath note) "/inbox/"))
-        (is (str/includes? content "status: \"candidate\""))
-        (is (str/includes? content "User prefers concise answers."))
-        (is (empty? (memory/search-vault (:memory-service system) "concise" {:limit 10}))))
+      (let [notes (filter #(and (.isFile %) (str/ends-with? (.getName %) ".md"))
+                          (file-seq (io/file root)))]
+        (is (= 0 (sqlite/count-vault-notes (:store system))))
+        (is (empty? notes)))
       (finally
         (io/delete-file root true)
         (io/delete-file path true)))))

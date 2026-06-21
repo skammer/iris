@@ -1,10 +1,7 @@
 (ns agent.chat.memory
-  "Chat memory integration. Builds bounded recall context before a turn and
-   extracts candidate notes from the completed user/assistant exchange."
+  "Chat memory integration. Builds bounded recall context before a turn."
   (:require
    [agent.chat.util :as util]
-   [agent.config :as config]
-   [agent.memory.core :as memory]
    [agent.memory.recall :as recall]
    [agent.prompts :as prompts]
    [cheshire.core :as json]
@@ -58,25 +55,3 @@
   {:role "system"
    :content (prompts/render "memory-context"
                             {:memory_json (compact-memory-json recall)})})
-
-(defn extract-turn-memory! [system session-id user-message assistant-message request-id]
-  (when (and session-id user-message assistant-message)
-    (try
-      (memory/extract-and-save-notes!
-       (:memory-service system)
-       (or (:note-llm-provider system) (:llm-provider system))
-       {:user-message (:content user-message)
-        :assistant-message (:content assistant-message)}
-       {:session-id session-id
-        :source-session-id session-id
-        :source-message-ids [(:id user-message) (:id assistant-message)]
-        :source-request-id request-id
-        :model (config/active-model (get-in system [:config :llm]))})
-      (catch Exception e
-        (util/emit! system {:event-type :message-update
-                            :entity-type :session
-                            :entity-id session-id
-                            :request-id request-id
-                            :payload {:kind :memory-extract-failed
-                                      :message (.getMessage e)
-                                      :type (some-> e ex-data :type)}})))))

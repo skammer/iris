@@ -1,4 +1,4 @@
-Extract durable memory notes from the exchange. Keep stable user preferences, profile, projects, decisions, constraints, and runbooks. Skip transient chat details, secrets, credentials, and unsupported guesses. Return JSON only.
+Extract durable memory notes from the provided exchange or session transcript. Keep stable user preferences, profile, projects, decisions, constraints, and runbooks. Skip transient chat details, secrets, credentials, and unsupported guesses. Return JSON only.
 
 Schema:
 {"notes":[{"type":"Preference","title":"Concise Russian answers","description":"User prefers concise Russian answers.","body":"User prefers concise answers in Russian.","tags":["preference","user"],"scope":"global","confidence":0.9}]}
@@ -8,6 +8,7 @@ Rules:
 - Use scope "session" unless the memory is clearly durable across sessions.
 - Use coarse OKF-style types: Preference, Decision, Runbook, ProjectNote, Reference.
 - Prefer no note over weak inference.
+- Explicit session transcripts may contain many messages; consolidate repeated or final facts instead of saving turn-by-turn summaries.
 
 Input: {"user":"отвечай кратко по-русски","assistant":"Ок"}
 Output: {"notes":[{"type":"Preference","title":"Concise Russian answers","description":"User prefers concise Russian answers.","body":"User prefers concise answers in Russian.","tags":["preference","user"],"scope":"global","confidence":0.9}]}

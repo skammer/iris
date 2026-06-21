@@ -31,7 +31,7 @@
   {:fs #{:fs_read :fs_write :fs_create :fs_replace :fs_list :fs_delete :fs_mkdir}
    :memory #{:memory_recall :vault_search
              :scratchpad_read :scratchpad_search :scratchpad_replace
-             :message_search}
+             :memory_extract_session :message_search}
    :todo #{:todo_write :todo_get :todo_list :todo_search}})
 
 (defn- expand-tool-name [tool]
@@ -145,7 +145,7 @@
    {:cfg <:tools config> :event-sink :store :telemetry :memory-service
     :channel-adapters-cfg :system-control :observer :trace}"
   [{:keys [cfg event-sink store memory-service channel-adapters-cfg
-           system-control observer trace magi-service]
+           system-control observer trace magi-service note-llm-provider llm-provider]
     telemetry-collector :telemetry}]
    (let [http-cfg (get cfg :http)
          fs-cfg (get cfg :fs)
@@ -202,7 +202,8 @@
        (as-> registry*
              (reduce tools/register-tool
                      registry*
-                     (conj (memory-tool/create-memory-tools memory-service)
+                     (conj (memory-tool/create-memory-tools memory-service
+                                                            (or note-llm-provider llm-provider))
                            (memory-tool/create-message-search-tool memory-service))))
 
        (and store (not= false (:enabled todo-cfg)))

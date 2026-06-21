@@ -1,9 +1,11 @@
 (ns agent.tools.common.memory-test
   (:require
+   [agent.llm.core :as llm-core]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.tools.common.memory :as memory-tool]
    [agent.tools.core :as tools]
+   [cheshire.core :as json]
    [clojure.java.io :as io]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]))
@@ -27,6 +29,25 @@
           (tools/create-registry)
           (conj (memory-tool/create-memory-tools service)
                 (memory-tool/create-message-search-tool service))))
+
+(defrecord NoteProvider [responses requests]
+  llm-core/ILLMProvider
+  (complete [_ _ _] "")
+  (stream [_ _ _] nil)
+  (embed [_ _ _] [])
+  (list-models [_] [])
+  (get-capabilities [_ _] {:supports-tools true})
+  (estimate-cost [_ _ _] {:tokens 1 :cost-usd 0.0})
+  llm-core/ILLMProviderInvoke
+  (invoke [_ request]
+    (swap! requests conj request)
+    {:role "assistant"
+     :content (first (first (swap-vals! responses rest)))
+     :tool-calls []
+     :usage nil
+     :raw nil})
+  (generate [this messages opts]
+    (llm-core/invoke this (assoc opts :messages messages))))
 
 (deftest memory-tool-recall-uses-vault-notes-and-ignores-prompt-files-test
   (let [path (temp-db-path)
@@ -81,6 +102,54 @@
       (finally
         (io/delete-file path true)
         (io/delete-file root true)))))
+
+(deftest memory-extract-session-tool-writes-candidate-notes-test
+  (let [path (temp-db-path)
+        root (temp-dir "iris-memory-extract-tool")
+        store (sqlite/create-store {:path path})
+        session (sqlite/create-session! store "memory-extract")
+        service (memory/create-memory-service
+                 {:search {:default-limit 10}
+                  :vault {:paths [(.getAbsolutePath root)]
+                          :writable? true}
+                  :notes {:extractor {:enabled true}
+                          :default-scope :session}}
+                 store)
+        responses (atom [(json/generate-string
+                          {:notes [{:type "Decision"
+                                    :title "Manual memory extraction"
+                                    :description "Memory extraction is explicit."
+                                    :body "Memory extraction runs from an explicit session command, not every chat turn."
+                                    :tags ["memory"]
+                                    :scope "session"
+                                    :confidence 0.92}]})])
+        requests (atom [])
+        provider (->NoteProvider responses requests)
+        registry* (reduce tools/register-tool
+                          (tools/create-registry)
+                          (conj (memory-tool/create-memory-tools service provider)
+                                (memory-tool/create-message-search-tool service)))]
+    (try
+      (let [user (sqlite/append-message! store (:id session) "user" "Do memory only on explicit request")
+            assistant (sqlite/append-message! store (:id session) "assistant" "Noted")
+            result (tools/execute-tool registry*
+                                       :memory_extract_session
+                                       {:limit 20}
+                                       {:permissions #{:memory-write}
+                                        :session-id (:id session)
+                                        :request-id "req-memory"})]
+        (is (str/includes? result "Candidate notes: 1"))
+        (is (= 1 (count @requests)))
+        (is (= 1 (sqlite/count-vault-notes store)))
+        (let [note (first (sqlite/list-vault-notes store))
+              content (slurp (:path note))]
+          (is (str/includes? content "Manual memory extraction"))
+          (is (str/includes? content (str "message_id: \"" (:id user) "\"")))
+          (is (str/includes? content (str "message_id: \"" (:id assistant) "\"")))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file path true)))))
 
 (deftest memory-tool-recall-clamps-requested-limit-test
   (let [path (temp-db-path)

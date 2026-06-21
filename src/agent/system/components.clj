@@ -81,7 +81,9 @@
        :system-control (:system-control system)
        :observer (:observer system)
        :trace (:trace system)
-       :magi-service (:magi-service system)})))
+       :magi-service (:magi-service system)
+       :llm-provider (:llm-provider system)
+       :note-llm-provider (:note-llm-provider system)})))
 
 (defn attach-telegram-service
   "Create the Telegram adapter and channel-adapter registry for `system`.

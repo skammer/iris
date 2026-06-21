@@ -65,10 +65,12 @@
 	                            :vault_search
                             :scratchpad_read :scratchpad_search
                             :scratchpad_replace
+                            :memory_extract_session
 	                            :message_search :shell :system_reload
                             :todo_write :todo_get :todo_list :todo_search]))
     (is (= ["Telegram"] (mapv :display-name adapters)))
-    (is (= ["memory-vault"] (mapv :name (skills/list-skills (:skills-registry system)))))
+    (is (every? (set (mapv :name (skills/list-skills (:skills-registry system))))
+                ["memory-vault" "dream" "distill"]))
 	    (is (= 2 (count (memory/list-surfaces system))))
     (is (false? (get-in system-health [:logging :enabled])))
     (is (= :local (get-in system-health [:broker :backend])))

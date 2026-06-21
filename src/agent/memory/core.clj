@@ -1,13 +1,14 @@
 (ns agent.memory.core
   "Memory service facade. Reads vault
    files from bounded roots, recalls relevant context for chat, and extracts
-   candidate vault notes from completed turns."
+   candidate vault notes from explicit memory consolidation runs."
   (:require
    [agent.llm.core :as llm]
    [agent.memory.scratchpad :as scratchpad]
    [agent.memory.vault :as vault]
    [agent.persistence.sqlite :as sqlite]
    [agent.prompts :as prompts]
+   [agent.util :as util]
    [cheshire.core :as json]
    [clojure.java.io :as io]
    [clojure.set :as set]
@@ -18,6 +19,10 @@
 (def default-embedding-candidate-limit 1000)
 (def default-low-confidence-threshold 0.6)
 (def default-stale-days 180)
+(def default-session-extract-limit 80)
+(def max-session-extract-limit 200)
+(def session-extract-message-chars 1200)
+(def session-extract-transcript-chars 20000)
 (def ^:private allowed-vault-statuses #{"candidate" "approved" "auto_session" "rejected" "superseded"})
 (def ^:private allowed-vault-scopes #{"global" "session" "agent" "project"})
 (def ^:private allowed-vault-move-roots #{"inbox" "preferences" "decisions" "projects"
@@ -573,12 +578,11 @@
     (:source-request-id opts) (assoc :request-id (:source-request-id opts))))
 
 (defn- note-origins [opts]
-  (let [[user-message-id assistant-message-id] (:source-message-ids opts)]
-    (cond-> [{:type "extraction"
-              :session-id (:session-id opts)
-              :request-id (:source-request-id opts)}]
-      user-message-id (conj (note-origin opts user-message-id))
-      assistant-message-id (conj (note-origin opts assistant-message-id)))))
+  (into [{:type "extraction"
+          :session-id (:session-id opts)
+          :request-id (:source-request-id opts)}]
+        (map #(note-origin opts %))
+        (:source-message-ids opts)))
 
 (defn- note-scope [memory-service note]
   (let [scope (or (:scope note)
@@ -627,6 +631,56 @@
                               :request-id (:source-request-id opts)
                               :payload {:message (.getMessage e)}})
           [])))))
+
+(defn- extraction-limit [value]
+  (min max-session-extract-limit
+       (positive-limit value default-session-extract-limit)))
+
+(defn- message-transcript-line [{:keys [id role content]}]
+  (str "[" id "] " role ": "
+       (util/truncate content
+                      session-extract-message-chars
+                      #(str " [truncated " % " chars]"))))
+
+(defn- session-transcript [memory-service session-id limit]
+  (let [messages (sqlite/list-messages (:store memory-service) session-id)
+        selected (take-last (extraction-limit limit) messages)
+        transcript (-> (str/join "\n\n" (map message-transcript-line selected))
+                       (util/truncate session-extract-transcript-chars
+                                      #(str "\n\n[transcript truncated " % " chars]")))]
+    {:session-id session-id
+     :total-message-count (count messages)
+     :included-message-count (count selected)
+     :messages (vec selected)
+     :transcript transcript}))
+
+(defn extract-session-and-save-notes!
+  "Manual memory consolidation entry point. Scans a bounded session transcript
+   and writes durable findings as candidate vault notes."
+  [memory-service provider {:keys [session-id limit request-id model]}]
+  (when (str/blank? (or session-id ""))
+    (throw (ex-info "session-id is required" {:type :validation-failed})))
+  (when-not provider
+    (throw (ex-info "Memory note extractor provider is not configured"
+                    {:type :memory-extractor-provider-missing})))
+  (let [{:keys [messages transcript] :as source} (session-transcript memory-service session-id limit)]
+    (if (empty? messages)
+      (assoc (dissoc source :messages :transcript)
+             :note-count 0
+             :paths [])
+      (let [saved (extract-and-save-notes!
+                   memory-service
+                   provider
+                   {:user-message transcript
+                    :assistant-message "Manual end-of-dialogue memory consolidation."}
+                   {:session-id session-id
+                    :source-session-id session-id
+                    :source-message-ids (mapv #(str (:id %)) messages)
+                    :source-request-id request-id
+                    :model model})]
+        (assoc (dissoc source :messages :transcript)
+               :note-count (count saved)
+               :paths (mapv :path saved))))))
 
 (defn record-recall-latency!
   [memory-service latency-ms]

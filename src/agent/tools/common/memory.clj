@@ -10,6 +10,7 @@
 (def ^:private max-line-chars 600)
 (def ^:private max-vault-chars 8000)
 (def ^:private max-message-chars 800)
+(def ^:private max-extract-session-limit 200)
 
 (def ^:private scope-schema
   [:map {:closed true}
@@ -42,6 +43,9 @@
   (if (and (integer? value) (pos? value))
     value
     fallback))
+
+(defn- extract-session-limit [requested]
+  (min (positive-int requested 80) max-extract-session-limit))
 
 (defn- memory-tool-limit [memory-service requested]
   (min (positive-int requested (or (:search-default-limit memory-service) 10))
@@ -275,12 +279,49 @@
                                      scope (assoc :scope scope)
                                      (:session-id context) (assoc :session-id (:session-id context))))))}))
 
-(defn create-memory-tools [memory-service]
-  [(create-memory-recall-tool memory-service)
-   (create-vault-search-tool memory-service)
-   (create-scratchpad-read-tool memory-service)
-   (create-scratchpad-search-tool memory-service)
-   (create-scratchpad-replace-tool memory-service)])
+(defn- extract-session-text [{:keys [session-id total-message-count included-message-count note-count paths]}]
+  (str "Memory extraction complete for session " session-id
+       ". Messages scanned: " included-message-count "/" total-message-count
+       ". Candidate notes: " note-count
+       (when (seq paths)
+         (str "\n" (str/join "\n" (map #(str "- " %) paths))))))
+
+(defn create-memory-extract-session-tool [memory-service provider]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :memory_extract_session
+     "Explicitly extract durable candidate memory notes from a completed session transcript."
+     :category :memory
+     :input-schema [:map {:closed true}
+                    [:session-id {:optional true} [:maybe :string]]
+                    [:limit {:optional true} [:maybe :int]]
+                    [:request-id {:optional true} [:maybe :string]]
+                    [:model {:optional true} [:maybe :string]]]
+     :operation :act
+     :approval-sensitive? false
+     :source :builtin)
+    :execute-fn
+    (fn [{:keys [session-id limit request-id model]} context]
+      (ensure-permission! context :memory-write)
+      (extract-session-text
+       (memory/extract-session-and-save-notes!
+        memory-service
+        provider
+         {:session-id (or session-id (:session-id context))
+          :limit (extract-session-limit limit)
+          :request-id (or request-id (:request-id context))
+         :model model})))}))
+
+(defn create-memory-tools
+  ([memory-service] (create-memory-tools memory-service nil))
+  ([memory-service provider]
+   (cond-> [(create-memory-recall-tool memory-service)
+            (create-vault-search-tool memory-service)
+            (create-scratchpad-read-tool memory-service)
+            (create-scratchpad-search-tool memory-service)
+            (create-scratchpad-replace-tool memory-service)]
+     provider (conj (create-memory-extract-session-tool memory-service provider)))))
 
 (defn- message-search-text [query rows]
   (if (empty? rows)
