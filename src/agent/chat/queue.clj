@@ -95,9 +95,22 @@
         result*)
       (catch Throwable t
         (reset! terminal-reason :error)
-        (when result
-          (deliver result {:error t}))
-        (throw t))
+        (if (and cancelled? @cancelled?)
+          (let [result* (service/stopped-result request-id)]
+            (reset! terminal-reason :cancel)
+            (when-let [session-id (:session-id opts)]
+              (history/append-message! system
+                                       session-id
+                                       "assistant"
+                                       service/stopped-content
+                                       {:metadata {:request-id request-id}}))
+            (when result
+              (deliver result {:result result*}))
+            result*)
+          (do
+            (when result
+              (deliver result {:error t}))
+            (throw t))))
       (finally
         (start-next-queued! system (:session-id opts) request-id @terminal-reason)))))
 

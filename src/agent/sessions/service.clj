@@ -34,6 +34,17 @@
                      :available-modes (prompts/list-modes)})))
   (sqlite/set-session-active-mode! (:store system) session-id mode))
 
+(defn set-title-if-blank!
+  [system session-id title]
+  (let [session (sqlite/set-session-title-if-blank! (:store system) session-id title)]
+    (when (= title (:title session))
+      (events/log-event! system
+                         {:event-type :session.title.updated
+                          :entity-type :session
+                          :entity-id session-id
+                          :payload {:title title}}))
+    session))
+
 (defn session-exists?
   [system session-id]
   (sqlite/session-exists? (:store system) session-id))

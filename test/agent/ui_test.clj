@@ -77,7 +77,8 @@
         (is (str/includes? html "selector: &apos;#create-session-form&apos;"))
         (is (str/includes? html "evt.detail.el === el")
             "datastar-fetch fires on document for every fetch; detail.el is the only correct initiator guard")
-        (is (str/includes? html "el.reset()")))
+        (is (str/includes? html "el.reset()"))
+        (is (not (str/includes? html "new session title"))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))

@@ -22,6 +22,12 @@ update sessions
 set active_mode = :active_mode
 where id = :id
 
+-- :name update-session-title :! :n
+update sessions
+set title = :title
+where id = :id
+  and (title is null or trim(title) = '')
+
 -- :name session-exists :? :1
 select 1 as present
 from sessions

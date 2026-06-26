@@ -164,9 +164,8 @@
                                                   {:active active
                                                    :queued (vec queue)
                                                    :loop-worker loop-worker}))]
-      (when-let [{:keys [cancelled? future]} active]
-        (reset! cancelled? true)
-        (when future (.cancel future true)))
+      (when-let [{:keys [cancelled?]} active]
+        (reset! cancelled? true))
       (when loop-worker
         (.cancel loop-worker true))
       (doseq [item queued]

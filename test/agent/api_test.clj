@@ -789,7 +789,7 @@
         (is (= 201 (:status created)))
         (is (= 200 (:status ui-created)))
         (is (str/includes? (:body ui-created) "datastar-patch-elements"))
-        (is (str/includes? (:body ui-created) "ui-test"))
+        (is (str/includes? (:body ui-created) "Untitled session"))
         (is (str/includes? (:body ui-created) "session-link--active"))
         (is (str/includes? (:body ui-created) "/ui/session/live?session_id="))
         (is (= 200 (:status session-detail)))

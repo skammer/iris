@@ -9,6 +9,7 @@
    [agent.chat.service :as service]
    [agent.chat.streaming :as chat-streaming]
    [agent.chat.subscribers :as subscribers]
+   [agent.chat.title :as chat-title]
    [agent.chat.util :as chat-util]
    [agent.config :as config]
    [agent.defaults :as defaults]
@@ -331,6 +332,7 @@
                                                             {:event-sink event-sink
                                                              :ops ops
                                                              :on-thinking-delta on-thinking-delta}))]
+        (chat-title/maybe-generate-title! system session-id request-id)
         (assoc result :stream? (boolean (or stream? on-delta))))
       (finally
         ((:flush! flusher))))))

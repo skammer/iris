@@ -143,6 +143,17 @@
                          :active_mode mode}))))
   (get-session store session-id))
 
+(defn set-session-title-if-blank!
+  [store session-id title]
+  (common/with-connection
+    store
+    (fn [conn]
+      (common/execute! conn
+                       (update-session-title-sqlvec
+                        {:id session-id
+                         :title title}))))
+  (get-session store session-id))
+
 (defn session-exists? [store session-id]
   (common/with-connection
     store

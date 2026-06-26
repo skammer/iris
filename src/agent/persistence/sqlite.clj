@@ -91,6 +91,9 @@
 (defn set-session-active-mode! [store session-id mode]
   (sessions/set-session-active-mode! store session-id mode))
 
+(defn set-session-title-if-blank! [store session-id title]
+  (sessions/set-session-title-if-blank! store session-id title))
+
 (defn session-exists? [store session-id]
   (sessions/session-exists? store session-id))
 

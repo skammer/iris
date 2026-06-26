@@ -307,7 +307,6 @@
          "data-on:datastar-fetch" "evt.detail.el === el && evt.detail.type === 'finished' && el.reset()"
          "data-indicator" "createSessionLoading"}
         [:div.compact-form-row
-         [:input {:type "text" :name "title" :placeholder "new session title"}]
          [:button {:type "submit"
                    "data-attr:disabled" "$createSessionLoading"}
           "New"]]]

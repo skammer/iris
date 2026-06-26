@@ -88,6 +88,46 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest run-turn-generates-title-for-blank-session-test
+  (let [path (harness/temp-db-path)
+        responses (atom ["done" "Debugging auth 500"])
+        requests (atom [])
+        provider (chat-test/->PlannerProvider responses requests)
+        system (test-system path provider no-extractor)
+        session (sessions/create-session! system nil)]
+    (try
+      (let [result (turn/run-turn! system {:session-id (:id session)
+                                           :messages [{:role "user" :content "debug auth 500"}]})
+            updated (sqlite/get-session (:store system) (:id session))
+            title-request (second (invoke-requests @requests))
+            events (session-events system (:id session))]
+        (is (= "done" (:content result)))
+        (is (= "Debugging auth 500" (:title updated)))
+        (is (= 2 (count (invoke-requests @requests))))
+        (is (true? (get-in title-request [:request :metadata :chat-title])))
+        (is (ordered-subseq? ["session.created" "agent-start" "turn-start"
+                              "message-start" "turn-end" "message-end"
+                              "agent-end" "session.title.updated"]
+                             (mapv :event-type events))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest run-turn-keeps-explicit-session-title-test
+  (let [path (harness/temp-db-path)
+        responses (atom ["done"])
+        requests (atom [])
+        provider (chat-test/->PlannerProvider responses requests)
+        system (test-system path provider no-extractor)
+        session (sessions/create-session! system "Manual title")]
+    (try
+      (turn/run-turn! system {:session-id (:id session)
+                              :messages [{:role "user" :content "debug auth 500"}]})
+      (is (= "Manual title"
+             (:title (sqlite/get-session (:store system) (:id session)))))
+      (is (= 1 (count (invoke-requests @requests))))
+      (finally
+        (io/delete-file path true)))))
+
 (deftest run-turn-threads-request-id-through-persistence-and-events-test
   (let [path (harness/temp-db-path)
         responses (atom ["done"])

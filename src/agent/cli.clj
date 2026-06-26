@@ -12,8 +12,6 @@
    [agent.system :as system]
    [clojure.string :as str]))
 
-(def session-title-max-chars 80)
-
 (def ^:dynamic *add-shutdown-hook!*
   (fn [^Thread hook]
     (.addShutdownHook (Runtime/getRuntime) hook)))
@@ -108,13 +106,6 @@
             (recur (next remaining) (assoc parsed :command arg))
             (recur (next remaining) (update parsed :prompt-parts conj arg))))))))
 
-(defn- prompt-title [prompt]
-  (let [title (some-> prompt str/split-lines first str/trim)]
-    (when-not (str/blank? title)
-      (if (> (count title) session-title-max-chars)
-        (str (subs title 0 (- session-title-max-chars 3)) "...")
-        title))))
-
 (defn- find-session [sessions value]
   (let [exact (filter #(= value (:id %)) sessions)
         prefix (filter #(str/starts-with? (:id %) value) sessions)]
@@ -161,8 +152,8 @@
                     {:type :invalid-cli-session
                      :session-id session-id}))))
 
-(defn- new-session-id [system prompt]
-  (:id (sessions/create-session! system (prompt-title prompt))))
+(defn- new-session-id [system _prompt]
+  (:id (sessions/create-session! system nil)))
 
 (defn- session-id-for-prompt [system {:keys [continue? no-session? resume? session-id]} prompt]
   (let [sessions (delay (sessions/list-sessions system))]

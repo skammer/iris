@@ -84,9 +84,8 @@
                                                  (-> request :parameters :query :session_id))))
 
 (defn create-session [system request]
-  (let [body (h/read-form-body request)
-        title (:title body)
-        session (session-service/create-session! system (not-empty title))]
+  (h/read-form-body request)
+  (let [session (session-service/create-session! system nil)]
 	    (streaming/once-response
 	     request
          {:metrics (:sse-metrics system)}
@@ -117,6 +116,7 @@
        (= session-id (:entity-id event))
        (or (contains? #{"message.updated"
                         "session.created"
+                        "session.title.updated"
                         "session-state-changed"
                         "turn-queued"}
                       (:event-type event))
@@ -152,6 +152,15 @@
          (or (:final? payload)
              (:tool-turn? payload)))))
 
+(defn- title-updated-event? [event session-id]
+  (and (= "session" (:entity-type event))
+       (= session-id (:entity-id event))
+       (= "session.title.updated" (:event-type event))))
+
+(defn- session-shell-fragments [system session-id]
+  (str (ui/sessions-fragment system session-id)
+       (ui/session-detail-fragment system session-id)))
+
 (defn session-live-response
   [system request]
   (let [session-id (-> request :parameters :query :session_id)
@@ -174,8 +183,11 @@
          (loop []
            (when-let [event (some-> (streaming/take! ctx ch) :payload)]
              (when (relevant-session-event? event session-id)
-               (streaming/send-datastar-patch! ctx
-                                               (ui/session-messages-fragment system session-id)))
+               (streaming/send-datastar-patch!
+                ctx
+                (if (title-updated-event? event session-id)
+                  (session-shell-fragments system session-id)
+                  (ui/session-messages-fragment system session-id))))
             (recur))))))))
 
 (defn chat-action [system request]
@@ -279,6 +291,11 @@
                        (do
                          (reset! streaming-state {})
                          (push-final!))
+
+                       (title-updated-event? event session_id)
+                       (streaming/send-datastar-patch!
+                        ctx
+                        (session-shell-fragments system session_id))
 
                        (relevant-session-event? event session_id)
                        (push!))

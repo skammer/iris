@@ -87,6 +87,25 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest sqlite-session-title-update-only-when-blank-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        blank-session (sqlite/create-session! store nil)
+        titled-session (sqlite/create-session! store "Manual")]
+    (try
+      (is (= "Generated"
+             (:title (sqlite/set-session-title-if-blank!
+                      store
+                      (:id blank-session)
+                      "Generated"))))
+      (is (= "Manual"
+             (:title (sqlite/set-session-title-if-blank!
+                      store
+                      (:id titled-session)
+                      "Generated"))))
+      (finally
+        (io/delete-file path true)))))
+
 (deftest sqlite-session-list-follows-latest-message-test
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})

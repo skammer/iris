@@ -158,7 +158,7 @@
       (is (= "streamed\n"
              (with-out-str
                (cli/main ["-p" "first" "prompt"]))))
-      (is (= [[:create "first prompt"]
+      (is (= [[:create nil]
               [:complete [{:role "user" :content "first prompt"}] "new-session"]]
              @calls)))))
 
