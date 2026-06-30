@@ -42,7 +42,9 @@
    [agent.ui-test]
    [agent.ui.render-test]
    [agent.tools.common.fs-test]
+   [agent.tools.common.homeassistant-test]
    [agent.tools.common.memory-test]
+   [agent.tools.common.skills-test]
    [agent.llm.registry-test]
    [agent.llm.providers.ollama-test]
    [agent.llm.core-test]
@@ -98,7 +100,9 @@
     agent.ui-test
     agent.ui.render-test
     agent.tools.common.fs-test
+    agent.tools.common.homeassistant-test
     agent.tools.common.memory-test
+    agent.tools.common.skills-test
     agent.llm.registry-test
     agent.llm.providers.ollama-test
     agent.llm.core-test

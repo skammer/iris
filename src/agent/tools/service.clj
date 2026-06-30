@@ -11,10 +11,12 @@
    [agent.telemetry.observer :as telemetry-observer]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.common.fs :as fs-tool]
+   [agent.tools.common.homeassistant :as homeassistant-tool]
    [agent.tools.common.http :as http-tool]
    [agent.tools.common.magi :as magi-tool]
    [agent.tools.common.memory :as memory-tool]
    [agent.tools.common.shell :as shell-tool]
+   [agent.tools.common.skills :as skills-tool]
    [agent.tools.common.telegram :as telegram-tool]
    [agent.tools.common.todo :as todo-tool]
    [agent.tools.core :as tools]
@@ -143,12 +145,13 @@
 (defn create-tool-registry
   "Build the production tool registry from a dependency map:
    {:cfg <:tools config> :event-sink :store :telemetry :memory-service
-    :channel-adapters-cfg :system-control :observer :trace}"
-  [{:keys [cfg event-sink store memory-service channel-adapters-cfg
+    :skills-registry :channel-adapters-cfg :system-control :observer :trace}"
+  [{:keys [cfg event-sink store memory-service skills-registry channel-adapters-cfg
            system-control observer trace magi-service note-llm-provider llm-provider]
     telemetry-collector :telemetry}]
    (let [http-cfg (get cfg :http)
          fs-cfg (get cfg :fs)
+         homeassistant-cfg (get cfg :homeassistant)
          shell-cfg (get cfg :shell)
          todo-cfg (get cfg :todo)
          mcp-cfg (get cfg :mcp)
@@ -197,6 +200,12 @@
              (reduce tools/register-tool
                      registry*
                      (fs-tool/create-fs-tools (fs-cfg-with-vault-roots fs-cfg memory-service))))
+
+       (true? (:enabled homeassistant-cfg))
+       (tools/register-tool (homeassistant-tool/create-homeassistant-tool homeassistant-cfg))
+
+       skills-registry
+       (tools/register-tool (skills-tool/create-skills-list-tool skills-registry))
 
        memory-service
        (as-> registry*

@@ -13,6 +13,7 @@
   [tool-name _input]
   (case tool-name
     :shell true
+    :homeassistant (= :call_service (some-> (:action _input) keyword))
     (:fs_write :fs_create :fs_replace :fs_delete :fs_mkdir) true
     false))
 
@@ -20,6 +21,7 @@
   [tool-name _input]
   (case tool-name
     :shell #{:shell-exec}
+    :homeassistant #{:homeassistant}
     (:fs_write :fs_create :fs_replace :fs_delete :fs_mkdir) #{:filesystem-write}
     (:fs_read :fs_list) #{:filesystem-read}
     #{}))

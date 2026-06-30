@@ -77,6 +77,7 @@
        :store (:store system)
        :telemetry (:telemetry system)
        :memory-service (:memory-service system)
+       :skills-registry (:skills-registry system)
        :channel-adapters-cfg (:channel-adapters cfg)
        :system-control (:system-control system)
        :observer (:observer system)

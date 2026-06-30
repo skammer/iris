@@ -129,10 +129,10 @@
                 :default-headers {"User-Agent" "iris/0.1"}}
          :yolo? false
          :max-parallelism 6
-         :permissions {:api [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate]
-                       :ui [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate]
-                       :agent [:http-request :memory-read :memory-write :todo-read :todo-write :magi-evaluate]
-                       :chat [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec :magi-evaluate]}
+         :permissions {:api [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant]
+                       :ui [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant]
+                       :agent [:http-request :memory-read :memory-write :todo-read :todo-write :magi-evaluate :homeassistant]
+                       :chat [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec :magi-evaluate :homeassistant]}
          :policy {:allowlist []
                   :blocklist []
                   :tool-scopes {}}
@@ -141,6 +141,12 @@
               :roots ["."]
               :max-read-bytes 1048576
               :max-write-bytes 1048576}
+         :homeassistant {:enabled false
+                         :base-url nil
+                         :token nil
+                         :timeout-ms 10000
+                         :allowed-domains #{:light :switch :scene :script}
+                         :global-services #{}}
          :todo {:enabled true}
          :shell {:enabled true
                  :roots ["."]

@@ -3,7 +3,7 @@
    [agent.skills :as skills]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defn temp-dir []
   (let [dir (java.nio.file.Files/createTempDirectory "iris-skills-" (make-array java.nio.file.attribute.FileAttribute 0))]
@@ -124,3 +124,12 @@
       (io/delete-file (io/file child "SKILL.md") true)
       (.delete child))
     (.delete root)))
+
+(deftest bundled-iris-tools-skill-test
+  (let [registry (skills/create-registry {:dirs ["skills"]})
+        names (set (map :name (skills/skill-catalog registry)))
+        section (skills/invoked-skills-section registry "/iris-tools")]
+    (is (contains? names "iris-tools"))
+    (is (str/includes? section "### /iris-tools"))
+    (is (str/includes? section "MAGI is for independent judgment"))
+    (is (str/includes? section "scratchpad_replace"))))

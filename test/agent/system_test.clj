@@ -63,11 +63,11 @@
 	                            :fs_delete :fs_mkdir :http
 	                            :memory_recall
 	                            :vault_search
-                            :scratchpad_read :scratchpad_search
-                            :scratchpad_replace
-                            :memory_extract_session
-	                            :message_search :shell :system_reload
-                            :todo_write :todo_get :todo_list :todo_search]))
+	                            :scratchpad_read :scratchpad_search
+	                            :scratchpad_replace
+	                            :memory_extract_session
+	                            :message_search :skills_list :shell :system_reload
+	                            :todo_write :todo_get :todo_list :todo_search]))
     (is (= ["Telegram"] (mapv :display-name adapters)))
     (is (every? (set (mapv :name (skills/list-skills (:skills-registry system))))
                 ["memory-vault" "dream" "distill"]))

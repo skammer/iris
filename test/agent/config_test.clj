@@ -83,15 +83,22 @@
 	      (is (not (contains? (get-in cfg [:chat :guardrails :doom-loop]) :action)))
       (is (false? (get-in cfg [:tools :yolo?])))
       (is (= 6 (get-in cfg [:tools :max-parallelism])))
-      (is (= [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate]
+      (is (= [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant]
              (get-in cfg [:tools :permissions :api])))
-      (is (= [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec :magi-evaluate]
+      (is (= [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec :magi-evaluate :homeassistant]
              (get-in cfg [:tools :permissions :chat])))
       (is (= {:allowlist []
               :blocklist []
               :tool-scopes {}}
              (get-in cfg [:tools :policy])))
       (is (= 900 (get-in cfg [:tools :approvals :ttl-seconds])))
+      (is (= {:enabled false
+              :base-url nil
+              :token nil
+              :timeout-ms 10000
+              :allowed-domains #{:light :switch :scene :script}
+              :global-services #{}}
+             (get-in cfg [:tools :homeassistant])))
       (is (= {:enabled? false
               :mode :assistive
               :fallback :human
@@ -193,6 +200,22 @@
   (with-isolated-config [_root {"AGENT_TOOLS_MAX_PARALLELISM" "4"}]
     (let [cfg (config/load-config)]
       (is (= 4 (get-in cfg [:tools :max-parallelism]))))))
+
+(deftest homeassistant-env-overrides-test
+  (with-isolated-config [_root {"AGENT_HOMEASSISTANT_ENABLED" "true"
+                                "AGENT_HOMEASSISTANT_BASE_URL" "http://ha.local:8123"
+                                "AGENT_HOMEASSISTANT_TOKEN" "ha-token"
+                                "AGENT_HOMEASSISTANT_TIMEOUT_MS" "7000"
+                                "AGENT_HOMEASSISTANT_ALLOWED_DOMAINS" "light,switch"
+                                "AGENT_HOMEASSISTANT_GLOBAL_SERVICES" "scene.reload"}]
+    (let [cfg (config/load-config)]
+      (is (= {:enabled true
+              :base-url "http://ha.local:8123"
+              :token "ha-token"
+              :timeout-ms 7000
+              :allowed-domains [:light :switch]
+              :global-services ["scene.reload"]}
+             (get-in cfg [:tools :homeassistant]))))))
 
 (deftest magi-env-overrides-test
   (with-isolated-config [_root {"AGENT_MAGI_ENABLED" "true"
@@ -324,7 +347,11 @@
       (doseq [name config/template-file-names]
         (is (not (.exists (io/file dir name)))))
       (is (re-find #"Agent-specific instructions"
-                   (get-in cfg [:iris :contexts "AGENTS.md"]))))))
+                   (get-in cfg [:iris :contexts "AGENTS.md"])))
+      (is (re-find #"Runtime operating rules for Iris agents"
+                   (get-in cfg [:iris :contexts "BOOT.md"])))
+      (is (re-find #"Tool-use policy for Iris agents"
+                   (get-in cfg [:iris :contexts "TOOLS.md"]))))))
 
 (deftest init-config-files-test
   (with-isolated-config [root {}]

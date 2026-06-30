@@ -166,6 +166,12 @@
    {:names "AGENT_OTEL_PUBLISH_DELAY_MS" :parse parse-long* :apply (assoc-path [:logging :otel :publish-delay])}
    {:names "AGENT_OTEL_MAX_ITEMS" :parse parse-long* :apply (assoc-path [:logging :otel :max-items])}
    {:names "AGENT_TOOLS_YOLO" :parse parse-bool :apply (assoc-path [:tools :yolo?])}
+   {:names "AGENT_HOMEASSISTANT_ENABLED" :parse parse-bool :apply (assoc-path [:tools :homeassistant :enabled])}
+   {:names "AGENT_HOMEASSISTANT_BASE_URL" :apply (assoc-path [:tools :homeassistant :base-url])}
+   {:names "AGENT_HOMEASSISTANT_TOKEN" :apply (assoc-path [:tools :homeassistant :token])}
+   {:names "AGENT_HOMEASSISTANT_TIMEOUT_MS" :parse parse-long* :apply (assoc-path [:tools :homeassistant :timeout-ms])}
+   {:names "AGENT_HOMEASSISTANT_ALLOWED_DOMAINS" :parse parse-keyword-csv :apply (assoc-path [:tools :homeassistant :allowed-domains])}
+   {:names "AGENT_HOMEASSISTANT_GLOBAL_SERVICES" :parse parse-csv :apply (assoc-path [:tools :homeassistant :global-services])}
    {:names "AGENT_MCP_ENABLED" :parse parse-bool :apply (assoc-path [:tools :mcp :enabled])}
    {:names "AGENT_TOOL_ALLOWLIST" :parse parse-keyword-csv :apply (assoc-path [:tools :policy :allowlist])}
    {:names "AGENT_TOOL_BLOCKLIST" :parse parse-keyword-csv :apply (assoc-path [:tools :policy :blocklist])}
