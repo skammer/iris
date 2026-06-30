@@ -1,8 +1,9 @@
 (ns agent.runtime.trace-test
   (:require
+   [agent.logging :as logging]
    [agent.runtime.trace :as trace]
    [clojure.java.io :as io]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defn- temp-dir []
   (.toFile (java.nio.file.Files/createTempDirectory
@@ -17,6 +18,31 @@
       (trace/record-event! runtime-trace {:event-type :llm.call
                                           :payload {:model "m"}})
       (is (false? (.exists (io/file path))))
+      (finally
+        (io/delete-file dir true)))))
+
+(deftest otel-export-does-not-require-local-trace-file
+  (let [dir (temp-dir)
+        path (str (io/file dir "trace.jsonl"))
+        runtime-trace (trace/create-trace {:mode :none :path path} (.getPath dir))
+        spans (atom [])]
+    (try
+      (with-redefs [logging/otel-traces-enabled? (constantly true)
+                    logging/span! (fn [event-name attrs opts]
+                                    (swap! spans conj {:event-name event-name
+                                                       :attrs attrs
+                                                       :opts opts}))]
+        (trace/record-event! runtime-trace {:event-type :llm.call
+                                            :turn-id "11111111-2222-3333-4444-555555555555"
+                                            :provider :openrouter
+                                            :model "model"
+                                            :success true
+                                            :payload {:duration-ms 42
+                                                      :messages ["secret"]}}))
+      (is (false? (.exists (io/file path))))
+      (is (= :agent.trace/llm.call (-> @spans first :event-name)))
+      (is (= 42 (-> @spans first :opts :duration-ms)))
+      (is (= "[redacted]" (-> @spans first :attrs :payload :messages)))
       (finally
         (io/delete-file dir true)))))
 

@@ -290,6 +290,30 @@
         (finally
           (io/delete-file file true))))))
 
+(deftest load-config-explicit-edn-otel-config-test
+  (with-isolated-config [root {}]
+    (let [file (java.io.File/createTempFile "iris-config-" ".edn")]
+      (spit file
+            "{:logging {:otel {:enabled true
+                               :url \"http://collector:4318/\"
+                               :send [:traces]
+                               :max-items 100
+                               :publish-delay 250
+                               :http-opts {:conn-timeout 500
+                                           :socket-timeout 750}}}}")
+      (try
+        (let [cfg (config/load-config (.getAbsolutePath file))]
+          (is (true? (get-in cfg [:logging :otel :enabled])))
+          (is (= "http://collector:4318/" (get-in cfg [:logging :otel :url])))
+          (is (= [:traces] (get-in cfg [:logging :otel :send])))
+          (is (= 100 (get-in cfg [:logging :otel :max-items])))
+          (is (= 250 (get-in cfg [:logging :otel :publish-delay])))
+          (is (= {:conn-timeout 500
+                  :socket-timeout 750}
+                 (get-in cfg [:logging :otel :http-opts]))))
+        (finally
+          (io/delete-file file true))))))
+
 (deftest deepseek-provider-type-loads-with-json-object-structured-output-test
   (with-isolated-config [root {}]
     (let [file (java.io.File/createTempFile "iris-config-" ".edn")]

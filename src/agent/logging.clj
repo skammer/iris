@@ -4,7 +4,8 @@
    [clojure.java.io :as io]
    [clojure.string :as str]
    [com.brunobonacci.mulog :as mulog]
-   [com.brunobonacci.mulog.core :as mulog-core]))
+   [com.brunobonacci.mulog.core :as mulog-core]
+   [com.brunobonacci.mulog.flakes :as mulog-flakes]))
 
 (def ^:private default-path "logs/iris.log")
 (def ^:private default-max-bytes (* 10 1024 1024))
@@ -153,6 +154,39 @@
    :otel (select-keys (get-in @publisher-state [:config :otel])
                       [:enabled :url :send :publish-delay :max-items])})
 
+(defn otel-traces-enabled?
+  []
+  (let [otel (get-in @publisher-state [:config :otel])]
+    (boolean (and (:stop-fn @publisher-state)
+                  (true? (:enabled otel))
+                  (some #{:traces} (:send otel))))))
+
+(defn- canonical-attr-key [k]
+  (cond
+    (keyword? k) k
+    (string? k) (keyword k)
+    :else (keyword (str k))))
+
+(defn- attrs->safe-map [attrs]
+  (into (sorted-map)
+        (for [[k v] attrs
+              :let [k* (canonical-attr-key k)]]
+          [k*
+           (if (sensitive-key? k*)
+             "***REDACTED***"
+             (mask-sensitive v))])))
+
+(defn- uuid-trace-id [value]
+  (let [text (some-> value str (str/replace "-" "") str/lower-case)]
+    (when (and text (re-matches #"[0-9a-f]{32}" text))
+      text)))
+
+(defn- duration-nanos [duration-ms]
+  (long (* 1000000.0 (double (or duration-ms 0)))))
+
+(defn- span-timestamp-ms [duration-ms]
+  (- (System/currentTimeMillis) (long (double (or duration-ms 0)))))
+
 (defn log!
   ([event-name] (log! event-name {}))
   ([event-name attrs]
@@ -162,16 +196,30 @@
                  (apply list
                         :mulog/namespace "agent.logging"
                         (mapcat identity
-                                (into (sorted-map)
-                                      (for [[k v] attrs]
-                                        (let [k* (cond
-                                                   (keyword? k) k
-                                                   (string? k) (keyword k)
-                                                   :else (keyword (str k)))]
-                                          [k*
-                                           (if (sensitive-key? k*)
-                                             "***REDACTED***"
-                                             (mask-sensitive v))])))))))))
+                                (attrs->safe-map attrs)))))))
+
+(defn span!
+  "Emit an OTel-compatible μ/log trace span.
+  `:duration-ms` controls span duration; `:turn/id` UUID becomes OTLP traceId."
+  ([event-name attrs] (span! event-name attrs {}))
+  ([event-name attrs {:keys [duration-ms success?]}]
+   (when (enabled?)
+     (let [attrs* (attrs->safe-map attrs)
+           trace-id (mulog-flakes/flake)
+           root-trace (or (uuid-trace-id (:turn/id attrs*)) trace-id)
+           duration-ms* (or duration-ms (:duration-ms attrs*) 0)]
+       (mulog-core/log-append
+        mulog-core/*default-logger*
+        (list
+         :mulog/event-name event-name
+         :mulog/trace-id trace-id
+         :mulog/parent-trace nil
+         :mulog/root-trace root-trace
+         :mulog/duration (duration-nanos duration-ms*)
+         :mulog/timestamp (span-timestamp-ms duration-ms*)
+         :mulog/outcome (if (false? success?) :error :ok)
+         :mulog/namespace "agent.logging")
+        attrs*)))))
 
 (defn log-error!
   ([event-name error] (log-error! event-name error {}))

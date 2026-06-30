@@ -3,6 +3,7 @@
    [agent.logging :as logging]
    [clojure.java.io :as io]
    [clojure.string :as str]
+   [com.brunobonacci.mulog :as mulog]
    [clojure.test :refer [deftest is]]))
 
 (deftest start-and-write-log-file
@@ -88,4 +89,63 @@
         (io/delete-file file true)
         (io/delete-file rotated true)
         (io/delete-file (io/file dir "agent.log.2") true)
+        (io/delete-file dir true)))))
+
+(deftest otel-starts-trace-and-log-publishers
+  (let [started (atom nil)]
+    (with-redefs [mulog/start-publisher! (fn [cfg]
+                                           (reset! started cfg)
+                                           (fn [] :stopped))
+                  mulog/stop-all-publishers! (fn [] :stopped)]
+      (try
+        (logging/stop!)
+        (logging/start! {:otel {:enabled true
+                                :url "http://collector:4318/"
+                                :send [:traces :logs]}})
+        (is (logging/otel-traces-enabled?))
+        (is (= {:type :multi
+                :publishers [{:type :open-telemetry
+                              :send :traces
+                              :url "http://collector:4318/"
+                              :max-items 5000
+                              :publish-delay 5000
+                              :http-opts {:conn-timeout 2000
+                                          :socket-timeout 2000}}
+                             {:type :open-telemetry
+                              :send :logs
+                              :url "http://collector:4318/"
+                              :max-items 5000
+                              :publish-delay 5000
+                              :http-opts {:conn-timeout 2000
+                                          :socket-timeout 2000}}]}
+               @started))
+        (finally
+          (logging/stop!))))))
+
+(deftest span-writes-otel-trace-record
+  (let [dir (io/file (System/getProperty "java.io.tmpdir")
+                     (str "iris-logging-span-" (System/nanoTime)))
+        file (io/file dir "agent.log")]
+    (.mkdirs dir)
+    (try
+      (logging/stop!)
+      (logging/start! {:enabled true
+                       :file {:path (.getAbsolutePath file)}})
+      (logging/span! :agent.logging/span-test
+                     {:turn/id "11111111-2222-3333-4444-555555555555"
+                      :duration-ms 12
+                      :safe "visible"}
+                     {:duration-ms 12
+                      :success? true})
+      (Thread/sleep 250)
+      (logging/stop!)
+      (Thread/sleep 150)
+      (let [body (slurp file)]
+        (is (str/includes? body ":agent.logging/span-test"))
+        (is (str/includes? body ":mulog/duration"))
+        (is (str/includes? body ":mulog/root-trace"))
+        (is (str/includes? body "visible")))
+      (finally
+        (logging/stop!)
+        (io/delete-file file true)
         (io/delete-file dir true)))))

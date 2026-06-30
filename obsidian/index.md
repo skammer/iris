@@ -8,6 +8,7 @@
 
 ## Architecture
 - [[codebase-map]] - Full namespace map, layer diagram, flows (June 2026 review)
+- [[configuration-observability]] - Config overlay order and OTel export
 - [[session-entries-unification]] - Deferred design: single source of truth for messages
 - [[design-principles]] - Core architectural decisions
 - [[component-structure]] - Module organization

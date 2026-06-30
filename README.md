@@ -64,6 +64,22 @@ Configuration:
 - `:memory {:prompt {:paths ["MEMORY.md"]}}` uses paths relative to process cwd unless absolute paths are configured.
 - `:skills {:dirs ["skills"]}` resolves relative dirs as config-dir first, then process cwd.
 
+OpenTelemetry:
+
+- Iris uses μ/log's OTLP HTTP publisher. Supported signals: `traces`, `logs`. Real OTLP `metrics` export is not implemented by the current publisher.
+- Runtime trace events are exported to OTel traces when `logging.otel.enabled=true`, even if local JSONL trace mode is `none`.
+- EDN example:
+
+```clojure
+{:logging {:otel {:enabled true
+                  :url "http://localhost:4318/"
+                  :send [:traces]
+                  :max-items 5000
+                  :publish-delay 5000
+                  :http-opts {:conn-timeout 2000
+                              :socket-timeout 2000}}}}
+```
+
 Run rewritten tests:
 
 ```bash

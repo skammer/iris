@@ -1,6 +1,7 @@
 (ns agent.runtime.trace
   "Privacy-safe runtime JSONL trace."
   (:require
+   [agent.logging :as logging]
    [agent.util :as util]
    [cheshire.core :as json]
    [clojure.java.io :as io]
@@ -95,6 +96,46 @@
   (spit path (str line "\n") :append true)
   (restrict-file-permissions! path))
 
+(defn- runtime-event
+  [{:keys [event-type turn-id provider model channel success error-message payload]}]
+  (let [event {:id (str (UUID/randomUUID))
+               :timestamp (util/now-str)
+               :event-type (name event-type)
+               :turn-id turn-id
+               :provider provider
+               :model model
+               :channel channel
+               :success success
+               :error-message error-message
+               :payload (scrub (or payload {}))}]
+    (into {}
+          (remove (comp nil? val))
+          event)))
+
+(defn- span-event-name [event-type]
+  (keyword "agent.trace" (str event-type)))
+
+(defn- event-duration-ms [event]
+  (or (get-in event [:payload :duration-ms])
+      (get-in event [:payload :latency-ms])
+      0))
+
+(defn- export-otel-span! [event]
+  (when (logging/otel-traces-enabled?)
+    (logging/span! (span-event-name (:event-type event))
+                   (cond-> {:trace/event-id (:id event)
+                            :trace/event-type (:event-type event)
+                            :turn/id (:turn-id event)
+                            :provider (:provider event)
+                            :model (:model event)
+                            :channel (:channel event)
+                            :success (:success event)
+                            :payload (:payload event)
+                            :duration-ms (event-duration-ms event)}
+                     (:error-message event) (assoc :error/message (:error-message event)))
+                   {:duration-ms (event-duration-ms event)
+                    :success? (:success event)})))
+
 (defn- trim-rolling! [trace]
   (when (= :rolling (:mode trace))
     (let [path (:path trace)
@@ -116,24 +157,22 @@
 
 (defn record-event!
   [trace {:keys [event-type turn-id provider model channel success error-message payload]}]
-  (when (enabled? trace)
-    (locking (:lock trace)
-      (let [event {:id (str (UUID/randomUUID))
-                   :timestamp (util/now-str)
-                   :event-type (name event-type)
-                   :turn-id turn-id
-                   :provider provider
-                   :model model
-                   :channel channel
-                   :success success
-                   :error-message error-message
-                   :payload (scrub (or payload {}))}
-            event* (into {}
-                         (remove (comp nil? val))
-                         event)]
-        (append-line! (:path trace) (json/generate-string event*))
-        (trim-rolling! trace)
-        event*))))
+  (when (or (enabled? trace)
+            (logging/otel-traces-enabled?))
+    (let [event* (runtime-event {:event-type event-type
+                                 :turn-id turn-id
+                                 :provider provider
+                                 :model model
+                                 :channel channel
+                                 :success success
+                                 :error-message error-message
+                                 :payload payload})]
+      (export-otel-span! event*)
+      (when (enabled? trace)
+        (locking (:lock trace)
+          (append-line! (:path trace) (json/generate-string event*))
+          (trim-rolling! trace)))
+      event*)))
 
 (defn load-events
   ([trace] (load-events trace {}))
