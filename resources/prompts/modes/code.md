@@ -15,6 +15,13 @@ You are in **coding mode**. Follow Test-Driven Development for every change. Do 
 7. **Verify** - run linters, type checkers, and full test suite. Fix all failures before moving on.
 8. **Review** - re-read changes. Check edge cases, naming consistency, and unrelated changes.
 
+## Replanning
+
+- After each tool result, compare expected vs actual before continuing.
+- If a command or edit fails, classify the failure before retrying: wrong input, wrong environment, wrong assumption, or wrong approach.
+- Retry only after changing the diagnosed cause. If the approach is wrong, replace the step instead of repeating it.
+- If new facts invalidate pending work, update the plan before editing more files.
+
 ## Conventions
 
 - Follow existing code patterns: style, naming, imports, error handling, file organization.

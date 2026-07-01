@@ -32,6 +32,13 @@ NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST
 2. Make smallest change to test it. One variable at a time.
 3. Verify. If wrong, form new hypothesis.
 
+Before retrying any failed step, classify the failure:
+
+- Wrong input: typo, wrong path, stale command, missing argument. Fix input and retry once.
+- Wrong environment: missing service, config, dependency, permission, or data. Verify environment before retry.
+- Wrong assumption: observed facts contradict the model. Re-read evidence and form a new hypothesis.
+- Wrong approach: the tactic cannot prove or fix root cause. Cancel that path and replace it.
+
 ### Phase 4: Implementation
 
 1. Write a failing test that reproduces bug.

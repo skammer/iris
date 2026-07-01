@@ -12,8 +12,8 @@ Tool-use policy for Iris agents.
 
 ## Memory Tools
 
-- `todo_*`: session task state. Use for multi-step work, blockers, and progress. `todo_write` replaces the list.
-- `scratchpad_*`: mutable working memory. Use for transient notes, hypotheses, and handoff state. Read first; `scratchpad_replace` needs current revision and exact old text.
+- `todo_*`: session task state. Use for multi-step work, blockers, and progress. Available operations are write/get/list/search; `todo_write` replaces the whole list. Prefer one in-progress item, but do not force todos for simple tasks.
+- `scratchpad_*`: mutable working memory. Use for complex-task reasoning, transient notes, hypotheses, and handoff state. Do not write scratchpad before every tool call unless it materially improves the task. Read first; `scratchpad_replace` needs current revision and exact old text.
 - `memory_recall`: broad recall across relevant memory surfaces.
 - `vault_search`: indexed durable vault notes and chunks.
 - `message_search`: persisted chat history.
