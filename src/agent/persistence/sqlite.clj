@@ -8,6 +8,7 @@
    [agent.persistence.sqlite.memory :as memory]
    [agent.persistence.sqlite.migrations :as migrations]
    [agent.persistence.sqlite.sessions :as sessions]
+   [agent.persistence.sqlite.tasks :as tasks]
    [agent.persistence.sqlite.todos :as todos]
    [agent.persistence.sqlite.tools :as tools]
    [clojure.java.io :as io]))
@@ -144,6 +145,31 @@
 (defn log-completion! [store completion]
   (sessions/log-completion! store completion))
 
+(defn create-task! [store task]
+  (tasks/create-task! store task))
+
+(defn get-task [store task-id]
+  (tasks/get-task store task-id))
+
+(defn get-task-by-idempotency-key [store idempotency-key]
+  (tasks/get-task-by-idempotency-key store idempotency-key))
+
+(defn list-tasks
+  ([store] (tasks/list-tasks store))
+  ([store opts] (tasks/list-tasks store opts)))
+
+(defn mark-task-started! [store task-id]
+  (tasks/mark-task-started! store task-id))
+
+(defn finish-task! [store task-id result]
+  (tasks/finish-task! store task-id result))
+
+(defn cancel-task! [store task-id]
+  (tasks/cancel-task! store task-id))
+
+(defn cancel-session-tasks! [store session-id]
+  (tasks/cancel-session-tasks! store session-id))
+
 (defn get-channel-session-mapping [store source external-chat-id]
   (sessions/get-channel-session-mapping store source external-chat-id))
 
@@ -252,6 +278,7 @@
      :details {:path (:path store)
                :session-count (sessions/count-sessions store)
                :event-count (events/count-events store)
+               :task-count (tasks/count-tasks store)
                :tool-approval-count (tools/count-tool-approvals store)
 	               :vault-note-count (memory/count-vault-notes store)
 	               :vault-chunk-count (memory/count-vault-chunks store)

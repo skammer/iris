@@ -1,6 +1,7 @@
 (ns agent.api.routes
   (:require
    [agent.api.routes.chat :as chat]
+   [agent.api.routes.a2a :as a2a]
    [agent.api.routes.events :as events]
    [agent.api.routes.memory :as memory]
    [agent.api.routes.providers :as providers]
@@ -13,6 +14,7 @@
   (vec (mapcat identity
                [root/routes
                 ui/routes
+                a2a/routes
                 sessions/routes
                 chat/routes
                 providers/routes

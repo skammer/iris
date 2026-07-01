@@ -4,6 +4,7 @@
    composes middleware, and starts/stops the http-kit server."
   (:require
    [agent.api.handlers.channel-adapters :as channel-adapters]
+   [agent.api.handlers.a2a :as a2a]
    [agent.api.handlers.chat :as chat]
    [agent.api.handlers.events :as events]
    [agent.api.handlers.health :as health]
@@ -88,6 +89,12 @@
    :ui-tool-approval-run (fn [r] (ui/tool-approval-run (sys) r (path-param r :approval-id)))
 
    :public-file public/file-response
+
+   :a2a-agent-card (fn [r] (a2a/agent-card (sys) r))
+   :a2a-send-message (fn [r] (a2a/send-message (sys) r))
+   :a2a-get-task (fn [r] (a2a/get-task (sys) r (path-param r :task-id)))
+   :a2a-list-tasks (fn [r] (a2a/list-tasks (sys) r))
+   :a2a-task-operation (fn [r] (a2a/task-operation (sys) r (path-param r :task-id)))
 
    :list-sessions (fn [r] (sessions/list-sessions (sys) r))
    :create-session (fn [r] (sessions/create (sys) r))

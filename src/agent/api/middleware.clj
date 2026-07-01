@@ -58,7 +58,10 @@
   (or (str/starts-with? path "/v1/")
       (= path "/v1")
       (str/starts-with? path "/ui/")
-      (= path "/ui")))
+      (= path "/ui")
+      (str/starts-with? path "/message:")
+      (str/starts-with? path "/tasks")
+      (= path "/extendedAgentCard")))
 
 (defn- basic-token [authorization]
   (when (and authorization

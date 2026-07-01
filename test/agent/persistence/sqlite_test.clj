@@ -72,6 +72,32 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest sqlite-chat-task-flow-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        session (sqlite/create-session! store "tasks")
+        task (sqlite/create-task! store
+                                  {:session-id (:id session)
+                                   :request-id "request-1"
+                                   :idempotency-key "idem-1"
+                                   :message-id "message-1"
+                                   :prompt "work"
+                                   :request {:message {:parts [{:text "work"}]}}})]
+    (try
+      (is (= "TASK_STATE_SUBMITTED" (:status task)))
+      (is (= (:id task) (:id (sqlite/get-task-by-idempotency-key store "idem-1"))))
+      (is (= "TASK_STATE_WORKING" (:status (sqlite/mark-task-started! store (:id task)))))
+      (is (= "TASK_STATE_COMPLETED"
+             (:status (sqlite/finish-task! store
+                                           (:id task)
+                                           {:status "TASK_STATE_COMPLETED"
+                                            :result {:content "done"}}))))
+      (is (= "done" (get-in (sqlite/get-task store (:id task)) [:result :content])))
+      (is (= 1 (count (sqlite/list-tasks store {:session-id (:id session)}))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest sqlite-session-active-mode-flow-test
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})

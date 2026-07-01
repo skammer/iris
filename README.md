@@ -80,6 +80,45 @@ OpenTelemetry:
                               :socket-timeout 2000}}}}
 ```
 
+Async HTTP tasks:
+
+- Iris exposes a minimal A2A HTTP+JSON task API for webhook-style callers.
+- Discovery: `GET /.well-known/agent-card.json`.
+- Submit: `POST /message:send`.
+- Poll: `GET /tasks/{task-id}`.
+- List: `GET /tasks?contextId={session-id}&status=TASK_STATE_WORKING`.
+- Cancel: `POST /tasks/{task-id}:cancel`.
+- If `:api :key` is configured, A2A task endpoints use the same `X-API-Key` / `Authorization: Bearer ...` auth as `/v1/*`.
+- Idempotency uses `Idempotency-Key`; if absent, `message.messageId`.
+- `contextId` maps to Iris `session_id`. If omitted, Iris creates a new session.
+- Final text answer is in `task.artifacts[0].parts[0].text`.
+
+Submit example:
+
+```bash
+TASK_ID="$(curl -sS http://127.0.0.1:8080/message:send \
+  -H 'Content-Type: application/a2a+json' \
+  -H 'Idempotency-Key: webhook-123' \
+  -d '{"message":{"messageId":"msg-123","role":"ROLE_USER","parts":[{"text":"Run this task"}]}}' \
+  | jq -r '.task.id')"
+```
+
+Poll example:
+
+```bash
+curl -sS "http://127.0.0.1:8080/tasks/${TASK_ID}?historyLength=2"
+```
+
+A2A compatibility notes:
+
+- Implemented subset: `/.well-known/agent-card.json`, `/message:send`, `/tasks`, `/tasks/{id}`, `/tasks/{id}:cancel`.
+- Not implemented: JSON-RPC, gRPC, `/message:stream`, `/tasks/{id}:subscribe`, push notification config endpoints.
+- `/message:send` always returns immediately with a Task; it does not implement A2A's blocking default when `configuration.returnImmediately` is absent/false.
+- Input supports text parts only. `raw`, `url`, and `data` parts return `CONTENT_TYPE_NOT_SUPPORTED`.
+- `message.taskId` is accepted only to infer `contextId`; Iris creates a new task instead of mutating/continuing the existing task.
+- Cancel is session-scoped because Iris chat cancellation is session-scoped; canceling one task cancels other non-terminal tasks in the same `contextId`.
+- `pageToken` is ignored; task listing returns the newest matching tasks from the local store.
+
 Run rewritten tests:
 
 ```bash
