@@ -102,7 +102,7 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
-(deftest magi-auto-conditional-denies-with-retryable-reason-test
+(deftest magi-auto-conditional-leaves-human-review-pending-test
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})
         events (atom [])
@@ -112,16 +112,15 @@
                     (tools/execute-tool reg
                                         :shell
                                         {:argv ["printf" "ok"]}
-                                        {:permissions #{:shell-exec}
-                                         :user "tester"})
-                    nil
-                    (catch clojure.lang.ExceptionInfo e e))]
-        (is (= :tool-blocked (:type (ex-data error))))
-        (is (re-find #"denied until retry satisfies" (.getMessage error))))
+	                                        {:permissions #{:shell-exec}
+	                                         :user "tester"})
+	                    nil
+	                    (catch clojure.lang.ExceptionInfo e e))]
+        (is (= :approval-required (:type (ex-data error)))))
       (let [approval (first (sqlite/list-tool-approvals store {:limit 10}))]
-        (is (= "denied" (:status approval)))
-        (is (= "magi" (:actor approval)))
-        (is (re-find #"needs narrower command" (:decision-reason approval))))
+        (is (= "pending" (:status approval)))
+        (is (nil? (:actor approval)))
+        (is (nil? (:decision-reason approval))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))

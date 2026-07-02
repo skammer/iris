@@ -123,7 +123,7 @@
     (case decision
       :yes (str "magi: yes" (when reason (str " - " reason)))
       :no (str "magi: no" (when reason (str " - " reason)))
-      :conditional (str "magi: conditional - denied until retry satisfies: "
+      :conditional (str "magi: conditional - human review required: "
                         (or reason "specified condition"))
       :info (str "magi: info" (when reason (str " - " reason)))
       :error (str "magi: error" (when reason (str " - " reason)))
@@ -136,7 +136,8 @@
       :auto-approve
       (case decision
         :yes :approve
-        (:no :conditional) :deny
+        :no :deny
+        :conditional :pending
         (:info :error) (case (magi/fallback magi-service)
                          :deny :deny
                          :human :pending

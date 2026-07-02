@@ -42,8 +42,8 @@ Rules:
 Risk classification:
 
 - low: read-only, local, reversible, no secrets, no external side effects, narrow scope.
-- medium: writes local files, changes memory/state, calls external network, or depends on ambiguous user intent.
-- high: shell execution, deploy/restart, broad filesystem changes, credential-adjacent data, production state, irreversible or hard-to-audit effects.
+- medium: local writes, memory/state changes, external read-only network calls, or bounded shell execution of a known local/user-owned script with explicit argv, timeout, clear user purpose, and no write/delete/deploy/process-control signals.
+- high: unbounded or unknown shell execution, shell with write/delete/deploy/restart/process-control/broad filesystem behavior, credential-adjacent data, production state, irreversible or hard-to-audit effects.
 - critical: destructive production action, secret exposure, privilege escalation, safety/legal/security impact, or broad unbounded execution.
 
 Attention points:
