@@ -2,6 +2,7 @@
   "Telegram Bot API client and send helpers."
   (:require
    [agent.telegram.format :as fmt]
+   [agent.telegram.rich :as rich]
    [cheshire.core :as json]
    [clj-http.client :as http]
    [clojure.java.io :as io]
@@ -102,6 +103,41 @@
 (defn- without-link-preview [payload]
   (merge payload disabled-link-preview))
 
+(declare send-message!)
+
+(defn- send-rich-chunks!
+  [token chat-id markdown opts]
+  (let [chunks (rich/final-chunks nil markdown)
+        reply-markup (:reply-markup opts)]
+    (if (seq chunks)
+      (mapv (fn [idx chunk]
+              (request! token "sendRichMessage"
+                        (without-link-preview
+                         (cond-> {:chat_id chat-id
+                                  :rich_message {:markdown chunk}}
+                           (and (zero? idx) reply-markup)
+                           (assoc :reply_markup reply-markup)))))
+            (range)
+            chunks)
+      [])))
+
+(defn- send-rich-or-legacy!
+  [token chat-id text opts]
+  (try
+    (send-rich-chunks! token chat-id text opts)
+    (catch Exception _
+      (if-let [reply-markup (:reply-markup opts)]
+        (let [chunks (fmt/chunk-markdown (str text) max-source-chars)]
+          (mapv (fn [idx chunk]
+                  (request! token "sendMessage"
+                            (without-link-preview
+                             (cond-> (assoc (text-payload chunk) :chat_id chat-id)
+                               (and (zero? idx) reply-markup)
+                               (assoc :reply_markup reply-markup)))))
+                (range)
+                chunks))
+        (send-message! token chat-id text)))))
+
 (defn send-message!
   [token chat-id text]
   (mapv (fn [chunk]
@@ -112,38 +148,15 @@
 
 (defn send-message-with-reply-markup!
   [token chat-id text reply-markup]
-  (let [s (str text)
-        clamped (if (> (count s) max-source-chars)
-                  (subs s 0 max-source-chars)
-                  s)]
-    (request! token "sendMessage"
-              (without-link-preview
-               (assoc (text-payload clamped)
-                      :chat_id chat-id
-                      :reply_markup reply-markup)))))
+  (send-rich-or-legacy! token chat-id text {:reply-markup reply-markup}))
 
 (defn send-html-message-with-reply-markup!
   [token chat-id text reply-markup]
-  (let [s (str text)]
-    (request! token "sendMessage"
-              (without-link-preview
-               {:chat_id chat-id
-                :text (if (> (count s) max-message-chars)
-                        (subs s 0 max-message-chars)
-                        s)
-                :parse_mode "HTML"
-                :reply_markup reply-markup}))))
+  (send-rich-or-legacy! token chat-id text {:reply-markup reply-markup}))
 
 (defn send-html-message!
   [token chat-id text]
-  (let [s (str text)]
-    (request! token "sendMessage"
-              (without-link-preview
-               {:chat_id chat-id
-                :text (if (> (count s) max-message-chars)
-                        (subs s 0 max-message-chars)
-                        s)
-                :parse_mode "HTML"}))))
+  (send-rich-or-legacy! token chat-id text nil))
 
 (defn send-chat-action!
   [token chat-id action]
@@ -169,11 +182,7 @@
    Rich Markdown within the 32768-char limit (see agent.telegram.rich)."
   ([token chat-id markdown] (send-rich-message! token chat-id markdown nil))
   ([token chat-id markdown {:keys [reply-markup]}]
-   (request! token "sendRichMessage"
-             (without-link-preview
-              (cond-> {:chat_id chat-id
-                       :rich_message {:markdown markdown}}
-                reply-markup (assoc :reply_markup reply-markup))))))
+   (send-rich-chunks! token chat-id markdown {:reply-markup reply-markup})))
 
 (defn send-rich-message-draft!
   "Streams a partial rich message as an ephemeral draft (private chats only).

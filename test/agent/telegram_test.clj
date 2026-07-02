@@ -822,7 +822,7 @@
                       :link_preview_options {:is_disabled true}}}]
              @calls)))))
 
-(deftest telegram-send-html-message-uses-html-parse-mode
+(deftest telegram-send-html-message-uses-rich-message
   (let [calls (atom [])]
     (with-redefs [telegram-api/request! (fn [token method body]
                                           (swap! calls conj {:token token
@@ -831,12 +831,75 @@
                                           {:ok true})]
       (telegram-api/send-html-message! "token" 100 "<blockquote expandable>x</blockquote>")
       (is (= [{:token "token"
-               :method "sendMessage"
+               :method "sendRichMessage"
                :body {:chat_id 100
-                      :text "<blockquote expandable>x</blockquote>"
-                      :parse_mode "HTML"
+                      :rich_message {:markdown "<blockquote expandable>x</blockquote>"}
                       :link_preview_options {:is_disabled true}}}]
              @calls)))))
+
+(deftest telegram-long-html-message-uses-rich-chunks-without-truncation
+  (let [calls (atom [])
+        text (apply str (repeat 70000 "x"))]
+    (with-redefs [telegram-api/request! (fn [token method body]
+                                          (swap! calls conj {:token token
+                                                             :method method
+                                                             :body body})
+                                          {:ok true})]
+      (telegram-api/send-html-message! "token" 100 text))
+    (is (= 3 (count @calls)))
+    (is (every? #(= "sendRichMessage" (:method %)) @calls))
+    (is (= 70000
+           (->> @calls
+                (map #(count (get-in % [:body :rich_message :markdown])))
+                (reduce +))))
+    (is (every? #(<= (count (get-in % [:body :rich_message :markdown])) 31000)
+                @calls))))
+
+(deftest telegram-rich-message-chunks-long-markdown
+  (let [calls (atom [])
+        text (apply str (repeat 70000 "x"))]
+    (with-redefs [telegram-api/request! (fn [token method body]
+                                          (swap! calls conj {:token token
+                                                             :method method
+                                                             :body body})
+                                          {:ok true})]
+      (telegram-api/send-rich-message! "token" 100 text))
+    (is (= 3 (count @calls)))
+    (is (every? #(= "sendRichMessage" (:method %)) @calls))
+    (is (= 70000
+           (->> @calls
+                (map #(count (get-in % [:body :rich_message :markdown])))
+                (reduce +))))))
+
+(deftest telegram-rich-reply-markup-attaches-only-to-first-chunk
+  (let [calls (atom [])
+        text (apply str (repeat 70000 "x"))
+        markup {:inline_keyboard [[{:text "Run" :callback_data "run"}]]}]
+    (with-redefs [telegram-api/request! (fn [token method body]
+                                          (swap! calls conj {:token token
+                                                             :method method
+                                                             :body body})
+                                          {:ok true})]
+      (telegram-api/send-message-with-reply-markup! "token" 100 text markup))
+    (is (= 3 (count @calls)))
+    (is (= markup (get-in (first @calls) [:body :reply_markup])))
+    (is (every? #(nil? (get-in % [:body :reply_markup]))
+                (rest @calls)))))
+
+(deftest telegram-rich-send-failure-falls-back-to-legacy-chunks
+  (let [calls (atom [])
+        text (apply str (repeat 9000 "x"))]
+    (with-redefs [telegram-api/request! (fn [_ method body]
+                                          (if (= "sendRichMessage" method)
+                                            (throw (ex-info "rich rejected"
+                                                            {:type :telegram-api-error}))
+                                            (do
+                                              (swap! calls conj {:method method
+                                                                 :body body})
+                                              {:ok true})))]
+      (telegram-api/send-html-message! "token" 100 text))
+    (is (= ["sendMessage" "sendMessage" "sendMessage"] (mapv :method @calls)))
+    (is (= 9000 (->> @calls (map #(count (get-in % [:body :text]))) (reduce +))))))
 
 (deftest telegram-photo-command-sends-photo
   (let [path (temp-db-path)
