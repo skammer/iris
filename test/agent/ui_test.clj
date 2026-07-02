@@ -437,9 +437,9 @@
                                                        :reason "all yes"}}
                                     :duration-ms 7}})
       (let [html (ui/magi-fragment {:store store})]
-        (is (str/includes? html "MAGI OVERSIGHT"))
+        (is (str/includes? html "decision log"))
         (is (str/includes? html "Invocation Log"))
-        (is (str/includes? html "Decision Console"))
+        (is (not (str/includes? html "Decision Console")))
         (is (str/includes? html "latest 1000 records"))
         (is (str/includes? html "approval"))
         (is (str/includes? html "tool"))
