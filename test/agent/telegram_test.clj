@@ -795,10 +795,10 @@
 (deftest telegram-send-chat-action-calls-api
   (let [calls (atom [])]
     (with-redefs [telegram-api/request! (fn [token method body]
-	                                          (swap! calls conj {:token token
-	                                                             :method method
-	                                                             :body body})
-	                                          {:ok true})]
+                                          (swap! calls conj {:token token
+                                                             :method method
+                                                             :body body})
+                                          {:ok true})]
       (telegram-api/send-chat-action! "token" 100 "typing")
       (is (= [{:token "token"
                :method "sendChatAction"
@@ -806,19 +806,36 @@
                       :action "typing"}}]
              @calls)))))
 
+(deftest telegram-send-message-disables-link-preview
+  (let [calls (atom [])]
+    (with-redefs [telegram-api/request! (fn [token method body]
+                                          (swap! calls conj {:token token
+                                                             :method method
+                                                             :body body})
+                                          {:ok true})]
+      (telegram-api/send-message! "token" 100 "https://example.com")
+      (is (= [{:token "token"
+               :method "sendMessage"
+               :body {:chat_id 100
+                      :text "https://example\\.com"
+                      :parse_mode "MarkdownV2"
+                      :link_preview_options {:is_disabled true}}}]
+             @calls)))))
+
 (deftest telegram-send-html-message-uses-html-parse-mode
   (let [calls (atom [])]
     (with-redefs [telegram-api/request! (fn [token method body]
-	                                          (swap! calls conj {:token token
-	                                                             :method method
-	                                                             :body body})
-	                                          {:ok true})]
+                                          (swap! calls conj {:token token
+                                                             :method method
+                                                             :body body})
+                                          {:ok true})]
       (telegram-api/send-html-message! "token" 100 "<blockquote expandable>x</blockquote>")
       (is (= [{:token "token"
                :method "sendMessage"
                :body {:chat_id 100
                       :text "<blockquote expandable>x</blockquote>"
-                      :parse_mode "HTML"}}]
+                      :parse_mode "HTML"
+                      :link_preview_options {:is_disabled true}}}]
              @calls)))))
 
 (deftest telegram-photo-command-sends-photo
@@ -1225,15 +1242,21 @@
       (telegram-api/send-rich-message-draft! "token" 100 42 "partial"))
     (is (= [{:token "token"
              :method "sendRichMessage"
-             :body {:chat_id 100 :rich_message {:markdown "# Hello"}}}
+             :body {:chat_id 100
+                    :rich_message {:markdown "# Hello"}
+                    :link_preview_options {:is_disabled true}}}
             {:token "token"
              :method "sendRichMessage"
              :body {:chat_id 100
                     :rich_message {:markdown "pick"}
-                    :reply_markup {:inline_keyboard []}}}
+                    :reply_markup {:inline_keyboard []}
+                    :link_preview_options {:is_disabled true}}}
             {:token "token"
              :method "sendRichMessageDraft"
-             :body {:chat_id 100 :draft_id 42 :rich_message {:markdown "partial"}}}]
+             :body {:chat_id 100
+                    :draft_id 42
+                    :rich_message {:markdown "partial"}
+                    :link_preview_options {:is_disabled true}}}]
            @calls))))
 
 (deftest telegram-rich-draft-failure-during-thinking-shows-placeholder

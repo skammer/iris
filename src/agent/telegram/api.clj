@@ -10,6 +10,8 @@
 (def ^:private telegram-api "https://api.telegram.org")
 (def ^:private max-message-chars 4096)
 (def ^:private max-source-chars 3400)
+(def ^:private disabled-link-preview
+  {:link_preview_options {:is_disabled true}})
 
 (defn- parse-body [body]
   (cond
@@ -97,11 +99,15 @@
                (subs s 0 max-message-chars)
                s)})))
 
+(defn- without-link-preview [payload]
+  (merge payload disabled-link-preview))
+
 (defn send-message!
   [token chat-id text]
   (mapv (fn [chunk]
           (request! token "sendMessage"
-                    (assoc (text-payload chunk) :chat_id chat-id)))
+                    (without-link-preview
+                     (assoc (text-payload chunk) :chat_id chat-id))))
         (fmt/chunk-markdown (str text) max-source-chars)))
 
 (defn send-message-with-reply-markup!
@@ -111,30 +117,33 @@
                   (subs s 0 max-source-chars)
                   s)]
     (request! token "sendMessage"
-              (assoc (text-payload clamped)
-                     :chat_id chat-id
-                     :reply_markup reply-markup))))
+              (without-link-preview
+               (assoc (text-payload clamped)
+                      :chat_id chat-id
+                      :reply_markup reply-markup)))))
 
 (defn send-html-message-with-reply-markup!
   [token chat-id text reply-markup]
   (let [s (str text)]
     (request! token "sendMessage"
-              {:chat_id chat-id
-               :text (if (> (count s) max-message-chars)
-                       (subs s 0 max-message-chars)
-                       s)
-               :parse_mode "HTML"
-               :reply_markup reply-markup})))
+              (without-link-preview
+               {:chat_id chat-id
+                :text (if (> (count s) max-message-chars)
+                        (subs s 0 max-message-chars)
+                        s)
+                :parse_mode "HTML"
+                :reply_markup reply-markup}))))
 
 (defn send-html-message!
   [token chat-id text]
   (let [s (str text)]
     (request! token "sendMessage"
-              {:chat_id chat-id
-               :text (if (> (count s) max-message-chars)
-                       (subs s 0 max-message-chars)
-                       s)
-               :parse_mode "HTML"})))
+              (without-link-preview
+               {:chat_id chat-id
+                :text (if (> (count s) max-message-chars)
+                        (subs s 0 max-message-chars)
+                        s)
+                :parse_mode "HTML"}))))
 
 (defn send-chat-action!
   [token chat-id action]
@@ -161,9 +170,10 @@
   ([token chat-id markdown] (send-rich-message! token chat-id markdown nil))
   ([token chat-id markdown {:keys [reply-markup]}]
    (request! token "sendRichMessage"
-             (cond-> {:chat_id chat-id
-                      :rich_message {:markdown markdown}}
-               reply-markup (assoc :reply_markup reply-markup)))))
+             (without-link-preview
+              (cond-> {:chat_id chat-id
+                       :rich_message {:markdown markdown}}
+                reply-markup (assoc :reply_markup reply-markup))))))
 
 (defn send-rich-message-draft!
   "Streams a partial rich message as an ephemeral draft (private chats only).
@@ -171,9 +181,10 @@
    finalized with send-rich-message!."
   [token chat-id draft-id markdown]
   (request! token "sendRichMessageDraft"
-            {:chat_id chat-id
-             :draft_id draft-id
-             :rich_message {:markdown markdown}}))
+            (without-link-preview
+             {:chat_id chat-id
+              :draft_id draft-id
+              :rich_message {:markdown markdown}})))
 
 (defn send-message-draft!
   [token chat-id draft-id text]
@@ -183,7 +194,8 @@
                   s)
         payload (text-payload clamped)]
     (request! token "sendMessageDraft"
-              (merge {:chat_id chat-id :draft_id draft-id} payload))))
+              (without-link-preview
+               (merge {:chat_id chat-id :draft_id draft-id} payload)))))
 
 (defn- attachment-payload
   [chat-id media-key media caption]
