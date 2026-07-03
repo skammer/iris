@@ -88,6 +88,7 @@
                               :tool-calls (vec (vals tool-calls))
                               :usage (usage/chat->estimate {:usage usage})
                               :raw raw}
+                       finish-reason (assoc :stop-reason finish-reason)
                        (seq reasoning) (assoc :reasoning-content (apply str reasoning))))]
            (parse/throw-empty-content! (:content turn)
                                        (:tool-calls turn)

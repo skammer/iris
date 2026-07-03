@@ -36,6 +36,8 @@
                        :tool-calls (vec (or (:tool_calls message) []))
                        :usage (usage/chat->estimate body)
                        :raw message}
+                (:finish_reason choice)
+                (assoc :stop-reason (:finish_reason choice))
                 (some? (:reasoning_content message))
                 (assoc :reasoning-content (:reasoning_content message))))]
     (throw-empty-content! (:content turn)
@@ -82,7 +84,8 @@
                :content content
                :tool-calls tool-calls
                :usage usage
-               :raw body})]
+               :raw body
+               :stop-reason (when incomplete? "length")})]
     (throw-empty-content! (:content turn)
                           (:tool-calls turn)
                           {:finish-reason (when incomplete? "length")

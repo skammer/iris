@@ -125,8 +125,21 @@
     (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})
           response (llm-core/invoke llm {:messages [{:role "user" :content "hi"}]})]
       (is (= "ok" (:content response)))
+      (is (= "stop" (:stop-reason response)))
       (is (= {:type :thinking :text "think first"}
              (first (:content-blocks response)))))))
+
+(deftest openai-compatible-nonstream-preserves-length-finish-reason-test
+  (with-redefs [http/post (fn [_ _]
+                            {:status 200
+                             :headers {"Content-Type" "application/json"}
+                             :body {:choices [{:message {:role "assistant"
+                                                         :content "partial"}
+                                               :finish_reason "length"}]}})]
+    (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})
+          response (llm-core/invoke llm {:messages [{:role "user" :content "hi"}]})]
+      (is (= "partial" (:content response)))
+      (is (= "length" (:stop-reason response))))))
 
 (deftest openai-compatible-provider-resolves-api-key-per-call-test
   (let [headers* (atom [])
@@ -239,6 +252,26 @@
         (is (= {:action "list" :path "."} (:arguments tc)))
         (is (= 2 (get-in response [:usage :cached-tokens])))))))
 
+(deftest openai-compatible-responses-incomplete-preserves-length-stop-reason-test
+  (with-redefs [http/post (fn [_ _]
+                            {:status 200
+                             :headers {"Content-Type" "application/json"}
+                             :body {:id "resp_1"
+                                    :status "incomplete"
+                                    :output [{:type "message"
+                                              :role "assistant"
+                                              :content [{:type "output_text"
+                                                         :text "partial"}]}]
+                                    :usage {:input_tokens 2
+                                            :output_tokens 1024
+                                            :total_tokens 1026}}})]
+    (let [llm (provider/create-openai-compatible-provider
+               {:api-key "oa-key"
+                :api :responses})
+          response (llm-core/invoke llm {:messages [{:role "user" :content "hi"}]})]
+      (is (= "partial" (:content response)))
+      (is (= "length" (:stop-reason response))))))
+
 (deftest openrouter-stream-test
   (with-redefs [http/post (fn [_ _]
                             {:status 200
@@ -275,7 +308,24 @@
         (is (true? (:stream @body*)))
         (is (= ["Hello" " world"] @chunks))
         (is (= "Hello world" (:content response)))
+        (is (= "stop" (:stop-reason response)))
         (is (empty? (:tool-calls response)))))))
+
+(deftest invoke-stream-preserves-length-finish-reason-test
+  (with-redefs [http/post (fn [_ _]
+                            {:status 200
+                             :headers {"Content-Type" "text/event-stream"}
+                             :body (byte-stream
+                                    (str "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
+                                         "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n"
+                                         "data: [DONE]\n\n"))})]
+    (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})
+          response (llm-core/invoke
+                    llm
+                    {:messages [{:role "user" :content "hi"}]
+                     :on-content-delta (fn [_])})]
+      (is (= "partial" (:content response)))
+      (is (= "length" (:stop-reason response))))))
 
 (deftest invoke-streams-reasoning-via-on-thinking-delta-callback-test
   (let [body* (atom nil)]
