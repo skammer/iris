@@ -46,21 +46,28 @@
       :approval-required (str "Memory tool approval required: " (:reason receipt))
       (str "Memory tool failed: " (or (:reason receipt) (:error-type receipt) "unknown error")))))
 
+(defn- receipt-result-text [receipt]
+  (or (:result-text receipt)
+      (get-in receipt [:result :result-text])))
+
 (defn tool-output-content
   ([receipt] (tool-output-content receipt defaults/tool-output-max-chars))
   ([receipt tool-output-max-chars]
    (if (str/starts-with? (or (some-> (:tool-name receipt) name) "") "memory")
      (memory-tool-output-content receipt tool-output-max-chars)
-     (let [payload (select-keys receipt
-                                [:status :tool-name :result :reason :error-type :input])
-           text (json/generate-string payload)]
-       (if (> (count text) tool-output-max-chars)
-         (json/generate-string
-          (assoc (select-keys receipt [:status :tool-name :reason :error-type :input])
-                 :truncated true
-                 :original-chars (count text)
-                 :preview (subs text 0 tool-output-max-chars)))
-         text)))))
+     (if-let [text (receipt-result-text receipt)]
+       (util/truncate text tool-output-max-chars
+                      #(str "\n\n[truncated " % " chars]"))
+       (let [payload (select-keys receipt
+                                  [:status :tool-name :result :reason :error-type :input])
+             text (json/generate-string payload)]
+         (if (> (count text) tool-output-max-chars)
+           (json/generate-string
+            (assoc (select-keys receipt [:status :tool-name :reason :error-type :input])
+                   :truncated true
+                   :original-chars (count text)
+                   :preview (subs text 0 tool-output-max-chars)))
+           text))))))
 
 (defn- tool-output-message [tool-call receipt tool-output-max-chars]
   {:role "tool"

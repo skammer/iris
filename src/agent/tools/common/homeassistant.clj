@@ -9,12 +9,17 @@
   (:import
    [java.net URI]))
 
-(def ^:private actions #{:get_state :list_states :list_services :call_service})
-(def ^:private read-actions #{:get_state :list_states :list_services})
+(def ^:private actions #{:get_state :list_states :search_states :list_services :call_service})
+(def ^:private read-actions #{:get_state :list_states :search_states :list_services})
 (def ^:private default-allowed-domains #{:light :switch :scene :script})
+(def ^:private default-state-limit 25)
+(def ^:private max-state-limit 200)
 
 (defn- clean-string [value]
   (some-> value str str/trim not-empty))
+
+(defn- one-line [value]
+  (some-> value str (str/replace #"\s+" " ") str/trim not-empty))
 
 (defn- normalize-keyword [value]
   (cond
@@ -127,11 +132,155 @@
   (boolean (and (string? value)
                 (re-matches #"[A-Za-z0-9_.]+" value))))
 
+(defn- state-domain [state]
+  (some-> (:entity_id state)
+          str
+          (str/split #"\." 2)
+          first
+          clean-string
+          str/lower-case))
+
+(defn- state-attribute [state key]
+  (get-in state [:attributes key]))
+
+(defn- state-summary [state]
+  (let [friendly-name (state-attribute state :friendly_name)
+        device-class (state-attribute state :device_class)
+        unit (state-attribute state :unit_of_measurement)]
+    (cond-> {:entity_id (:entity_id state)
+             :state (:state state)}
+      friendly-name (assoc :friendly_name friendly-name)
+      device-class (assoc :device_class device-class)
+      unit (assoc :unit_of_measurement unit)
+      (:last_updated state) (assoc :last_updated (:last_updated state)))))
+
+(defn- join-parts [& parts]
+  (str/join " | " (keep one-line parts)))
+
+(defn- state-summary-line [state]
+  (let [summary (if (or (contains? state :friendly_name)
+                        (not (contains? state :attributes)))
+                  state
+                  (state-summary state))
+        entity-state (str (:entity_id summary) " = " (:state summary))
+        details (join-parts (:friendly_name summary)
+                            (:device_class summary)
+                            (:unit_of_measurement summary)
+                            (:last_updated summary))]
+    (if (str/blank? details)
+      entity-state
+      (str entity-state " | " details))))
+
+(defn- states-result-text [action body]
+  (let [header (format "homeassistant.%s ok: returned %d/%d matched, total %d, limit %d, more %s"
+                       (name action)
+                       (:returned body)
+                       (:matched body)
+                       (:entity-count body)
+                       (:limit body)
+                       (boolean (:more_available body)))
+        filters (join-parts (str "query=" (pr-str (or (:query body) "")))
+                            (str "domain=" (or (:domain body) "*"))
+                            (str "device_class=" (or (:device_class body) "*")))
+        lines (map state-summary-line (:entities body))]
+    (str/join "\n" (cond-> [header]
+                     (not (str/blank? filters)) (conj (str "filters: " filters))
+                     true (into lines)))))
+
+(defn- service-names [domain-entry]
+  (->> (:services domain-entry)
+       keys
+       (map name)
+       sort
+       vec))
+
+(defn- services-result-text [response]
+  (let [domains (vec (or (:body response) []))
+        rows (mapv (fn [domain-entry]
+                     (str (:domain domain-entry) ": "
+                          (str/join ", " (service-names domain-entry))))
+                   domains)
+        service-count (reduce + (map (comp count service-names) domains))]
+    (str/join "\n"
+              (into [(format "homeassistant.list_services ok: domains %d, services %d"
+                             (count domains)
+                             service-count)]
+                    rows))))
+
+(defn- single-state-result-text [action response]
+  (str "homeassistant." (name action) " ok: "
+       (state-summary-line (:body response))))
+
+(defn- call-service-result-text [{:keys [domain service entity_id status body]}]
+  (let [states (when (sequential? body)
+                 (map state-summary-line body))]
+    (str/join "\n"
+              (cond-> [(str "homeassistant.call_service ok: "
+                            domain "." service
+                            (when entity_id (str " " entity_id))
+                            " status=" status)]
+                (seq states) (into states)))))
+
+(defn- query-terms [query]
+  (->> (str/split (str/lower-case (or (clean-string query) "")) #"[^\p{L}\p{N}_]+")
+       (keep clean-string)
+       set))
+
+(defn- state-haystack [state]
+  (str/lower-case
+   (str/join " "
+             (keep identity
+                   [(:entity_id state)
+                    (:state state)
+                    (state-attribute state :friendly_name)
+                    (state-attribute state :device_class)
+                    (state-attribute state :unit_of_measurement)]))))
+
+(defn- state-matches-query? [terms state]
+  (or (empty? terms)
+      (let [haystack (state-haystack state)]
+        (some #(str/includes? haystack %) terms))))
+
+(defn- state-matches-domain? [domain state]
+  (or (nil? domain)
+      (= (name domain) (state-domain state))))
+
+(defn- state-matches-device-class? [device-class state]
+  (or (nil? device-class)
+      (= (str/lower-case device-class)
+         (some-> (state-attribute state :device_class) str/lower-case))))
+
+(defn- state-limit [value]
+  (max 1 (min max-state-limit (long (or value default-state-limit)))))
+
+(defn- compact-states-response [response {:keys [query domain device_class limit]}]
+  (let [states (vec (or (:body response) []))
+        terms (query-terms query)
+        matched (filterv #(and (state-matches-query? terms %)
+                               (state-matches-domain? domain %)
+                               (state-matches-device-class? device_class %))
+                         states)
+        limit* (state-limit limit)
+        returned (subvec matched 0 (min limit* (count matched)))]
+    (assoc response
+           :body {:entity-count (count states)
+                  :matched (count matched)
+                  :returned (count returned)
+                  :more_available (> (count matched) (count returned))
+                  :limit limit*
+                  :query (or query "")
+                  :domain (some-> domain name)
+                  :device_class device_class
+                  :entities (mapv state-summary returned)})))
+
 (defn- validate-input [config input]
   (let [action (normalize-keyword (:action input))
         entity-id (clean-string (:entity_id input))
         domain (normalize-domain (:domain input))
         service (normalize-domain (:service input))
+        query (clean-string (:query input))
+        device-class (some-> (:device_class input) clean-string str/lower-case)
+        limit (:limit input)
         data (or (:data input) {})]
     (when-not (contains? actions action)
       (throw (tools/validation-error "action must be a supported Home Assistant action"
@@ -172,6 +321,9 @@
       entity-id (assoc :entity_id entity-id)
       domain (assoc :domain (name domain))
       service (assoc :service (name service))
+      query (assoc :query query)
+      device-class (assoc :device_class device-class)
+      limit (assoc :limit limit)
       (seq data) (assoc :data data)
       (:timeout-ms input) (assoc :timeout-ms (:timeout-ms input)))))
 
@@ -191,16 +343,19 @@
      {:description
       (tools/create-tool-description
        :homeassistant
-       "Home Assistant API bridge for states, services, and controlled service calls."
+       "Home Assistant API bridge. Use search_states with query/domain/device_class to find entities; list_states returns compact limited state summaries to avoid truncating full HA state dumps."
        :category :api
        :timeout-ms (:timeout-ms config*)
        :required-permissions #{:homeassistant}
        :input-schema [:map {:closed true}
                       [:action [:or
-                                [:enum :get_state :list_states :list_services :call_service]
-                                [:enum "get_state" "list_states" "list_services" "call_service"]]]
+                                [:enum :get_state :list_states :search_states :list_services :call_service]
+                                [:enum "get_state" "list_states" "search_states" "list_services" "call_service"]]]
                       [:entity_id {:optional true} :string]
+                      [:query {:optional true} :string]
                       [:domain {:optional true} :string]
+                      [:device_class {:optional true} :string]
+                      [:limit {:optional true} [:int {:min 1 :max 200}]]
                       [:service {:optional true} :string]
                       [:data {:optional true} [:map-of :any :any]]
                       [:timeout-ms {:optional true} [:int {:min 1}]]]
@@ -223,25 +378,38 @@
       (fn [{:keys [action entity_id domain service timeout-ms] :as input} _context]
         (case action
           :list_states
-          (assoc (request! config* :get "/api/states" {:timeout-ms timeout-ms})
-                 :action "list_states")
+          (let [response (assoc (compact-states-response
+                                  (request! config* :get "/api/states" {:timeout-ms timeout-ms})
+                                  input)
+                                :action "list_states")]
+            (assoc response :result-text (states-result-text :list_states (:body response))))
+
+          :search_states
+          (let [response (assoc (compact-states-response
+                                  (request! config* :get "/api/states" {:timeout-ms timeout-ms})
+                                  input)
+                                :action "search_states")]
+            (assoc response :result-text (states-result-text :search_states (:body response))))
 
           :get_state
-          (assoc (request! config* :get (str "/api/states/" entity_id) {:timeout-ms timeout-ms})
-                 :action "get_state"
-                 :entity_id entity_id)
+          (let [response (assoc (request! config* :get (str "/api/states/" entity_id) {:timeout-ms timeout-ms})
+                                :action "get_state"
+                                :entity_id entity_id)]
+            (assoc response :result-text (single-state-result-text :get_state response)))
 
           :list_services
-          (assoc (request! config* :get "/api/services" {:timeout-ms timeout-ms})
-                 :action "list_services")
+          (let [response (assoc (request! config* :get "/api/services" {:timeout-ms timeout-ms})
+                                :action "list_services")]
+            (assoc response :result-text (services-result-text response)))
 
           :call_service
-          (assoc (request! config*
-                           :post
-                           (str "/api/services/" domain "/" service)
-                           {:body (service-body input)
-                            :timeout-ms timeout-ms})
-                 :action "call_service"
-                 :domain domain
-                 :service service
-                 :entity_id entity_id)))})))
+          (let [response (assoc (request! config*
+                                           :post
+                                           (str "/api/services/" domain "/" service)
+                                           {:body (service-body input)
+                                            :timeout-ms timeout-ms})
+                                :action "call_service"
+                                :domain domain
+                                :service service
+                                :entity_id entity_id)]
+            (assoc response :result-text (call-service-result-text response)))))})))

@@ -74,7 +74,9 @@
    :tool-call-id (:tool-call-id result)
    :name (some-> (:tool-name result) name)
    :content (if (= :ok (:status result))
-              (util/result-content (:result result))
+              (or (:result-text result)
+                  (get-in result [:result :result-text])
+                  (util/result-content (:result result)))
               (util/result-content
                (cond-> {:error (:error result)
                         :type (some-> (:error-type result) name)}

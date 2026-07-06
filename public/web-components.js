@@ -1,4 +1,4 @@
-const AUTOSCROLL_THRESHOLD_PX = 300;
+const AUTOSCROLL_THRESHOLD_PX = 32;
 const THEME_STORAGE_KEY = "iris-theme";
 
 const syncRoute = (path, replace = false) => {
@@ -140,21 +140,56 @@ class AgentChatPanel extends HTMLElement {}
 
 class ChatStream extends HTMLElement {
   #stick = true;
+  #manualScroll = false;
+  #lastScrollTop = 0;
+  #lastTouchY = null;
   #observer = new MutationObserver(() => this.afterChange());
 
   connectedCallback() {
+    this.#lastScrollTop = this.scrollTop;
+    this.#syncFollowState();
     this.addEventListener("scroll", this, { passive: true });
+    this.addEventListener("wheel", this, { passive: true });
+    this.addEventListener("touchstart", this, { passive: true });
+    this.addEventListener("touchmove", this, { passive: true });
     this.#observer.observe(this, { childList: true, subtree: true, characterData: true });
     requestAnimationFrame(() => this.scrollToAnchor());
   }
 
   disconnectedCallback() {
     this.removeEventListener("scroll", this);
+    this.removeEventListener("wheel", this);
+    this.removeEventListener("touchstart", this);
+    this.removeEventListener("touchmove", this);
     this.#observer.disconnect();
   }
 
-  handleEvent() {
-    this.#stick = this.scrollHeight - this.clientHeight - this.scrollTop <= AUTOSCROLL_THRESHOLD_PX;
+  handleEvent(event) {
+    if (event.type === "wheel") {
+      if (event.deltaY < 0) this.releaseBottom();
+      return;
+    }
+    if (event.type === "touchstart") {
+      this.#lastTouchY = event.touches?.[0]?.clientY ?? null;
+      return;
+    }
+    if (event.type === "touchmove") {
+      const y = event.touches?.[0]?.clientY ?? null;
+      if (this.#lastTouchY != null && y != null && y > this.#lastTouchY) this.releaseBottom();
+      this.#lastTouchY = y;
+      return;
+    }
+    if (event.type !== "scroll") return;
+
+    const current = this.scrollTop;
+    const scrollingUp = current < this.#lastScrollTop - 1;
+    if (scrollingUp) this.#manualScroll = true;
+    if (!scrollingUp && this.#distanceFromBottom() <= AUTOSCROLL_THRESHOLD_PX) {
+      this.#manualScroll = false;
+    }
+    this.#stick = !this.#manualScroll && this.#distanceFromBottom() <= AUTOSCROLL_THRESHOLD_PX;
+    this.#lastScrollTop = current;
+    this.#syncFollowState();
   }
 
   afterChange() {
@@ -164,17 +199,34 @@ class ChatStream extends HTMLElement {
     if (this.#stick) requestAnimationFrame(() => this.scrollToAnchor());
   }
 
+  #distanceFromBottom() {
+    return Math.max(0, this.scrollHeight - this.clientHeight - this.scrollTop);
+  }
+
+  #syncFollowState() {
+    this.dataset.followBottom = this.#stick ? "true" : "false";
+  }
+
+  releaseBottom() {
+    this.#manualScroll = true;
+    this.#stick = false;
+    this.#syncFollowState();
+  }
+
   scrollToAnchor() {
     const anchor = this.querySelector(".chat-stream__bottom-anchor");
     if (anchor instanceof HTMLElement) {
       anchor.scrollIntoView({ block: "end" });
+      this.#lastScrollTop = this.scrollTop;
     }
   }
 
   // Sending a message is an explicit "take me to the conversation tail",
   // even when scrolled up reading history (where #stick is false).
   followBottom() {
+    this.#manualScroll = false;
     this.#stick = true;
+    this.#syncFollowState();
     requestAnimationFrame(() => this.scrollToAnchor());
   }
 }

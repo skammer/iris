@@ -1,7 +1,8 @@
 (ns agent.runtime.messages-test
   (:require
    [agent.runtime.messages :as runtime-messages]
-   [clojure.test :refer :all]))
+   [clojure.string :as str]
+   [clojure.test :refer [deftest is]]))
 
 (deftest normalize-chat-history-inserts-missing-tool-result-test
   (let [{:keys [messages repairs]}
@@ -58,3 +59,15 @@
           {:role "user" :content "next"}])]
     (is (= 1 (:removed-internal-stop-messages repairs)))
     (is (= ["user"] (mapv :role messages)))))
+
+(deftest tool-output-content-prefers-compact-result-text-test
+  (let [content (runtime-messages/tool-output-content
+                 {:status :ok
+                  :tool-name :homeassistant
+                  :input {:action "list_states"}
+                  :result {:body {:entities (repeat 20 {:entity_id "sensor.x"
+                                                        :state "1"})}
+                           :result-text "homeassistant.list_states ok\nsensor.x = 1"}}
+                 2000)]
+    (is (= "homeassistant.list_states ok\nsensor.x = 1" content))
+    (is (not (str/starts-with? content "{\"status\"")))))

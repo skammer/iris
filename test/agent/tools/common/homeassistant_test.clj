@@ -69,6 +69,96 @@
         (is (= {:brightness_pct 70 :entity_id "light.kitchen"} body))
         (is (= "call_service" (:action result)))))))
 
+(deftest homeassistant-list-states-returns-compact-limited-results
+  (with-redefs [http/request (fn [_]
+                               {:status 200
+                                :headers {"content-type" "application/json"}
+                                :body (json/generate-string
+                                       [{:entity_id "sensor.plant_soil_moisture"
+                                         :state "41"
+                                         :attributes {:friendly_name "Plant soil moisture"
+                                                      :device_class "moisture"
+                                                      :unit_of_measurement "%"}
+                                         :last_updated "2026-07-06T17:00:00Z"}
+                                        {:entity_id "sensor.temperature"
+                                         :state "22"
+                                         :attributes {:friendly_name "Temperature"}}])})]
+    (let [result (tools/execute-tool (registry configured-cfg)
+                                     :homeassistant
+                                     {:action "list_states"
+                                      :limit 1}
+                                     {:permissions #{:homeassistant}})]
+      (is (= "list_states" (:action result)))
+      (is (= {:entity-count 2
+              :matched 2
+              :returned 1
+              :more_available true
+              :limit 1
+              :query ""
+              :domain nil
+              :device_class nil
+              :entities [{:entity_id "sensor.plant_soil_moisture"
+                          :state "41"
+                          :friendly_name "Plant soil moisture"
+                          :device_class "moisture"
+                          :unit_of_measurement "%"
+                          :last_updated "2026-07-06T17:00:00Z"}]}
+             (:body result)))
+      (is (= "homeassistant.list_states ok: returned 1/2 matched, total 2, limit 1, more true\nfilters: query=\"\" | domain=* | device_class=*\nsensor.plant_soil_moisture = 41 | Plant soil moisture | moisture | % | 2026-07-06T17:00:00Z"
+             (:result-text result)))
+      (is (not (str/includes? (pr-str result) ":attributes"))))))
+
+(deftest homeassistant-search-states-filters-compact-results
+  (with-redefs [http/request (fn [_]
+                               {:status 200
+                                :headers {"content-type" "application/json"}
+                                :body (json/generate-string
+                                       [{:entity_id "sensor.plant_soil_moisture"
+                                         :state "41"
+                                         :attributes {:friendly_name "Plant soil moisture"
+                                                      :device_class "moisture"
+                                                      :unit_of_measurement "%"}}
+                                        {:entity_id "sensor.hall_temperature"
+                                         :state "22"
+                                         :attributes {:friendly_name "Hall temperature"
+                                                      :device_class "temperature"
+                                                      :unit_of_measurement "C"}}])})]
+    (let [result (tools/execute-tool (registry configured-cfg)
+                                     :homeassistant
+                                     {:action "search_states"
+                                      :query "soil moisture"
+                                      :domain "sensor"
+                                      :device_class "moisture"}
+                                     {:permissions #{:homeassistant}})]
+      (is (= "search_states" (:action result)))
+      (is (= 1 (get-in result [:body :matched])))
+      (is (= [{:entity_id "sensor.plant_soil_moisture"
+               :state "41"
+               :friendly_name "Plant soil moisture"
+               :device_class "moisture"
+               :unit_of_measurement "%"}]
+             (get-in result [:body :entities])))
+      (is (= "homeassistant.search_states ok: returned 1/1 matched, total 2, limit 25, more false\nfilters: query=\"soil moisture\" | domain=sensor | device_class=moisture\nsensor.plant_soil_moisture = 41 | Plant soil moisture | moisture | %"
+             (:result-text result))))))
+
+(deftest homeassistant-list-services-returns-compact-result-text
+  (with-redefs [http/request (fn [_]
+                               {:status 200
+                                :headers {"content-type" "application/json"}
+                                :body (json/generate-string
+                                       [{:domain "light"
+                                         :services {"turn_on" {:description "Turn on a light"}
+                                                    "turn_off" {:description "Turn off a light"}}}
+                                        {:domain "switch"
+                                         :services {"toggle" {:description "Toggle a switch"}}}])})]
+    (let [result (tools/execute-tool (registry configured-cfg)
+                                     :homeassistant
+                                     {:action "list_services"}
+                                     {:permissions #{:homeassistant}})]
+      (is (= "homeassistant.list_services ok: domains 2, services 3\nlight: turn_off, turn_on\nswitch: toggle"
+             (:result-text result)))
+      (is (= 2 (count (:body result)))))))
+
 (deftest homeassistant-denies-non-allowlisted-service-domain
   (is (thrown-with-msg?
        clojure.lang.ExceptionInfo
@@ -96,7 +186,7 @@
   (let [description (tools/describe (ha-tool/create-homeassistant-tool configured-cfg))]
     (is (= :homeassistant (:name description)))
     (is (= :action (:action-key description)))
-    (is (= #{:get_state :list_states :list_services}
+    (is (= #{:get_state :list_states :search_states :list_services}
            (:read-only-actions description)))
     (is (false? (:approval-sensitive? description)))))
 

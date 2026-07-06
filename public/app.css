@@ -645,10 +645,8 @@ textarea {
   scrollbar-gutter: stable;
 }
 
-/* Pin-to-bottom via CSS scroll anchoring: every child is excluded from
-   anchor candidacy except the 1px bottom anchor, so while it's in view the
-   browser keeps the scroller pinned as content above it grows. The anchor
-   must be excluded HERE — this ID rule outranks any class rule on it. */
+/* Pin-to-bottom via CSS scroll anchoring while ChatStream is following tail.
+   JS disables the bottom anchor immediately on explicit upward scroll. */
 #session-messages-panel > :not(.chat-stream__bottom-anchor) {
   overflow-anchor: none;
 }
@@ -716,6 +714,10 @@ textarea {
   flex: 0 0 1px;
   min-height: 1px;
   overflow-anchor: auto;
+}
+
+#session-messages-panel[data-follow-bottom="false"] .chat-stream__bottom-anchor {
+  overflow-anchor: none;
 }
 
 #session-messages-panel .message {
