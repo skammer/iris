@@ -39,6 +39,16 @@
       (emit! :agent-end {:stop-reason (or (:stop-reason result) :completed)})
       result)))
 
+(defn eventually
+  [pred]
+  (loop [remaining 80]
+    (cond
+      (pred) true
+      (zero? remaining) false
+      :else (do
+              (Thread/sleep 25)
+              (recur (dec remaining))))))
+
 (defn update-for
   [update-id chat-id user-id text]
   {:update_id update-id
@@ -130,6 +140,38 @@
              (:session-id (second @calls))))
       (is (not= (:session-id (first @calls))
                 (:session-id (nth @calls 2))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-async-chat-sends-agent-lifecycle-messages
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        sent (atom [])
+        active-tasks (atom {})
+        system {:store store
+                :event-bus (system-events/create-event-bus)
+                :event-sink (fn [_] nil)}
+        config {:bot-token "token"
+                :allowlist {:allow-all? true}}
+        opts {:async-chat? true
+              :active-tasks active-tasks
+              :send-message-fn (fn [chat-id text]
+                                 (swap! sent conj {:chat-id chat-id :text text}))
+              :send-message-draft-fn (fn [& _] nil)
+              :send-chat-action-fn (fn [& _] nil)}]
+    (try
+      (with-redefs [chat/run! (chat-stub
+                               (fn [_ emit!]
+                                 (emit! :message-update {:delta "pong"})
+                                 (emit! :message-end {:content "pong" :final? true})
+                                 {:content "pong"}))]
+        (is (= :processed
+               (telegram/process-update! system config opts (update-for 1 100 7 "hi")))))
+      (is (eventually #(= [{:chat-id 100 :text "Agent started."}
+                           {:chat-id 100 :text "Agent stopped."}]
+                          @sent)))
+      (is (eventually #(empty? @active-tasks)))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))

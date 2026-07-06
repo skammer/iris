@@ -75,6 +75,16 @@
       (telegram-operation-failed! system chat-id operation e)
       nil)))
 
+(def ^:private agent-started-content "Agent started.")
+(def ^:private agent-stopped-content "Agent stopped.")
+
+(defn- send-lifecycle-message!
+  [system config opts chat-id operation content]
+  (let [send! (or (:send-message-fn opts)
+                  (fn [cid text] (tg-api/send-message! (:bot-token config) cid text)))]
+    (safe-telegram! system chat-id operation
+                    #(send! chat-id content))))
+
 (defn- session-history
   [system session-id]
   (if (and (not (str/blank? (or session-id "")))
@@ -240,16 +250,30 @@
   [system config opts chat chat-id session-id user-text]
   (let [active-tasks (:active-tasks opts)
         task-id (str (java.util.UUID/randomUUID))
+        registered (promise)
+        lifecycle-started? (atom false)
         task (future
+               @registered
+               (send-lifecycle-message! system config opts chat-id
+                                        :agent-start-notification
+                                        agent-started-content)
+               (reset! lifecycle-started? true)
                (try
                  (run-chat! system config opts chat chat-id session-id user-text)
                  (finally
+                   (when @lifecycle-started?
+                     (send-lifecycle-message! system config opts chat-id
+                                              :agent-stop-notification
+                                              agent-stopped-content))
                    (swap! active-tasks
                           (fn [tasks]
                             (if (= task-id (get-in tasks [chat-id :id]))
                               (dissoc tasks chat-id)
                               tasks))))))]
-    (swap! active-tasks assoc chat-id {:id task-id :future task})
+    (swap! active-tasks assoc chat-id {:id task-id
+                                       :future task
+                                       :session-id session-id})
+    (deliver registered true)
     task))
 
 (defn process-update!
