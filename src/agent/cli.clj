@@ -32,6 +32,7 @@
     "  clojure -M -m agent.core --no-session \"ephemeral prompt\""
     "  clojure -M -m agent.core config init"
     "  clojure -M -m agent.core config migrate path/to/config.edn"
+    "  clojure -M -m agent.core config set dotted.path value"
     "  clojure -M -m agent.core skills [prefix]"
     "  clojure -M -m agent.core loop --prompt \"task\" --plan LOOP_PLAN.md --max 10"
     "  clojure -M -m agent.core serve"
@@ -199,7 +200,7 @@
   (binding [*print-namespace-maps* false]
     (prn value)))
 
-(defn- run-config-command! [prompt]
+(defn- run-config-command! [prompt config-path]
   (let [[subcommand path & extra] (config-args prompt)]
     (case subcommand
       "init"
@@ -216,7 +217,17 @@
                           {:type :invalid-cli-args})))
         (print-edn! (cfg/migrate-config-file path)))
 
-      (throw (ex-info "config command must be init or migrate"
+      "set"
+      (do
+        (when (or (str/blank? path) (not (seq extra)))
+          (throw (ex-info "config set requires path and value"
+                          {:type :invalid-cli-args})))
+        (print-edn! (cfg/set-config-value!
+                     path
+                     (str/join " " extra)
+                     {:explicit-path config-path})))
+
+      (throw (ex-info "config command must be init, migrate, or set"
                       {:type :invalid-cli-args
                        :subcommand subcommand})))))
 
@@ -314,7 +325,7 @@
       (run-serve! config-path)
 
       (= "config" command)
-      (run-config-command! prompt)
+      (run-config-command! prompt config-path)
 
       (= "skills" command)
       (with-system! config-path #(print-skills! % prompt))

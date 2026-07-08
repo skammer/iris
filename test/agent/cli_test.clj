@@ -3,6 +3,7 @@
 	   [agent.chat :as chat]
 	   [agent.cli :as cli]
 	   [agent.cli.render :as cli-render]
+   [agent.config :as config]
 	   [agent.logging :as logging]
 	   [agent.nrepl :as nrepl]
    [agent.sessions.service :as sessions]
@@ -47,6 +48,24 @@
                                        "--max" "3"
                                        "--run" "clojure -M:test"])
                       [:command :loop-prompt :loop-plan :loop-max :loop-run :prompt]))))
+
+(deftest config-set-cli-passes-path-value-and-config-path-test
+  (let [calls (atom [])]
+    (with-redefs [config/set-config-value! (fn [path value opts]
+                                             (swap! calls conj [path value opts])
+                                             {:path [:llm :providers :deepseek :model]
+                                              :file "local.edn"
+                                              :created? false})]
+      (is (= "{:path [:llm :providers :deepseek :model], :file \"local.edn\", :created? false}\n"
+             (with-out-str
+               (cli/main ["--config" "local.edn"
+                          "config" "set"
+                          "llm.providers.deepseek.model"
+                          "deepseek chat"])))))
+    (is (= [["llm.providers.deepseek.model"
+             "deepseek chat"
+             {:explicit-path "local.edn"}]]
+           @calls))))
 
 (deftest one-shot-cli-closes-system-test
   (let [closed (atom [])]

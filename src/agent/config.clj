@@ -7,6 +7,7 @@
    [agent.defaults :as defaults]
    [clojure.edn :as edn]
    [clojure.java.io :as io]
+   [clojure.pprint :as pprint]
    [clojure.string :as str]))
 
 (def default-config
@@ -685,6 +686,210 @@
   [file]
   (when (.exists file)
     (load-config-file-with-includes file [])))
+
+(defn- config-source-entry [file cfg]
+  {:file (io/file file)
+   :path (canonical-path file)
+   :config cfg
+   :stripped-config (strip-loader-config cfg)})
+
+(defn- config-source-chain* [file stack]
+  (let [path (canonical-path file)]
+    (when (some #(= path %) stack)
+      (throw (ex-info (str "Config include cycle: " path)
+                      {:type :config-include-cycle
+                       :path path
+                       :stack (conj (vec stack) path)})))
+    (let [cfg (some-> (load-edn-file path)
+                      normalize-iris-namespaced-config)
+          base-dir (.getParentFile (io/file path))
+          stack* (conj (vec stack) path)
+          includes (config-includes path cfg)
+          included-sources (mapcat (fn [include-path]
+                                     (let [include-file (resolve-include-file base-dir include-path)]
+                                       (when-not (.exists include-file)
+                                         (throw (ex-info (str "Config include not found: "
+                                                              (.getPath include-file))
+                                                         {:type :config-include-not-found
+                                                          :path (.getPath include-file)
+                                                          :include include-path
+                                                          :declared-from path})))
+                                       (config-source-chain* include-file stack*)))
+                                   includes)]
+      (conj (vec included-sources)
+            (config-source-entry (io/file path) cfg)))))
+
+(defn- config-source-chain [file]
+  (when (.exists file)
+    (config-source-chain* file [])))
+
+(defn- distinct-sources [sources]
+  (:sources
+   (reduce (fn [{:keys [seen] :as acc} source]
+             (if (contains? seen (:path source))
+               acc
+               (-> acc
+                   (update :seen conj (:path source))
+                   (update :sources conj source))))
+           {:seen #{} :sources []}
+           sources)))
+
+(defn- config-sources [explicit-path]
+  (let [global-file (io/file (global-config-dir) config-file-name)
+        local-file (io/file (local-config-dir) config-file-name)
+        explicit-file (when (nonblank explicit-path) (io/file explicit-path))]
+    (distinct-sources
+     (concat (config-source-chain global-file)
+             (config-source-chain local-file)
+             (when explicit-file
+               (config-source-chain explicit-file))))))
+
+(defn- source-config [source]
+  (or (:stripped-config source) {}))
+
+(defn- effective-edit-config [sources]
+  (apply deep-merge default-config (map source-config sources)))
+
+(defn- trim-leading-colon [text]
+  (if (str/starts-with? text ":")
+    (subs text 1)
+    text))
+
+(defn- segment-keyword [segment]
+  (let [text (-> (str segment)
+                 trim-leading-colon
+                 (str/replace "_" "-"))]
+    (if-let [[_ ns name] (re-matches #"([^/]+)/(.+)" text)]
+      (keyword ns name)
+      (keyword text))))
+
+(defn- segment-candidates [segment]
+  (let [raw (trim-leading-colon (str segment))
+        hyphen (str/replace raw "_" "-")]
+    (set (distinct [raw hyphen (str hyphen "?")]))))
+
+(defn- key-text [k]
+  (if (keyword? k)
+    (if-let [ns (namespace k)]
+      (str ns "/" (name k))
+      (name k))
+    (str k)))
+
+(defn- matching-key [m segment]
+  (when (map? m)
+    (let [candidates (segment-candidates segment)]
+      (first (filter #(contains? candidates (key-text %)) (keys m))))))
+
+(defn- split-config-path [path]
+  (let [segments (->> (str/split (str path) #"\.")
+                      (map str/trim)
+                      (remove str/blank?)
+                      vec)]
+    (when-not (seq segments)
+      (throw (ex-info "config set path must be non-empty"
+                      {:type :invalid-config-path
+                       :path path})))
+    segments))
+
+(defn- resolve-config-path [cfg path]
+  (loop [node cfg
+         segments (split-config-path path)
+         resolved []]
+    (if-not (seq segments)
+      resolved
+      (let [segment (first segments)
+            k (or (matching-key node segment)
+                  (segment-keyword segment))]
+        (recur (when (map? node) (get node k))
+               (next segments)
+               (conj resolved k))))))
+
+(defn- contains-config-path? [cfg path]
+  (loop [node cfg
+         ks path]
+    (cond
+      (empty? ks) true
+      (not (map? node)) false
+      (contains? node (first ks)) (recur (get node (first ks)) (next ks))
+      :else false)))
+
+(defn- source-containing-path [sources path]
+  (last (filter #(contains-config-path? (source-config %) path) sources)))
+
+(defn- default-set-target-file [explicit-path]
+  (cond
+    (nonblank explicit-path)
+    (io/file explicit-path)
+
+    (.exists (io/file (local-config-dir) config-file-name))
+    (io/file (local-config-dir) config-file-name)
+
+    :else
+    (io/file (global-config-dir) config-file-name)))
+
+(defn- read-config-map [file]
+  (let [cfg (some-> (load-edn-file (.getPath file))
+                    normalize-iris-namespaced-config)]
+    (cond
+      (nil? cfg) {}
+      (map? cfg) cfg
+      :else (throw (ex-info (str "Config file must contain a map: " (.getPath file))
+                            {:type :config-file-invalid
+                             :path (.getPath file)})))))
+
+(defn- assoc-config-in [m [k & ks] value]
+  (let [m* (if (map? m) m {})]
+    (if (seq ks)
+      (assoc m* k (assoc-config-in (get m* k) ks value))
+      (assoc m* k value))))
+
+(defn- write-config-map! [file cfg]
+  (when-let [parent (.getParentFile file)]
+    (.mkdirs parent))
+  (spit file
+        (binding [*print-namespace-maps* false]
+          (with-out-str
+            (pprint/pprint cfg)))))
+
+(defn- read-complete-edn [text]
+  (let [reader (java.io.PushbackReader.
+                (java.io.StringReader. text))
+        value (edn/read {:eof ::eof} reader)]
+    (when (= ::eof value)
+      (throw (ex-info "empty EDN value" {:type :invalid-config-value})))
+    (loop [ch (.read reader)]
+      (cond
+        (= -1 ch) value
+        (Character/isWhitespace (char ch)) (recur (.read reader))
+        :else (throw (ex-info "trailing characters after EDN value"
+                              {:type :invalid-config-value}))))))
+
+(defn parse-config-value [text]
+  (try
+    (let [value (read-complete-edn (str/trim (str text)))]
+      (if (symbol? value)
+        (str text)
+        value))
+    (catch Exception _
+      (str text))))
+
+(defn set-config-value!
+  ([path value-text]
+   (set-config-value! path value-text nil))
+  ([path value-text {:keys [explicit-path]}]
+   (let [sources (config-sources explicit-path)
+         resolved-path (resolve-config-path (effective-edit-config sources) path)
+         target-source (source-containing-path sources resolved-path)
+         target-file (or (:file target-source)
+                         (default-set-target-file explicit-path))
+         existed? (.exists target-file)
+         value (parse-config-value value-text)
+         cfg (if existed? (read-config-map target-file) {})
+         cfg* (assoc-config-in cfg resolved-path value)]
+     (write-config-map! target-file cfg*)
+     {:path resolved-path
+      :file (.getPath target-file)
+      :created? (not existed?)})))
 
 (defn migrate-config-file
   [path]

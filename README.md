@@ -55,6 +55,9 @@ Configuration:
 - LLM model settings live under provider entries: `{:llm {:active-provider :ollama :providers {:ollama {:type :ollama :base-url "http://localhost:11434" :model "llama3.2:3b"} :deepseek {:type :openai-compatible :api :chat-completions :base-url "https://api.deepseek.com/v1" :api-key "..." :model "deepseek-chat"}}}}`.
 - OpenAI-compatible providers default to `:api :chat-completions`; use `:api :responses` only for endpoints/models that support `/responses`.
 - Legacy LLM config can be converted with `clojure -M -m agent.core config migrate path/to/config.edn`.
+- Config values can be written with `clojure -M -m agent.core config set dotted.path value`, for example `clojure -M -m agent.core config set channel-adapters.telegram.rich_messages true`.
+- `config set` parses values as EDN (`true`, `9090`, `:responses`, vectors/maps); bare words are written as strings. `_` in path segments matches `-`, and existing boolean keys ending in `?` are auto-resolved.
+- `config set` writes the highest-precedence source file that already defines the path, including files listed in `:config/includes`. New paths go to `--config` when supplied, else existing `./.iris/config.edn`, else `~/.config/iris/config.edn`.
 - If a generated file starts with `#:iris`, nested keys like `:api` read as `:iris/api`; current loader normalizes this, but prefer normal map syntax: `{:iris/config-version 1 :api {:port 9090}}`.
 - Config dir resolution: `IRIS_CONFIG_DIR`, then `$XDG_CONFIG_HOME/iris`, then `~/.config/iris`.
 - Project-local overlay dir: `./.iris/`.
