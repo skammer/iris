@@ -338,6 +338,16 @@
                                   identity)
               row->channel-session))))
 
+(defn list-channel-session-mappings [store source]
+  (common/with-connection
+    store
+    (fn [conn]
+      (mapv row->channel-session
+            (common/select-many conn
+                                (list-channel-session-mappings-sqlvec
+                                 {:source (common/normalize-name source)})
+                                identity)))))
+
 (defn upsert-channel-session-mapping!
   [store {:keys [source external-chat-id session-id metadata]}]
   (let [now (common/now-str)

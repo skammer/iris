@@ -107,6 +107,12 @@ where source = :source
   and external_chat_id = :external_chat_id
 limit 1
 
+-- :name list-channel-session-mappings :? :*
+select source, external_chat_id, session_id, metadata_json, created_at, updated_at
+from channel_session_mappings
+where source = :source
+order by updated_at desc
+
 -- :name upsert-channel-session-mapping :! :n
 insert into channel_session_mappings
   (source, external_chat_id, session_id, metadata_json, created_at, updated_at)

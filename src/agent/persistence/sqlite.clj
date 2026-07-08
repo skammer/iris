@@ -173,6 +173,9 @@
 (defn get-channel-session-mapping [store source external-chat-id]
   (sessions/get-channel-session-mapping store source external-chat-id))
 
+(defn list-channel-session-mappings [store source]
+  (sessions/list-channel-session-mappings store source))
+
 (defn ensure-channel-session! [store mapping]
   (sessions/ensure-channel-session! store mapping))
 

@@ -144,7 +144,7 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
-(deftest telegram-async-chat-sends-agent-lifecycle-messages
+(deftest telegram-async-chat-does-not-send-agent-lifecycle-messages
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path :evict-on-close? true})
         sent (atom [])
@@ -168,11 +168,47 @@
                                  {:content "pong"}))]
         (is (= :processed
                (telegram/process-update! system config opts (update-for 1 100 7 "hi")))))
-      (is (eventually #(= [{:chat-id 100 :text "Agent started."}
-                           {:chat-id 100 :text "Agent stopped."}]
-                          @sent)))
       (is (eventually #(empty? @active-tasks)))
+      (is (not-any? #(#{"Agent started." "Agent stopped."} (:text %)) @sent))
       (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-service-start-stop-sends-lifecycle-to-known-chats
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        sent (atom [])
+        system {:store store
+                :config {:channel-adapters {:telegram {:enabled true
+                                                       :bot-token "token"
+                                                       :poll-timeout-seconds 1
+                                                       :poll-limit 1
+                                                       :allowlist {:allow-all? true}}}}
+                :event-sink (fn [_] nil)}
+        service (telegram/create-service
+                 system
+                 {:get-updates-fn (fn [_]
+                                    (Thread/sleep 50)
+                                    [])
+                  :send-message-fn (fn [chat-id text]
+                                     (swap! sent conj {:chat-id chat-id :text text}))})]
+    (try
+      (sqlite/ensure-channel-session!
+       store
+       {:source :telegram
+        :external-chat-id 100
+        :title "Telegram: Test"
+        :metadata {:chat {:id 100 :type "private"}}})
+      (telegram/start! service)
+      (is (= [{:chat-id 100 :text "Agent started."}] @sent))
+      (telegram/stop! service 1000)
+      (is (= [{:chat-id 100 :text "Agent started."}
+              {:chat-id 100 :text "Agent stopped."}]
+             @sent))
+      (telegram/stop! service 1000)
+      (is (= 2 (count @sent)))
+      (finally
+        (telegram/stop! service 1000)
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 

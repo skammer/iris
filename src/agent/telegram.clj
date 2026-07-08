@@ -85,6 +85,24 @@
     (safe-telegram! system chat-id operation
                     #(send! chat-id content))))
 
+(defn- parse-chat-id [value]
+  (let [value* (str value)]
+    (if (re-matches #"-?\d+" value*)
+      (Long/parseLong value*)
+      value*)))
+
+(defn- lifecycle-chat-ids [system]
+  (when-let [store (:store system)]
+    (->> (sqlite/list-channel-session-mappings store :telegram)
+         (keep #(some-> (:external-chat-id %) parse-chat-id))
+         distinct
+         vec)))
+
+(defn- notify-lifecycle!
+  [system config opts operation content]
+  (doseq [chat-id (lifecycle-chat-ids system)]
+    (send-lifecycle-message! system config opts chat-id operation content)))
+
 (defn- session-history
   [system session-id]
   (if (and (not (str/blank? (or session-id "")))
@@ -251,20 +269,11 @@
   (let [active-tasks (:active-tasks opts)
         task-id (str (java.util.UUID/randomUUID))
         registered (promise)
-        lifecycle-started? (atom false)
         task (future
                @registered
-               (send-lifecycle-message! system config opts chat-id
-                                        :agent-start-notification
-                                        agent-started-content)
-               (reset! lifecycle-started? true)
                (try
                  (run-chat! system config opts chat chat-id session-id user-text)
                  (finally
-                   (when @lifecycle-started?
-                     (send-lifecycle-message! system config opts chat-id
-                                              :agent-stop-notification
-                                              agent-stopped-content))
                    (swap! active-tasks
                           (fn [tasks]
                             (if (= task-id (get-in tasks [chat-id :id]))
@@ -458,13 +467,21 @@
                                                :entity-type :telegram
                                                :payload {:message (.getMessage e)
                                                          :type (some-> e ex-data :type)}})
-                        (Thread/sleep 1000)))))))))
+                        (Thread/sleep 1000))))))
+        (notify-lifecycle! system config opts
+                           :agent-start-notification
+                           agent-started-content))))
   service)
 
 (defn stop!
   ([service] (stop! service 5000))
   ([service timeout-ms]
    (when service
+     (let [was-running? @(:running? service)]
+       (when was-running?
+         (notify-lifecycle! (:system service) (:config service) (:opts service)
+                            :agent-stop-notification
+                            agent-stopped-content)))
      (reset! (:running? service) false)
      (when-let [f @(:future service)]
        (deref f timeout-ms ::timeout)
