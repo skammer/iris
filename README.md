@@ -67,6 +67,23 @@ Configuration:
 - `:memory {:prompt {:paths ["MEMORY.md"]}}` uses paths relative to process cwd unless absolute paths are configured.
 - `:skills {:dirs ["skills"]}` resolves relative dirs as config-dir first, then process cwd.
 
+WASM / Endive:
+
+- Standalone Clojure library lives in `export/endive-clj` and is linked from Iris via `:local/root`; public API is `endive-clj.core`: `compile-module`, `instantiate`, `invoke`, `run-wasi`, `close!`.
+- Iris tool `wasm_execute` is disabled by default. Enable with `clojure -M -m agent.core config set tools.wasm.enabled true`.
+- Tool execution needs `:wasm-execute` permission and accepts Base64 Wasm:
+
+```clojure
+{:wasm-base64 "AGFzbQEAAA..."
+ :mode "invoke"
+ :export "add"
+ :args [2 40]}
+```
+
+- WASI mounts are data maps. Virtual mounts are safest: `{:guest "/workspace" :type :virtual :files {"in.txt" "hi"}}`.
+- Host mounts require configured `tools.wasm.wasi.fs.allowed-roots`; read-only host mounts are copied to Jimfs, writable host mounts use the host path directly.
+- Network is not WASI sockets. It is an opt-in host-function pack controlled by `tools.wasm.network`, not by tool input.
+
 OpenTelemetry:
 
 - Iris uses μ/log's OTLP HTTP publisher. Supported signals: `traces`, `logs`. Real OTLP `metrics` export is not implemented by the current publisher.

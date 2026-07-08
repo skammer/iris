@@ -19,6 +19,7 @@
    [agent.tools.common.skills :as skills-tool]
    [agent.tools.common.telegram :as telegram-tool]
    [agent.tools.common.todo :as todo-tool]
+   [agent.tools.common.wasm :as wasm-tool]
    [agent.tools.core :as tools]
    [clojure.set :as set]
    [clojure.string :as str]))
@@ -152,6 +153,7 @@
    (let [http-cfg (get cfg :http)
          fs-cfg (get cfg :fs)
          homeassistant-cfg (get cfg :homeassistant)
+         wasm-cfg (get cfg :wasm)
          shell-cfg (get cfg :shell)
          todo-cfg (get cfg :todo)
          mcp-cfg (get cfg :mcp)
@@ -203,6 +205,9 @@
 
        (true? (:enabled homeassistant-cfg))
        (tools/register-tool (homeassistant-tool/create-homeassistant-tool homeassistant-cfg))
+
+       (true? (:enabled wasm-cfg))
+       (tools/register-tool (wasm-tool/create-wasm-tool wasm-cfg))
 
        skills-registry
        (tools/register-tool (skills-tool/create-skills-list-tool skills-registry))

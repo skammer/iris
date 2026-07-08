@@ -151,10 +151,10 @@
                   :default-headers {"User-Agent" "iris/0.1"}}
            :yolo? false
            :max-parallelism 6
-           :permissions {:api [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant]
-                         :ui [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant]
-                         :agent [:http-request :memory-read :memory-write :todo-read :todo-write :magi-evaluate :homeassistant]
-                         :chat [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec :magi-evaluate :homeassistant]}
+           :permissions {:api [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute]
+                         :ui [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute]
+                         :agent [:http-request :memory-read :memory-write :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute]
+                         :chat [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec :magi-evaluate :homeassistant :wasm-execute]}
            :policy {:allowlist []
                     :blocklist []
                     :tool-scopes {}}
@@ -169,6 +169,23 @@
                            :timeout-ms 10000
                            :allowed-domains #{:light :switch :scene :script}
                            :global-services #{}}
+           :wasm {:enabled false
+                  :timeout-ms 30000
+                  :max-wasm-bytes 1048576
+                  :max-stdout-bytes 1048576
+                  :max-stderr-bytes 1048576
+                  :max-memory-pages 64
+                  :wasi {:args []
+                         :env {}
+                         :stdin ""
+                         :fs {:mounts []
+                              :allowed-roots []
+                              :max-copy-bytes 10485760}}
+                  :network {:enabled? false
+                            :allowed-hosts []
+                            :allow-private? false
+                            :timeout-ms 10000
+                            :max-response-bytes 1048576}}
            :todo {:enabled true}
            :shell {:enabled true
                    :roots ["."]

@@ -83,9 +83,9 @@
 	      (is (not (contains? (get-in cfg [:chat :guardrails :doom-loop]) :action)))
       (is (false? (get-in cfg [:tools :yolo?])))
       (is (= 6 (get-in cfg [:tools :max-parallelism])))
-      (is (= [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant]
+      (is (= [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute]
              (get-in cfg [:tools :permissions :api])))
-      (is (= [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec :magi-evaluate :homeassistant]
+      (is (= [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec :magi-evaluate :homeassistant :wasm-execute]
              (get-in cfg [:tools :permissions :chat])))
       (is (= {:allowlist []
               :blocklist []
@@ -99,6 +99,24 @@
               :allowed-domains #{:light :switch :scene :script}
               :global-services #{}}
              (get-in cfg [:tools :homeassistant])))
+      (is (= {:enabled false
+              :timeout-ms 30000
+              :max-wasm-bytes 1048576
+              :max-stdout-bytes 1048576
+              :max-stderr-bytes 1048576
+              :max-memory-pages 64
+              :wasi {:args []
+                     :env {}
+                     :stdin ""
+                     :fs {:mounts []
+                          :allowed-roots []
+                          :max-copy-bytes 10485760}}
+              :network {:enabled? false
+                        :allowed-hosts []
+                        :allow-private? false
+                        :timeout-ms 10000
+                        :max-response-bytes 1048576}}
+             (get-in cfg [:tools :wasm])))
       (is (= {:enabled? false
               :mode :assistive
               :fallback :human
@@ -216,6 +234,26 @@
               :allowed-domains [:light :switch]
               :global-services ["scene.reload"]}
              (get-in cfg [:tools :homeassistant]))))))
+
+(deftest wasm-env-overrides-test
+  (with-isolated-config [_root {"AGENT_WASM_ENABLED" "true"
+                                "AGENT_WASM_TIMEOUT_MS" "5000"
+                                "AGENT_WASM_MAX_BYTES" "4096"
+                                "AGENT_WASM_MAX_MEMORY_PAGES" "8"
+                                "AGENT_WASM_NETWORK_ENABLED" "true"
+                                "AGENT_WASM_NETWORK_ALLOWED_HOSTS" "example.com,api.example.com"
+                                "AGENT_WASM_NETWORK_ALLOW_PRIVATE" "true"}]
+    (let [cfg (config/load-config)]
+      (is (= true (get-in cfg [:tools :wasm :enabled])))
+      (is (= 5000 (get-in cfg [:tools :wasm :timeout-ms])))
+      (is (= 4096 (get-in cfg [:tools :wasm :max-wasm-bytes])))
+      (is (= 8 (get-in cfg [:tools :wasm :max-memory-pages])))
+      (is (= {:enabled? true
+              :allowed-hosts ["example.com" "api.example.com"]
+              :allow-private? true
+              :timeout-ms 10000
+              :max-response-bytes 1048576}
+             (get-in cfg [:tools :wasm :network]))))))
 
 (deftest magi-env-overrides-test
   (with-isolated-config [_root {"AGENT_MAGI_ENABLED" "true"

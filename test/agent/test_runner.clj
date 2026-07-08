@@ -13,6 +13,7 @@
    [agent.chat.turn-test]
    [agent.chat-test]
    [clojure.test :as t]
+   [endive-clj.core-test]
    [agent.config-test]
    [agent.health-test]
    [agent.system-test]
@@ -55,6 +56,7 @@
    [agent.tools.common.http-test]
    [agent.tools.common.telegram-test]
    [agent.tools.common.todo-test]
+   [agent.tools.common.wasm-test]
    [agent.tools.common.shell-test]
    [agent.tools.core-test]
    [clojure.java.io :as io]))
@@ -71,6 +73,7 @@
     agent.chat.streaming-test
     agent.chat.turn-test
     agent.chat-test
+    endive-clj.core-test
     agent.config-test
     agent.health-test
     agent.system-test
@@ -113,6 +116,7 @@
     agent.tools.common.http-test
     agent.tools.common.telegram-test
     agent.tools.common.todo-test
+    agent.tools.common.wasm-test
     agent.tools.common.shell-test
     agent.tools.core-test])
 

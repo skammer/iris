@@ -172,6 +172,13 @@
    {:names "AGENT_HOMEASSISTANT_TIMEOUT_MS" :parse parse-long* :apply (assoc-path [:tools :homeassistant :timeout-ms])}
    {:names "AGENT_HOMEASSISTANT_ALLOWED_DOMAINS" :parse parse-keyword-csv :apply (assoc-path [:tools :homeassistant :allowed-domains])}
    {:names "AGENT_HOMEASSISTANT_GLOBAL_SERVICES" :parse parse-csv :apply (assoc-path [:tools :homeassistant :global-services])}
+   {:names "AGENT_WASM_ENABLED" :parse parse-bool :apply (assoc-path [:tools :wasm :enabled])}
+   {:names "AGENT_WASM_TIMEOUT_MS" :parse parse-long* :apply (assoc-path [:tools :wasm :timeout-ms])}
+   {:names "AGENT_WASM_MAX_BYTES" :parse parse-long* :apply (assoc-path [:tools :wasm :max-wasm-bytes])}
+   {:names "AGENT_WASM_MAX_MEMORY_PAGES" :parse parse-long* :apply (assoc-path [:tools :wasm :max-memory-pages])}
+   {:names "AGENT_WASM_NETWORK_ENABLED" :parse parse-bool :apply (assoc-path [:tools :wasm :network :enabled?])}
+   {:names "AGENT_WASM_NETWORK_ALLOWED_HOSTS" :parse parse-csv :apply (assoc-path [:tools :wasm :network :allowed-hosts])}
+   {:names "AGENT_WASM_NETWORK_ALLOW_PRIVATE" :parse parse-bool :apply (assoc-path [:tools :wasm :network :allow-private?])}
    {:names "AGENT_MCP_ENABLED" :parse parse-bool :apply (assoc-path [:tools :mcp :enabled])}
    {:names "AGENT_TOOL_ALLOWLIST" :parse parse-keyword-csv :apply (assoc-path [:tools :policy :allowlist])}
    {:names "AGENT_TOOL_BLOCKLIST" :parse parse-keyword-csv :apply (assoc-path [:tools :policy :blocklist])}
