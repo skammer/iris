@@ -10,6 +10,7 @@
    [agent.skills :as skills]
    [agent.nrepl :as nrepl]
    [agent.system :as system]
+   [agent.wasm.bundles :as wasm-bundles]
    [clojure.string :as str]))
 
 (def ^:dynamic *add-shutdown-hook!*
@@ -33,6 +34,10 @@
     "  clojure -M -m agent.core config init"
     "  clojure -M -m agent.core config migrate path/to/config.edn"
     "  clojure -M -m agent.core config set dotted.path value"
+    "  clojure -M -m agent.core bundle install path/to/package.skill"
+    "  clojure -M -m agent.core bundle list"
+    "  clojure -M -m agent.core bundle enable bundle.id [version]"
+    "  clojure -M -m agent.core bundle disable bundle.id"
     "  clojure -M -m agent.core skills [prefix]"
     "  clojure -M -m agent.core loop --prompt \"task\" --plan LOOP_PLAN.md --max 10"
     "  clojure -M -m agent.core serve"
@@ -101,7 +106,7 @@
           "--no-session"
           (recur (next remaining) (assoc parsed :no-session? true))
 
-          (if (and (contains? #{"serve" "loop" "skills" "config"} arg)
+          (if (and (contains? #{"serve" "loop" "skills" "config" "bundle"} arg)
                    (empty? (:prompt-parts parsed))
                    (nil? (:command parsed)))
             (recur (next remaining) (assoc parsed :command arg))
@@ -231,6 +236,75 @@
                       {:type :invalid-cli-args
                        :subcommand subcommand})))))
 
+(defn- bundle-key [id version]
+  (if (str/blank? version)
+    id
+    (str id "@" version)))
+
+(defn- current-enabled-bundles [config-path]
+  (vec (get-in (cfg/load-config config-path) [:tools :wasm-bundles :enabled] [])))
+
+(defn- set-enabled-bundles! [config-path enabled]
+  (cfg/set-config-value!
+   "tools.wasm-bundles.enabled"
+   (pr-str (vec enabled))
+   {:explicit-path config-path}))
+
+(defn- print-bundles! [bundles]
+  (if (seq bundles)
+    (doseq [{:keys [id name version root]} bundles]
+      (println (str id " " version " /" name " " root)))
+    (println "No bundles found.")))
+
+(defn- run-bundle-command! [prompt config-path]
+  (let [[subcommand a b & extra] (config-args prompt)
+        config (cfg/load-config config-path)
+        bundle-cfg (get-in config [:tools :wasm-bundles])]
+    (case subcommand
+      "install"
+      (do
+        (when (or (str/blank? a) b (seq extra))
+          (throw (ex-info "bundle install requires exactly one package path"
+                          {:type :invalid-cli-args})))
+        (print-edn! (wasm-bundles/install-bundle! bundle-cfg a)))
+
+      "list"
+      (do
+        (when (or a b (seq extra))
+          (throw (ex-info "bundle list takes no arguments"
+                          {:type :invalid-cli-args})))
+        (print-bundles! (wasm-bundles/discover-bundles bundle-cfg)))
+
+      "installed"
+      (do
+        (when (or a b (seq extra))
+          (throw (ex-info "bundle installed takes no arguments"
+                          {:type :invalid-cli-args})))
+        (print-bundles! (wasm-bundles/installed-bundles bundle-cfg)))
+
+      "enable"
+      (do
+        (when (or (str/blank? a) (seq extra))
+          (throw (ex-info "bundle enable requires id and optional version"
+                          {:type :invalid-cli-args})))
+        (let [enabled (current-enabled-bundles config-path)
+              key (bundle-key a b)]
+          (print-edn! (set-enabled-bundles! config-path (distinct (conj enabled key))))))
+
+      "disable"
+      (do
+        (when (or (str/blank? a) b (seq extra))
+          (throw (ex-info "bundle disable requires exactly one id"
+                          {:type :invalid-cli-args})))
+        (let [enabled (remove #(or (= a (str %))
+                                   (str/starts-with? (str %) (str a "@")))
+                              (current-enabled-bundles config-path))]
+          (print-edn! (set-enabled-bundles! config-path enabled))))
+
+      (throw (ex-info "bundle command must be install, list, installed, enable, or disable"
+                      {:type :invalid-cli-args
+                       :subcommand subcommand})))))
+
 (defn- create-system!
   [config-path]
   (cfg/init-config!)
@@ -326,6 +400,9 @@
 
       (= "config" command)
       (run-config-command! prompt config-path)
+
+      (= "bundle" command)
+      (run-bundle-command! prompt config-path)
 
       (= "skills" command)
       (with-system! config-path #(print-skills! % prompt))

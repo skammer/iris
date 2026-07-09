@@ -11,6 +11,7 @@
 - [[a2a-http-tasks]] - Async HTTP task API and A2A compatibility notes
 - [[configuration-observability]] - Config overlay order and OTel export
 - [[session-entries-unification]] - Deferred design: single source of truth for messages
+- [[wasm-tool-skill-bundles]] - `.tool`/`.skill` WASM bundle format and runtime
 - [[design-principles]] - Core architectural decisions
 - [[component-structure]] - Module organization
 - [[security-model]] - Sandboxing and authentication

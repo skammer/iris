@@ -117,6 +117,20 @@
                         :timeout-ms 10000
                         :max-response-bytes 1048576}}
              (get-in cfg [:tools :wasm])))
+      (is (= {:enabled? true
+              :install-dir (str (io/file root "home" ".config" "iris" "bundles" "installed"))
+              :package-dir (str (io/file root "home" ".config" "iris" "bundles" "packages"))
+              :dev-roots []
+              :enabled []
+              :settings {}
+              :timeout-ms 30000
+              :max-stdout-bytes 1048576
+              :max-stderr-bytes 1048576
+              :max-memory-pages 64
+              :http {:timeout-ms 10000
+                     :max-timeout-ms 30000
+                     :max-response-bytes 1048576}}
+             (get-in cfg [:tools :wasm-bundles])))
       (is (= {:enabled? false
               :mode :assistive
               :fallback :human

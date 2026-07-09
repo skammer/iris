@@ -7,6 +7,11 @@
   "skill": "SKILL.md",
   "url": "https://github.com/skammer/iris",
   "tags": ["iris", "homeassistant", "smart-home", "wasi"],
+  "requiredPermissions": ["wasm-execute"],
+  "actionKey": "action",
+  "readOnlyActions": ["get_state", "list_states", "search_states", "list_services"],
+  "parallelSafeActions": ["get_state", "list_states", "search_states", "list_services"],
+  "sensitiveActions": ["call_service"],
   "runtime": {
     "kind": "wasi-preview1",
     "stdin": "json",

@@ -20,7 +20,8 @@
    [agent.telegram :as telegram]
    [agent.telemetry :as telemetry]
    [agent.telemetry.observer :as telemetry-observer]
-   [agent.tools.service :as tool-service]))
+   [agent.tools.service :as tool-service]
+   [agent.wasm.bundles :as wasm-bundles]))
 
 (defn create-store
   [cfg]
@@ -41,6 +42,13 @@
 (defn create-skills-registry
   [cfg]
   (skills/create-registry cfg))
+
+(defn create-skills-registry-from-config
+  [cfg]
+  (create-skills-registry
+   (assoc (:skills cfg)
+          :bundle-dirs (wasm-bundles/bundle-skill-dirs
+                        (get-in cfg [:tools :wasm-bundles])))))
 
 (defn create-memory-service
   ([cfg store]
@@ -149,7 +157,7 @@
                        :broker broker-instance
                        :event-sink event-sink
                        :chat-service chat-service
-                       :skills-registry (create-skills-registry (:skills cfg))
+                       :skills-registry (create-skills-registry-from-config cfg)
                        :memory-service memory-service}]
       (-> base-system
           (assoc :tool-registry (build-tool-registry base-system cfg))

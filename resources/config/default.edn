@@ -164,6 +164,19 @@
                           :allow-private? false
                           :timeout-ms 10000
                           :max-response-bytes 1048576}}
+         :wasm-bundles {:enabled? true
+                        :install-dir "bundles/installed"
+                        :package-dir "bundles/packages"
+                        :dev-roots []
+                        :enabled []
+                        :settings {}
+                        :timeout-ms 30000
+                        :max-stdout-bytes 1048576
+                        :max-stderr-bytes 1048576
+                        :max-memory-pages 64
+                        :http {:timeout-ms 10000
+                               :max-timeout-ms 30000
+                               :max-response-bytes 1048576}}
          :todo {:enabled true}
          :shell {:enabled true
                  :roots ["."]

@@ -21,6 +21,7 @@
    [agent.tools.common.todo :as todo-tool]
    [agent.tools.common.wasm :as wasm-tool]
    [agent.tools.core :as tools]
+   [agent.wasm.bundles :as wasm-bundles]
    [clojure.set :as set]
    [clojure.string :as str]))
 
@@ -158,6 +159,7 @@
          todo-cfg (get cfg :todo)
          mcp-cfg (get cfg :mcp)
          telegram-cfg (get channel-adapters-cfg :telegram)
+         wasm-bundles-cfg (get cfg :wasm-bundles)
          policy-hook (create-tool-policy-hook cfg)
          registry (tools/create-registry
                    {:event-sink event-sink
@@ -208,6 +210,16 @@
 
        (true? (:enabled wasm-cfg))
        (tools/register-tool (wasm-tool/create-wasm-tool wasm-cfg))
+
+       (true? (:enabled? wasm-bundles-cfg))
+       (as-> registry*
+             (reduce tools/register-tool
+                     registry*
+                     (try
+                       (wasm-bundles/create-bundle-tools wasm-bundles-cfg)
+                       (catch Exception e
+                         (logging/log-error! :agent.tools/wasm-bundles-skipped e {})
+                         []))))
 
        skills-registry
        (tools/register-tool (skills-tool/create-skills-list-tool skills-registry))

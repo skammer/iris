@@ -13,6 +13,7 @@ This Obsidian vault contains documentation for the Clojure-based AI agent projec
 
 ### 2. Architecture
 - **design-principles.md**: Core architectural decisions
+- **wasm-tool-skill-bundles.md**: `.tool`/`.skill` WASM bundle format and runtime
 - **component-structure.md**: Module organization and interfaces
 - **security-model.md**: Sandboxing, authentication, data protection
 - **multi-agent-coordination.md**: Orchestrator/worker patterns, communication

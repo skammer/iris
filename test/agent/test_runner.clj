@@ -57,6 +57,7 @@
    [agent.tools.common.telegram-test]
    [agent.tools.common.todo-test]
    [agent.tools.common.wasm-test]
+   [agent.wasm.bundles-test]
    [agent.tools.common.shell-test]
    [agent.tools.core-test]
    [clojure.java.io :as io]))
@@ -117,6 +118,7 @@
     agent.tools.common.telegram-test
     agent.tools.common.todo-test
     agent.tools.common.wasm-test
+    agent.wasm.bundles-test
     agent.tools.common.shell-test
     agent.tools.core-test])
 

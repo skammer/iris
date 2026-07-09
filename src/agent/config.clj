@@ -186,6 +186,19 @@
                             :allow-private? false
                             :timeout-ms 10000
                             :max-response-bytes 1048576}}
+           :wasm-bundles {:enabled? true
+                          :install-dir "bundles/installed"
+                          :package-dir "bundles/packages"
+                          :dev-roots []
+                          :enabled []
+                          :settings {}
+                          :timeout-ms 30000
+                          :max-stdout-bytes 1048576
+                          :max-stderr-bytes 1048576
+                          :max-memory-pages 64
+                          :http {:timeout-ms 10000
+                                 :max-timeout-ms 30000
+                                 :max-response-bytes 1048576}}
            :todo {:enabled true}
            :shell {:enabled true
                    :roots ["."]
@@ -955,6 +968,16 @@
   [cfg global-dir]
   (update-in cfg [:skills :dirs] resolve-config-first-paths global-dir))
 
+(defn- resolve-config-first-path [path config-dir]
+  (first (resolve-config-first-paths [path] config-dir)))
+
+(defn- finalize-wasm-bundles
+  [cfg global-dir]
+  (-> cfg
+      (update-in [:tools :wasm-bundles :install-dir] resolve-config-first-path global-dir)
+      (update-in [:tools :wasm-bundles :package-dir] resolve-config-first-path global-dir)
+      (update-in [:tools :wasm-bundles :dev-roots] resolve-config-first-paths global-dir)))
+
 (defn load-config
   ([] (load-config nil))
   ([path]
@@ -975,6 +998,7 @@
          (config-env/apply-env-config getenv)
          (finalize-data-paths global-dir)
          (finalize-skill-dirs global-dir)
+         (finalize-wasm-bundles global-dir)
          validate-config!))))
 
 (defn llm-config

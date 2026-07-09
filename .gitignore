@@ -14,6 +14,3 @@ data
 .codex
 AGENTS.md
 export/*
-!export/homeassistant-wasm-skill/
-!export/homeassistant-wasm-skill/**
-export/homeassistant-wasm-skill/target/

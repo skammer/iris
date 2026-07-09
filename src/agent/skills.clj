@@ -78,12 +78,14 @@
 (defn load-skills-from-dir
   [dir source]
   (if-let [root (existing-dir dir)]
-    (->> (.listFiles root)
-         (filter #(.isDirectory %))
-         (map #(load-skill-file % source))
-         (remove nil?)
-         (sort-by :name)
-         vec)
+    (let [direct (load-skill-file root source)
+          children (->> (.listFiles root)
+                        (filter #(.isDirectory %))
+                        (map #(load-skill-file % source))
+                        (remove nil?))]
+      (->> (cond-> children direct (conj direct))
+           (sort-by :name)
+           vec))
     []))
 
 (defn- dir-fingerprint
@@ -93,22 +95,24 @@
   file contents."
   [dir]
   (if-let [root (existing-dir dir)]
-    (->> (.listFiles root)
-         (filter #(.isDirectory %))
-         (keep (fn [skill-dir]
-                 (let [skill-file (io/file skill-dir "SKILL.md")]
-                   (when (.isFile skill-file)
-                     [(.getAbsolutePath skill-file) (.lastModified skill-file)]))))
-         set)
+    (let [root-skill (io/file root "SKILL.md")]
+      (->> (cond-> (vec (.listFiles root))
+             (.isFile root-skill) (conj root))
+           (filter #(.isDirectory %))
+           (keep (fn [skill-dir]
+                   (let [skill-file (io/file skill-dir "SKILL.md")]
+                     (when (.isFile skill-file)
+                       [(.getAbsolutePath skill-file) (.lastModified skill-file)]))))
+           set))
     #{}))
 
 (defn- registry-fingerprint [registry]
   (mapv dir-fingerprint (:dirs registry)))
 
 (defn create-registry
-  [{:keys [dirs]
+  [{:keys [dirs bundle-dirs]
     :or {dirs ["skills"]}}]
-  {:dirs (vec dirs)
+  {:dirs (vec (concat dirs bundle-dirs))
    ;; Registry-scoped scan cache: {:fingerprint <registry-fingerprint>
    ;;                              :skills <list-skills result>}.
    :cache (atom nil)})
