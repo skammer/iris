@@ -1,0 +1,87 @@
+{
+  "id": "iris.homeassistant",
+  "name": "homeassistant",
+  "version": "0.1.0",
+  "description": "Home Assistant WASI tool plus agent skill for compact state lookup and guarded service calls.",
+  "module": "module.wasm",
+  "skill": "SKILL.md",
+  "url": "https://github.com/skammer/iris",
+  "tags": ["iris", "homeassistant", "smart-home", "wasi"],
+  "runtime": {
+    "kind": "wasi-preview1",
+    "stdin": "json",
+    "stdout": "json",
+    "requiresHostFunctions": [
+      {
+        "module": "http",
+        "name": "request",
+        "params": ["i32", "i32", "i32", "i32", "i32"],
+        "results": ["i32"],
+        "description": "Generic HTTP bridge. Guest passes a JSON request envelope containing method, url, headers, body, and timeout_ms. Host returns response body plus HTTP status."
+      }
+    ]
+  },
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["get_state", "list_states", "search_states", "list_services", "call_service"]
+      },
+      "entity_id": { "type": "string" },
+      "query": { "type": "string" },
+      "domain": { "type": "string" },
+      "device_class": { "type": "string" },
+      "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
+      "service": { "type": "string" },
+      "data": { "type": "object" }
+    },
+    "required": ["action"]
+  },
+  "settings": [
+    {
+      "key": "ha_host",
+      "label": "Home Assistant URL",
+      "type": "string",
+      "required": true,
+      "description": "Example: http://homeassistant.local:8123. Passed to the trusted WASM module in stdin settings."
+    },
+    {
+      "key": "ha_api_key",
+      "label": "Home Assistant API key",
+      "type": "string",
+      "required": true,
+      "description": "Long-lived access token. V1 trusted-binary mode passes this value to the WASM module in stdin settings."
+    },
+    {
+      "key": "timeout_ms",
+      "label": "Timeout, ms",
+      "type": "integer",
+      "default": 10000
+    },
+    {
+      "key": "allowed_domains",
+      "label": "Allowed service domains",
+      "type": "json",
+      "default": ["light", "switch", "scene", "script"],
+      "description": "Service-call allowlist. Use [\"all\"] only for trusted sessions."
+    },
+    {
+      "key": "global_services",
+      "label": "Globally allowed services",
+      "type": "json",
+      "default": [],
+      "description": "Services allowed without entity_id, for example [\"scene.turn_on\"]."
+    }
+  ],
+  "permissions": {
+    "network": {
+      "mode": "host-mediated",
+      "target": "http"
+    },
+    "filesystem": {
+      "mounts": []
+    }
+  }
+}
