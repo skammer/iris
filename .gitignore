@@ -13,4 +13,4 @@ data
 .claude
 .codex
 AGENTS.md
-export
+export/*
