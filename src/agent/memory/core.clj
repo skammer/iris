@@ -556,14 +556,15 @@
 
 (defn extract-notes
   [provider {:keys [user-message assistant-message model session-id extractor]}]
-  (let [response (llm/invoke
+  (let [prompt-name (name (or (:prompt extractor) "note-extraction"))
+        response (llm/invoke
                   provider
                   (merge
                    {:model model
                     :session-id session-id
                     :temperature 0.0
                     :messages [{:role "system"
-                                :content (prompts/load-prompt "note-extraction")}
+                                :content (prompts/load-prompt prompt-name)}
                                {:role "user"
                                 :content (json/generate-string
                                           {:user user-message
@@ -571,18 +572,22 @@
                    (output-options extractor)))]
     (parse-note-response (:content response))))
 
-(defn- note-origin [opts message-id]
-  (cond-> {:type "message"}
+(defn- note-origin [opts origin-type id-key id]
+  (cond-> {:type origin-type}
     (:session-id opts) (assoc :session-id (:session-id opts))
-    message-id (assoc :message-id message-id)
+    id (assoc id-key id)
     (:source-request-id opts) (assoc :request-id (:source-request-id opts))))
 
 (defn- note-origins [opts]
-  (into [{:type "extraction"
-          :session-id (:session-id opts)
-          :request-id (:source-request-id opts)}]
-        (map #(note-origin opts %))
-        (:source-message-ids opts)))
+  (vec
+   (concat
+    [{:type (or (:source-type opts) "extraction")
+      :session-id (:session-id opts)
+      :request-id (:source-request-id opts)}]
+    (map #(note-origin opts "message" :message-id %)
+         (:source-message-ids opts))
+    (map #(note-origin opts "event" :event-id %)
+         (:source-event-ids opts)))))
 
 (defn- note-scope [memory-service note]
   (let [scope (or (:scope note)
@@ -592,17 +597,67 @@
       scope
       "session")))
 
+(defn- normalized-note-title [note]
+  (-> (:title note)
+      (or "")
+      str/lower-case
+      (str/replace #"\s+" " ")
+      str/trim))
+
+(defn- note-search-text [note]
+  (str (:title note) "\n" (:description note) "\n" (:body note)))
+
+(defn- reviewable-existing-note? [note]
+  (contains? reviewable-vault-statuses (:iris-status note)))
+
+(defn- duplicate-note? [existing note]
+  (let [title (normalized-note-title note)
+        text (note-search-text note)]
+    (some (fn [candidate]
+            (when (reviewable-existing-note? candidate)
+              (let [candidate-title (normalized-note-title candidate)
+                    candidate-text (str (:title candidate) "\n" (:description candidate))]
+                (or (and (not (str/blank? title))
+                         (= title candidate-title))
+                    (>= (jaccard text candidate-text) 0.88)))))
+          existing)))
+
+(defn- filter-extracted-notes [memory-service notes opts]
+  (let [min-confidence (:min-confidence opts)
+        existing (when (:dedupe? opts)
+                   (sqlite/list-vault-notes (:store memory-service) {:limit 10000}))]
+    (second
+     (reduce
+      (fn [[seen kept] note]
+        (let [title (normalized-note-title note)]
+          (if (or (contains? seen title)
+                  (and min-confidence
+                       (< (confidence-score (:confidence note))
+                          (double min-confidence)))
+                  (and existing
+                       (duplicate-note? existing note)))
+            [seen kept]
+            [(cond-> seen
+               (not (str/blank? title)) (conj title))
+             (conj kept note)])))
+      [#{} []]
+      notes))))
+
 (defn extract-and-save-notes!
   [memory-service provider exchange opts]
-  (let [extractor (get-in memory-service [:config :notes :extractor])]
+  (let [extractor (merge (get-in memory-service [:config :notes :extractor])
+                         (:extractor opts))]
     (if (false? (:enabled extractor))
       []
       (try
         (let [model (or (:model extractor) (:model opts))
-              notes (extract-notes provider (assoc exchange
-                                                   :model model
-                                                   :session-id (:session-id opts)
-                                                   :extractor extractor))
+              notes (filter-extracted-notes
+                     memory-service
+                     (extract-notes provider (assoc exchange
+                                                    :model model
+                                                    :session-id (:session-id opts)
+                                                    :extractor extractor))
+                     opts)
               saved (mapv (fn [note]
                             (vault/write-candidate-note!
                              memory-service
@@ -630,6 +685,8 @@
                               :entity-id (:session-id opts)
                               :request-id (:source-request-id opts)
                               :payload {:message (.getMessage e)}})
+          (when (:throw? opts)
+            (throw e))
           [])))))
 
 (defn- extraction-limit [value]

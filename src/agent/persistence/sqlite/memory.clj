@@ -22,7 +22,11 @@
          list-vault-chunks-sqlvec
          list-memory-embeddings-sqlvec
          list-vault-chunk-embeddings-sqlvec
-         list-vault-chunk-embedding-candidates-sqlvec)
+         list-vault-chunk-embedding-candidates-sqlvec
+         list-idle-extraction-candidates-sqlvec
+         get-memory-extraction-state-sqlvec
+         upsert-memory-extraction-success-sqlvec
+         upsert-memory-extraction-failure-sqlvec)
 
 (hugsql/def-sqlvec-fns "agent/persistence/sqlite/memory.sql")
 
@@ -102,6 +106,31 @@
    :origins (vec (or (common/parse-json-string origins_json) []))
    :frontmatter (or (common/parse-json-string frontmatter_json) {})
    :body-hash body_hash
+   :updated-at updated_at})
+
+(defn- row->idle-candidate
+  [{:keys [session_id last_processed_message_id last_processed_event_id
+           latest_message_id latest_message_created_at new_message_count]}]
+  {:session-id session_id
+   :last-processed-message-id (long (or last_processed_message_id 0))
+   :last-processed-event-id (long (or last_processed_event_id 0))
+   :latest-message-id latest_message_id
+   :latest-message-created-at latest_message_created_at
+   :new-message-count (long (or new_message_count 0))})
+
+(defn- row->memory-extraction-state
+  [{:keys [session_id last_processed_message_id last_processed_message_created_at
+           last_processed_event_id last_run_at last_success_at last_note_count
+           last_error next_attempt_at updated_at]}]
+  {:session-id session_id
+   :last-processed-message-id (long (or last_processed_message_id 0))
+   :last-processed-message-created-at last_processed_message_created_at
+   :last-processed-event-id (long (or last_processed_event_id 0))
+   :last-run-at last_run_at
+   :last-success-at last_success_at
+   :last-note-count (long (or last_note_count 0))
+   :last-error last_error
+   :next-attempt-at next_attempt_at
    :updated-at updated_at})
 
 (defn replace-vault-index!
@@ -255,3 +284,59 @@
                                                             (str "%\"session_id\":\"" session-id "\"%"))
                                    :limit (common/bounded-limit limit 1000 10000)})
                                  identity))))))
+
+(defn list-idle-extraction-candidates
+  [store {:keys [idle-before now limit] :or {limit 20}}]
+  (common/with-connection
+    store
+    (fn [conn]
+      (mapv row->idle-candidate
+            (common/select-many conn
+                                (list-idle-extraction-candidates-sqlvec
+                                 {:idle_before idle-before
+                                  :now now
+                                  :limit (common/bounded-limit limit 20 200)})
+                                identity)))))
+
+(defn get-memory-extraction-state
+  [store session-id]
+  (common/with-connection
+    store
+    (fn [conn]
+      (some-> (common/select-one conn
+                                 (get-memory-extraction-state-sqlvec
+                                  {:session_id session-id})
+                                 identity)
+              row->memory-extraction-state))))
+
+(defn mark-memory-extraction-success!
+  [store {:keys [session-id last-processed-message-id last-processed-message-created-at
+                 last-processed-event-id note-count now]}]
+  (common/with-connection
+    store
+    (fn [conn]
+      (common/execute!
+       conn
+       (upsert-memory-extraction-success-sqlvec
+        {:session_id session-id
+         :last_processed_message_id (long (or last-processed-message-id 0))
+         :last_processed_message_created_at last-processed-message-created-at
+         :last_processed_event_id (long (or last-processed-event-id 0))
+         :last_run_at now
+         :last_success_at now
+         :last_note_count (long (or note-count 0))
+         :updated_at now})))))
+
+(defn mark-memory-extraction-failure!
+  [store {:keys [session-id error next-attempt-at now]}]
+  (common/with-connection
+    store
+    (fn [conn]
+      (common/execute!
+       conn
+       (upsert-memory-extraction-failure-sqlvec
+        {:session_id session-id
+         :last_run_at now
+         :last_error error
+         :next_attempt_at next-attempt-at
+         :updated_at now})))))

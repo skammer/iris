@@ -261,6 +261,15 @@
                               :provider nil
                               :model nil
                               :format :json-schema}
+                  :idle-extraction {:enabled true
+                                    :idle-timeout-minutes 45
+                                    :poll-interval-seconds 60
+                                    :failure-cooldown-minutes 15
+                                    :max-sessions 20
+                                    :max-messages 80
+                                    :max-events 40
+                                    :min-confidence 0.85
+                                    :include-events? true}
                   :default-scope :session}}
  :channel-adapters {:telegram {:enabled false
                                 :bot-token nil

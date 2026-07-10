@@ -11,6 +11,7 @@
    [agent.logging :as logging]
    [agent.magi.core :as magi]
    [agent.memory.core :as memory]
+   [agent.memory.idle :as memory-idle]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.trace :as runtime-trace]
    [agent.skills :as skills]
@@ -63,6 +64,10 @@
       store
       {:embedding-provider llm-provider
        :embedding-model (:embedding-model provider-cfg)}))))
+
+(defn create-memory-idle-service
+  [system-ref]
+  (memory-idle/create-service system-ref))
 
 (defn create-channel-adapter-registry
   ([cfg] (create-channel-adapter-registry cfg nil))
@@ -157,6 +162,7 @@
                        :broker broker-instance
                        :event-sink event-sink
                        :chat-service chat-service
+                       :memory-idle-service (create-memory-idle-service system-ref)
                        :skills-registry (create-skills-registry-from-config cfg)
                        :memory-service memory-service}]
       (-> base-system

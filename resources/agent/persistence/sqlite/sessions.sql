@@ -44,6 +44,15 @@ from messages
 where session_id = :session_id
 order by coalesce(json_extract(metadata_json, '$.activated-at'), created_at) asc, id asc
 
+-- :name list-messages-after :? :*
+select id, role, content, tool_calls, tool_call_id, metadata_json, excluded_from_context, created_at
+from messages
+where session_id = :session_id
+  and id > :after_id
+  and (:through_id is null or id <= :through_id)
+order by coalesce(json_extract(metadata_json, '$.activated-at'), created_at) asc, id asc
+limit :limit
+
 -- :name update-message-runtime-flags :! :n
 update messages
 set metadata_json = :metadata_json,

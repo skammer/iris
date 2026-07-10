@@ -251,6 +251,21 @@
                                   (list-messages-sqlvec {:session_id session-id})
                                   identity))))))
 
+(defn list-messages-after
+  [store session-id {:keys [after-id through-id limit] :or {after-id 0 limit 80}}]
+  (common/with-connection
+    store
+    (fn [conn]
+      (let [overrides (message-entry-overrides conn session-id)]
+        (mapv #(merge-entry-overrides (row->message %) overrides)
+              (common/select-many conn
+                                  (list-messages-after-sqlvec
+                                   {:session_id session-id
+                                    :after_id (long (or after-id 0))
+                                    :through_id through-id
+                                    :limit (common/bounded-limit limit 80 200)})
+                                  identity))))))
+
 (defn update-message-runtime-flags!
   [store message-id {:keys [metadata excluded-from-context? session-id reparent-to-current-leaf? select-leaf?]}]
   (common/with-transaction

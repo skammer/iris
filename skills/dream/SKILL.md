@@ -9,6 +9,10 @@ Use when user invokes `/dream` or explicitly asks to save durable memory.
 
 Goal: create high-signal candidate vault notes from completed or recent session history. Do not save memory every turn.
 
+Iris may also run automatic idle extraction after a long quiet period. `/dream`
+is still the explicit/manual consolidation path and should be higher intent than
+background idle extraction.
+
 Workflow:
 
 1. Identify target session. Default: current `session-id`.

@@ -135,3 +135,58 @@ where ((n.iris_status = 'approved' and n.iris_scope in ('global', 'project'))
            and n.iris_status in ('approved', 'auto_session')
            and n.origins_json like :session_origin_needle))
 limit :limit
+
+-- :name list-idle-extraction-candidates :? :*
+select m.session_id,
+       coalesce(s.last_processed_message_id, 0) as last_processed_message_id,
+       coalesce(s.last_processed_event_id, 0) as last_processed_event_id,
+       max(m.id) as latest_message_id,
+       max(m.created_at) as latest_message_created_at,
+       sum(case when m.id > coalesce(s.last_processed_message_id, 0) then 1 else 0 end) as new_message_count
+from messages m
+left join memory_extraction_state s on s.session_id = m.session_id
+group by m.session_id
+having max(m.created_at) <= :idle_before
+   and sum(case when m.id > coalesce(s.last_processed_message_id, 0) then 1 else 0 end) > 0
+   and (max(s.next_attempt_at) is null or max(s.next_attempt_at) <= :now)
+order by max(m.created_at) asc
+limit :limit
+
+-- :name get-memory-extraction-state :? :1
+select session_id, last_processed_message_id, last_processed_message_created_at,
+       last_processed_event_id, last_run_at, last_success_at, last_note_count,
+       last_error, next_attempt_at, updated_at
+from memory_extraction_state
+where session_id = :session_id
+limit 1
+
+-- :name upsert-memory-extraction-success :! :n
+insert into memory_extraction_state
+  (session_id, last_processed_message_id, last_processed_message_created_at,
+   last_processed_event_id, last_run_at, last_success_at, last_note_count,
+   last_error, next_attempt_at, updated_at)
+values
+  (:session_id, :last_processed_message_id, :last_processed_message_created_at,
+   :last_processed_event_id, :last_run_at, :last_success_at, :last_note_count,
+   null, null, :updated_at)
+on conflict(session_id) do update set
+  last_processed_message_id = excluded.last_processed_message_id,
+  last_processed_message_created_at = excluded.last_processed_message_created_at,
+  last_processed_event_id = excluded.last_processed_event_id,
+  last_run_at = excluded.last_run_at,
+  last_success_at = excluded.last_success_at,
+  last_note_count = excluded.last_note_count,
+  last_error = null,
+  next_attempt_at = null,
+  updated_at = excluded.updated_at
+
+-- :name upsert-memory-extraction-failure :! :n
+insert into memory_extraction_state
+  (session_id, last_run_at, last_error, next_attempt_at, updated_at)
+values
+  (:session_id, :last_run_at, :last_error, :next_attempt_at, :updated_at)
+on conflict(session_id) do update set
+  last_run_at = excluded.last_run_at,
+  last_error = excluded.last_error,
+  next_attempt_at = excluded.next_attempt_at,
+  updated_at = excluded.updated_at

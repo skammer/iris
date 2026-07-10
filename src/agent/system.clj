@@ -12,6 +12,7 @@
    [agent.llm.service :as llm-service]
    [agent.logging :as logging]
    [agent.magi.core :as magi]
+   [agent.memory.idle :as memory-idle]
    [agent.persistence.sqlite :as sqlite]
    [agent.system.components :as components]
    [agent.system.health :as system-health]
@@ -99,6 +100,8 @@
 
 (defn- stop-runtime-edges!
   [system]
+  (safe-stop! :agent.system.lifecycle/memory-idle-stop-failed
+              #(some-> (:memory-idle-service system) memory-idle/stop!))
   (safe-stop! :agent.system.lifecycle/chat-stop-failed
               #(some-> (:chat-service system) chat/stop!))
   (safe-stop! :agent.system.lifecycle/telegram-stop-failed
@@ -132,6 +135,8 @@
                     :observer observer
                     :trace trace
                     :memory-service memory-service
+                    :memory-idle-service (components/create-memory-idle-service
+                                          (:system-ref old-system))
                     :skills-registry (components/create-skills-registry (:skills new-cfg)))]
     (->> (components/attach-telegram-service
           (assoc base :tool-registry (components/build-tool-registry base new-cfg)))
@@ -142,11 +147,15 @@
         system-ref (:system-ref system*)
         old-cfg (:config system*)
         new-cfg (config/load-config (:config-path system*))
+        idle-running? (memory-idle/running? (:memory-idle-service system*))
         new-system (rebuild-hot-system system* new-cfg)
         result (reload-result :soft old-cfg new-cfg :reloaded)]
     (chat/stop! (:chat-service system*))
+    (memory-idle/stop! (:memory-idle-service system*))
     (logging/start! (:logging new-cfg))
     (reset! system-ref new-system)
+    (when idle-running?
+      (memory-idle/start! (:memory-idle-service new-system)))
     (reset! (:reload-state new-system)
             (assoc result
                    :source (:source opts)
@@ -276,4 +285,5 @@
                          :telegram-service telegram-service)]
       (when-let [system-ref (:system-ref system*)]
         (reset! system-ref system*))
+      (memory-idle/start! (:memory-idle-service system*))
       system*)))

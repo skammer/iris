@@ -51,6 +51,9 @@ Memory has separate read and durable-write paths.
 - `message_search`: search persisted chat messages.
 - `memory_extract_session`: explicit session consolidation only, when user asks to save or extract memory.
 
+Background idle extraction may create candidate vault notes after a configured
+quiet period. Treat those as review candidates, not approved memory.
+
 Do not auto-promote chat content, scratchpad notes, or extracted candidates into approved global memory. Source durable claims with evidence or explicit operator intent.
 
 ## Vault

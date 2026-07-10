@@ -49,6 +49,9 @@ Preserve unknown frontmatter keys. Treat broken links and missing optional field
 ## Scope And Status
 
 - New durable notes usually start in `inbox/` with `iris.status: "candidate"`.
+- Automatic idle extraction may add high-confidence `candidate` notes after a
+  quiet session window; empty extraction is normal and should not be "fixed" by
+  adding weak notes.
 - Use `approved` only with strong evidence.
 - Use `session` for session-specific facts.
 - Use `global` only for stable user/project-independent memory.

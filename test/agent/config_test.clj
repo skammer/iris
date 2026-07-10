@@ -152,6 +152,16 @@
               :model nil
               :format :json-schema}
              (get-in cfg [:memory :notes :extractor])))
+      (is (= {:enabled true
+              :idle-timeout-minutes 45
+              :poll-interval-seconds 60
+              :failure-cooldown-minutes 15
+              :max-sessions 20
+              :max-messages 80
+              :max-events 40
+              :min-confidence 0.85
+              :include-events? true}
+             (get-in cfg [:memory :notes :idle-extraction])))
       (is (= {:default-limit 10
               :max-limit 10
               :min-score 0.3}

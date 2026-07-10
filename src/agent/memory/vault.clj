@@ -78,10 +78,11 @@
          "  confidence: " (yaml-value (or confidence 0.7)) "\n"
          "  origins:\n"
          (apply str
-                (for [{:keys [type session-id message-id request-id vault-path]} origins]
+                (for [{:keys [type session-id message-id event-id request-id vault-path]} origins]
                   (str "  - type: " (yaml-value type) "\n"
                        (when session-id (str "    session_id: " (yaml-value session-id) "\n"))
                        (when message-id (str "    message_id: " (yaml-value message-id) "\n"))
+                       (when event-id (str "    event_id: " (yaml-value event-id) "\n"))
                        (when vault-path (str "    vault_path: " (yaml-value vault-path) "\n"))
                        (when request-id (str "    request_id: " (yaml-value request-id) "\n")))))
          "---\n\n"

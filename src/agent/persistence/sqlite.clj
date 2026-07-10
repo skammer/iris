@@ -107,6 +107,9 @@
 (defn list-messages [store session-id]
   (sessions/list-messages store session-id))
 
+(defn list-messages-after [store session-id opts]
+  (sessions/list-messages-after store session-id opts))
+
 (defn update-message-runtime-flags! [store message-id flags]
   (sessions/update-message-runtime-flags! store message-id flags))
 
@@ -244,6 +247,18 @@
 (defn list-vault-chunk-embedding-candidates
   ([store] (memory/list-vault-chunk-embedding-candidates store))
   ([store opts] (memory/list-vault-chunk-embedding-candidates store opts)))
+
+(defn list-idle-extraction-candidates [store opts]
+  (memory/list-idle-extraction-candidates store opts))
+
+(defn get-memory-extraction-state [store session-id]
+  (memory/get-memory-extraction-state store session-id))
+
+(defn mark-memory-extraction-success! [store opts]
+  (memory/mark-memory-extraction-success! store opts))
+
+(defn mark-memory-extraction-failure! [store opts]
+  (memory/mark-memory-extraction-failure! store opts))
 
 (defn save-todo-list! [store todo-list]
   (todos/save-list! store todo-list))
