@@ -9,10 +9,13 @@
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [agent.ui :as ui]
+   [agent.ui.catalog :as ui-catalog]
    [agent.ui.render :as ui-render]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [clojure.test :refer [deftest is testing]]))
+   [clojure.test :refer [deftest is testing]])
+  (:import
+   (org.jsoup Jsoup)))
 
 (defn- temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-ui-" ".db")))
@@ -27,6 +30,68 @@
 (deftest index-page-deep-link-loads-route-fragment
   (let [html (ui/index-page "/chat/session-1")]
     (is (str/includes? html "/ui/shell?tab=chat&amp;session_id=session-1"))))
+
+(deftest ui-catalog-covers-reference-components-and-layouts
+  (let [html (ui-catalog/page)]
+    (is (str/includes? html "IRIS UI SYSTEM"))
+    (is (str/includes? html "Status &amp; progress"))
+    (is (str/includes? html "Cards, metrics &amp; tables"))
+    (is (str/includes? html "Workflow canvas"))
+    (is (str/includes? html "Layout recipes"))
+    (is (str/includes? html "Dialog / onboarding"))))
+
+(deftest ui-catalog-has-valid-structure-and-accessible-controls
+  (let [doc (Jsoup/parse (ui-catalog/page))
+        sections (.select doc ".ui-catalog-section")
+        ids (mapv #(.id %) (.select doc "[id]"))]
+    (is (= 1 (.size (.select doc ".ui-catalog-shell > aside.ui-catalog-nav"))))
+    (is (= 1 (.size (.select doc ".ui-catalog-shell > main.ui-catalog-main"))))
+    (is (= ["foundations" "actions" "forms" "status" "data" "navigation"
+            "layouts" "workflow" "feedback"]
+           (mapv #(.id %) sections)))
+    (is (= (count ids) (count (distinct ids))) "catalog ids must be unique")
+    (is (every? #(not (str/blank? (.attr % "aria-label")))
+                (.select doc ".ui-icon-button"))
+        "icon-only buttons need accessible names")
+    (is (every? #(or (not (str/blank? (.attr % "aria-label")))
+                     (some (fn [parent] (= "label" (.normalName parent)))
+                           (.parents %)))
+                (.select doc "input, textarea, select"))
+        "form controls need a label or accessible name")))
+
+(deftest design-document-covers-every-redesign-reference
+  (let [design (slurp (io/file "DESIGN.md"))
+        references (->> (file-seq (io/file "redesign-inspiration"))
+                        (filter #(.isFile %))
+                        (map #(.getName %))
+                        (filter #(str/ends-with? % ".webp"))
+                        sort)]
+    (is (= 16 (count references)))
+    (doseq [filename references]
+      (is (str/includes? design filename)
+          (str "DESIGN.md must map reference " filename)))))
+
+(deftest design-document-covers-every-css-token
+  (let [design (slurp (io/file "DESIGN.md"))
+        css (slurp (io/file "public/app.css"))
+        tokens (->> (re-seq #"(?m)^\s*(--[a-z0-9-]+)\s*:" css)
+                    (map second)
+                    set
+                    sort)]
+    (is (seq tokens))
+    (doseq [token tokens]
+      (is (str/includes? design (str "`" token "`"))
+          (str "DESIGN.md must document token " token)))))
+
+(deftest ui-avoids-thick-side-accent-borders
+  (let [css (slurp (io/file "public/app.css"))]
+    (is (not (re-find #"border-(?:left|right)\s*:\s*[2-9][0-9]*px" css)))
+    (is (not (re-find #"border-(?:left|right)-width\s*:\s*[2-9][0-9]*px" css)))))
+
+(deftest shell-brand-is-text-only
+  (let [source (slurp (io/file "src/agent/ui.clj"))]
+    (is (str/includes? source "[:strong \"IRIS\"]"))
+    (is (not (str/includes? source "shell-brand__mark")))))
 
 (deftest dashboard-fragment-shows-active-model
   (with-redefs [sqlite/health-check (constantly {:details {:session-count 0

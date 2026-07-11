@@ -23,6 +23,7 @@
    [agent.api.routes :as routes]
    [agent.logging :as logging]
    [agent.ui :as ui-views]
+   [agent.ui.catalog :as ui-catalog]
    [clojure.string :as str]
    [clojure.walk :as walk]
    [muuntaja.core :as m]
@@ -61,6 +62,7 @@
   {:health (fn [r] (health/handle (sys) r))
 
    :ui-index (fn [r] (responses/html-response 200 (ui-views/index-page (:uri r))))
+   :ui-catalog (fn [_] (responses/html-response 200 (ui-catalog/page)))
    :ui-shell (fn [r] (ui/shell (sys) r))
    :ui-dashboard (fn [r] (ui/dashboard (sys) r))
    :ui-operator-board (fn [r] (ui/operator-board (sys) r))

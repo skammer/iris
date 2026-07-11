@@ -107,6 +107,9 @@ const applyTheme = (theme) => {
 applyTheme(preferredTheme());
 
 class ThemeToggle extends HTMLElement {
+  #switchTimer = null;
+  #pendingTheme = null;
+
   connectedCallback() {
     this.button?.addEventListener("click", this);
     this.render();
@@ -114,6 +117,7 @@ class ThemeToggle extends HTMLElement {
 
   disconnectedCallback() {
     this.button?.removeEventListener("click", this);
+    clearTimeout(this.#switchTimer);
   }
 
   get button() {
@@ -121,10 +125,20 @@ class ThemeToggle extends HTMLElement {
   }
 
   handleEvent() {
-    const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
-    persistTheme(next);
-    applyTheme(next);
-    this.render();
+    const root = document.documentElement;
+    const current = this.#pendingTheme || root.dataset.theme;
+    const next = current === "light" ? "dark" : "light";
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    this.#pendingTheme = next;
+    root.classList.add("theme-switching");
+    clearTimeout(this.#switchTimer);
+    this.#switchTimer = setTimeout(() => {
+      persistTheme(next);
+      applyTheme(next);
+      this.#pendingTheme = null;
+      this.render();
+      requestAnimationFrame(() => root.classList.remove("theme-switching"));
+    }, reduceMotion ? 0 : 90);
   }
 
   render() {

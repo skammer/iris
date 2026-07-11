@@ -138,6 +138,10 @@
       (ui-render/trusted-fragment (router-state-fragment (route-path {:tab active-tab
                                                             :session-id session-id})))
       [:header.shell-header
+       [:a.shell-brand {:href "/" :aria-label "Iris control plane"}
+        [:span.shell-brand__copy
+         [:strong "IRIS"]
+         [:small "CONTROL PLANE"]]]
        [:div.status-bar
         [:div.status-block.status-block--accent
          (ui-render/status-dot "running")
@@ -152,12 +156,14 @@
         [:div.status-block.status-block--success
          [:span.status-label "events"]
          [:span.status-value (str event-count)]]]
-       [:theme-toggle
-        [:button#theme-toggle.theme-toggle
-         {:type "button"
-          :aria-label "Toggle light or dark mode"
-          :title "Toggle light/dark mode"}
-         "Dark"]]]
+       [:div.shell-header__actions
+        [:a.shell-system-link {:href "/ui"} "UI SYSTEM"]
+        [:theme-toggle
+         [:button#theme-toggle.theme-toggle
+          {:type "button"
+           :aria-label "Toggle light or dark mode"
+           :title "Toggle light/dark mode"}
+          "Dark"]]]]
       [:nav#shell-nav.shell-nav
        [:span.shell-nav__pill {:aria-hidden "true"}]
        (for [tab tabs]

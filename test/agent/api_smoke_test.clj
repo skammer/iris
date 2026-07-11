@@ -109,6 +109,15 @@
         (is (str/includes? body "session-link--active"))
         (is (str/includes? body (str "/ui/sessions?session_id=" session-id)))))))
 
+(deftest ui-catalog-page-smoke
+  (with-server nil
+    (fn [{:keys [base-url]}]
+      (let [{:keys [status body]} (helpers/http-get (str base-url "/ui"))]
+        (is (= 200 status))
+        (is (str/includes? body "IRIS UI SYSTEM"))
+        (is (str/includes? body "id=\"workflow\""))
+        (is (str/includes? body "Source of truth: DESIGN.md"))))))
+
 (deftest ui-events-page-smoke
   (with-server nil
     (fn [{:keys [base-url]}]
