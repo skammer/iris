@@ -408,6 +408,7 @@ Every reference file in `redesign-inspiration/` has an explicit destination:
 - Add new global tokens here and in `:root` before using them.
 - Extend an existing component before creating a near-duplicate.
 - Add every reusable component or layout to `/ui` in its normal, disabled, error, and loading states when applicable.
+- Mixed-status review lists are grouped by status. Each record is a distinct card with metadata, readable source details, and actions contained in a dedicated footer.
 - Product pages use real data. `/ui` uses deterministic examples.
 - Update this document whenever tokens, motion, responsive behavior, or component contracts change.
 - Verify UI changes with targeted Clojure tests, lint, real browser screenshots at desktop and narrow widths, keyboard navigation, light/dark themes, and reduced-motion mode.

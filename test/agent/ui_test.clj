@@ -353,6 +353,7 @@
                        "iris-ui-memory-"
                        (make-array java.nio.file.attribute.FileAttribute 0)))
         note (io/file root "inbox/note.md")
+        approved-note (io/file root "preferences/approved.md")
         store (sqlite/create-store {:path path})
         memory-service (memory/create-memory-service
                         {:search {:default-limit 10}
@@ -371,6 +372,21 @@
                  "  status: candidate\n"
                  "---\n\n"
                  "UI note body\n"))
+      (.mkdirs (.getParentFile approved-note))
+      (spit approved-note
+            (str "---\n"
+                 "id: mem_ui_approved\n"
+                 "type: Preference\n"
+                 "title: Approved UI note\n"
+                 "description: Stable interface preference\n"
+                 "iris:\n"
+                 "  scope: global\n"
+                 "  status: approved\n"
+                 "  origins:\n"
+                 "  - type: session\n"
+                 "    session_id: session-1\n"
+                 "---\n\n"
+                 "Approved note body\n"))
       (memory/reindex-vault! memory-service)
       (let [html (ui/memory-workspace-fragment {:store store
                                                 :memory-service memory-service})]
@@ -394,6 +410,13 @@
 	        (is (str/includes? html "workspace-grid memory-workspace"))
         (is (str/includes? html "memory-left-stack"))
         (is (str/includes? html "memory-right-stack"))
+        (is (str/includes? html ">Candidates</h3>"))
+        (is (str/includes? html ">Approved</h3>"))
+        (is (str/includes? html "memory-note-card"))
+        (is (str/includes? html "memory-note-actions"))
+        (is (str/includes? html "Source details"))
+        (is (str/includes? html "memory-source-details"))
+        (is (not (str/includes? html "source json")))
         (is (not (str/includes? html "memory-facts"))))
       (finally
         (sqlite/close-store! store)

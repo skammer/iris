@@ -100,13 +100,14 @@
                                               :why why})]]])]
       [:div.empty "No memory matches."])]))
 
-(defn- vault-note-action [idx path label status scope]
+(defn- vault-note-action [idx path label status scope class-name]
   (let [form-id (str "vault-note-action-" idx "-" status "-" scope)]
     [:form.inline-form {:id form-id}
      [:input {:type "hidden" :name "path" :value path}]
      [:input {:type "hidden" :name "status" :value status}]
      [:input {:type "hidden" :name "scope" :value scope}]
      [:button {:type "button"
+               :class class-name
                "data-on:click" (str "@post('/ui/memory/vault/status', "
                                     "{contentType: 'form', selector: '#" form-id "'})")}
       label]]))
@@ -118,7 +119,7 @@
   (let [form-id (str "vault-note-move-" idx)]
     [:form.inline-form {:id form-id}
      [:input {:type "hidden" :name "path" :value path}]
-     [:select {:name "folder"}
+     [:select {:name "folder" :aria-label "Destination folder"}
       (for [folder vault-note-folders]
         [:option {:value folder} folder])]
      [:button {:type "button"
@@ -126,32 +127,108 @@
                                     "{contentType: 'form', selector: '#" form-id "'})")}
       "Move"]]))
 
+(declare source-value)
+
+(defn- source-key [value]
+  (if (keyword? value) (name value) (str value)))
+
+(defn- source-value [value]
+  (cond
+    (map? value)
+    [:dl.memory-source-map
+     (for [[k v] (sort-by (comp str key) value)]
+       [:div
+        [:dt (source-key k)]
+        [:dd (source-value v)]])]
+
+    (sequential? value)
+    (if (seq value)
+      [:ol.memory-source-list
+       (for [item value]
+         [:li (source-value item)])]
+      [:span.memory-source-empty "none"])
+
+    (nil? value) [:span.memory-source-empty "not set"]
+    (boolean? value) [:span (compact-bool value)]
+    :else [:code (str value)]))
+
+(defn- source-field [label value]
+  [:div.memory-source-field
+   [:dt label]
+   [:dd (source-value value)]])
+
+(defn- vault-note-actions [idx path status scope]
+  (let [scope* (or scope "global")
+        review-actions
+        (case status
+          "approved"
+          [(vault-note-action idx path "Mark candidate" "candidate" scope* nil)
+           (vault-note-action idx path "Reject" "rejected" scope* "memory-action--danger")]
+
+          "rejected"
+          [(vault-note-action idx path "Restore candidate" "candidate" scope* nil)
+           (vault-note-action idx path "Approve" "approved" scope* "memory-action--primary")]
+
+          [(vault-note-action idx path "Approve" "approved" scope* "memory-action--primary")
+           (when-not (= scope* "global")
+             (vault-note-action idx path "Approve global" "approved" "global" nil))
+           (vault-note-action idx path "Reject" "rejected" scope* "memory-action--danger")])]
+    [:footer.memory-note-actions
+     [:span.memory-note-actions__label "Review actions"]
+     [:div.memory-note-actions__controls
+      (concat (remove nil? review-actions)
+              [(vault-note-move-form idx path)])]]))
+
 (defn- vault-note-row [idx {:keys [path title type iris-status iris-scope updated-at
                                    iris-confidence origins frontmatter description]}]
-  [:div.row.memory-note-row
-   [:span.row__id {:title path}
-    (or title path)]
-   [:span.row__meta
-    (str (or type "Reference")
-         " | " (or iris-status "-")
-         " | " (or iris-scope "-")
-         " | c=" (or iris-confidence "-"))]
-   [:span.row__time (ui-render/short-timestamp updated-at)]
-   [:span.row__actions
-    (vault-note-action idx path "Approve" "approved" (or iris-scope "global"))
-    (vault-note-action idx path "Approve global" "approved" "global")
-    (vault-note-action idx path "Reject" "rejected" (or iris-scope "global"))
-    (vault-note-move-form idx path)]
+  [:article.memory-note-card {:data-status (or iris-status "unknown")}
+   [:header.memory-note-card__header
+    [:div
+     [:h4 {:title path} (or title path)]
+     [:span.memory-note-type (or type "Reference")]]
+    [:time {:datetime updated-at} (ui-render/short-timestamp updated-at)]]
+   [:div.memory-note-badges
+    [:span.badge.memory-note-status (or iris-status "unknown")]
+    [:span.badge (str "scope " (or iris-scope "-"))]
+    [:span.badge (str "confidence " (or iris-confidence "-"))]]
+   (when-not (str/blank? description)
+     [:p.memory-note-description description])
    [:details.memory-note-source
-    [:summary "source"]
-    [:pre.code (ui-render/pretty-json {:path path
-                                       :title title
-                                       :description description
-                                       :origins origins
-                                       :frontmatter frontmatter})]]])
+    [:summary "Source details"]
+    [:dl.memory-source-details
+     (source-field "Path" path)
+     (source-field "Description" description)
+     (source-field "Origins" origins)
+     (source-field "Metadata" frontmatter)]]
+   (vault-note-actions idx path iris-status iris-scope)])
+
+(defn- vault-note-group [title status notes start-idx]
+  (when (seq notes)
+    [:section.memory-note-group {:data-status status}
+     [:header.memory-note-group__header
+      [:h3 title]
+      [:span.count-badge (count notes)]]
+     [:div.memory-note-list
+      (map-indexed (fn [idx note]
+                     (vault-note-row (+ start-idx idx) note))
+                   notes)]]))
+
+(defn- vault-note-groups [notes]
+  (let [by-status (group-by #(or (:iris-status %) "unknown") notes)
+        candidates (get by-status "candidate")
+        approved (get by-status "approved")
+        other-statuses (sort (remove #{"candidate" "approved"} (keys by-status)))]
+    [:div.memory-note-groups
+     (vault-note-group "Candidates" "candidate" candidates 0)
+     (vault-note-group "Approved" "approved" approved (count candidates))
+     (for [[offset status] (map-indexed vector other-statuses)]
+       (vault-note-group (str/capitalize status)
+                         status
+                         (get by-status status)
+                         (+ (count candidates) (count approved) (* 100 offset))))]))
 
 (defn- review-row [kind note]
-  [:div.row.memory-note-row
+  [:div.row.memory-review-row
    [:span.row__id {:title (:path note)}
     (str kind ": " (or (:title note) (:id note) (:path note)))]
    [:span.row__meta
@@ -264,8 +341,7 @@
         [:section.panel.memory-overview
          [:h2 "Vault Notes"]
          (if (seq notes)
-           [:div.rows
-            (map-indexed vault-note-row notes)]
+           (vault-note-groups notes)
            [:div.empty-line "none"])]
 
         [:section.panel.memory-lab
