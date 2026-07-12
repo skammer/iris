@@ -391,6 +391,10 @@ Every reference file in `redesign-inspiration/` has an explicit destination:
 | `39a7eb50cffadeb5297b3e24af831147.webp` | Nested sidebar/navigation variants | Navigation |
 | `656c75c464c8c5c8b3da0b7a5b572ac2.webp` | Compact runtime status stack | Status |
 | `6f6786301fb11cf6feb3f588ed745ae6.webp` | Orders/runs dashboard and data table | Data |
+
+The Tools page applies this reference as an approvals-only operator queue: summary metrics, a dense status table, expandable request details, and row-scoped decision controls. Manual tool invocation is intentionally absent.
+
+Its table prioritizes `reason`: status, tool, requester, and timestamp stay compact. UUIDs render as their first segment with the full value in the native title tooltip.
 | `7bf9c1463af2b46fac0eb0285c87551f.webp` | Radio-card settings and billing choice | Forms |
 | `7dee6a668aa19fd365d1c504e3828623.webp` | Color, type, buttons, search, tabs, statuses, controls, menu | Foundations through Navigation |
 | `82d465b425a7ec38f84284c4acb81fe9.webp` | Performance dashboard, metrics, chart, alerts | Data; Feedback |

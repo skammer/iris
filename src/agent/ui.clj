@@ -27,7 +27,6 @@
 	         memory-workspace-fragment
 	         memory-search-results-fragment
 	         memory-tool-result-fragment
-		         tools-fragment
 	         tool-approvals-fragment)
 
 (def ^:private tabs
@@ -174,14 +173,12 @@
                      (ui-render/trusted-fragment (sessions-fragment system session-id))
                      (ui-render/trusted-fragment (session-detail-fragment system session-id))])
 	             :tools (ui-render/render-many
-                     [:section.workspace-grid.tools
-                      [:section.panel.stack
-                       (ui-render/trusted-fragment (tools-fragment system))]
-                      [:section.panel.stack
+                     [:section.workspace-grid.single
+                      [:div.tools-workspace
+                       [:div#tool-results-panel.tool-operation-result {:hidden true}]
                        (ui-render/trusted-fragment
                         (tool-approvals-fragment
-                         (tool-approvals/list-requests (:store system) {:limit 50})))
-                       [:div#tool-results-panel.empty "Request approval, approve, then run."]]])
+                         (tool-approvals/list-requests (:store system) {:limit 50})))]] )
              :memory (memory-workspace-fragment system)
              :magi (ui-render/render-many
                     [:section.workspace-grid.single
@@ -736,82 +733,138 @@
          [:div.magi-empty
           [:div.empty "No MAGI decisions yet."]])]])))
 
-(defn tools-fragment [system]
-  (let [tool-list (tools/list-tools (:tool-registry system))]
-    (ui-render/render
-     [:div#tools-panel
-      [:h3 "Local Tools"]
-      [:p.meta "Sensitive actions create approval requests first. Approval list lives below."]
-      [:div.meta (str "available: " (str/join ", " (map (comp name :name) tool-list)))]
-      [:form#fs-tool-form
-       [:h3 "Filesystem"]
-       [:div.dual
-        [:select {:name "tool"}
-         [:option {:value "fs_list"} "list"]
-         [:option {:value "fs_read"} "read"]
-         [:option {:value "fs_write"} "write"]
-         [:option {:value "fs_mkdir"} "mkdir"]
-         [:option {:value "fs_delete"} "delete"]]
-        [:input {:type "text" :name "path" :value "." :placeholder "path"}]]
-       [:textarea {:name "content" :placeholder "content for write"}]
-       [:input {:type "text" :name "reason" :placeholder "why this action is needed"}]
-       [:div.actions
-        [:button {:type "button"
-                  "data-on:click" "@post('/ui/tool-approvals/request', {contentType: 'form', selector: '#fs-tool-form'})"}
-         "Request filesystem action"]]]
-      [:form#shell-tool-form
-       [:h3 "Shell"]
-       [:input {:type "hidden" :name "tool" :value "shell"}]
-       [:input {:type "text" :name "command" :placeholder "printf hello"}]
-       [:input {:type "text" :name "working_dir" :value "." :placeholder "working dir"}]
-       [:input {:type "text" :name "reason" :placeholder "why shell is needed"}]
-       [:div.actions
-        [:button {:type "button"
-                  "data-on:click" "@post('/ui/tool-approvals/request', {contentType: 'form', selector: '#shell-tool-form'})"}
-         "Request shell action"]]]])))
-
 (defn tool-results-fragment [tool-name status payload]
   (ui-render/render
-   [:div#tool-results-panel
-    [:h3 "Tool Result"]
-    [:p.meta (str (name tool-name) " / status " status)]
-    [:div.result.code (json/generate-string payload {:pretty true})]]))
+   [:div#tool-results-panel.tool-operation-result
+    [:div
+     [:strong "Execution result"]
+     [:span.meta (str (name tool-name) " / status " status)]]
+    [:details
+     [:summary "View output"]
+     [:pre.code (json/generate-string payload {:pretty true})]]]))
 
 (defn- approval-actions [approval]
   (concat
    (when (= "pending" (:status approval))
-     [[:form {:id (str "approve-" (:id approval))}
+     [[:form.approval-action-form.approval-action-form--approve {:id (str "approve-" (:id approval))}
        [:input {:type "hidden" :name "actor" :value "operator"}]
-       [:input {:type "text" :name "reason" :placeholder "approval reason"}]
+       [:label
+        [:span "Approval reason"]
+        [:input {:type "text" :name "reason" :placeholder "Why this is safe"}]]
        [:button {:type "button"
                  "data-on:click" (str "@post('/ui/tool-approvals/" (:id approval) "/approve', {contentType: 'form', selector: '#approve-" (:id approval) "'})")}
         "Approve"]]
-      [:form {:id (str "deny-" (:id approval))}
+      [:form.approval-action-form.approval-action-form--deny {:id (str "deny-" (:id approval))}
        [:input {:type "hidden" :name "actor" :value "operator"}]
-       [:input {:type "text" :name "reason" :placeholder "denial reason"}]
+       [:label
+        [:span "Denial reason"]
+        [:input {:type "text" :name "reason" :placeholder "What must change"}]]
        [:button {:type "button"
                  "data-on:click" (str "@post('/ui/tool-approvals/" (:id approval) "/deny', {contentType: 'form', selector: '#deny-" (:id approval) "'})")}
         "Deny"]]])
    (when (= "approved" (:status approval))
-     [[:form {:id (str "run-" (:id approval))}
+     [[:form.approval-action-form.approval-action-form--run {:id (str "run-" (:id approval))}
+       [:span "Approval granted. Execute the exact reviewed input."]
        [:button {:type "button"
                  "data-on:click" (str "@post('/ui/tool-approvals/" (:id approval) "/run', {contentType: 'form', selector: '#run-" (:id approval) "'})")}
-        "Run"]]])))
+        "Run approved tool"]]])))
+
+(defn- approval-status [status]
+  [:span.approval-status {:class (str "approval-status--" status)}
+   status])
+
+(defn- approval-input-fields [input]
+  [:dl.approval-input-fields
+   (for [[k value] (sort-by (comp str key) input)]
+     [:div
+      [:dt (if (keyword? k) (name k) (str k))]
+      [:dd
+       (if (or (map? value) (sequential? value))
+         [:pre.code (json/generate-string value {:pretty true})]
+         [:code (str value)])]])])
+
+(defn- approval-record [approval]
+  (let [{:keys [id tool-name status requested-by reason actor decision-reason
+                created-at decided-at expires-at input requested-permissions]} approval]
+    [:details.approval-record {:data-status status}
+     [:summary.approval-record__summary
+      (approval-status status)
+      [:span.approval-record__tool tool-name]
+      [:span.approval-record__requester
+       (cond-> {}
+         requested-by (assoc :title requested-by))
+       (if requested-by (ui-render/short-id requested-by) "-")]
+      [:span.approval-record__reason (or (not-empty reason) "No reason provided")]
+      [:time {:datetime created-at} (ui-render/short-timestamp created-at)]
+      [:span.approval-record__chevron {:aria-hidden "true"} "⌄"]]
+     [:div.approval-record__detail
+      [:div.approval-detail-grid
+       [:section
+        [:h3 "Request"]
+        [:dl.approval-metadata
+         [:div [:dt "ID"] [:dd [:code {:title id} (ui-render/short-id id)]]]
+         [:div [:dt "Requested by"]
+          [:dd
+           (if requested-by
+             [:span {:title requested-by} (ui-render/short-id requested-by)]
+             "-")]]
+         [:div [:dt "Expires"] [:dd (or expires-at "-")]]
+         [:div [:dt "Permissions"]
+          [:dd (if (seq requested-permissions)
+                 (str/join ", " (sort (map name requested-permissions)))
+                 "none")]]]]
+       [:section
+        [:h3 "Decision"]
+        [:dl.approval-metadata
+         [:div [:dt "Status"] [:dd status]]
+         [:div [:dt "Actor"] [:dd (or actor "-")]]
+         [:div [:dt "Reason"] [:dd (or decision-reason "-")]]
+         [:div [:dt "Decided"] [:dd (or decided-at "-")]]]]]
+      [:section.approval-input
+       [:h3 "Tool input"]
+       (if (seq input)
+         (approval-input-fields input)
+         [:div.empty-line "none"])]
+      (when-let [actions (seq (approval-actions approval))]
+        [:footer.approval-record__actions
+         [:span "Operator action"]
+         [:div actions]])]]))
 
 (defn tool-approvals-fragment [approvals]
-  (ui-render/render
-   [:div#tool-approvals-panel
-    [:h3 "Tool Approvals"]
-    (if (seq approvals)
-      [:div.stack
-       (for [approval approvals]
-         [:article.result
-          [:strong (:tool-name approval)]
-          [:div.meta (str (:status approval) " / " (:created-at approval))]
-          (when-let [reason (:reason approval)]
-            [:div.meta (str "reason: " reason)])
-          (when-let [decision-reason (:decision-reason approval)]
-            [:div.meta (str "decision: " decision-reason)])
-          [:div.code (json/generate-string (:input approval) {:pretty true})]
-         [:div.actions (approval-actions approval)]])]
-      [:div.empty "No tool approvals yet."])]))
+  (let [status-rank {"pending" 0 "approved" 1 "denied" 2}
+        approvals* (->> approvals
+                        (sort-by #(get status-rank (:status %) 9))
+                        vec)
+        counts (frequencies (map :status approvals*))]
+    (ui-render/render
+     [:section#tool-approvals-panel.panel.approvals-page
+      {"data-on-interval__duration.10s.leading" "@get('/ui/tool-approvals')"}
+      [:header.approvals-page__header
+       [:div
+        [:span.overview-kicker "Operator review"]
+        [:h1 "Tool Approvals"]
+        [:p "Review sensitive actions requested by agents. Open a row for full context and decision controls."]]
+       [:span.badge (str "Latest " (count approvals*) " / 50")]]
+      [:div.approval-metrics
+       (for [[label status] [["Total" nil]
+                             ["Pending" "pending"]
+                             ["Approved" "approved"]
+                             ["Denied" "denied"]]]
+         [:div.approval-metric
+          [:span.label label]
+          [:strong (str (if status (get counts status 0) (count approvals*)))]] )]
+      [:section.approval-table
+       [:header.approval-table__head
+        [:span "Status"]
+        [:span "Tool"]
+        [:span "Requested by"]
+        [:span "Reason"]
+        [:span "Created"]
+        [:span {:aria-hidden "true"} ""]]
+       (if (seq approvals*)
+         [:div.approval-table__body
+          (for [approval approvals*]
+            (approval-record approval))]
+         [:div.approval-table__empty
+          [:strong "Queue clear"]
+          [:span "No approval requests yet."]])]])))

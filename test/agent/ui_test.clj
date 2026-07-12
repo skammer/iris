@@ -142,6 +142,38 @@
       (is (str/includes? html "empty-line"))
       (is (str/includes? html "View all activity")))))
 
+(deftest tool-approvals-are-an-operator-queue
+  (let [base {:requested-by "session-1"
+              :reason "Agent requested filesystem access"
+              :created-at "2026-07-12T10:00:00Z"
+              :expires-at "2026-07-12T11:00:00Z"
+              :requested-permissions #{:filesystem-write}
+              :input {:path "/workspace/report.md" :content "draft"}}
+        pending-id "303ea8ca-9665-4edd-bd97-b5c3cec87438"
+        approvals [(assoc base :id pending-id :tool-name "fs_write" :status "pending")
+                   (assoc base :id "approval-approved" :tool-name "shell" :status "approved"
+                          :actor "operator" :decision-reason "Reviewed" :decided-at "2026-07-12T10:02:00Z")
+                   (assoc base :id "approval-denied" :tool-name "fs_delete" :status "denied"
+                          :actor "operator" :decision-reason "Unsafe path" :decided-at "2026-07-12T10:03:00Z")]
+        html (ui/tool-approvals-fragment approvals)
+        doc (Jsoup/parse html)]
+    (is (= 3 (.size (.select doc ".approval-record"))))
+    (is (= 4 (.size (.select doc ".approval-metric"))))
+    (is (= 1 (.size (.select doc ".approval-status--pending"))))
+    (is (= 1 (.size (.select doc ".approval-status--approved"))))
+    (is (= 1 (.size (.select doc ".approval-status--denied"))))
+    (is (= "pending" (.text (.first (.select doc ".approval-status")))))
+    (is (str/includes? html "Tool input"))
+    (is (str/includes? html "Run approved tool"))
+    (is (str/includes? html "What must change"))
+    (let [id-code (.first (.select doc ".approval-record[data-status=pending] .approval-metadata code"))]
+      (is (= "303ea8ca" (.text id-code)))
+      (is (= pending-id (.attr id-code "title"))))
+    (is (not (str/includes? html "Local Tools")))
+    (is (not (str/includes? html "tool-approvals/request")))
+    (is (not (str/includes? html "fs-tool-form")))
+    (is (not (str/includes? html "shell-tool-form")))))
+
 (deftest create-session-form-posts-explicit-form-and-clears-on-success
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})]

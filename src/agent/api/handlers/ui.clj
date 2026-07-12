@@ -20,9 +20,6 @@
    (java.nio.file Files)
    (java.util Base64)))
 
-(defn- ui-tool-input [body]
-  (tools-h/tool-input-from-map (keyword (:tool body)) body))
-
 (def ^:private max-chat-image-bytes (* 10 1024 1024))
 
 (defn- uploaded-files [value]
@@ -462,40 +459,10 @@
                              (:path body)
                              (:folder body)))))
 
-(defn list-tools [system _request]
-  (responses/html-response 200 (ui/tools-fragment system)))
-
 (defn list-tool-approvals [system _request]
   (responses/html-response 200
                            (ui/tool-approvals-fragment
                             (tool-approvals/list-requests (:store system) {:limit 50}))))
-
-(defn tool-approval-request [system request]
-  (let [body (h/read-form-body request)
-        tool-name (keyword (:tool body))
-        input (ui-tool-input body)
-        tool-description (some-> (:tool-registry system)
-                                  (tools/get-tool tool-name)
-                                  tools/describe)
-        approval (tool-approvals/request-with-magi!
-                  (:store system)
-                  {:magi-service (:magi-service system)
-                   :event-sink (:event-sink system)}
-                  {:tool-name tool-name
-                   :input input
-                   :requested-by "ui"
-                   :reason (:reason body)
-                   :expires-at (tool-approvals/default-expires-at system)}
-                  tool-description
-                  {:user "ui"})]
-    (responses/html-response 201
-                             (str (ui/tool-approvals-fragment
-                                   (tool-approvals/list-requests (:store system) {:limit 50}))
-                                  (ui/tool-results-fragment
-                                   tool-name
-                                   201
-                                   {:approval_id (:id approval)
-                                    :status (:status approval)})))))
 
 (defn tool-approval-decision [system request approval-id status]
   (let [body (h/read-form-body request)
@@ -506,13 +473,8 @@
                   :denied (tool-approvals/deny! (:store system) approval-id actor reason))]
     (tool-approvals/log-decision! (:event-sink system) updated status actor reason)
     (responses/html-response 200
-                             (str (ui/tool-approvals-fragment
-                                   (tool-approvals/list-requests (:store system) {:limit 50}))
-                                  (ui/tool-results-fragment
-                                   (keyword (:tool-name updated))
-                                   200
-                                   {:approval_id approval-id
-                                    :status (:status updated)})))))
+                             (ui/tool-approvals-fragment
+                              (tool-approvals/list-requests (:store system) {:limit 50})))))
 
 (defn tool-approval-run [system _request approval-id]
   (let [{:keys [tool-name input permissions approval]} (tool-approvals/resolve-approved-request (:store system) approval-id)

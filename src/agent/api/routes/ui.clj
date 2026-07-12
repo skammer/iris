@@ -30,17 +30,6 @@
    [:path schemas/NonBlankString]
    [:folder schemas/NonBlankString]])
 
-(def ^:private ui-tool-approval-request-form
-  [:map
-   [:tool schemas/NonBlankString]
-   [:reason {:optional true} :string]
-   [:path {:optional true} :string]
-   [:action {:optional true} :string]
-   [:content {:optional true} :string]
-   [:argv {:optional true} :string]
-   [:command {:optional true} :string]
-   [:working_dir {:optional true} :string]])
-
 (def ^:private ui-tool-approval-decision-form
   [:map
    [:actor {:optional true} :string]
@@ -88,11 +77,8 @@
    ["/ui/memory/vault/move" {:post {:handler/id :ui-memory-vault-move
                                     :parameters {:form ui-memory-vault-move-form}}}]
    ["/ui/memory/vault/reindex" {:post {:handler/id :ui-memory-vault-reindex}}]
-   ["/ui/tools" {:get {:handler/id :ui-tools}}]
    ["/ui/system/reload" {:post {:handler/id :ui-system-reload}}]
    ["/ui/tool-approvals" {:get {:handler/id :ui-tool-approvals}}]
-   ["/ui/tool-approvals/request" {:post {:handler/id :ui-tool-approval-request
-                                         :parameters {:form ui-tool-approval-request-form}}}]
    ["/ui/tool-approvals/:approval-id/approve" {:post {:handler/id :ui-tool-approval-approve
                                                       :parameters {:form ui-tool-approval-decision-form}}}]
    ["/ui/tool-approvals/:approval-id/deny" {:post {:handler/id :ui-tool-approval-deny
