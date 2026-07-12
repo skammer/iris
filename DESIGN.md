@@ -395,6 +395,8 @@ Every reference file in `redesign-inspiration/` has an explicit destination:
 The Tools page applies this reference as an approvals-only operator queue: summary metrics, a dense status table, expandable request details, and row-scoped decision controls. Manual tool invocation is intentionally absent.
 
 Its table prioritizes `reason`: status, tool, requester, and timestamp stay compact. UUIDs render as their first segment with the full value in the native title tooltip.
+
+The Logs page uses the same dense operator-table language while keeping its two sources explicit: SQLite Event Log and optional Runtime Trace. Neutral events never receive error styling; only an explicit failed trace is red.
 | `7bf9c1463af2b46fac0eb0285c87551f.webp` | Radio-card settings and billing choice | Forms |
 | `7dee6a668aa19fd365d1c504e3828623.webp` | Color, type, buttons, search, tabs, statuses, controls, menu | Foundations through Navigation |
 | `82d465b425a7ec38f84284c4acb81fe9.webp` | Performance dashboard, metrics, chart, alerts | Data; Feedback |
@@ -417,4 +419,5 @@ The Overview page directly applies this reference: identity summary, four worksp
 - Mixed-status review lists are grouped by status. Each record is a distinct card with metadata, readable source details, and actions contained in a dedicated footer.
 - Product pages use real data. `/ui` uses deterministic examples.
 - Update this document whenever tokens, motion, responsive behavior, or component contracts change.
+- Record every product or user-visible behavior change in `CHANGELOG.md` in the same change.
 - Verify UI changes with targeted Clojure tests, lint, real browser screenshots at desktop and narrow widths, keyboard navigation, light/dark themes, and reduced-motion mode.

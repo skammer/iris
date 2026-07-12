@@ -515,7 +515,11 @@
         (is (str/includes? html "Event Log"))
         (is (str/includes? html "Runtime Trace"))
         (is (str/includes? html "test.event"))
-        (is (str/includes? html "llm.call")))
+        (is (str/includes? html "llm.call"))
+        (is (str/includes? html "log-metrics"))
+        (is (= 2 (.size (.select (Jsoup/parse html) ".log-table"))))
+        (is (= 2 (.size (.select (Jsoup/parse html) ".log-record"))))
+        (is (not (str/includes? html "event-item"))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)
