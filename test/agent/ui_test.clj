@@ -110,8 +110,15 @@
                                 :providers {:openai-compatible {:type :openai-compatible
                                                                  :model "gpt-4o-mini"}}}}
                  :reload-state (atom {:status :idle})})]
-      (is (str/includes? html ">model</span>"))
-      (is (str/includes? html ">gpt-4o-mini</span>"))
+      (is (str/includes? html ">Model</dt>"))
+      (is (str/includes? html ">gpt-4o-mini</dd>"))
+      (is (str/includes? html "Agent Control Plane"))
+      (is (str/includes? html "overview-action-grid"))
+      (is (str/includes? html "Current deployment"))
+      (is (str/includes? html "href=\"/chat\""))
+      (is (str/includes? html "href=\"/tools\""))
+      (is (str/includes? html "href=\"/memory\""))
+      (is (str/includes? html "href=\"/logs\""))
       (is (str/includes? html ">version</span>"))
       (is (str/includes? html ">abc123-dirty</span>"))
       (is (str/includes? html ">commit</span>"))
@@ -132,7 +139,8 @@
       (is (str/includes? html "board-section"))
       (is (str/includes? html "count-badge"))
       (is (str/includes? html "board-section--empty"))
-      (is (str/includes? html "empty-line")))))
+      (is (str/includes? html "empty-line"))
+      (is (str/includes? html "View all activity")))))
 
 (deftest create-session-form-posts-explicit-form-and-clears-on-success
   (let [path (temp-db-path)

@@ -399,6 +399,8 @@ Every reference file in `redesign-inspiration/` has an explicit destination:
 | `a7c77f375f78ef72b7a138069555a664.webp` | Multi-stage setup, local steps, form canvas, preview | Status; Layouts |
 | `a7c77f375f78ef72b7a138069555a664-2.webp` | Duplicate setup reference; same canonical recipe | Status; Layouts |
 | `ac33be5504393896cd78c24f0d1c5424.webp` | Agent dashboard, action tiles, metric cards, variants | Actions; Data; Layouts |
+
+The Overview page directly applies this reference: identity summary, four workspace action tiles, one bordered live-runtime card, and a three-column operations board. Product data and existing navigation remain authoritative.
 | `dd0e118ed00220e1f9280a7d298c31ba.webp` | Focused onboarding/comparison dialog | Layouts; Feedback |
 | `e7c04b9dfb056e843cef5939d60f94ca.webp` | Workflow toolbar, nodes, connectors, zoom | Workflow |
 | `fd6e5fa6e735048a5a7cfd33336585bf.webp` | Empty conversation and composer | Forms; Feedback |

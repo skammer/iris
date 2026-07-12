@@ -190,7 +190,7 @@
                     [:section.workspace-grid.single
                      (ui-render/trusted-fragment (logs-fragment system))])
              (ui-render/render-many
-              [:section.workspace-grid.two-up
+              [:section.workspace-grid.overview-workspace
                (ui-render/trusted-fragment (dashboard-fragment system))
                (ui-render/trusted-fragment (operator-board-fragment system))])))])))
 
@@ -207,41 +207,64 @@
         reload-label (str/join " · " (keep #(some-> % name)
                                            [(:status reload-status) (:mode reload-status)]))]
     (ui-render/render
-     [:section#dashboard-summary.panel
+     [:section#dashboard-summary.panel.overview-dashboard
       {"data-on-interval__duration.10s.leading" "@get('/ui/dashboard')"}
-      [:div.panel-head
-       [:h2 "Runtime Snapshot"]
-       [:form#system-reload-form.panel-head__form
-        {:method "post"
-         "data-on:submit" "@post('/ui/system/reload', {contentType: 'form', selector: '#system-reload-form'})"}
-        [:input {:type "hidden" :name "mode" :value "soft"}]
-        [:span.reload-status
-         (cond-> {:class (str "reload-status--" (name (:status reload-status)))}
-           (:message reload-status) (assoc :title (str (:message reload-status))))
-         reload-label]
-        [:button {:type "submit"} "Reload config"]]]
-      [:div.stats
-       [:div.stat.stat--wide [:span.label "provider"] [:span.value.provider-value (name (config/active-provider-key llm-config))]]
-       [:div.stat.stat--wide [:span.label "model"] [:span.value (or (config/active-model llm-config) "-")]]
-       [:div.stat [:span.label "sessions"] [:span.value (get-in storage [:details :session-count] 0)]]
-       [:div.stat [:span.label "events"] [:span.value (get-in storage [:details :event-count] 0)]]
-       [:div.stat [:span.label "tools"] [:span.value (:count tools-health)]]
-       [:div.stat [:span.label "adapters"] [:span.value (:count adapter-health)]]]
-      [:div.fact-strip
-       (for [[label value] [["vault notes" (get-in memory-health [:vault :note-count] 0)]
-                            ["version" (:version build)]
-                            ["commit" (:commit-short build)]
-                            ["built" (or (ui-render/short-timestamp (:built-at build)) "-")]
-                            ["schema" (get-in storage [:details :schema-version] "?")]
-                            ["approvals" (get-in storage [:details :tool-approval-count] 0)]]]
-         [:span.fact
-          [:span.fact__label label]
-          [:span.fact__value (str value)]])]
-      [:div.run-grid
-       [:div.result.result--metric
-        [:strong "Pending approvals"]
-        [:div.value {:class (when (pos? pending-approvals) "value--warn")}
-         (str pending-approvals)]]]])))
+      [:div.overview-intro
+       [:div.overview-title-block
+        [:span.overview-kicker "Iris / Runtime"]
+        [:h1 "Agent Control Plane"]
+        [:p "Local-first agent runtime, memory, tools, and operator review."]
+        [:dl.overview-runtime-identity
+         [:div [:dt "Provider"] [:dd (name (config/active-provider-key llm-config))]]
+         [:div [:dt "Model"] [:dd (or (config/active-model llm-config) "-")]]]]
+       [:nav.overview-action-grid {:aria-label "Primary workspaces"}
+        (for [[mark label detail href] [["01" "Open chat" "Sessions and messages" "/chat"]
+                                        ["02" "Review tools" (str pending-approvals " pending approvals") "/tools"]
+                                        ["03" "Browse memory" (str (get-in memory-health [:vault :note-count] 0) " vault notes") "/memory"]
+                                        ["04" "Inspect logs" (str (get-in storage [:details :event-count] 0) " events") "/logs"]]]
+          [:a.overview-action-tile {:href href}
+           [:span.overview-action-tile__mark {:aria-hidden "true"} mark]
+           [:span.overview-action-tile__copy
+            [:strong label]
+            [:small detail]]
+           [:span.overview-action-tile__arrow {:aria-hidden "true"} "↗"]])]]
+      [:section.runtime-card
+       [:header.runtime-card__header
+        [:div
+         [:span.overview-kicker "Live runtime"]
+         [:strong "Current deployment"]]
+        [:form#system-reload-form.panel-head__form
+         {:method "post"
+          "data-on:submit" "@post('/ui/system/reload', {contentType: 'form', selector: '#system-reload-form'})"}
+         [:input {:type "hidden" :name "mode" :value "soft"}]
+         [:span.reload-status
+          (cond-> {:class (str "reload-status--" (name (:status reload-status)))}
+            (:message reload-status) (assoc :title (str (:message reload-status))))
+          reload-label]
+         [:button {:type "submit"} "Reload config"]]]
+       [:div.runtime-card__body
+        [:div.runtime-provider-card
+         [:span.label "Active model"]
+         [:strong (or (config/active-model llm-config) "-")]
+         [:span.meta (name (config/active-provider-key llm-config))]]
+        [:div.overview-metrics
+         (for [[label value alert?] [["Sessions" (get-in storage [:details :session-count] 0) false]
+                                     ["Events" (get-in storage [:details :event-count] 0) false]
+                                     ["Tools" (:count tools-health) false]
+                                     ["Adapters" (:count adapter-health) false]
+                                     ["Approvals" pending-approvals (pos? pending-approvals)]]]
+           [:div.overview-metric
+            [:span.label label]
+            [:strong {:class (when alert? "value--warn")} (str value)]])]]
+       [:footer.fact-strip
+        (for [[label value] [["vault notes" (get-in memory-health [:vault :note-count] 0)]
+                             ["version" (:version build)]
+                             ["commit" (:commit-short build)]
+                             ["built" (or (ui-render/short-timestamp (:built-at build)) "-")]
+                             ["schema" (get-in storage [:details :schema-version] "?")]]]
+          [:span.fact
+           [:span.fact__label label]
+           [:span.fact__value (str value)]])]]])))
 
 (defn- board-section
   ([label items row-fn] (board-section label items row-fn nil))
@@ -263,10 +286,13 @@
         kernel-events (filter #(= "agent.kernel.step.executed" (:event-type %))
                               recent-events-pool)]
     (ui-render/render
-     [:section#operator-board.panel
+     [:section#operator-board.panel.overview-operations
       {"data-on-interval__duration.10s.leading" "@get('/ui/operator-board')"}
       [:div.panel-head
-       [:h2 "Operator Board"]]
+       [:div
+        [:span.overview-kicker "Operations"]
+        [:h2 "Operator Board"]]
+       [:a.overview-text-link {:href "/logs"} "View all activity ↗"]]
       [:div.board
        (board-section "Approval queue" approvals
                       (fn [{:keys [tool-name reason created-at]}]
