@@ -19,14 +19,17 @@
 (declare dashboard-fragment
          operator-board-fragment
          sessions-fragment
+         session-route-path
          session-detail-fragment
          session-messages-fragment
+         route-fragment
          events-fragment
          magi-fragment
          logs-fragment
 	         memory-workspace-fragment
 	         memory-search-results-fragment
 	         memory-tool-result-fragment
+	         tool-approval-detail-fragment
 	         tool-approvals-fragment)
 
 (def ^:private tabs
@@ -90,8 +93,53 @@
    {:type "button"
     :class (when (= (:key tab) active-tab) "active")
     "data-route" (route-path {:tab (:key tab)})
-    "data-on:click" (str "@get('/ui/shell?tab=" (name (:key tab)) "')")}
+    "data-on:click" (str "@get('/ui/route?tab=" (name (:key tab))
+                         "&client_id=' + window.irisUiClientId)")}
    (:label tab)])
+
+(defn- shell-nav-node [active-tab]
+  [:nav#shell-nav.shell-nav
+   [:span.shell-nav__pill {:aria-hidden "true"}]
+   (for [tab tabs]
+     (tab-link tab active-tab))])
+
+(defn- workspace-node [system active-tab session-id]
+  [:div#workspace-content.workspace-content
+   (ui-render/trusted-fragment
+    (case active-tab
+      :chat (ui-render/render-many
+             [:section.workspace-grid.chat-workspace
+              (ui-render/trusted-fragment (sessions-fragment system session-id))
+              (ui-render/trusted-fragment (session-detail-fragment system session-id))])
+      :tools (ui-render/render-many
+              [:section.workspace-grid.single
+               [:div.tools-workspace
+                [:div#tool-results-panel.tool-operation-result {:hidden true}]
+                (ui-render/trusted-fragment
+                 (tool-approvals-fragment
+                  (tool-approvals/list-requests (:store system) {:limit 50})))]] )
+      :memory (memory-workspace-fragment system)
+      :magi (ui-render/render-many
+             [:section.workspace-grid.single
+              (ui-render/trusted-fragment (magi-fragment system))])
+      :logs (ui-render/render-many
+             [:section.workspace-grid.single
+              (ui-render/trusted-fragment (logs-fragment system))])
+      (ui-render/render-many
+       [:section.workspace-grid.overview-workspace
+        (ui-render/trusted-fragment (dashboard-fragment system))
+        (ui-render/trusted-fragment (operator-board-fragment system))])))])
+
+(defn route-fragment [system active-route]
+  (let [route (if (map? active-route) active-route {:tab active-route})
+        active-tab (normalize-tab (:tab route))
+        session-id (:session-id route)
+        path (if (= :chat active-tab)
+               (session-route-path system session-id)
+               (route-path {:tab active-tab}))]
+    (str (router-state-fragment path)
+         (ui-render/render (shell-nav-node active-tab))
+         (ui-render/render (workspace-node system active-tab session-id)))))
 
 (defn index-page
   ([] (index-page "/"))
@@ -163,33 +211,8 @@
            :aria-label "Toggle light or dark mode"
            :title "Toggle light/dark mode"}
           "Dark"]]]]
-      [:nav#shell-nav.shell-nav
-       [:span.shell-nav__pill {:aria-hidden "true"}]
-       (for [tab tabs]
-         (tab-link tab active-tab))]
-      (ui-render/trusted-fragment (case active-tab
-             :chat (ui-render/render-many
-                    [:section.workspace-grid.chat-workspace
-                     (ui-render/trusted-fragment (sessions-fragment system session-id))
-                     (ui-render/trusted-fragment (session-detail-fragment system session-id))])
-	             :tools (ui-render/render-many
-                     [:section.workspace-grid.single
-                      [:div.tools-workspace
-                       [:div#tool-results-panel.tool-operation-result {:hidden true}]
-                       (ui-render/trusted-fragment
-                        (tool-approvals-fragment
-                         (tool-approvals/list-requests (:store system) {:limit 50})))]] )
-             :memory (memory-workspace-fragment system)
-             :magi (ui-render/render-many
-                    [:section.workspace-grid.single
-                     (ui-render/trusted-fragment (magi-fragment system))])
-             :logs (ui-render/render-many
-                    [:section.workspace-grid.single
-                     (ui-render/trusted-fragment (logs-fragment system))])
-             (ui-render/render-many
-              [:section.workspace-grid.overview-workspace
-               (ui-render/trusted-fragment (dashboard-fragment system))
-               (ui-render/trusted-fragment (operator-board-fragment system))])))])))
+      (shell-nav-node active-tab)
+      (workspace-node system active-tab session-id)])))
 
 (defn dashboard-fragment [system]
   (let [storage (sqlite/health-check (:store system))
@@ -205,7 +228,7 @@
                                            [(:status reload-status) (:mode reload-status)]))]
     (ui-render/render
      [:section#dashboard-summary.panel.overview-dashboard
-      {"data-on-interval__duration.10s.leading" "@get('/ui/dashboard')"}
+      {"data-on-interval__duration.10s" "@get('/ui/dashboard')"}
       [:div.overview-intro
        [:div.overview-title-block
         [:span.overview-kicker "Iris / Runtime"]
@@ -284,7 +307,7 @@
                               recent-events-pool)]
     (ui-render/render
      [:section#operator-board.panel.overview-operations
-      {"data-on-interval__duration.10s.leading" "@get('/ui/operator-board')"}
+      {"data-on-interval__duration.10s" "@get('/ui/operator-board')"}
       [:div.panel-head
        [:div
         [:span.overview-kicker "Operations"]
@@ -323,7 +346,7 @@
                        (some-> sessions first :id))]
      (ui-render/render
       [:aside#sessions-panel.panel.sessions-sidebar
-       {"data-on-interval__duration.15s.leading"
+       {"data-on-interval__duration.15s"
         (str "@get('/ui/sessions"
              (when active-id
                (str "?session_id=" (ui-render/url-encode active-id)))
@@ -390,7 +413,7 @@
            ;; Generous retry budget: the default 10 retries can be exhausted
            ;; by server restarts, after which the transcript silently freezes.
            "data-init" (str "@get('/ui/session/live?session_id=" (:id session)
-                            "', {openWhenHidden: true, retryMaxCount: 1000, retryMaxWaitMs: 10000})")}
+                            "&client_id=' + window.irisUiClientId, {requestCancellation: window.irisChatStreamController, openWhenHidden: true, retryMaxCount: 1000, retryMaxWaitMs: 10000})")}
           [:div.chat-titlebar
            [:h2 (or (:title session) "Untitled session")]
            [:span.meta.code (:id session)]
@@ -472,11 +495,22 @@
       value
       {:content value})))
 
+(def ^:private default-visible-messages 60)
+
+(defn- visible-message-limit [value]
+  (try
+    (-> (or value default-visible-messages) long (max default-visible-messages) (min 400))
+    (catch Exception _
+      default-visible-messages)))
+
 (defn session-messages-fragment
   ([system session-id]
    (session-messages-fragment system session-id {}))
   ([system session-id opts]
    (let [messages (sqlite/list-messages (:store system) session-id)
+         limit (visible-message-limit (:limit opts))
+         visible-messages (vec (take-last limit messages))
+         hidden-count (- (count messages) (count visible-messages))
          state (chat/session-state system session-id)
          streaming (streaming-state system session-id opts)
          streaming* (cond-> {}
@@ -490,9 +524,16 @@
        (if (or (seq messages) streaming? (:working? state))
          (list*
           (ui-render/thread-stats-bar messages)
+          (when (pos? hidden-count)
+            [:button.chat-history-more
+             {:type "button"
+              "data-on:click" (str "@get('/ui/session-messages?session_id="
+                                   (ui-render/url-encode session-id)
+                                   "&limit=" (min 400 (+ limit default-visible-messages)) "')")}
+             (str "Load " (min hidden-count default-visible-messages) " older")])
           [:div.chat-stream__filler]
           (concat
-           (ui-render/message-list system messages)
+           (ui-render/message-list system visible-messages)
            (cond
              streaming? [(streaming-message streaming*)]
              :else nil)))
@@ -502,7 +543,7 @@
 (defn events-fragment [system]
   (ui-render/render
    [:section#events-panel.panel
-    {"data-on-interval__duration.5s.leading" "@get('/ui/events')"}
+    {"data-on-interval__duration.5s" "@get('/ui/events')"}
     [:h2 "Live Events"]
     (if-let [events (seq (sqlite/list-events (:store system) {:limit 25}))]
       [:div.event-list
@@ -599,7 +640,7 @@
         trace-failures (count (filter #(false? (:success %)) trace-events))]
     (ui-render/render
      [:section#logs-panel.panel.logs-page
-      {"data-on-interval__duration.5s.leading" "@get('/ui/logs')"}
+      {"data-on-interval__duration.5s" "@get('/ui/logs')"}
       [:header.logs-page__header
        [:div
         [:span.overview-kicker "Runtime observability"]
@@ -858,21 +899,10 @@
          [:pre.code (json/generate-string value {:pretty true})]
          [:code (str value)])]])])
 
-(defn- approval-record [approval]
-  (let [{:keys [id tool-name status requested-by reason actor decision-reason
-                created-at decided-at expires-at input requested-permissions]} approval]
-    [:details.approval-record {:data-status status}
-     [:summary.approval-record__summary
-      (approval-status status)
-      [:span.approval-record__tool tool-name]
-      [:span.approval-record__requester
-       (cond-> {}
-         requested-by (assoc :title requested-by))
-       (if requested-by (ui-render/short-id requested-by) "-")]
-      [:span.approval-record__reason (or (not-empty reason) "No reason provided")]
-      [:time {:datetime created-at} (ui-render/short-timestamp created-at)]
-      [:span.approval-record__chevron {:aria-hidden "true"} "⌄"]]
-     [:div.approval-record__detail
+(defn- approval-detail-node [approval]
+  (let [{:keys [id status requested-by actor decision-reason decided-at
+                expires-at input requested-permissions]} approval]
+    [:div.approval-record__detail {:id (str "approval-detail-" id)}
       [:div.approval-detail-grid
        [:section
         [:h3 "Request"]
@@ -903,7 +933,32 @@
       (when-let [actions (seq (approval-actions approval))]
         [:footer.approval-record__actions
          [:span "Operator action"]
-         [:div actions]])]]))
+         [:div actions]])]))
+
+(defn tool-approval-detail-fragment [approval]
+  (ui-render/render
+   (if approval
+     (approval-detail-node approval)
+     [:div#approval-detail-missing.approval-record__detail
+      [:div.empty-line "Approval not found."]])))
+
+(defn- approval-record [approval]
+  (let [{:keys [id tool-name status requested-by reason created-at]} approval]
+    [:details.approval-record {:data-status status}
+     [:summary.approval-record__summary
+      {"data-on:click" (str "@get('/ui/tool-approvals/" id "/detail')")}
+      (approval-status status)
+      [:span.approval-record__tool tool-name]
+      [:span.approval-record__requester
+       (cond-> {}
+         requested-by (assoc :title requested-by))
+       (if requested-by (ui-render/short-id requested-by) "-")]
+      [:span.approval-record__reason (or (not-empty reason) "No reason provided")]
+      [:time {:datetime created-at} (ui-render/short-timestamp created-at)]
+      [:span.approval-record__chevron {:aria-hidden "true"} "⌄"]]
+     [:div.approval-record__detail.approval-record__detail--loading
+      {:id (str "approval-detail-" id)}
+      [:div.empty-line "Loading details…"]]]))
 
 (defn tool-approvals-fragment [approvals]
   (let [status-rank {"pending" 0 "approved" 1 "denied" 2}
@@ -913,7 +968,7 @@
         counts (frequencies (map :status approvals*))]
     (ui-render/render
      [:section#tool-approvals-panel.panel.approvals-page
-      {"data-on-interval__duration.10s.leading" "@get('/ui/tool-approvals')"}
+      {"data-on-interval__duration.10s" "@get('/ui/tool-approvals')"}
       [:header.approvals-page__header
        [:div
         [:span.overview-kicker "Operator review"]

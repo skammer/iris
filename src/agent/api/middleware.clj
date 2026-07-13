@@ -7,8 +7,74 @@
             [clojure.string :as str]
             [org.httpkit.server :as http-kit])
   (:import
+   (java.io ByteArrayOutputStream)
+   (java.nio.charset StandardCharsets)
    (java.util Base64)
-   (java.util UUID)))
+   (java.util UUID)
+   (java.util.zip GZIPOutputStream)))
+
+(def ^:private byte-array-class (Class/forName "[B"))
+
+(defn- header-value [headers header-name]
+  (some (fn [[k value]]
+          (when (= (str/lower-case (name k)) (str/lower-case header-name))
+            value))
+        headers))
+
+(defn- remove-header [headers header-name]
+  (into {}
+        (remove (fn [[k _]]
+                  (= (str/lower-case (name k)) (str/lower-case header-name))))
+        headers))
+
+(defn- compressible-content-type? [content-type]
+  (let [value (str/lower-case (or content-type ""))]
+    (or (str/starts-with? value "text/")
+        (str/includes? value "json")
+        (str/includes? value "javascript")
+        (str/includes? value "svg")
+        (str/includes? value "xml"))))
+
+(defn- gzip-bytes [bytes]
+  (let [output (ByteArrayOutputStream.)]
+    (with-open [gzip (GZIPOutputStream. output)]
+      (.write gzip bytes))
+    (.toByteArray output)))
+
+(defn- gzip-body [body]
+  (cond
+    (string? body) (gzip-bytes (.getBytes ^String body StandardCharsets/UTF_8))
+    (instance? byte-array-class body) (gzip-bytes body)
+    :else nil))
+
+(defn wrap-gzip-response
+  [handler]
+  (fn [request]
+    (let [response (handler request)
+          headers (:headers response)
+          encoding (str/lower-case (or (get-in request [:headers "accept-encoding"]) ""))
+          body (:body response)]
+      (if (and response
+               (str/includes? encoding "gzip")
+               (not (str/includes? encoding "gzip;q=0"))
+               (nil? (header-value headers "content-encoding"))
+               (compressible-content-type? (header-value headers "content-type"))
+               (or (string? body) (instance? byte-array-class body))
+               (> (if (string? body)
+                    (count (.getBytes ^String body StandardCharsets/UTF_8))
+                    (alength ^bytes body))
+                  512))
+        (let [compressed (gzip-body body)
+              vary (header-value headers "vary")
+              headers* (-> headers
+                           (remove-header "content-length")
+                           (assoc "Content-Encoding" "gzip"
+                                  "Content-Length" (str (alength ^bytes compressed))
+                                  "Vary" (if (str/blank? (str vary))
+                                           "Accept-Encoding"
+                                           (str vary ", Accept-Encoding"))))]
+          (assoc response :headers headers* :body compressed))
+        response))))
 
 (defn wrap-request-id
   [handler]
@@ -98,4 +164,5 @@
        (wrap-api-key-auth api-config)
        wrap-error-boundary
        wrap-request-logging
+       wrap-gzip-response
        wrap-request-id)))

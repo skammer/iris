@@ -385,6 +385,10 @@ theme-toggle {
   overflow: hidden;
 }
 
+.workspace-content {
+  display: contents;
+}
+
 .workspace-grid.two-up {
   grid-template-columns: minmax(0, 0.95fr) minmax(420px, 1.05fr);
 }
@@ -398,15 +402,25 @@ theme-toggle {
 }
 
 .workspace-grid.memory-workspace {
-  align-content: start;
-  grid-auto-rows: auto;
+  align-content: stretch;
+  grid-auto-rows: minmax(0, 1fr);
   grid-template-columns: minmax(0, 1fr) minmax(420px, 1fr);
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .workspace-grid.memory-workspace .panel {
   overflow: visible;
+}
+
+.memory-left-stack,
+.memory-right-stack {
+  align-content: start;
+  grid-auto-rows: max-content;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .workspace-grid.single {
@@ -876,13 +890,23 @@ textarea {
   /* Grows with content up to max-height, then scrolls. Browsers without
      field-sizing fall back to a fixed-height scrolling textarea. */
   field-sizing: content;
-  min-height: 0;
+  min-height: 38px;
   max-height: 220px;
   resize: none;
   overflow-y: auto;
   padding: 9px 10px;
   border: 1px solid var(--border-visible);
   background: var(--surface-raised);
+  box-sizing: border-box;
+}
+
+#chat-form > button,
+#chat-form > .chat-file-input {
+  width: 84px;
+  height: 38px;
+  min-height: 38px;
+  box-sizing: border-box;
+  padding: 0 10px;
 }
 
 #chat-form .chat-input:focus-visible {
@@ -903,6 +927,13 @@ textarea {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.chat-history-more {
+  justify-self: start;
+  margin: 8px 12px 0;
+  padding: 6px 8px;
+  color: var(--text-secondary);
 }
 
 .chat-file-input:focus-within {
@@ -1677,6 +1708,17 @@ textarea {
     display: grid;
   }
 
+  .workspace-grid.memory-workspace {
+    align-content: start;
+    grid-auto-rows: auto;
+    overflow-y: auto;
+  }
+
+  .memory-left-stack,
+  .memory-right-stack {
+    overflow: visible;
+  }
+
   .memory-note-actions__controls {
     justify-content: flex-start;
   }
@@ -1721,8 +1763,8 @@ textarea {
   }
 
   .compact-form-row button,
-  #chat-form button[type="submit"],
-  #chat-form .chat-file-input {
+  #chat-form > button,
+  #chat-form > .chat-file-input {
     width: 100%;
   }
 
@@ -3464,7 +3506,8 @@ button.row--link:focus-visible {
   gap: 12px;
   min-height: 0;
   overflow: auto;
-  padding-right: 4px;
+  padding: 0 4px 10px 0;
+  scroll-padding-bottom: 10px;
 }
 
 .magi-section-head {
@@ -3824,14 +3867,14 @@ button.row--link:focus-visible {
    ============================================================= */
 
 .ui-catalog-page {
-  height: auto;
   min-height: 100%;
   overflow: auto;
   background: var(--canvas);
 }
 
 .ui-catalog-shell {
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
 }
@@ -3913,8 +3956,9 @@ button.row--link:focus-visible {
 
 .ui-catalog-main {
   display: block;
-  height: auto;
-  overflow: visible;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
   padding: 0 clamp(20px, 4vw, 64px) 64px;
 }
 
@@ -4442,7 +4486,8 @@ button.row--link:focus-visible {
 }
 
 @media (max-width: 980px) {
-  .ui-catalog-shell { grid-template-columns: 1fr; }
+  .ui-catalog-shell { height: auto; min-height: 100vh; grid-template-columns: 1fr; }
+  .ui-catalog-main { height: auto; overflow: visible; }
   .ui-catalog-nav { position: static; height: auto; grid-template-columns: 1fr auto; grid-template-rows: auto auto; }
   .ui-catalog-nav nav { grid-column: 1 / -1; display: flex; gap: var(--space-1); overflow-x: auto; }
   .ui-catalog-nav nav a { white-space: nowrap; }

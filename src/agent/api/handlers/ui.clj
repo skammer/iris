@@ -21,6 +21,25 @@
    (java.util Base64)))
 
 (def ^:private max-chat-image-bytes (* 10 1024 1024))
+(defonce ^:private ui-session-streams (atom {}))
+
+(defn- close-ui-session-stream! [client-id]
+  (when-let [ctx (and (not (str/blank? client-id))
+                      (get @ui-session-streams client-id))]
+    (swap! ui-session-streams dissoc client-id)
+    (streaming/close! ctx)))
+
+(defn- register-ui-session-stream! [client-id ctx]
+  (when-not (str/blank? client-id)
+    (close-ui-session-stream! client-id)
+    (swap! ui-session-streams assoc client-id ctx)
+    (streaming/register-cleanup!
+     ctx
+     #(swap! ui-session-streams
+             (fn [streams]
+               (if (identical? ctx (get streams client-id))
+                 (dissoc streams client-id)
+                 streams))))))
 
 (defn- uploaded-files [value]
   (cond
@@ -66,6 +85,15 @@
                                                 {:tab (some-> (:tab query) keyword)
                                                  :session-id (:session_id query)}))))
 
+(defn route [system request]
+  (let [query (-> request :parameters :query)]
+    (when-not (= "chat" (some-> (:tab query) str/lower-case))
+      (close-ui-session-stream! (:client_id query)))
+    (responses/html-response 200
+                             (ui/route-fragment system
+                                                {:tab (some-> (:tab query) keyword)
+                                                 :session-id (:session_id query)}))))
+
 (defn dashboard [system _request]
   (responses/html-response 200 (ui/dashboard-fragment system)))
 
@@ -103,10 +131,12 @@
                                    (ui/session-route-path system session-id))))))
 
 (defn session-messages [system request]
-  (let [session-id (-> request :parameters :query :session_id)]
+  (let [query (-> request :parameters :query)
+        session-id (:session_id query)]
     (h/ensure-session-exists! system session-id)
     (responses/html-response 200
-                             (ui/session-messages-fragment system session-id))))
+                             (ui/session-messages-fragment system session-id
+                                                           {:limit (:limit query)}))))
 
 (defn- relevant-session-event? [event session-id]
   (and (= "session" (:entity-type event))
@@ -160,7 +190,9 @@
 
 (defn session-live-response
   [system request]
-  (let [session-id (-> request :parameters :query :session_id)
+  (let [query (-> request :parameters :query)
+        session-id (:session_id query)
+        client-id (:client_id query)
         broker-instance (or (:event-bus system) (:broker system))]
     (h/ensure-session-exists! system session-id)
 	    (streaming/managed-response
@@ -169,23 +201,33 @@
           :metrics (:sse-metrics system)
 	      :on-error (fn [_ _] nil)}
      (fn [ctx]
+       (register-ui-session-stream! client-id ctx)
        (let [subscription (streaming/subscribe! ctx
                                                 broker-instance
                                                 (broker/all-events-subject)
                                                 {:buffer-size defaults/event-stream-buffer-size
                                                  :buffer-strategy :sliding
                                                  :slow-client :drop-new})
-             ch (:channel subscription)]
-         (streaming/send-datastar-patch! ctx (ui/session-messages-fragment system session-id))
+             ch (:channel subscription)
+             heartbeat-ms 5000]
          (loop []
-           (when-let [event (some-> (streaming/take! ctx ch) :payload)]
-             (when (relevant-session-event? event session-id)
-               (streaming/send-datastar-patch!
-                ctx
-                (if (title-updated-event? event session-id)
-                  (session-shell-fragments system session-id)
-                  (ui/session-messages-fragment system session-id))))
-            (recur))))))))
+           (when (streaming/open? ctx)
+             (let [heartbeat (async/timeout heartbeat-ms)
+                   [value source] (async/alts!! [ch heartbeat])]
+               (cond
+                 (= source heartbeat)
+                 (when (streaming/send-sse-text! ctx ":\n\n")
+                   (recur))
+
+                 value
+                 (let [event (:payload value)]
+                   (when (relevant-session-event? event session-id)
+                     (streaming/send-datastar-patch!
+                      ctx
+                      (if (title-updated-event? event session-id)
+                        (session-shell-fragments system session-id)
+                        (ui/session-messages-fragment system session-id))))
+                   (recur)))))))))))
 
 (defn chat-action [system request]
   (let [body (h/read-form-body request)
@@ -463,6 +505,11 @@
   (responses/html-response 200
                            (ui/tool-approvals-fragment
                             (tool-approvals/list-requests (:store system) {:limit 50}))))
+
+(defn tool-approval-detail [system _request approval-id]
+  (responses/html-response 200
+                           (ui/tool-approval-detail-fragment
+                            (tool-approvals/get-request (:store system) approval-id))))
 
 (defn tool-approval-decision [system request approval-id status]
   (let [body (h/read-form-body request)

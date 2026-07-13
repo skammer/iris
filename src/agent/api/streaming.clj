@@ -173,11 +173,14 @@
 	               (stream-fn ctx)
 	               (record! ctx :completed)
 	               (catch Throwable t
-	                 (record! ctx :errors)
-                 (logging/log-error! :agent.api.streaming/stream-failed t
-                                     (cond-> {}
-                                       name (assoc :name name)))
-                 ((or on-error default-error!) ctx t))
+	                 ;; Client disconnects cancel the worker after :open? flips
+	                 ;; false. That is expected lifecycle, not a stream error.
+	                 (when (open? ctx)
+	                   (record! ctx :errors)
+                   (logging/log-error! :agent.api.streaming/stream-failed t
+                                       (cond-> {}
+                                         name (assoc :name name)))
+                   ((or on-error default-error!) ctx t)))
                (finally
                  (cleanup! ctx)
                  (when close?

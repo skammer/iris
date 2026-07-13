@@ -397,6 +397,7 @@ The Tools page applies this reference as an approvals-only operator queue: summa
 Its table prioritizes `reason`: status, tool, requester, and timestamp stay compact. UUIDs render as their first segment with the full value in the native title tooltip.
 
 The Logs page uses the same dense operator-table language while keeping its two sources explicit: SQLite Event Log and optional Runtime Trace. Neutral events never receive error styling; only an explicit failed trace is red.
+
 | `7bf9c1463af2b46fac0eb0285c87551f.webp` | Radio-card settings and billing choice | Forms |
 | `7dee6a668aa19fd365d1c504e3828623.webp` | Color, type, buttons, search, tabs, statuses, controls, menu | Foundations through Navigation |
 | `82d465b425a7ec38f84284c4acb81fe9.webp` | Performance dashboard, metrics, chart, alerts | Data; Feedback |
@@ -410,6 +411,20 @@ The Overview page directly applies this reference: identity summary, four worksp
 | `dd0e118ed00220e1f9280a7d298c31ba.webp` | Focused onboarding/comparison dialog | Layouts; Feedback |
 | `e7c04b9dfb056e843cef5939d60f94ca.webp` | Workflow toolbar, nodes, connectors, zoom | Workflow |
 | `fd6e5fa6e735048a5a7cfd33336585bf.webp` | Empty conversation and composer | Forms; Feedback |
+
+## Navigation and performance contracts
+
+- Persistent shell chrome is never replaced during ordinary tab navigation. Route responses patch only `#shell-nav`, `#workspace-content`, and `#router-state`; the workspace patch root uses `display: contents` so it never becomes a competing scroll container.
+- Chat live streams are client-scoped. Leaving Chat aborts the browser request and closes the matching server stream; opening another session replaces the previous stream for that client.
+- Server-rendered panels include their initial data. Interval refreshes must not use a leading request that immediately downloads the same markup again.
+- Large non-streaming text responses use gzip when accepted. SSE remains uncompressed and receives heartbeat cleanup support.
+- Tool Approval queue responses contain summaries only. Full input, decision metadata, and actions load when a row opens.
+- Chat initially renders the latest 60 messages. Older history loads progressively without changing durable storage.
+- Memory uses independent left/right column scrolling on wide screens; stacked narrow layouts return to one document-like workspace scroll.
+- Memory column stacks use intrinsic `max-content` rows: panels may scroll out of view, but they never collapse or paint through adjacent panels.
+- Retrieval Lab belongs in the left operational column immediately after Vault. The right column is reserved for the Vault Notes review queue.
+- Desktop composer actions use one control geometry: `84px × 38px` for Image, Stop, and Send. Narrow layouts expand each action to the available width.
+- On desktop, `.ui-catalog-shell` owns `100vh` and `.ui-catalog-main` scrolls independently. Narrow layouts restore document scrolling and use `min-height: 100vh`.
 
 ## Implementation rules
 

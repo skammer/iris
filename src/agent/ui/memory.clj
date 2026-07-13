@@ -289,6 +289,43 @@
         [:div.empty-line "empty"]
         [:pre.code.scratchpad-preview (:content scratchpad)])])])
 
+(defn- retrieval-lab-panel []
+  [:section.panel.memory-lab
+   [:h2 "Retrieval Lab"]
+   [:form#memory-tool-form.memory-tool-form
+    [:h3 "Memory Tool"]
+    [:div.memory-form-grid
+     [:select {:name "action"}
+      [:option {:value "recall"} "recall"]
+      [:option {:value "vault-search"} "vault-search"]
+      [:option {:value "scratchpad-read"} "scratchpad-read"]
+      [:option {:value "scratchpad-search"} "scratchpad-search"]
+      [:option {:value "scratchpad-replace"} "scratchpad-replace"]]
+     [:input {:type "text" :name "query" :placeholder "query"}]
+     [:input {:type "text" :name "limit" :value "10" :placeholder "limit"}]
+     [:select {:name "scope_type"}
+      [:option {:value ""} "scope auto"]
+      [:option {:value "global"} "global"]
+      [:option {:value "session"} "session"]
+      [:option {:value "agent"} "agent"]]
+     [:input {:type "text" :name "scope_id" :placeholder "scope id"}]
+     [:input {:type "text" :name "expected_revision" :placeholder "scratchpad revision"}]]
+    [:textarea {:name "old_text" :rows 4 :placeholder "scratchpad old_text"}]
+    [:textarea {:name "new_text" :rows 4 :placeholder "scratchpad new_text"}]
+    [:div.actions
+     [:button {:type "button"
+               "data-on:click" "@post('/ui/memory/tool', {contentType: 'form', selector: '#memory-tool-form'})"}
+      "Run"]]]
+   [:div#memory-tool-output.empty "No memory tool output."]
+   [:form#memory-search-form.memory-tool-form
+    [:h3 "Memory Recall"]
+    [:div.compact-form-row
+     [:input {:type "text" :name "query" :placeholder "recall messages, events, vault notes"}]
+     [:button {:type "button"
+               "data-on:click" "@post('/ui/memory/search', {contentType: 'form', selector: '#memory-search-form'})"}
+      "Recall"]]]
+   [:div#memory-search-results-panel.empty "No recall output."]])
+
 (defn memory-workspace-fragment
   ([system] (memory-workspace-fragment system nil))
 	   ([system reset-result]
@@ -333,6 +370,8 @@
                    "data-on:click" "@post('/ui/memory/vault/reindex')"}
           "Audit & Reindex"]]
 
+        (retrieval-lab-panel)
+
         (quality-panel quality)
 
         (scratchpad-panel global-scratchpad)]
@@ -343,40 +382,4 @@
          (if (seq notes)
            (vault-note-groups notes)
            [:div.empty-line "none"])]
-
-        [:section.panel.memory-lab
-         [:h2 "Retrieval Lab"]
-         [:form#memory-tool-form.memory-tool-form
-          [:h3 "Memory Tool"]
-          [:div.memory-form-grid
-           [:select {:name "action"}
-            [:option {:value "recall"} "recall"]
-            [:option {:value "vault-search"} "vault-search"]
-            [:option {:value "scratchpad-read"} "scratchpad-read"]
-            [:option {:value "scratchpad-search"} "scratchpad-search"]
-            [:option {:value "scratchpad-replace"} "scratchpad-replace"]]
-           [:input {:type "text" :name "query" :placeholder "query"}]
-           [:input {:type "text" :name "limit" :value "10" :placeholder "limit"}]
-           [:select {:name "scope_type"}
-            [:option {:value ""} "scope auto"]
-            [:option {:value "global"} "global"]
-            [:option {:value "session"} "session"]
-            [:option {:value "agent"} "agent"]]
-           [:input {:type "text" :name "scope_id" :placeholder "scope id"}]
-           [:input {:type "text" :name "expected_revision" :placeholder "scratchpad revision"}]]
-          [:textarea {:name "old_text" :rows 4 :placeholder "scratchpad old_text"}]
-          [:textarea {:name "new_text" :rows 4 :placeholder "scratchpad new_text"}]
-          [:div.actions
-           [:button {:type "button"
-                     "data-on:click" "@post('/ui/memory/tool', {contentType: 'form', selector: '#memory-tool-form'})"}
-            "Run"]]]
-         [:div#memory-tool-output.empty "No memory tool output."]
-         [:form#memory-search-form.memory-tool-form
-         [:h3 "Memory Recall"]
-         [:div.compact-form-row
-           [:input {:type "text" :name "query" :placeholder "recall messages, events, vault notes"}]
-           [:button {:type "button"
-                     "data-on:click" "@post('/ui/memory/search', {contentType: 'form', selector: '#memory-search-form'})"}
-            "Recall"]]]
-         [:div#memory-search-results-panel.empty "No recall output."]]
         (memory-reset-result reset-result)]]))))

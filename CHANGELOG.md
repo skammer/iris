@@ -2,6 +2,31 @@
 
 All notable project changes are recorded here. New entries go at the top.
 
+## 2026-07-13
+
+### Changed
+
+- Replaced full-shell tab reloads with partial navigation and workspace patches.
+- Kept the partial workspace patch root layout-neutral, restoring each page's original independent scroll behavior.
+- Restored independent Memory column scrolling on wide screens and one continuous scroll in stacked layouts.
+- Prevented Memory grid rows from collapsing under tall panels, eliminating overlapping Vault Notes and Retrieval Lab content.
+- Moved Retrieval Lab into the left Memory column directly after Vault; the right column is now dedicated to Vault Notes.
+- Added bottom breathing room to the MAGI invocation log so the final row and border remain fully visible.
+- Added client-scoped cancellation and server cleanup for Chat SSE streams; switching pages no longer accumulates live connections.
+- Stopped classifying expected client-side SSE cancellation as a runtime stream error.
+- Added a Safari/WebView-safe client ID fallback when `crypto.randomUUID()` is unavailable.
+- Removed duplicate leading refreshes from server-rendered dashboard, sessions, approvals, events, and logs panels.
+- Enabled gzip for large text, JSON, JavaScript, SVG, and XML responses while leaving SSE streams uncompressed.
+- Made Tool Approval details load only when a row opens, reducing initial markup and DOM size.
+- Limited the initial transcript to the latest 60 messages and added progressive older-message loading.
+- Standardized Image, Stop, and Send controls to the same `84 × 38px` desktop size.
+- Made the desktop UI catalogue own the viewport and scroll its main content independently, while narrow layouts retain normal document scrolling.
+
+### Performance
+
+- Reduced local compressed route payloads to roughly `1.5 KB` for Tools and `2.2 KB` for Chat in the seeded QA scenario.
+- Added Playwright coverage for partial routing, gzip, duplicate-request prevention, SSE cleanup, transcript limits, lazy approval details, composer geometry, and catalogue scrolling.
+
 ## 2026-07-12
 
 ### Added

@@ -24,10 +24,15 @@
    [clojure.test :refer [deftest is]]
    [malli.core :as m])
   (:import
-   (java.io BufferedReader ByteArrayOutputStream InputStreamReader)
+   (java.io BufferedReader ByteArrayInputStream ByteArrayOutputStream InputStreamReader)
    (java.net URI)
    (java.net URL)
-   (java.net.http HttpClient HttpRequest HttpResponse$BodyHandlers)))
+   (java.net.http HttpClient HttpRequest HttpResponse$BodyHandlers)
+   (java.util.zip GZIPInputStream)))
+
+(defn- gunzip-string [bytes]
+  (with-open [input (GZIPInputStream. (ByteArrayInputStream. bytes))]
+    (slurp input)))
 
 (defrecord TestProvider [messages*]
   llm-core/ILLMProvider
@@ -327,6 +332,21 @@
                  "secret database path"
                  {:method "get" :path "/boom" :request-id "rid-fail"}]]
                @errors))))))
+
+(deftest api-middleware-gzips-large-text-responses-test
+  (let [body (apply str (repeat 1000 "warm gray interface "))
+        handler (api-middleware/wrap-gzip-response
+                 (constantly {:status 200
+                              :headers {"Content-Type" "text/html; charset=utf-8"
+                                        "Content-Length" (str (count body))}
+                              :body body}))
+        compressed (handler {:headers {"accept-encoding" "gzip, deflate"}})
+        plain (handler {:headers {}})]
+    (is (= "gzip" (get-in compressed [:headers "Content-Encoding"])))
+    (is (= "Accept-Encoding" (get-in compressed [:headers "Vary"])))
+    (is (= body (gunzip-string (:body compressed))))
+    (is (= body (:body plain)))
+    (is (nil? (get-in plain [:headers "Content-Encoding"])))))
 
 (deftest api-malformed-json-is-controlled-bad-json-test
   (let [error (try
@@ -915,8 +935,8 @@
         (is (= 200 (:status ui-chat-page)))
         (is (str/includes? (:body ui-chat-page) (str "/ui/shell?tab=chat&amp;session_id=" session-id)))
         (is (= 200 (:status ui-dashboard)))
-        (is (str/includes? (:body ui-dashboard) "Runtime Snapshot"))
-        (is (str/includes? (:body ui-dashboard) "Pending approvals"))
+        (is (str/includes? (:body ui-dashboard) "Current deployment"))
+        (is (str/includes? (:body ui-dashboard) "pending approvals"))
         (is (= 200 (:status ui-operator-board)))
         (is (str/includes? (:body ui-operator-board) "Operator Board"))
         (is (str/includes? (:body ui-operator-board) "Approval queue"))

@@ -38,16 +38,26 @@
 (def ^:private shell-query
   [:map
    [:tab {:optional true} :string]
-   [:session_id {:optional true} :string]])
+   [:session_id {:optional true} :string]
+   [:client_id {:optional true} :string]])
 
 (def ^:private optional-session-id-query
   [:map [:session_id {:optional true} :string]])
 
 (def ^:private session-id-query
-  [:map [:session_id schemas/NonBlankString]])
+  [:map
+   [:session_id schemas/NonBlankString]
+   [:client_id {:optional true} :string]])
+
+(def ^:private session-messages-query
+  [:map
+   [:session_id schemas/NonBlankString]
+   [:limit {:optional true} :string]])
 
 (def routes
   [["/ui/shell" {:get {:handler/id :ui-shell
+                       :parameters {:query shell-query}}}]
+   ["/ui/route" {:get {:handler/id :ui-route
                        :parameters {:query shell-query}}}]
    ["/ui/dashboard" {:get {:handler/id :ui-dashboard}}]
    ["/ui/operator-board" {:get {:handler/id :ui-operator-board}}]
@@ -58,7 +68,7 @@
    ["/ui/session-detail" {:get {:handler/id :ui-session-detail
                                 :parameters {:query session-id-query}}}]
    ["/ui/session-messages" {:get {:handler/id :ui-session-messages
-                                  :parameters {:query session-id-query}}}]
+                                  :parameters {:query session-messages-query}}}]
    ["/ui/session/live" {:get {:handler/id :ui-session-live
                               :parameters {:query session-id-query}}}]
    ["/ui/chat" {:post {:handler/id :ui-chat}}]
@@ -79,6 +89,7 @@
    ["/ui/memory/vault/reindex" {:post {:handler/id :ui-memory-vault-reindex}}]
    ["/ui/system/reload" {:post {:handler/id :ui-system-reload}}]
    ["/ui/tool-approvals" {:get {:handler/id :ui-tool-approvals}}]
+   ["/ui/tool-approvals/:approval-id/detail" {:get {:handler/id :ui-tool-approval-detail}}]
    ["/ui/tool-approvals/:approval-id/approve" {:post {:handler/id :ui-tool-approval-approve
                                                       :parameters {:form ui-tool-approval-decision-form}}}]
    ["/ui/tool-approvals/:approval-id/deny" {:post {:handler/id :ui-tool-approval-deny

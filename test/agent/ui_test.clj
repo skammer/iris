@@ -156,6 +156,7 @@
                    (assoc base :id "approval-denied" :tool-name "fs_delete" :status "denied"
                           :actor "operator" :decision-reason "Unsafe path" :decided-at "2026-07-12T10:03:00Z")]
         html (ui/tool-approvals-fragment approvals)
+        detail-html (ui/tool-approval-detail-fragment (first approvals))
         doc (Jsoup/parse html)]
     (is (= 3 (.size (.select doc ".approval-record"))))
     (is (= 4 (.size (.select doc ".approval-metric"))))
@@ -163,16 +164,29 @@
     (is (= 1 (.size (.select doc ".approval-status--approved"))))
     (is (= 1 (.size (.select doc ".approval-status--denied"))))
     (is (= "pending" (.text (.first (.select doc ".approval-status")))))
-    (is (str/includes? html "Tool input"))
-    (is (str/includes? html "Run approved tool"))
-    (is (str/includes? html "What must change"))
-    (let [id-code (.first (.select doc ".approval-record[data-status=pending] .approval-metadata code"))]
+    (is (not (str/includes? html "Tool input"))
+        "queue rows load heavy details only when opened")
+    (is (str/includes? detail-html "Tool input"))
+    (is (str/includes? detail-html "What must change"))
+    (let [detail-doc (Jsoup/parse detail-html)
+          id-code (.first (.select detail-doc ".approval-metadata code"))]
       (is (= "303ea8ca" (.text id-code)))
       (is (= pending-id (.attr id-code "title"))))
+    (is (str/includes? html (str "/ui/tool-approvals/" pending-id "/detail")))
     (is (not (str/includes? html "Local Tools")))
     (is (not (str/includes? html "tool-approvals/request")))
     (is (not (str/includes? html "fs-tool-form")))
     (is (not (str/includes? html "shell-tool-form")))))
+
+(deftest route-fragment-patches-nav-and-workspace-only
+  (with-redefs [tool-approvals/list-requests (constantly [])]
+    (let [html (ui/route-fragment {:store nil} {:tab :tools})]
+      (is (str/includes? html "id=\"shell-nav\""))
+      (is (str/includes? html "id=\"workspace-content\""))
+      (is (str/includes? html "id=\"router-state\""))
+      (is (not (str/includes? html "shell-header")))
+      (is (str/includes? html "/ui/route?tab=chat"))
+      (is (not (str/includes? html ".leading"))))))
 
 (deftest create-session-form-posts-explicit-form-and-clears-on-success
   (let [path (temp-db-path)
@@ -222,6 +236,35 @@
           (is (not (re-find #"<img[^>]*src=\"x\"" html))
               "non-https image sources are dropped")
           (is (not (str/includes? html "javascript:alert")))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest session-transcript-limits-initial-render-and-loads-older
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [session (sqlite/create-session! store "history")]
+        (doseq [n (range 65)]
+          (sqlite/append-message! store (:id session) "user" (str "message-" n)))
+        (let [html (ui/session-messages-fragment {:store store} (:id session))
+              doc (Jsoup/parse html)]
+          (is (= 60 (.size (.select doc "article.message"))))
+          (is (str/includes? html "Load 5 older"))
+          (is (str/includes? html "&amp;limit=120"))
+          (is (not (str/includes? html "message-0")))
+          (is (str/includes? html "message-64"))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest chat-live-request-uses-explicit-cancellation
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [session (sqlite/create-session! store "stream")
+            html (ui/session-detail-fragment {:store store} (:id session))]
+        (is (str/includes? html "requestCancellation: window.irisChatStreamController")))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))

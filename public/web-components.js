@@ -1,6 +1,29 @@
 const AUTOSCROLL_THRESHOLD_PX = 32;
 const THEME_STORAGE_KEY = "iris-theme";
 
+const createUiClientId = () => {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+};
+
+window.irisUiClientId = window.irisUiClientId || createUiClientId();
+
+let chatStreamController = new AbortController();
+window.irisChatStreamController = chatStreamController;
+
+const resetChatStreamController = () => {
+  chatStreamController.abort();
+  chatStreamController = new AbortController();
+  window.irisChatStreamController = chatStreamController;
+  return chatStreamController;
+};
+
+const abortChatStreamController = () => {
+  chatStreamController.abort();
+};
+
 const syncRoute = (path, replace = false) => {
   if (!path || window.location.pathname === path) return;
   const method = replace ? "replaceState" : "pushState";
@@ -68,7 +91,11 @@ document.addEventListener("click", (event) => {
   const route = target.closest("[data-route]");
   if (route instanceof HTMLElement) {
     const path = route.dataset.route;
-    if (path) syncRoute(path);
+    if (path) {
+      if (path.startsWith("/chat")) resetChatStreamController();
+      else abortChatStreamController();
+      syncRoute(path);
+    }
   }
 }, true);
 
@@ -150,7 +177,23 @@ class ThemeToggle extends HTMLElement {
   }
 }
 
-class AgentChatPanel extends HTMLElement {}
+class AgentChatPanel extends HTMLElement {
+  #streamController = null;
+
+  connectedCallback() {
+    if (chatStreamController.signal.aborted) resetChatStreamController();
+    this.#streamController = chatStreamController;
+  }
+
+  disconnectedCallback() {
+    if (this.#streamController === chatStreamController) {
+      abortChatStreamController();
+    } else {
+      this.#streamController?.abort();
+    }
+    this.#streamController = null;
+  }
+}
 
 class ChatStream extends HTMLElement {
   #stick = true;
