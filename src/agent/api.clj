@@ -81,6 +81,7 @@
    :ui-memory-search (fn [r] (ui/memory-search (sys) r))
    :ui-memory-tool (fn [r] (ui/memory-tool-run (sys) r))
    :ui-memory-vault-status (fn [r] (ui/memory-vault-status (sys) r))
+   :ui-memory-vault-magi (fn [r] (ui/memory-vault-magi (sys) r))
    :ui-memory-vault-move (fn [r] (ui/memory-vault-move (sys) r))
    :ui-memory-vault-reindex (fn [r] (ui/memory-vault-reindex (sys) r))
    :ui-system-reload (fn [r] (ui/system-reload (sys) r))

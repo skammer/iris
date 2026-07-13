@@ -423,6 +423,7 @@ The Overview page directly applies this reference: identity summary, four worksp
 - Memory uses independent left/right column scrolling on wide screens; stacked narrow layouts return to one document-like workspace scroll.
 - Memory column stacks use intrinsic `max-content` rows: panels may scroll out of view, but they never collapse or paint through adjacent panels.
 - Retrieval Lab belongs in the left operational column immediately after Vault. The right column is reserved for the Vault Notes review queue.
+- Candidate Vault Notes place `Review` and `Advice` inside a labeled MAGI action group, separate from manual and file controls. The latest verdict stays inside its note card; only `YES` may promote, and semantic color always accompanies a text label.
 - Desktop composer actions use one control geometry: `84px × 38px` for Image, Stop, and Send. Narrow layouts expand each action to the available width.
 - On desktop, `.ui-catalog-shell` owns `100vh` and `.ui-catalog-main` scrolls independently. Narrow layouts restore document scrolling and use `min-height: 100vh`.
 

@@ -48,3 +48,10 @@ Track:
 - Verification: concrete observable success/failure signal.
 - Failure modes: partial writes, stale state, race, timeout, malformed input, retries.
 - Principle: prefer narrow, testable, reversible action; deny vague broad execution.
+
+For memory-promotion:
+
+- Verify that the note's claim is entailed by its evidence; assistant speculation is not user evidence.
+- Reject contradictions, unsupported inference, duplicate noise, transient details, and scope broader than evidence supports.
+- Prefer precise, reusable statements over chat summaries.
+- Use conditional only when one concrete missing source or scope correction would make the note trustworthy.

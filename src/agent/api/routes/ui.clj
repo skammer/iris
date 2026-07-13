@@ -30,6 +30,11 @@
    [:path schemas/NonBlankString]
    [:folder schemas/NonBlankString]])
 
+(def ^:private ui-memory-vault-magi-form
+  [:map
+   [:path schemas/NonBlankString]
+   [:action [:enum "review" "advice"]]])
+
 (def ^:private ui-tool-approval-decision-form
   [:map
    [:actor {:optional true} :string]
@@ -84,6 +89,8 @@
                               :parameters {:form ui-memory-tool-form}}}]
    ["/ui/memory/vault/status" {:post {:handler/id :ui-memory-vault-status
                                       :parameters {:form ui-memory-vault-status-form}}}]
+   ["/ui/memory/vault/magi" {:post {:handler/id :ui-memory-vault-magi
+                                    :parameters {:form ui-memory-vault-magi-form}}}]
    ["/ui/memory/vault/move" {:post {:handler/id :ui-memory-vault-move
                                     :parameters {:form ui-memory-vault-move-form}}}]
    ["/ui/memory/vault/reindex" {:post {:handler/id :ui-memory-vault-reindex}}]

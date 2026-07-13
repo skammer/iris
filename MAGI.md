@@ -9,6 +9,8 @@
 - Human approval остаётся fallback.
 - Magi пишет обычный `tool_approvals` decision: `approved` или `denied`; текущие UI/API/Telegram почти не ломаются.
 - Magi также доступен как read-only tool для ручной проверки решений.
+- Magi reviews candidate Vault Notes in configurable `auto`, `manual`, `assistive`, or `off` mode.
+- Only unanimous `yes` promotes a note; every other verdict leaves it `candidate`.
 - Prompts лежат в `resources/prompts/magi/*.md`, не в config.
 - Config хранит только enabled, provider/model/таймауты, scope применения.
 - Ответы строго enum + optional comment. Freeform запрещён.
@@ -132,6 +134,11 @@ Add to `resources/config/default.edn`:
        :fallback :human          ;; :human | :deny
        :apply-to #{:tool-approvals}
        :tool-categories #{:all}
+       :memory-promotion {:mode :manual
+                          :scopes #{:all}
+                          :poll-interval-seconds 60
+                          :failure-cooldown-minutes 15
+                          :max-candidates 10}
        :tool {:enabled true}
        :execution :parallel      ;; :parallel | :sequential
        :allow-critical? false
@@ -281,21 +288,17 @@ Confidence: 0.9
 
 ### Phase 3: Memory promotion integration
 
-Current memory write paths:
+Implemented through `agent.memory.magi-review`:
 
-- `scratchpad_replace` is not approval-sensitive.
-- vault candidate extraction creates candidates only.
-- vault status changes use memory API/functions.
+- evaluates candidate Vault Notes using domain `memory-promotion` and the complete note/evidence context.
+- modes: `auto`, `manual`, `assistive`, `off`.
+- the labeled MAGI `Review` action applies unanimous `yes`; `Advice` never mutates status.
+- `no`, `conditional`, `info`, and `error` leave the note `candidate`.
+- automatic review is bounded by scope, poll interval, cooldown, and batch size.
+- `note-id + body-hash` plus `memory.vault.magi_evaluated` provides audit and idempotency without another table.
+- scratchpad remains outside this approval flow.
 
-Plan:
-
-- do not gate scratchpad in first implementation.
-- gate `candidate -> approved` for global/project vault notes when a promotion API/tool exists.
-- if no explicit promotion API exists yet, leave as future integration.
-
-Confidence: 0.75
-
-Weakness: need exact future promotion surface; current code has `update-vault-note-iris!`, but not all callers are visible as approval flow.
+Confidence: 0.92
 
 ### Phase 4: Persistence/audit
 
@@ -388,6 +391,9 @@ Auto-approval must be conservative:
 - With `:mode :assistive`, Magi logs evaluation but does not decide approval rows.
 - With `:mode :auto-approve`, only Judge `:yes` approves.
 - `:conditional` denies with retryable reason.
+- With memory-promotion `:mode :auto`, only Judge `:yes` promotes a candidate Vault Note.
+- Memory `:no`, `:conditional`, `:info`, and `:error` remain candidates for human review.
+- Advice-only review never changes note status.
 - Judge receives only triumvirate outputs and performs deterministic aggregation.
 - Unconfigured Magi participant uses current active provider/model.
 - Magi tool is read-only and cannot approve/deny existing approval rows.

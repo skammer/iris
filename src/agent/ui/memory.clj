@@ -2,6 +2,7 @@
   "Memory workspace fragments for server-rendered UI."
   (:require
    [agent.memory.core :as memory]
+   [agent.memory.magi-review :as magi-review]
    [agent.persistence.sqlite :as sqlite]
    [agent.ui.render :as ui-render]
    [clojure.string :as str]))
@@ -112,6 +113,17 @@
                                     "{contentType: 'form', selector: '#" form-id "'})")}
       label]]))
 
+(defn- vault-note-magi-action [idx path action label class-name]
+  (let [form-id (str "vault-note-magi-" idx "-" action)]
+    [:form.inline-form {:id form-id}
+     [:input {:type "hidden" :name "path" :value path}]
+     [:input {:type "hidden" :name "action" :value action}]
+     [:button {:type "button"
+               :class class-name
+               "data-on:click" (str "@post('/ui/memory/vault/magi', "
+                                    "{contentType: 'form', selector: '#" form-id "'})")}
+      label]]))
+
 (def ^:private vault-note-folders
   ["inbox" "preferences" "decisions" "projects" "runbooks" "sessions" "references" "archive"])
 
@@ -157,8 +169,12 @@
    [:dt label]
    [:dd (source-value value)]])
 
-(defn- vault-note-actions [idx path status scope]
+(defn- vault-note-actions [system idx path status scope]
   (let [scope* (or scope "global")
+        candidate? (= status "candidate")
+        magi-enabled? (and candidate?
+                           (magi-review/enabled? system)
+                           (magi-review/scope-allowed? system scope*))
         review-actions
         (case status
           "approved"
@@ -176,11 +192,33 @@
     [:footer.memory-note-actions
      [:span.memory-note-actions__label "Review actions"]
      [:div.memory-note-actions__controls
-      (concat (remove nil? review-actions)
-              [(vault-note-move-form idx path)])]]))
+      (when magi-enabled?
+        [:div.memory-note-action-group
+         [:span "MAGI"]
+         (remove nil?
+                 [(when (magi-review/review-applies? system)
+                    (vault-note-magi-action idx path "review" "Review"
+                                            "memory-action--magi"))
+                  (vault-note-magi-action idx path "advice" "Advice" nil)])])
+      [:div.memory-note-action-group
+       [:span "Manual"]
+       (remove nil? review-actions)]
+      [:div.memory-note-action-group
+       [:span "File"]
+       (vault-note-move-form idx path)]]]))
 
-(defn- vault-note-row [idx {:keys [path title type iris-status iris-scope updated-at
-                                   iris-confidence origins frontmatter description]}]
+(defn- magi-verdict [review]
+  (when-let [payload (:payload review)]
+    [:div.memory-note-magi-verdict
+     [:span.badge {:class (str "memory-note-magi-verdict--"
+                               (or (some-> (:decision payload) name) "unknown"))}
+      (str "MAGI " (or (some-> (:decision payload) name str/upper-case) "-"))]
+     [:span (or (:reason payload) "No reason")]
+     (when (:applied payload)
+       [:span.memory-note-magi-applied "applied"])]))
+
+(defn- vault-note-row [system reviews idx {:keys [path id title type iris-status iris-scope updated-at
+                                                  iris-confidence origins frontmatter description]}]
   [:article.memory-note-card {:data-status (or iris-status "unknown")}
    [:header.memory-note-card__header
     [:div
@@ -193,6 +231,7 @@
     [:span.badge (str "confidence " (or iris-confidence "-"))]]
    (when-not (str/blank? description)
      [:p.memory-note-description description])
+   (magi-verdict (get reviews (or id path)))
    [:details.memory-note-source
     [:summary "Source details"]
     [:dl.memory-source-details
@@ -200,9 +239,9 @@
      (source-field "Description" description)
      (source-field "Origins" origins)
      (source-field "Metadata" frontmatter)]]
-   (vault-note-actions idx path iris-status iris-scope)])
+   (vault-note-actions system idx path iris-status iris-scope)])
 
-(defn- vault-note-group [title status notes start-idx]
+(defn- vault-note-group [system reviews title status notes start-idx]
   (when (seq notes)
     [:section.memory-note-group {:data-status status}
      [:header.memory-note-group__header
@@ -210,19 +249,19 @@
       [:span.count-badge (count notes)]]
      [:div.memory-note-list
       (map-indexed (fn [idx note]
-                     (vault-note-row (+ start-idx idx) note))
+                     (vault-note-row system reviews (+ start-idx idx) note))
                    notes)]]))
 
-(defn- vault-note-groups [notes]
+(defn- vault-note-groups [system reviews notes]
   (let [by-status (group-by #(or (:iris-status %) "unknown") notes)
         candidates (get by-status "candidate")
         approved (get by-status "approved")
         other-statuses (sort (remove #{"candidate" "approved"} (keys by-status)))]
     [:div.memory-note-groups
-     (vault-note-group "Candidates" "candidate" candidates 0)
-     (vault-note-group "Approved" "approved" approved (count candidates))
+     (vault-note-group system reviews "Candidates" "candidate" candidates 0)
+     (vault-note-group system reviews "Approved" "approved" approved (count candidates))
      (for [[offset status] (map-indexed vector other-statuses)]
-       (vault-note-group (str/capitalize status)
+       (vault-note-group system reviews (str/capitalize status)
                          status
                          (get by-status status)
                          (+ (count candidates) (count approved) (* 100 offset))))]))
@@ -334,6 +373,15 @@
           quality (:quality health)
 	         surfaces (memory/list-surfaces memory-service)
 	         notes (sqlite/list-vault-notes (:store memory-service) {:limit 50})
+          reviews (->> (sqlite/list-events (:store memory-service)
+                                           {:event-type magi-review/review-event-type
+                                            :entity-type :vault_note
+                                            :limit 1000})
+                       (reduce (fn [by-note event]
+                                 (if (contains? by-note (:entity-id event))
+                                   by-note
+                                   (assoc by-note (:entity-id event) event)))
+                               {}))
           global-scratchpad (try
                               (memory/read-scratchpad memory-service {:scope {:type :global}})
                               (catch Exception e
@@ -380,6 +428,6 @@
         [:section.panel.memory-overview
          [:h2 "Vault Notes"]
          (if (seq notes)
-           (vault-note-groups notes)
+           (vault-note-groups system reviews notes)
            [:div.empty-line "none"])]
         (memory-reset-result reset-result)]]))))

@@ -9,6 +9,7 @@
    [agent.chat :as chat]
    [agent.defaults :as defaults]
    [agent.memory.core :as memory]
+   [agent.memory.magi-review :as memory-magi-review]
    [agent.memory.recall :as memory-recall]
    [agent.sessions.service :as session-service]
    [agent.tools.approvals :as tool-approvals]
@@ -491,6 +492,17 @@
                              (:memory-service system)
                              (:path body)
                              (select-keys body [:scope :status])))))
+
+(defn memory-vault-magi [system request]
+  (let [{:keys [path action]} (h/read-form-body request)
+        review? (= "review" action)]
+    (memory-reset-response system
+                           (if review? "MAGI review" "MAGI advice")
+                           #(memory-magi-review/review-note!
+                             system
+                             path
+                             {:apply? review?
+                              :source (if review? :manual :advice)}))))
 
 (defn memory-vault-move [system request]
   (let [body (h/read-form-body request)]

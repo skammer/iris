@@ -677,9 +677,13 @@
           [:span "Enable rolling trace in local/dev configuration when diagnostic events are needed."]])]])))
 
 (defn- magi-decision-events [system]
-  (sqlite/list-events (:store system)
-                      {:event-type :tool.approval.magi_evaluated
-                       :limit 1000}))
+  (concat
+   (sqlite/list-events (:store system)
+                       {:event-type :tool.approval.magi_evaluated
+                        :limit 1000})
+   (sqlite/list-events (:store system)
+                       {:event-type :memory.vault.magi_evaluated
+                        :limit 1000})))
 
 (defn- magi-tool-event? [{:keys [event-type payload]}]
   (and (= "tool-execution-end" event-type)
@@ -715,13 +719,15 @@
   (or (some-> decision name str/upper-case) "-"))
 
 (defn- magi-event-result [{:keys [payload] :as event}]
-  (if (= "tool.approval.magi_evaluated" (:event-type event))
+  (if (contains? #{"tool.approval.magi_evaluated" "memory.vault.magi_evaluated"}
+                 (:event-type event))
     payload
     (or (:result payload)
         (get-in payload [:receipt :result]))))
 
 (defn- magi-event-view [{:keys [id event-type entity-id created-at payload] :as event}]
   (let [approval? (= "tool.approval.magi_evaluated" event-type)
+        memory? (= "memory.vault.magi_evaluated" event-type)
         result (magi-event-result event)
         judge* (or (:judge result)
                    (select-keys result [:decision :reason]))
@@ -732,8 +738,11 @@
                    (get-in payload [:receipt :call :input])
                    (:input result)
                    (get-in filter* [:context :input]))
-        source (if approval? "approval" "tool")
-        tool-name (or (:tool-name payload)
+        source (cond approval? "approval"
+                     memory? "vault-note"
+                     :else "tool")
+        tool-name (or (when memory? "vault-note")
+                      (:tool-name payload)
                       (:tool-name result)
                       (get-in filter* [:context :tool-name])
                       "magi")
@@ -807,7 +816,7 @@
 
 (defn magi-fragment [system]
   (let [invocations (magi-invocation-events system)
-        decision-events (filter #(= "tool.approval.magi_evaluated" (:event-type %)) invocations)
+        decision-events (filter #(str/ends-with? (:event-type %) ".magi_evaluated") invocations)
         latest (first invocations)]
     (ui-render/render
      [:section#magi-panel.panel.magi-panel
@@ -825,7 +834,7 @@
          [:span.fact__label "records"]
          [:span.fact__value (str (count invocations))]]
         [:span.fact
-         [:span.fact__label "approvals"]
+         [:span.fact__label "reviews"]
          [:span.fact__value (str (count decision-events))]]
         [:span.fact
          [:span.fact__label "latest"]

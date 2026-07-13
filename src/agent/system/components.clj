@@ -12,6 +12,7 @@
    [agent.magi.core :as magi]
    [agent.memory.core :as memory]
    [agent.memory.idle :as memory-idle]
+   [agent.memory.magi-review :as memory-magi-review]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.trace :as runtime-trace]
    [agent.skills :as skills]
@@ -68,6 +69,10 @@
 (defn create-memory-idle-service
   [system-ref]
   (memory-idle/create-service system-ref))
+
+(defn create-memory-magi-review-service
+  [system-ref]
+  (memory-magi-review/create-service system-ref))
 
 (defn create-channel-adapter-registry
   ([cfg] (create-channel-adapter-registry cfg nil))
@@ -163,6 +168,7 @@
                        :event-sink event-sink
                        :chat-service chat-service
                        :memory-idle-service (create-memory-idle-service system-ref)
+                       :memory-magi-review-service (create-memory-magi-review-service system-ref)
                        :skills-registry (create-skills-registry-from-config cfg)
                        :memory-service memory-service}]
       (-> base-system

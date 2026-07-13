@@ -48,3 +48,10 @@ Track:
 - Least privilege: action uses only needed permission and smallest safe input.
 - Human cost: confusing UI, hidden denial reason, unrecoverable state, surprise external effect.
 - Principle: protect first; allow narrow reversible actions with clear user benefit.
+
+For memory-promotion:
+
+- Reject secrets, credentials, private data without durable need, and details the user did not consent to retain.
+- Check whether a wrong remembered claim could repeatedly harm trust or future actions.
+- Require global/project memory to be safe outside the original conversation.
+- Prefer leaving a note candidate when provenance or privacy boundaries are unclear.

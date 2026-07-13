@@ -6,6 +6,10 @@ All notable project changes are recorded here. New entries go at the top.
 
 ### Changed
 
+- Added configurable MAGI review for candidate Vault Notes: automatic, manual, assistive, or off.
+- Added grouped per-note MAGI `Review` and advice-only actions; only unanimous `yes` promotes, while every other verdict keeps the note candidate.
+- Added content-hash idempotency, failure cooldown, audit events, and Vault Note entries in the MAGI decision log.
+- Removed the last `2px solid var(--border-visible)` declarations from chat loading indicators.
 - Replaced full-shell tab reloads with partial navigation and workspace patches.
 - Kept the partial workspace patch root layout-neutral, restoring each page's original independent scroll behavior.
 - Restored independent Memory column scrolling on wide screens and one continuous scroll in stacked layouts.

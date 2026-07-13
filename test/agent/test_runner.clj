@@ -26,6 +26,7 @@
    [agent.logging-test]
    [agent.memory.core-test]
    [agent.memory.idle-test]
+   [agent.memory.magi-review-test]
    [agent.mcp.core-test]
    [agent.persistence.session-entries-test]
    [agent.persistence.sqlite-test]
@@ -88,6 +89,7 @@
     agent.logging-test
     agent.memory.core-test
     agent.memory.idle-test
+    agent.memory.magi-review-test
     agent.mcp.core-test
     agent.persistence.session-entries-test
     agent.persistence.sqlite-test

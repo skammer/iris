@@ -132,6 +132,11 @@
           :fallback :human
           :apply-to #{:tool-approvals}
           :tool-categories #{:all}
+          :memory-promotion {:mode :manual
+                             :scopes #{:all}
+                             :poll-interval-seconds 60
+                             :failure-cooldown-minutes 15
+                             :max-candidates 10}
           :tool {:enabled true}
           :execution :parallel
           :allow-critical? false

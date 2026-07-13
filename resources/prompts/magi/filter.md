@@ -55,3 +55,11 @@ Attention points:
 - External effects: network calls, deploys, notifications, purchases, account changes.
 - Execution power: shell, filesystem write/delete, process control, remote host access.
 - Observability: whether result can be verified and audited.
+
+For memory-promotion requests:
+
+- Use domain memory-promotion when a candidate Vault Note may become approved memory.
+- Require the note body, scope, provenance/evidence, and stable content hash.
+- Treat session-scoped promotion as low risk when evidence is direct and contains no sensitive data.
+- Treat project/global promotion as medium risk because it can influence future sessions.
+- Use unsupported when evidence is missing, truncated beyond evaluation, or cannot support the proposed claim.

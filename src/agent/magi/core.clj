@@ -137,6 +137,11 @@
           :fallback :human
           :apply-to #{:tool-approvals}
           :tool-categories #{:all}
+          :memory-promotion {:mode :manual
+                             :scopes #{:all}
+                             :poll-interval-seconds 60
+                             :failure-cooldown-minutes 15
+                             :max-candidates 10}
           :tool {:enabled true}
           :execution :parallel
           :allow-critical? false
@@ -198,6 +203,21 @@
 
 (defn mode [service]
   (normalize-keyword (get-in service [:config :mode] :assistive)))
+
+(defn memory-promotion-config [service]
+  (merge {:mode :manual
+          :scopes #{:all}
+          :poll-interval-seconds 60
+          :failure-cooldown-minutes 15
+          :max-candidates 10}
+         (get-in service [:config :memory-promotion])))
+
+(defn memory-promotion-mode [service]
+  (normalize-keyword (:mode (memory-promotion-config service))))
+
+(defn memory-promotion-enabled? [service]
+  (and (enabled? service)
+       (not= :off (memory-promotion-mode service))))
 
 (defn fallback [service]
   (normalize-keyword (get-in service [:config :fallback] :human)))

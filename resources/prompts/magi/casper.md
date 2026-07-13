@@ -47,3 +47,10 @@ Track:
 - Communication: whether result will be understandable and actionable to the user.
 - Proportionality: power of tool matches size and urgency of goal.
 - Principle: favor useful reversible progress; deny action that creates avoidable regret.
+
+For memory-promotion:
+
+- Approve only information likely to remain useful beyond the source exchange.
+- Reject conversational residue, completed one-off details, and notes that merely restate an assistant response.
+- Check that title, body, type, and scope make the memory understandable in future retrieval.
+- Prefer the narrowest scope that still serves the user's future goal.

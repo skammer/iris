@@ -472,7 +472,10 @@
                  "Approved note body\n"))
       (memory/reindex-vault! memory-service)
       (let [html (ui/memory-workspace-fragment {:store store
-                                                :memory-service memory-service})]
+                                                :memory-service memory-service
+                                                :magi-service {:config {:enabled? true
+                                                                        :memory-promotion {:mode :manual
+                                                                                           :scopes #{:all}}}}})]
         (is (str/includes? html "Memory Tool"))
         (is (str/includes? html "/ui/memory/tool"))
 	        (is (not (str/includes? html "Reset facts")))
@@ -481,6 +484,9 @@
 	        (is (str/includes? html "Audit &amp; Reindex"))
 	        (is (str/includes? html "/ui/memory/vault/reindex"))
 	        (is (str/includes? html "/ui/memory/vault/move"))
+	        (is (str/includes? html "/ui/memory/vault/magi"))
+	        (is (str/includes? html ">Review</button>"))
+	        (is (str/includes? html ">Advice</button>"))
 	        (is (str/includes? html "vault-search"))
         (is (not (str/includes? html "write-vault")))
         (is (not (str/includes? html "read-vault")))
@@ -611,6 +617,26 @@
                                                        :decision :yes
                                                        :reason "all yes"}}
                                     :duration-ms 7}})
+      (sqlite/log-event! store
+                         {:event-type :memory.vault.magi_evaluated
+                          :entity-type :vault_note
+                          :entity-id "mem-1"
+                          :payload {:source "manual"
+                                    :note {:id "mem-1" :title "Stable preference"}
+                                    :input {:question "Promote note?"}
+                                    :filter {:kind :yes-no
+                                             :domain :memory-promotion
+                                             :risk :medium
+                                             :question "Promote note?"
+                                             :expected-response :permit}
+                                    :agents {:melchior {:response :yes}
+                                             :balthasar {:response :yes}
+                                             :casper {:response :yes}}
+                                    :judge {:decision :yes :reason "supported"}
+                                    :decision :yes
+                                    :reason "supported"
+                                    :duration-ms 9
+                                    :applied true}})
       (let [html (ui/magi-fragment {:store store})]
         (is (str/includes? html "decision log"))
         (is (str/includes? html "Invocation Log"))
@@ -626,7 +652,8 @@
         (is (str/includes? html "event"))
         (is (str/includes? html "CONDITIONAL"))
         (is (str/includes? html "printf"))
-        (is (str/includes? html "double check")))
+        (is (str/includes? html "double check"))
+        (is (str/includes? html "vault-note")))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))

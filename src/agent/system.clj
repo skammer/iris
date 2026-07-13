@@ -13,6 +13,7 @@
    [agent.logging :as logging]
    [agent.magi.core :as magi]
    [agent.memory.idle :as memory-idle]
+   [agent.memory.magi-review :as memory-magi-review]
    [agent.persistence.sqlite :as sqlite]
    [agent.system.components :as components]
    [agent.system.health :as system-health]
@@ -100,6 +101,8 @@
 
 (defn- stop-runtime-edges!
   [system]
+  (safe-stop! :agent.system.lifecycle/memory-magi-review-stop-failed
+              #(some-> (:memory-magi-review-service system) memory-magi-review/stop!))
   (safe-stop! :agent.system.lifecycle/memory-idle-stop-failed
               #(some-> (:memory-idle-service system) memory-idle/stop!))
   (safe-stop! :agent.system.lifecycle/chat-stop-failed
@@ -137,6 +140,8 @@
                     :memory-service memory-service
                     :memory-idle-service (components/create-memory-idle-service
                                           (:system-ref old-system))
+                    :memory-magi-review-service (components/create-memory-magi-review-service
+                                                 (:system-ref old-system))
                     :skills-registry (components/create-skills-registry (:skills new-cfg)))]
     (->> (components/attach-telegram-service
           (assoc base :tool-registry (components/build-tool-registry base new-cfg)))
@@ -152,10 +157,12 @@
         result (reload-result :soft old-cfg new-cfg :reloaded)]
     (chat/stop! (:chat-service system*))
     (memory-idle/stop! (:memory-idle-service system*))
+    (memory-magi-review/stop! (:memory-magi-review-service system*))
     (logging/start! (:logging new-cfg))
     (reset! system-ref new-system)
     (when idle-running?
       (memory-idle/start! (:memory-idle-service new-system)))
+    (memory-magi-review/start! (:memory-magi-review-service new-system))
     (reset! (:reload-state new-system)
             (assoc result
                    :source (:source opts)
@@ -286,4 +293,5 @@
       (when-let [system-ref (:system-ref system*)]
         (reset! system-ref system*))
       (memory-idle/start! (:memory-idle-service system*))
+      (memory-magi-review/start! (:memory-magi-review-service system*))
       system*)))
