@@ -828,8 +828,11 @@
       (let [texts (mapv :text @sent)]
         (is (some #(= "cherry paragraph" %) texts)
             "streamed pre-tool-call text must be promoted to a real message")
-        (is (some #(= "🔧 list_dir status: completed path: ./obsidian" %) texts)
-            "tool-call summary must include tool name and status")
+        (is (some #(= (str "Called 1 tool\n\n"
+                           "🔧 list_dir status: completed path: ./obsidian")
+                      %)
+                  texts)
+            "tool-call summary must be aggregated")
         (is (some #(= "final answer" %) texts)
             "final answer must be sent as a real message")
         (is (= "final answer" (last texts))
@@ -930,7 +933,7 @@
            (->> @calls
                 (map #(count (get-in % [:body :rich_message :markdown])))
                 (reduce +))))
-    (is (every? #(<= (count (get-in % [:body :rich_message :markdown])) 31000)
+    (is (every? #(<= (count (get-in % [:body :rich_message :markdown])) 32768)
                 @calls))))
 
 (deftest telegram-rich-message-chunks-long-markdown
@@ -1213,6 +1216,115 @@
       (testing "legacy senders untouched"
         (is (empty? @(:sent recorders)))
         (is (empty? @(:html-sent recorders))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-rich-aggregates-consecutive-tool-calls
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        recorders {:sent (atom []) :html-sent (atom []) :drafts (atom [])
+                   :rich-sent (atom []) :rich-drafts (atom [])}
+        system {:store store
+                :event-bus (system-events/create-event-bus)
+                :event-sink (fn [_] nil)}
+        opts (recording-opts recorders)]
+    (try
+      (with-redefs [chat/run! (chat-stub
+                               (fn [_ emit!]
+                                 (emit! :tool-execution-start
+                                        {:tool-name "homeassistant"
+                                         :tool-call-id "c1"})
+                                 (emit! :tool-execution-end
+                                        {:receipt {:tool-name "homeassistant"
+                                                   :tool-call-id "c1"
+                                                   :status :ok
+                                                   :input {:action "get_state"
+                                                           :entity_id "sensor.one"}}})
+                                 (emit! :tool-execution-start
+                                        {:tool-name "shell"
+                                         :tool-call-id "c2"})
+                                 (Thread/sleep 1100)
+                                 (emit! :tool-execution-end
+                                        {:receipt {:tool-name "shell"
+                                                   :tool-call-id "c2"
+                                                   :status :ok
+                                                   :input {:argv ["echo" "ok"]}}})
+                                 (emit! :message-update {:delta "done"})
+                                 (emit! :message-end {:content "done" :final? true})
+                                 {:content "done"}))]
+        (is (= :processed
+               (telegram/process-update! system (rich-test-config) opts
+                                         (update-for 1 100 7 "hi")))))
+      (is (some #(= "<tg-thinking>Calling 1 tool... homeassistant</tg-thinking>"
+                    (:markdown %))
+                @(:rich-drafts recorders)))
+      (is (some #(= "<tg-thinking>Calling 2 tools... shell</tg-thinking>"
+                    (:markdown %))
+                @(:rich-drafts recorders)))
+      (is (= 2 (count @(:rich-sent recorders))))
+      (let [summary (:markdown (first @(:rich-sent recorders)))]
+        (is (str/starts-with? summary
+                              "<details><summary>Called 2 tools</summary>"))
+        (is (str/includes? summary "<blockquote>"))
+        (is (str/includes? summary "<b>1. homeassistant</b> · ok"))
+        (is (str/includes? summary "<b>2. shell</b> · ok"))
+        (is (= 2 (count (re-seq #"<pre>" summary)))))
+      (is (= "done" (:markdown (last @(:rich-sent recorders))))
+          "final answer follows the aggregated tool summary")
+      (is (empty? @(:sent recorders)))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-rich-empty-partial-does-not-downgrade-ha-report
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        events (atom [])
+        rich-draft-attempts (atom [])
+        recorders {:sent (atom []) :html-sent (atom []) :drafts (atom [])
+                   :rich-sent (atom []) :rich-drafts (atom [])}
+        system {:store store
+                :event-bus (system-events/create-event-bus)
+                :event-sink #(swap! events conj %)}
+        opts (recording-opts
+              recorders
+              :rich-draft-fn
+              (fn [chat-id draft-id markdown]
+                (swap! rich-draft-attempts conj markdown)
+                (if (= "---" markdown)
+                  (throw (ex-info "Telegram API request failed"
+                                  {:type :telegram-api-error
+                                   :body {:description
+                                          "Bad Request: RICH_MESSAGE_EMPTY"}}))
+                  (swap! (:rich-drafts recorders)
+                         conj
+                         {:chat-id chat-id
+                          :draft-id draft-id
+                          :markdown markdown}))))
+        report (str "---\n\n## 🌿 Растения\n\n"
+                    "| Растение | Влажность |\n"
+                    "|---|---|\n"
+                    "| Драцена | 82% |")]
+    (try
+      (with-redefs [chat/run! (chat-stub
+                               (fn [_ emit!]
+                                 (emit! :message-update {:delta "---"})
+                                 (Thread/sleep 1100)
+                                 (emit! :message-update
+                                        {:delta (subs report 3)})
+                                 (emit! :message-end {:content report :final? true})
+                                 {:content report}))]
+        (is (= :processed
+               (telegram/process-update! system (rich-test-config) opts
+                                         (update-for 1 100 7 "/ha-report")))))
+      (is (= "---" (first @rich-draft-attempts)))
+      (is (some #(str/includes? % "| Растение | Влажность |")
+                @rich-draft-attempts))
+      (is (= [{:chat-id 100 :markdown report}] @(:rich-sent recorders)))
+      (is (empty? @(:sent recorders))
+          "transient empty RichBlock prefix must not force legacy MarkdownV2")
+      (is (empty? (filter #(= :telegram.operation.failed (:event-type %)) @events)))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))

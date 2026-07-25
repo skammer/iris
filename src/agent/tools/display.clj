@@ -3,9 +3,10 @@
 
    Tool execution is identical across channels; what differs is how much of the
    result the user sees inline. Web wraps results in a collapsible block with a
-   capped-height body; telegram sends a short summary as a separate message; the
-   API hands over the full payload untouched."
+   capped-height body; Telegram aggregates consecutive calls into one summary;
+   the API hands over the full payload untouched."
   (:require
+   [cheshire.core :as json]
    [clojure.string :as str]))
 
 (def default-channel-config
@@ -127,3 +128,47 @@
                   (when-not (str/blank? args)
                     (str " " args)))]
     (escape-html-truncated line telegram-max-message-chars)))
+
+(defn- pretty-input [input]
+  (try
+    (json/generate-string (or input {}) {:pretty true})
+    (catch Exception _
+      (pr-str input))))
+
+(defn- rich-tool-block
+  [system idx {:keys [tool-name input status]}]
+  (let [cfg (channel-config system :telegram tool-name)
+        args-cap (:args-preview-chars cfg 1200)
+        title (str "<b>" (inc idx) ". "
+                   (escape-html (or (not-empty (label tool-name)) "tool"))
+                   "</b>"
+                   (when-let [status* (not-empty (label status))]
+                     (str " · " (escape-html status*))))
+        input* (-> (pretty-input input)
+                   (truncate args-cap)
+                   escape-html)]
+    (str title "\n<pre>" input* "</pre>")))
+
+(defn telegram-rich-batch-summary
+  "One Rich Markdown summary for consecutive Telegram tool calls."
+  [system receipts]
+  (let [receipts* (vec receipts)
+        n (count receipts*)]
+    (when (pos? n)
+      (str "<details><summary>Called " n " "
+           (if (= 1 n) "tool" "tools")
+           "</summary>\n<blockquote>\n"
+           (str/join "\n<hr>\n"
+                     (map-indexed #(rich-tool-block system %1 %2) receipts*))
+           "\n</blockquote>\n</details>"))))
+
+(defn telegram-plain-batch-summary
+  "Legacy fallback: aggregate consecutive calls without Rich Markdown tags."
+  [system receipts]
+  (let [receipts* (vec receipts)
+        n (count receipts*)]
+    (when (pos? n)
+      (str "Called " n " " (if (= 1 n) "tool" "tools")
+           "\n\n"
+           (str/join "\n\n"
+                     (map #(telegram-summary system %) receipts*))))))

@@ -11,11 +11,12 @@
    [agent.telegram.format :as fmt]
    [clojure.string :as str]))
 
-;; Rich messages allow up to 32768 UTF-8 characters. Sanitization expands
-;; escaped tags and the docs' phrasing leaves char-vs-byte ambiguous, so we
-;; chunk with headroom and re-split any chunk that is still too many bytes.
-(def ^:private max-rich-source-chars 31000)
-(def ^:private max-rich-bytes 32000)
+;; Bot API 10.1 limits rich messages to 32768 UTF-8 characters, 500 blocks,
+;; 16 nesting levels, 50 media attachments, and 20 table columns. This text
+;; path emits no media. Leave room for synthesized tag/marker closers and use
+;; a conservative source-block budget below the server's exact ceiling.
+(def ^:private max-rich-source-chars 32000)
+(def ^:private max-rich-source-blocks 480)
 
 (def ^:private fence-rx
   #"(?ms)^[ \t]*(?:```|~~~)([^\n`~]*)\n(.*?)\n?[ \t]*(?:```|~~~)[ \t]*$")
@@ -178,20 +179,60 @@
         s (close-odd-marker s #"\$\$" "$$" strip-code)]
     (apply str s (map #(str "</" % ">") (reverse (open-html-tags s))))))
 
-(defn- utf8-len ^long [s]
-  (alength (.getBytes ^String s "UTF-8")))
+(defn- fenced-block? [s]
+  (boolean (re-matches fence-rx (str/trim s))))
 
-(defn- byte-shrink [chunk]
-  (if (<= (utf8-len chunk) max-rich-bytes)
-    [chunk]
-    (mapcat byte-shrink (fmt/chunk-markdown chunk (max 1 (quot (count chunk) 2))))))
+(defn- table-block? [s]
+  (let [lines (str/split-lines s)]
+    (and (<= 2 (count lines))
+         (str/includes? (first lines) "|")
+         (boolean
+          (re-matches
+           #"\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*"
+           (second lines))))))
+
+(defn- source-block-cost [s]
+  (if (or (fenced-block? s) (table-block? s))
+    1
+    (max 1 (count (remove str/blank? (str/split-lines s))))))
+
+(defn- split-heavy-source-block [s]
+  (if (<= (source-block-cost s) max-rich-source-blocks)
+    [s]
+    (->> (str/split-lines s)
+         (partition-all max-rich-source-blocks)
+         (mapv #(str/join "\n" %)))))
+
+(defn- chunk-by-block-limit
+  "Conservatively keeps generated RichBlocks below Telegram's 500-block
+   ceiling. Tables and fenced code count as one source block; ordinary source
+   lines count as one each, which intentionally errs on the safe side."
+  [s]
+  (let [parts (->> (str/split (str s) #"\n{2,}")
+                   (mapcat split-heavy-source-block)
+                   (remove str/blank?))]
+    (loop [remaining parts
+           current []
+           cost 0
+           chunks []]
+      (if-let [part (first remaining)]
+        (let [part-cost (source-block-cost part)]
+          (if (and (seq current)
+                   (> (+ cost part-cost) max-rich-source-blocks))
+            (recur remaining [] 0 (conj chunks (str/join "\n\n" current)))
+            (recur (rest remaining)
+                   (conj current part)
+                   (+ cost part-cost)
+                   chunks)))
+        (cond-> chunks
+          (seq current) (conj (str/join "\n\n" current)))))))
 
 (defn chunk-rich-markdown
   "Splits sanitized rich markdown into sendable chunks, each under the rich
-   message limits with balanced streaming markers."
+   message character and block limits with balanced streaming markers."
   [sanitized]
   (->> (fmt/chunk-markdown sanitized max-rich-source-chars)
-       (mapcat byte-shrink)
+       (mapcat chunk-by-block-limit)
        (mapv close-streaming-markers)))
 
 (defn- clamp-head [s]

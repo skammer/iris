@@ -44,6 +44,34 @@
                :input {:q "<tag>&x"}})]
     (is (str/includes? text "&lt;tag&gt;&amp;x"))))
 
+(deftest display-telegram-rich-batch-summary-test
+  (let [text (display/telegram-rich-batch-summary
+              {}
+              [{:tool-name "homeassistant"
+                :tool-call-id "c1"
+                :status :ok
+                :input {:action "get_state"
+                        :entity_id "sensor.dratsena_soil_moisture"}}
+               {:tool-name "shell"
+                :tool-call-id "c2"
+                :status :error
+                :input {:argv ["echo" "<unsafe>"]}}])]
+    (is (str/starts-with? text "<details><summary>Called 2 tools</summary>"))
+    (is (str/includes? text "<blockquote>"))
+    (is (str/includes? text "<b>1. homeassistant</b> · ok"))
+    (is (str/includes? text "<pre>{"))
+    (is (str/includes? text "&lt;unsafe&gt;"))
+    (is (str/includes? text "<hr>"))
+    (is (str/ends-with? text "</details>"))))
+
+(deftest display-telegram-plain-batch-summary-test
+  (let [text (display/telegram-plain-batch-summary
+              {}
+              [{:tool-name :fs :status :ok :input {:path "."}}])]
+    (is (str/starts-with? text "Called 1 tool"))
+    (is (str/includes? text "🔧 fs status: ok path: ."))
+    (is (not (str/includes? text "<blockquote")))))
+
 (deftest registry-register-list-and-execute-test
   (let [events (atom [])
         hooks (atom [])

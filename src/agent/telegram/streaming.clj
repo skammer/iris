@@ -39,8 +39,16 @@
 (defn- private-chat? [chat]
   (= "private" (:type chat)))
 
+(defn- rich-message-empty-error? [error]
+  (= "Bad Request: RICH_MESSAGE_EMPTY"
+     (get-in (ex-data error) [:body :description])))
+
 (defn- next-draft-id []
-  (inc (mod (System/currentTimeMillis) max-draft-id)))
+  ;; Stream and tool-status controls coexist in one chat; random allocation
+  ;; avoids adjacent timestamp ids colliding after either control rotates.
+  (.nextInt (java.util.concurrent.ThreadLocalRandom/current)
+            1
+            max-draft-id))
 
 (defn- rotate-draft-id
   [id]
@@ -192,10 +200,15 @@
                                              (send-rich-draft! chat-id @draft-id
                                                                (rich/compose-draft thinking text))
                                              (catch Exception e
-                                               (reset! rich-ok? false)
-                                               (legacy-draft! text)
-                                               ;; rethrow so the failure event is recorded
-                                               (throw e))))
+                                               ;; A partial Markdown prefix such as
+                                               ;; `---` can parse to zero RichBlocks.
+                                               ;; It becomes valid on the next delta,
+                                               ;; so do not poison the whole turn.
+                                               (when-not (rich-message-empty-error? e)
+                                                 (reset! rich-ok? false)
+                                                 (legacy-draft! text)
+                                                 ;; rethrow so the failure event is recorded
+                                                 (throw e)))))
                           (safe-telegram! system chat-id :draft-update
                                           #(legacy-draft! text))))))
         scheduler (make-flush-scheduler lock has-content? do-flush!)
@@ -243,22 +256,146 @@
       (build-rich-controls safe-telegram! system config opts chat-id)
       (build-legacy-controls safe-telegram! system config opts chat-id))))
 
-(defn build-on-tool-call
-  [safe-telegram! system opts chat-id stream-controls]
+(defn- visible-tool-call?
+  [system tool-name]
+  (true? (:show-tool-calls?
+          (tool-display/channel-config system :telegram tool-name))))
+
+(defn- tool-call-key [{:keys [tool-call-id source-index tool-name]}]
+  (or tool-call-id [source-index tool-name]))
+
+(defn- add-call-once [calls call]
+  (let [key (tool-call-key call)]
+    (if (some #(= key (tool-call-key %)) calls)
+      calls
+      (conj calls call))))
+
+(defn- remove-call [calls call]
+  (let [key (tool-call-key call)]
+    (filterv #(not= key (tool-call-key %)) calls)))
+
+(defn- calling-tools-draft [started running]
+  (let [n (count started)
+        current (or (last running) (last started))
+        raw-tool-name (:tool-name current)
+        tool-name (cond
+                    (keyword? raw-tool-name) (name raw-tool-name)
+                    (some? raw-tool-name) (str raw-tool-name)
+                    :else nil)]
+    (str "<tg-thinking>Calling " n " " (if (= 1 n) "tool" "tools") "..."
+         (when tool-name
+           (str " " (tool-display/escape-html tool-name)))
+         "</tg-thinking>")))
+
+(defn- append-receipt [receipts receipt]
+  (let [call-id (:tool-call-id receipt)]
+    (if-let [idx (and call-id
+                      (first (keep-indexed
+                              (fn [i existing]
+                                (when (= call-id (:tool-call-id existing)) i))
+                              receipts)))]
+      (assoc receipts idx receipt)
+      (conj receipts receipt))))
+
+(defn- ordered-receipts [receipts]
+  (->> receipts
+       (map-indexed vector)
+       (sort-by (fn [[idx receipt]]
+                  [(or (:source-index receipt) Long/MAX_VALUE) idx]))
+       (mapv second)))
+
+(defn build-tool-call-controls
+  "Aggregates consecutive tool calls into one Telegram message. In private
+   rich-message chats, a draft-only RichBlockThinking status remains visible
+   while tools run; the next assistant output flushes one expandable summary."
+  [safe-telegram! system config opts chat-id stream-controls]
   (let [cfg (tool-display/channel-config system :telegram nil)]
     (when (true? (:show-tool-calls? cfg))
-      (let [send! (or (:send-message-fn opts)
-                      (fn [cid text]
-                        (tg-api/send-html-message! (get-in system [:config :channel-adapters :telegram :bot-token])
-                                                   cid text)))
-            finalize! (:finalize! stream-controls)]
-        (fn [{:keys [receipt]}]
-          (safe-telegram! system chat-id :tool-call-summary
-                          (fn []
-                            (when finalize! (finalize!))
-                            (let [text (tool-display/telegram-summary system receipt)]
-                              (when-not (str/blank? text)
-                                (send! chat-id text))))))))))
+      (let [token (:bot-token config)
+            lock (Object.)
+            active? (atom false)
+            receipts (atom [])
+            started-calls (atom [])
+            running-calls (atom [])
+            draft-id (atom (next-draft-id))
+            rich? (rich/enabled? config)
+            rich-ok? (atom rich?)
+            draft? (and rich? (some? stream-controls))
+            finalize-stream! (:finalize! stream-controls)
+            send-rich-draft! (or (:send-rich-message-draft-fn opts)
+                                 (fn [cid did markdown]
+                                   (tg-api/send-rich-message-draft! token cid did markdown)))
+            send-rich! (or (:send-rich-message-fn opts)
+                           (fn [cid markdown]
+                             (tg-api/send-rich-message! token cid markdown)))
+            send-message! (or (:send-message-fn opts)
+                              (fn [cid text]
+                                (tg-api/send-message! token cid text)))
+            flush-draft! (fn []
+                           (when (and draft? @active? @rich-ok?)
+                             (safe-telegram! system chat-id :tool-call-draft
+                                             #(try
+                                                (send-rich-draft! chat-id @draft-id
+                                                                  (calling-tools-draft
+                                                                   @started-calls
+                                                                   @running-calls))
+                                                (catch Exception e
+                                                  (reset! rich-ok? false)
+                                                  (throw e))))))
+            scheduler (when draft?
+                        (make-flush-scheduler lock #(boolean @active?) flush-draft!))
+            begin! (fn [call running?]
+                     (when (visible-tool-call? system (:tool-name call))
+                       (locking lock
+                         (when-not @active?
+                           (when finalize-stream! (finalize-stream!))
+                           (reset! active? true))
+                         (swap! started-calls add-call-once call)
+                         (when running?
+                           (swap! running-calls add-call-once call))
+                         (if scheduler
+                           ((:request! scheduler))
+                           (flush-draft!)))))
+            complete! (fn [receipt]
+                        (when (visible-tool-call? system (:tool-name receipt))
+                          (begin! receipt false)
+                          (swap! receipts append-receipt receipt)
+                          (swap! running-calls remove-call receipt)
+                          (when scheduler ((:request! scheduler)))))
+            flush! (fn []
+                     (locking lock
+                       (let [batch (ordered-receipts @receipts)]
+                         (when @active?
+                           (reset! active? false)
+                           (reset! receipts [])
+                           (reset! started-calls [])
+                           (reset! running-calls [])
+                           (when scheduler ((:reset! scheduler)))
+                           (swap! draft-id rotate-draft-id)
+                           (when (seq batch)
+                             (let [rich-summary
+                                   (tool-display/telegram-rich-batch-summary system batch)
+                                   plain-summary
+                                   (tool-display/telegram-plain-batch-summary system batch)]
+                               (if @rich-ok?
+                                 (safe-telegram! system chat-id :tool-call-summary
+                                                 #(try
+                                                    (send-rich! chat-id rich-summary)
+                                                    (catch Exception e
+                                                      (reset! rich-ok? false)
+                                                      (send-message! chat-id plain-summary)
+                                                      (throw e))))
+                                 (safe-telegram! system chat-id :tool-call-summary
+                                                 #(send-message! chat-id plain-summary)))))))))
+            stop! (fn []
+                    (flush!)
+                    (when scheduler ((:stop! scheduler))))]
+        {:on-start! (fn [call]
+                      (begin! call true))
+         :on-end! (fn [{:keys [receipt]}]
+                    (complete! receipt))
+         :flush! flush!
+         :stop! stop!}))))
 
 (defn start-typing-indicator!
   [safe-telegram! system config opts chat-id]

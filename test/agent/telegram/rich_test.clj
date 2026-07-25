@@ -135,13 +135,35 @@
       (is (even? (count (re-seq #"(?m)^[ \t]*(?:```|~~~)" chunk)))
           "fences balanced per chunk"))))
 
-(deftest chunking-cjk-byte-limit
+(deftest chunking-uses-character-not-byte-limit
   (let [big (->> (repeat 200 (str (apply str (repeat 80 "漢字テスト")) "\n\n"))
                  (apply str))
         chunks (rich/chunk-rich-markdown big)]
     (is (> (count chunks) 1))
     (doseq [chunk chunks]
-      (is (<= (alength (.getBytes ^String chunk "UTF-8")) 32768)))))
+      (is (<= (count chunk) 32768)))
+    (is (some #(> (alength (.getBytes ^String % "UTF-8")) 32768) chunks)
+        "Bot API limit is UTF-8 characters, not encoded bytes")))
+
+(deftest chunking-respects-rich-block-limit
+  (let [big (str/join "\n\n" (map #(str "paragraph-" %) (range 600)))
+        chunks (rich/chunk-rich-markdown big)]
+    (is (= 2 (count chunks)))
+    (is (= 600 (reduce + (map #(count (re-seq #"paragraph-" %)) chunks))))
+    (is (every? #(<= (count (re-seq #"paragraph-" %)) 480) chunks))))
+
+(deftest ha-report-gfm-tables-stay-rich
+  (let [report (str "## 🌿 Растения\n\n"
+                    "| Растение | 💧 Влажность | 🌡️ Температура | 🔋 Батарея |\n"
+                    "|---|---|---|---|\n"
+                    "| Драцена | 82% | 27.4°C | 57% |\n"
+                    "| Фикус | 88% | 26.1°C | 100% |\n\n"
+                    "## 🏢 Климат\n\n"
+                    "| Параметр | Значение |\n"
+                    "|---|---|\n"
+                    "| 🌡️ Температура | 27.9°C |\n"
+                    "| 💧 Влажность | 44.6% |")]
+    (is (= [report] (rich/final-chunks nil report)))))
 
 ;; --- inbound conversion -------------------------------------------------------
 

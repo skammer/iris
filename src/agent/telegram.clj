@@ -121,7 +121,7 @@
        (= "agent-end" (:event-type event))))
 
 (defn- run-chat-events!
-  [system config opts chat-id session-id messages stream-controls on-tool-call]
+  [system config opts chat-id session-id messages stream-controls tool-call-controls]
   (let [broker-instance (or (:event-bus system) (:broker system))
         subscription (broker/subscribe! broker-instance (broker/all-events-subject)
                                          {:buffer-strategy :sliding
@@ -131,7 +131,8 @@
         result-ch (async/chan 1)
         saw-delta? (atom false)
         suppress-approval-final? (atom false)
-        finalize! (:finalize! stream-controls)]
+        finalize! (:finalize! stream-controls)
+        flush-tool-calls! (:flush! tool-call-controls)]
     (try
       (future
         (try
@@ -163,6 +164,7 @@
                 (when (and event
                            (session-event? event session-id "message-update")
                            (string? (:delta payload)))
+                  (when flush-tool-calls! (flush-tool-calls!))
                   (when-not (and @suppress-approval-final?
                                  (:synthetic? payload))
                     (reset! saw-delta? true)
@@ -171,6 +173,7 @@
                 (when (and event
                            (session-event? event session-id "message-update")
                            (string? (:thinking-delta payload)))
+                  (when flush-tool-calls! (flush-tool-calls!))
                   (when-let [on-thinking-delta (:on-thinking-delta stream-controls)]
                     (on-thinking-delta (:thinking-delta payload))))
                 (when (and event
@@ -179,12 +182,14 @@
                            (= "assistant" (:role payload)))
                   (when (and (not @saw-delta?)
                              (not (str/blank? (:content payload))))
+                    (when flush-tool-calls! (flush-tool-calls!))
                     (when-let [on-delta (:on-delta stream-controls)]
                       (on-delta (:content payload))))
                   (reset! saw-delta? false))
                 (when (and event
                            (session-event? event session-id "message-end")
                            (:final? payload))
+                  (when flush-tool-calls! (flush-tool-calls!))
                   (if (and @suppress-approval-final?
                            (= :approval-required (keyword (:stop-reason payload))))
                     (reset! suppress-approval-final? false)
@@ -198,14 +203,23 @@
                 (when (and event
                            (session-event? event session-id "tool-execution-update")
                            (= :approval-required (keyword (:kind payload))))
-	                  (reset! suppress-approval-final? true)
-	                  (doseq [approval (:approvals payload)]
-	                    (tg-approvals/send-card! safe-telegram! system config opts chat-id approval)))
+                  (when flush-tool-calls! (flush-tool-calls!))
+                  (reset! suppress-approval-final? true)
+                  (doseq [approval (:approvals payload)]
+                    (tg-approvals/send-card! safe-telegram! system config opts chat-id approval)))
+                (when (and event
+                           (session-event? event session-id "tool-execution-start"))
+                  (when-let [on-start! (:on-start! tool-call-controls)]
+                    (on-start! payload)))
                 (when (and event
                            (session-event? event session-id "tool-execution-end"))
-                  (when on-tool-call
-                    (on-tool-call {:receipt (:receipt payload)
-                                   :tool-call (:tool-call payload)})))
+                  (when-let [on-end! (:on-end! tool-call-controls)]
+                    (on-end! {:receipt (:receipt payload)
+                              :tool-call (:tool-call payload)})))
+                (when (and event
+                           (terminal-session-event? event session-id)
+                           flush-tool-calls!)
+                  (flush-tool-calls!))
                 (recur result-value (or terminal?
                                         (and event
                                              (terminal-session-event? event session-id)))))))))
@@ -240,11 +254,15 @@
                     (fn [cid text] (tg-api/send-message! token cid text))))
         stop-typing! (tg-streaming/start-typing-indicator! safe-telegram! system config opts chat-id)
         stream-controls (tg-streaming/build-controls safe-telegram! system config opts chat chat-id)
-        on-tool-call (tg-streaming/build-on-tool-call safe-telegram! system opts chat-id stream-controls)
+        tool-call-controls (tg-streaming/build-tool-call-controls
+                            safe-telegram! system config opts chat-id stream-controls)
         result (try
-                 (run-chat-events! system config opts chat-id session-id messages stream-controls on-tool-call)
+                 (run-chat-events! system config opts chat-id session-id messages
+                                   stream-controls tool-call-controls)
                  (finally
                    (stop-typing!)
+                   (when-let [stop-tool-calls! (:stop! tool-call-controls)]
+                     (stop-tool-calls!))
                    (when-let [stop-controls! (:stop! stream-controls)]
                      (stop-controls!))))
         final (or (:content result) "")]
