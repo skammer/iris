@@ -6,6 +6,8 @@ All notable project changes are recorded here. New entries go at the top.
 
 ### Changed
 
+- Made Vault Note promotion atomic: approve now moves notes out of `inbox/` into a deterministic durable folder, updates status, reindexes once, and rolls back on failure.
+- Added approved-inbox drift reporting to Memory Quality and the periodic MAGI memory worker.
 - Added configurable MAGI review for candidate Vault Notes: automatic, manual, assistive, or off.
 - Added grouped per-note MAGI `Review` and advice-only actions; only unanimous `yes` promotes, while every other verdict keeps the note candidate.
 - Added content-hash idempotency, failure cooldown, audit events, and Vault Note entries in the MAGI decision log.

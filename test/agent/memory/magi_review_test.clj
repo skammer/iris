@@ -152,3 +152,27 @@
         (sqlite/close-store! store)
         (io/delete-file root true)
         (io/delete-file db-path true)))))
+
+(deftest approved-inbox-drift-event-is-emitted-on-change-only-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        store (sqlite/create-store {:path db-path})
+        file (write-candidate! root)
+        requests (atom [])
+        system (test-system store root :auto :yes requests)
+        service (review/create-service (atom system))]
+    (try
+      (memory/update-vault-note-iris! (:memory-service system)
+                                      (.getCanonicalPath file)
+                                      {:status "approved"})
+      (review/report-approved-inbox-drift! service system)
+      (review/report-approved-inbox-drift! service system)
+      (let [events (sqlite/list-events store
+                                       {:event-type :memory.vault.approved_inbox_detected
+                                        :limit 10})]
+        (is (= 1 (count events)))
+        (is (= 1 (get-in events [0 :payload :count]))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))

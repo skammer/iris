@@ -294,8 +294,10 @@ Implemented through `agent.memory.magi-review`:
 - modes: `auto`, `manual`, `assistive`, `off`.
 - the labeled MAGI `Review` action applies unanimous `yes`; `Advice` never mutates status.
 - `no`, `conditional`, `info`, and `error` leave the note `candidate`.
+- successful `yes` promotion atomically moves the note from `inbox/` to its deterministic durable folder before completing approval.
 - automatic review is bounded by scope, poll interval, cooldown, and batch size.
 - `note-id + body-hash` plus `memory.vault.magi_evaluated` provides audit and idempotency without another table.
+- the periodic worker reports legacy `approved` notes still stranded in `inbox/`; it does not silently relocate them.
 - scratchpad remains outside this approval flow.
 
 Confidence: 0.92

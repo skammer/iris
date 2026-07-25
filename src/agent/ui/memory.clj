@@ -281,6 +281,7 @@
   (let [conflict-notes (mapcat :notes (:conflicts quality))
         queue (concat
                (map #(vector "candidate" %) (:candidate-notes quality))
+               (map #(vector "approved in inbox" %) (:approved-inbox-notes quality))
                (map #(vector "low confidence" %) (:low-confidence-notes quality))
                (map #(vector (str "stale " (name (:stale-reason %))) %) (:stale-notes quality))
                (map #(vector "broken origin" %) (:broken-origin-notes quality))
@@ -292,6 +293,7 @@
      [:div.memory-stats
       (memory-health-stat "review" (:review-queue-count quality))
       (memory-health-stat "candidates" (:candidate-backlog quality))
+      (memory-health-stat "inbox drift" (count (:approved-inbox-notes quality)))
       (memory-health-stat "conflicts" (count (:conflicts quality)))
       (memory-health-stat "stale" (count (:stale-notes quality)))
       (memory-health-stat "orphans" (+ (count (:orphan-notes quality))

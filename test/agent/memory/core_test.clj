@@ -540,6 +540,136 @@
         (io/delete-file root true)
         (io/delete-file db-path true)))))
 
+(deftest vault-note-promotion-moves-to-durable-folder-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        candidate (io/file root "inbox/preference.md")
+        store (sqlite/create-store {:path db-path})
+        service (test-service store {:vault {:paths [(.getAbsolutePath root)]
+                                             :writable? true}})]
+    (try
+      (.mkdirs (.getParentFile candidate))
+      (spit candidate
+            (str "---\n"
+                 "id: mem_promote_move\n"
+                 "type: Preference\n"
+                 "title: Promotion move marker\n"
+                 "iris:\n"
+                 "  scope: global\n"
+                 "  status: candidate\n"
+                 "---\n\n"
+                 "promotion-move-marker detail\n"))
+      (memory/reindex-vault! service)
+      (let [result (memory/promote-vault-note! service
+                                               (.getAbsolutePath candidate)
+                                               {:scope "global"})
+            target (io/file root "preferences/preference.md")
+            note (first (sqlite/list-vault-notes store {:limit 10}))
+            event (first (sqlite/list-events store
+                                             {:event-type :memory.vault.note_promoted
+                                              :limit 1}))]
+        (is (false? (.exists candidate)))
+        (is (.isFile target))
+        (is (= "approved" (:iris-status note)))
+        (is (= (.getCanonicalPath target) (:path note) (:path result)))
+        (is (= "preferences" (:folder result)))
+        (is (= (.getCanonicalPath target) (:entity-id event))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
+(deftest session-note-promotion-overrides-type-folder-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        candidate (io/file root "inbox/session-decision.md")
+        store (sqlite/create-store {:path db-path})
+        service (test-service store {:vault {:paths [(.getAbsolutePath root)]
+                                             :writable? true}})]
+    (try
+      (.mkdirs (.getParentFile candidate))
+      (spit candidate
+            (str "---\n"
+                 "id: mem_session_promote\n"
+                 "type: Decision\n"
+                 "title: Session decision\n"
+                 "iris:\n"
+                 "  scope: session\n"
+                 "  status: candidate\n"
+                 "---\n\nSession-only decision.\n"))
+      (memory/reindex-vault! service)
+      (let [result (memory/promote-vault-note! service
+                                               (.getAbsolutePath candidate)
+                                               {})
+            note (first (sqlite/list-vault-notes store {:limit 10}))]
+        (is (= "sessions" (:folder result)))
+        (is (.isFile (io/file root "sessions/session-decision.md")))
+        (is (= "session" (:iris-scope note))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
+(deftest vault-note-promotion-rolls-back-on-move-conflict-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        candidate (io/file root "inbox/conflict.md")
+        target (io/file root "preferences/conflict.md")
+        store (sqlite/create-store {:path db-path})
+        service (test-service store {:vault {:paths [(.getAbsolutePath root)]
+                                             :writable? true}})]
+    (try
+      (doseq [file [candidate target]] (.mkdirs (.getParentFile file)))
+      (spit candidate
+            (str "---\n"
+                 "id: mem_promotion_conflict\n"
+                 "type: Preference\n"
+                 "title: Promotion conflict\n"
+                 "iris:\n"
+                 "  scope: global\n"
+                 "  status: candidate\n"
+                 "---\n\nCandidate content.\n"))
+      (spit target "Existing durable note.\n")
+      (memory/reindex-vault! service)
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"target already exists"
+                            (memory/promote-vault-note! service
+                                                        (.getAbsolutePath candidate)
+                                                        {})))
+      (is (str/includes? (slurp candidate) "status: candidate"))
+      (is (= "Existing durable note.\n" (slurp target)))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
+(deftest memory-quality-report-detects-approved-inbox-drift-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        note (io/file root "inbox/approved.md")
+        store (sqlite/create-store {:path db-path})
+        service (test-service store {:vault {:paths [(.getAbsolutePath root)]}})]
+    (try
+      (.mkdirs (.getParentFile note))
+      (spit note
+            (str "---\n"
+                 "id: mem_approved_inbox\n"
+                 "type: Reference\n"
+                 "title: Approved inbox drift\n"
+                 "iris:\n"
+                 "  scope: global\n"
+                 "  status: approved\n"
+                 "---\n\nDrift.\n"))
+      (memory/reindex-vault! service)
+      (let [quality (memory/quality-report service)]
+        (is (= 1 (count (:approved-inbox-notes quality))))
+        (is (= "mem_approved_inbox" (get-in quality [:approved-inbox-notes 0 :id])))
+        (is (pos? (:review-queue-count quality))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
 (deftest vault-note-move-keeps-index-in-sync-test
   (let [db-path (temp-db-path)
         root (temp-dir)

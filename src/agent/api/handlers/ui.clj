@@ -488,10 +488,15 @@
   (let [body (h/read-form-body request)]
     (memory-reset-response system
                            "Vault note"
-                           #(memory/update-vault-note-iris!
-                             (:memory-service system)
-                             (:path body)
-                             (select-keys body [:scope :status])))))
+                           #(if (= "approved" (:status body))
+                              (memory/promote-vault-note!
+                               (:memory-service system)
+                               (:path body)
+                               (select-keys body [:scope]))
+                              (memory/update-vault-note-iris!
+                               (:memory-service system)
+                               (:path body)
+                               (select-keys body [:scope :status]))))))
 
 (defn memory-vault-magi [system request]
   (let [{:keys [path action]} (h/read-form-body request)

@@ -28,6 +28,13 @@
 (def ^:private allowed-vault-move-roots #{"inbox" "preferences" "decisions" "projects"
                                            "runbooks" "sessions" "references" "archive"})
 (def ^:private reviewable-vault-statuses #{"candidate" "approved" "auto_session"})
+(def ^:private promotable-vault-statuses #{"candidate" "rejected"})
+(def ^:private promotion-folders
+  {"preference" "preferences"
+   "decision" "decisions"
+   "runbook" "runbooks"
+   "projectnote" "projects"
+   "reference" "references"})
 
 (defn- canonical-path [path]
   (.getCanonicalPath (io/file path)))
@@ -423,6 +430,94 @@
                         :entity-id path*
                         :payload result})
     result))
+
+(defn- normalized-note-type [value]
+  (-> (or value "Reference")
+      str/lower-case
+      (str/replace #"[^a-z0-9]" "")))
+
+(defn- promotion-folder [scope type]
+  (if (= "session" scope)
+    "sessions"
+    (get promotion-folders (normalized-note-type type) "references")))
+
+(defn- current-note-metadata [path]
+  (let [{:keys [frontmatter]} (vault/parse-note-content (slurp path) path)
+        iris (:iris frontmatter)]
+    {:type (or (:type frontmatter) "Reference")
+     :scope (or (:scope iris) "global")
+     :status (or (:status iris) "candidate")}))
+
+(defn promote-vault-note!
+  "Move a candidate/rejected note into its deterministic durable folder and
+   mark it approved. The file, index, and audit event are rolled back together
+   when promotion fails."
+  [memory-service path changes]
+  (when-not (:vault-writable? memory-service)
+    (throw (ex-info "Vault memory is read-only" {:type :vault-read-only})))
+  (let [source-path (ensure-vault-path! memory-service path)
+        root (or (vault-root-for-path memory-service source-path)
+                 (throw (ex-info "Path is outside configured memory vault roots"
+                                 {:type :path-not-allowed
+                                  :path source-path
+                                  :roots (:vault-roots memory-service)})))
+        before (slurp source-path)
+        {:keys [type scope status]} (current-note-metadata source-path)
+        normalized-changes (normalize-vault-iris-change (assoc changes :status "approved"))
+        scope* (or (:scope normalized-changes) scope)
+        changes* (assoc normalized-changes :scope scope*)
+        folder (promotion-folder scope* type)
+        target-path (.getCanonicalPath
+                     (io/file root folder (.getName (io/file source-path))))
+        move? (not= source-path target-path)]
+    (when-not (contains? promotable-vault-statuses status)
+      (throw (ex-info "Vault Note cannot be promoted from its current status"
+                      {:type :vault-note-not-promotable
+                       :path source-path
+                       :status status
+                       :allowed promotable-vault-statuses})))
+    (ensure-vault-path! memory-service target-path)
+    (try
+      (vault/update-note-iris! source-path changes*)
+      (when move?
+        (vault/move-note! source-path target-path))
+      (reindex-vault! memory-service)
+      (let [result {:from source-path
+                    :path target-path
+                    :folder folder
+                    :moved move?
+                    :updated true
+                    :iris (select-keys changes* [:scope :status])}]
+        (sqlite/log-event! (:store memory-service)
+                           {:event-type :memory.vault.note_promoted
+                            :entity-type :memory
+                            :entity-id target-path
+                            :payload result})
+        result)
+      (catch Exception e
+        (try
+          (when (and move?
+                     (.isFile (io/file target-path))
+                     (not (.exists (io/file source-path))))
+            (vault/move-note! target-path source-path))
+          (spit source-path before)
+          (reindex-vault! memory-service)
+          (catch Exception rollback-error
+            (throw (ex-info "Vault Note promotion and rollback failed"
+                            {:type :vault-note-promotion-rollback-failed
+                             :path source-path
+                             :target target-path
+                             :promotion-error (.getMessage e)
+                             :rollback-error (.getMessage rollback-error)}
+                            rollback-error))))
+        (throw e)))))
+
+(defn approved-inbox-notes [memory-service]
+  (->> (sqlite/list-vault-notes (:store memory-service)
+                                {:status "approved" :limit 10000})
+       (filter (fn [{:keys [path]}]
+                 (= "inbox" (some-> path io/file .getParentFile .getName str/lower-case))))
+       vec))
 
 (defn- safe-vault-folder [folder]
   (let [folder* (str/replace (str/trim (or folder "")) #"\\" "/")
@@ -909,6 +1004,10 @@
         notes (sqlite/list-vault-notes (:store memory-service) {:limit 10000})
         chunks (sqlite/list-vault-chunks (:store memory-service) {:limit 10000})
         candidates (filter #(= "candidate" (:iris-status %)) notes)
+        approved-inbox (filter (fn [{:keys [path iris-status]}]
+                                 (and (= "approved" iris-status)
+                                      (= "inbox" (some-> path io/file .getParentFile .getName str/lower-case))))
+                               notes)
         origins (mapcat :origins notes)
         low-confidence (low-confidence-notes notes low-confidence-threshold)
         stale (stale-notes notes stale-days)
@@ -921,6 +1020,7 @@
      :note-count-by-status (count-by :iris-status notes)
      :candidate-backlog (count candidates)
      :candidate-notes (mapv review-note-summary (take 50 candidates))
+     :approved-inbox-notes (mapv review-note-summary (take 50 approved-inbox))
      :low-confidence-threshold low-confidence-threshold
      :low-confidence-notes (vec (take 50 low-confidence))
      :origin-count-by-type (count-by origin-type origins)
@@ -934,6 +1034,7 @@
      :embedding-coverage (embedding-coverage memory-service notes chunks)
      :recall-latency (recall-latency-metrics memory-service)
      :review-queue-count (+ (count candidates)
+                            (count approved-inbox)
                             (count low-confidence)
                             (count stale)
                             (count conflicts)

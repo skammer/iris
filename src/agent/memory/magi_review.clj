@@ -108,11 +108,10 @@
                              (= :yes decision))
           applied (when should-apply?
                     (current-candidate! system path)
-                    (memory/update-vault-note-iris!
+                    (memory/promote-vault-note!
                      (:memory-service system)
                      path
-                     {:status "approved"
-                      :scope (:iris-scope note)}))
+                     {:scope (:iris-scope note)}))
           payload {:source (name source)
                    :note (select-keys note [:id :path :type :title :description
                                             :tags :iris-scope :iris-confidence
@@ -179,12 +178,14 @@
                         runnable)]
       {:processed (count results)
        :approved (count (filter :applied results))
+       :approved-inbox (count (memory/approved-inbox-notes (:memory-service system)))
        :results results})))
 
 (defn create-service [system-ref]
   {:system-ref system-ref
    :running? (atom false)
    :stop? (atom false)
+   :last-approved-inbox (atom ::unknown)
    :worker (atom nil)})
 
 (defn running? [service]
@@ -196,6 +197,27 @@
       (when (and (not @stop?) (< (System/currentTimeMillis) deadline))
         (Thread/sleep (max 1 (min 1000 (- deadline (System/currentTimeMillis)))))
         (recur)))))
+
+(defn report-approved-inbox-drift! [service system]
+  (let [notes (memory/approved-inbox-notes (:memory-service system))
+        current (set (map #(or (:id %) (:path %)) notes))
+        previous @(:last-approved-inbox service)]
+    (when (not= previous current)
+      (reset! (:last-approved-inbox service) current)
+      (cond
+        (seq current)
+        (emit! system {:event-type :memory.vault.approved_inbox_detected
+                       :entity-type :system
+                       :entity-id "memory"
+                       :payload {:count (count notes)
+                                 :notes (mapv #(select-keys % [:id :path :type :title :iris-scope])
+                                              (take 50 notes))}})
+
+        (and (not= ::unknown previous) (seq previous))
+        (emit! system {:event-type :memory.vault.approved_inbox_cleared
+                       :entity-type :system
+                       :entity-id "memory"
+                       :payload {:previous-count (count previous)}})))))
 
 (defn start! [service]
   (when (and service (not @(:running? service)))
@@ -210,6 +232,7 @@
                       (when-let [system* @(:system-ref service)]
                         (try
                           (run-once! system*)
+                          (report-approved-inbox-drift! service system*)
                           (catch Exception e
                             (emit! system* {:event-type :memory.vault.magi_worker_failed
                                             :entity-type :system
