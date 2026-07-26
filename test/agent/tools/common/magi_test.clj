@@ -39,7 +39,7 @@
         description (tools/describe tool)]
     (is (= :read (:operation description)))
     (is (false? (:approval-sensitive? description)))
-    (is (false? (:activates-tools? description)))
+    (is (true? (:activates-tools? description)))
     (is (thrown-with-msg?
          clojure.lang.ExceptionInfo
          #"Insufficient permissions"
@@ -48,4 +48,11 @@
            (:decision (tools/execute-tool registry
                                           :magi
                                           {:question "Trust?"}
-                                          {:permissions #{:magi-evaluate}}))))))
+                                          {:permissions #{:magi-evaluate}}))))
+    (is (= 0
+           (get-in (tools/execute-tool registry
+                                       :magi
+                                       {:question "Trust?"
+                                        :file-review true}
+                                       {:permissions #{:magi-evaluate}})
+                   [:agents :melchior :file-review :budget :calls])))))

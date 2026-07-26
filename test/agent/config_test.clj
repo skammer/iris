@@ -146,6 +146,12 @@
               :allow-critical? false
               :timeout-ms 30000
               :max-context-chars 12000
+              :file-review {:enabled? true
+                            :max-tool-calls 8
+                            :max-tool-rounds 4
+                            :timeout-ms 90000
+                            :max-evidence-chars 32000
+                            :max-tool-result-chars 12000}
               :filter {:provider nil :model nil}
               :judge {:provider nil :model nil}
               :agents {:melchior {:provider nil :model nil}

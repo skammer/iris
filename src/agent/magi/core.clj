@@ -4,6 +4,7 @@
   (:require
    [agent.llm.core :as llm]
    [agent.llm.service :as llm-service]
+   [agent.magi.file-review :as file-review]
    [agent.util :as util]
    [cheshire.core :as json]
    [clojure.java.io :as io]
@@ -21,6 +22,14 @@
 (def ^:private expected-responses #{:permit :classify :opine})
 (def ^:private agent-responses #{:yes :conditional :no :info :error})
 (def ^:private judge-decisions #{:yes :conditional :no :info :error})
+
+(def ^:private default-file-review-config
+  {:enabled? true
+   :max-tool-calls 8
+   :max-tool-rounds 4
+   :timeout-ms 90000
+   :max-evidence-chars 32000
+   :max-tool-result-chars 12000})
 
 (def ^:private prompt-paths
   {:filter "prompts/magi/filter.md"
@@ -132,27 +141,30 @@
    :reason (or (some-> (:reason m) str str/trim not-empty) "magi decision")})
 
 (defn- default-magi-config [cfg]
-  (merge {:enabled? false
-          :mode :assistive
-          :fallback :human
-          :apply-to #{:tool-approvals}
-          :tool-categories #{:all}
-          :memory-promotion {:mode :manual
-                             :scopes #{:all}
-                             :poll-interval-seconds 60
-                             :failure-cooldown-minutes 15
-                             :max-candidates 10}
-          :tool {:enabled true}
-          :execution :parallel
-          :allow-critical? false
-          :timeout-ms 30000
-          :max-context-chars 12000
-          :filter {:provider nil :model nil}
-          :judge {:provider nil :model nil}
-          :agents {:melchior {:provider nil :model nil}
-                   :balthasar {:provider nil :model nil}
-                   :casper {:provider nil :model nil}}}
-         (:magi cfg)))
+  (let [configured (:magi cfg)]
+    (-> (merge {:enabled? false
+                :mode :assistive
+                :fallback :human
+                :apply-to #{:tool-approvals}
+                :tool-categories #{:all}
+                :memory-promotion {:mode :manual
+                                   :scopes #{:all}
+                                   :poll-interval-seconds 60
+                                   :failure-cooldown-minutes 15
+                                   :max-candidates 10}
+                :tool {:enabled true}
+                :execution :parallel
+                :allow-critical? false
+                :timeout-ms 30000
+                :max-context-chars 12000
+                :filter {:provider nil :model nil}
+                :judge {:provider nil :model nil}
+                :agents {:melchior {:provider nil :model nil}
+                         :balthasar {:provider nil :model nil}
+                         :casper {:provider nil :model nil}}}
+               configured)
+        (assoc :file-review
+               (merge default-file-review-config (:file-review configured))))))
 
 (defn- role-override [magi-cfg role]
   (if (= role :filter)
@@ -179,7 +191,7 @@
 
 (defn create-service
   ([cfg] (create-service cfg {}))
-  ([cfg {:keys [default-provider providers prompt-overrides]}]
+  ([cfg {:keys [default-provider providers prompt-overrides tool-registry-fn]}]
    (let [magi-cfg (default-magi-config cfg)
          roles (conj participant-order :filter :judge)
          providers* (into {}
@@ -193,6 +205,7 @@
      {:config magi-cfg
       :providers providers*
       :provider-selections selections
+      :tool-registry-fn tool-registry-fn
       :prompts (merge (prompts) prompt-overrides)})))
 
 (defn enabled? [service]
@@ -231,6 +244,18 @@
 (defn- max-context-chars [service]
   (long (or (get-in service [:config :max-context-chars]) 12000)))
 
+(defn- file-review-config [service]
+  (merge default-file-review-config (get-in service [:config :file-review])))
+
+(defn- file-review? [service filter-result]
+  (and (true? (:file-review? filter-result))
+       (true? (:enabled? (file-review-config service)))))
+
+(defn- agent-timeout-ms [service filter-result]
+  (long (if (file-review? service filter-result)
+          (:timeout-ms (file-review-config service))
+          (timeout-ms service))))
+
 (defn classify [service request]
   (let [payload (-> request
                     (update :context compact-context (max-context-chars service)))
@@ -241,7 +266,9 @@
                          filter-schema
                          (timeout-ms service))
         normalized (normalize-filter-output raw)]
-    (update normalized :context #(merge (:context payload) (or % {})))))
+    (-> normalized
+        (update :context #(merge (:context payload) (or % {})))
+        (assoc :file-review? (true? (:file-review? request))))))
 
 (defn- agent-payload [filter-result]
   {:kind (name (:kind filter-result))
@@ -253,20 +280,34 @@
 
 (defn ask-agent [service role filter-result]
   (try
-    (normalize-agent-output
-     (invoke-json (get-in service [:providers role])
-                  role
-                  (get-in service [:prompts role])
-                  (agent-payload filter-result)
-                  agent-schema
-                  (timeout-ms service)))
+    (if (file-review? service filter-result)
+      (let [{:keys [output trace budget]}
+            (file-review/run!
+             {:provider (get-in service [:providers role])
+              :role role
+              :system-prompt (get-in service [:prompts role])
+              :payload (agent-payload filter-result)
+              :schema agent-schema
+              :timeout-ms (timeout-ms service)
+              :config (file-review-config service)
+              :tool-registry-fn (:tool-registry-fn service)})]
+        (assoc (normalize-agent-output output)
+               :file-review {:trace trace
+                             :budget budget}))
+      (normalize-agent-output
+       (invoke-json (get-in service [:providers role])
+                    role
+                    (get-in service [:prompts role])
+                    (agent-payload filter-result)
+                    agent-schema
+                    (timeout-ms service))))
     (catch Exception e
       {:response :error
        :comment (.getMessage e)})))
 
 (defn- timed-agent [service role filter-result]
   (let [task (future (ask-agent service role filter-result))
-        result (deref task (timeout-ms service) ::timeout)]
+        result (deref task (agent-timeout-ms service filter-result) ::timeout)]
     (if (= ::timeout result)
       (do
         (future-cancel task)
@@ -275,13 +316,14 @@
       result)))
 
 (defn ask-triumvirate [service filter-result]
-  (let [run-one (fn [role] [role (timed-agent service role filter-result)])]
+  (let [role-timeout-ms (agent-timeout-ms service filter-result)
+        run-one (fn [role] [role (timed-agent service role filter-result)])]
     (if (= :parallel (normalize-keyword (get-in service [:config :execution])))
-      (let [tasks (mapv (fn [role] [role (future (timed-agent service role filter-result))])
+      (let [tasks (mapv (fn [role] [role (future (ask-agent service role filter-result))])
                         participant-order)]
         (into {}
               (map (fn [[role task]]
-                     [role (let [result (deref task (timeout-ms service) ::timeout)]
+                     [role (let [result (deref task role-timeout-ms ::timeout)]
                              (if (= ::timeout result)
                                (do
                                  (future-cancel task)
@@ -401,7 +443,8 @@
 (defn- tool-family [tool-name]
   (case tool-name
     :shell :shell
-    (:fs_read :fs_write :fs_create :fs_replace :fs_list :fs_delete :fs_mkdir) :fs
+    (:fs_read :fs_write :fs_create :fs_replace :fs_list :fs_search
+     :fs_delete :fs_mkdir) :fs
     (:memory_recall :vault_search :scratchpad_read :scratchpad_search
      :scratchpad_replace :memory_propose_update :memory_extract_session :message_search) :memory
     nil))

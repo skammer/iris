@@ -133,7 +133,10 @@
         llm-registry (llm-registry/create-registry llm-cfg)
         llm-provider (system-health/with-component-health health-registry :llm-provider
                        #(llm-service/create-llm-provider llm-cfg))
-        magi-service (magi/create-service cfg {:default-provider llm-provider})
+        magi-service (magi/create-service
+                      cfg
+                      {:default-provider llm-provider
+                       :tool-registry-fn #(some-> @system-ref :tool-registry)})
         note-llm-provider (system-health/with-component-health health-registry :llm-provider
                             #(llm-service/create-note-llm-provider cfg))
         memory-service (system-health/with-component-health health-registry :memory

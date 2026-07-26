@@ -24,6 +24,7 @@
      :required-permissions #{:magi-evaluate}
      :input-schema [:map {:closed true}
                     [:question :string]
+                    [:file-review {:optional true} [:maybe :boolean]]
                     [:kind {:optional true} [:maybe [:or
                                                      [:enum :yes-no :info]
                                                      [:enum "yes-no" "info"]]]]
@@ -36,7 +37,7 @@
                                                        [:enum "tool-approval" "memory-promotion" "policy" "other"]]]]]
      :operation :read
      :approval-sensitive? false
-     :activates-tools? false
+     :activates-tools? true
      :source :builtin)
     :validate-fn
     (fn [input]
@@ -51,6 +52,7 @@
       (ensure-permission! context :magi-evaluate)
       (assoc (magi/decide magi-service
                           {:question (:question input)
+                           :file-review? (true? (:file-review input))
                            :kind (or (:kind input) :yes-no)
                            :context (:context input)
                            :expected-response (or (:expected-response input) :permit)

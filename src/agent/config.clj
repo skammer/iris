@@ -142,6 +142,12 @@
           :allow-critical? false
           :timeout-ms 30000
           :max-context-chars 12000
+          :file-review {:enabled? true
+                        :max-tool-calls 8
+                        :max-tool-rounds 4
+                        :timeout-ms 90000
+                        :max-evidence-chars 32000
+                        :max-tool-result-chars 12000}
           :filter {:provider nil :model nil}
           :judge {:provider nil :model nil}
           :agents {:melchior {:provider nil :model nil}
@@ -167,7 +173,12 @@
            :fs {:enabled true
                 :roots ["."]
                 :max-read-bytes 1048576
-                :max-write-bytes 1048576}
+                :max-write-bytes 1048576
+                :max-search-files 5000
+                :max-search-file-bytes 1048576
+                :max-search-results 200
+                :max-search-line-chars 500
+                :search-timeout-ms 5000}
            :homeassistant {:enabled false
                            :base-url nil
                            :token nil
@@ -614,7 +625,17 @@
       (into (keep #(positive-number-error cfg %)
                   [[:loop :max-iterations]
                    [:loop :summary-max-chars]
-                   [:loop :validation-max-chars]])))))
+                   [:loop :validation-max-chars]
+                   [:magi :file-review :max-tool-calls]
+                   [:magi :file-review :max-tool-rounds]
+                   [:magi :file-review :timeout-ms]
+                   [:magi :file-review :max-evidence-chars]
+                   [:magi :file-review :max-tool-result-chars]
+                   [:tools :fs :max-search-files]
+                   [:tools :fs :max-search-file-bytes]
+                   [:tools :fs :max-search-results]
+                   [:tools :fs :max-search-line-chars]
+                   [:tools :fs :search-timeout-ms]])))))
 
 (defn- validate-config! [cfg]
   (let [errors (config-validation-errors cfg)]

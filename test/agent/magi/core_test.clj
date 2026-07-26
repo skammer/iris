@@ -3,7 +3,12 @@
    [agent.config :as config]
    [agent.llm.core :as llm]
    [agent.magi.core :as magi]
+   [agent.magi.file-review :as file-review]
+   [agent.tools.common.fs :as fs-tool]
+   [agent.tools.core :as tools]
    [cheshire.core :as json]
+   [clojure.java.io :as io]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is]]))
 
 (defrecord StaticProvider [response requests]
@@ -20,6 +25,28 @@
 
 (defn- provider [response]
   (->StaticProvider response (atom [])))
+
+(defrecord ScriptedProvider [responses requests]
+  llm/ILLMProviderInvoke
+  (invoke [_ request]
+    (swap! requests conj request)
+    (let [response (first (first (swap-vals! responses rest)))]
+      (if (:tool-calls response)
+        (merge {:role "assistant"
+                :content ""
+                :usage nil
+                :raw nil}
+               response)
+        {:role "assistant"
+         :content (if (string? response) response (json/generate-string response))
+         :tool-calls []
+         :usage nil
+         :raw nil})))
+  (generate [this messages opts]
+    (llm/invoke this (assoc opts :messages messages))))
+
+(defn- scripted-provider [responses]
+  (->ScriptedProvider (atom responses) (atom [])))
 
 (defn- service [responses]
   (magi/create-service
@@ -137,3 +164,126 @@
                                                               :context {}})})]
     (is (= {:provider :ollama :model "llama3.2:3b"}
            (get-in svc [:provider-selections :melchior])))))
+
+(deftest file-review-gives-tools-only-to-triumvirate-and-forces-budget-verdict-test
+  (let [root (.toFile (java.nio.file.Files/createTempDirectory
+                       "iris-magi-review-"
+                       (make-array java.nio.file.attribute.FileAttribute 0)))
+        file (io/file root "review.clj")
+        _ (spit file "(defn unsafe [] :fixed)\n")
+        registry (reduce tools/register-tool
+                         (tools/create-registry)
+                         (fs-tool/create-fs-tools {:roots [(.getAbsolutePath root)]}))
+        filter-provider (provider {:kind "yes-no"
+                                   :domain "policy"
+                                   :risk "low"
+                                   :question "Is the implementation correct?"
+                                   :expected_response "opine"})
+        melchior (scripted-provider
+                  [{:tool-calls [{:id "read-1"
+                                  :function {:name "fs_search"
+                                             :arguments (json/generate-string
+                                                         {:path (.getAbsolutePath root)
+                                                          :query "unsafe"})}}]}
+                   {:response "yes" :comment "review.clj:1 is fixed"}])
+        balthasar (scripted-provider [{:response "yes" :comment "safe"}])
+        casper (scripted-provider [{:response "yes" :comment "useful"}])
+        judge-provider (provider {:decision "yes" :reason "all yes"})
+        svc (magi/create-service
+             (assoc config/default-config
+                    :magi {:timeout-ms 1000
+                           :file-review {:max-tool-calls 1
+                                         :max-tool-rounds 1
+                                         :timeout-ms 3000
+                                         :max-evidence-chars 4000
+                                         :max-tool-result-chars 2000}})
+             {:providers {:filter filter-provider
+                          :melchior melchior
+                          :balthasar balthasar
+                          :casper casper
+                          :judge judge-provider}
+              :tool-registry-fn (constantly registry)})
+        result (magi/decide svc {:question "Review agent result"
+                                 :file-review? true
+                                 :context {:changed-files [(.getAbsolutePath file)]}})
+        melchior-review (get-in result [:agents :melchior :file-review])]
+    (try
+      (is (= :yes (:decision result)))
+      (is (= "succeeded" (get-in melchior-review [:trace 0 :status])))
+      (is (= 1 (get-in melchior-review [:budget :calls])))
+      (is (true? (get-in melchior-review [:budget :exhausted?])))
+      (is (= #{"fs_list" "fs_read" "fs_search"}
+             (->> (first @(:requests melchior))
+                  :tools
+                  (map #(get-in % [:function :name]))
+                  set)))
+      (is (nil? (:tools (second @(:requests melchior)))))
+      (is (str/includes? (get-in (second @(:requests melchior))
+                                 [:messages (dec (count (:messages (second @(:requests melchior)))) )
+                                  :content])
+                         "budget exhausted"))
+      (is (nil? (:tools (first @(:requests filter-provider)))))
+      (is (nil? (:tools (first @(:requests judge-provider)))))
+      (is (not (str/includes? (pr-str (:trace melchior-review)) "(defn unsafe")))
+      (finally
+        (io/delete-file file true)
+        (.delete root)))))
+
+(deftest file-review-is-opt-in-test
+  (let [providers {:filter (provider {:kind "yes-no"
+                                      :domain "policy"
+                                      :risk "low"
+                                      :question "Allow?"
+                                      :expected_response "permit"})
+                   :melchior (provider {:response "yes"})
+                   :balthasar (provider {:response "yes"})
+                   :casper (provider {:response "yes"})
+                   :judge (provider {:decision "yes" :reason "all yes"})}
+        svc (magi/create-service config/default-config {:providers providers})
+        result (magi/decide svc {:question "Allow?" :context {}})]
+    (is (= :yes (:decision result)))
+    (is (every? nil?
+                (for [role [:melchior :balthasar :casper]
+                      :let [request (first @(-> providers role :requests))]]
+                  (:tools request))))
+    (is (every? #(not (contains? % :file-review)) (vals (:agents result))))))
+
+(deftest file-review-blocks-write-tools-even-when-registry-has-them-test
+  (let [root (.toFile (java.nio.file.Files/createTempDirectory
+                       "iris-magi-block-"
+                       (make-array java.nio.file.attribute.FileAttribute 0)))
+        file (io/file root "protected.txt")
+        _ (spit file "unchanged")
+        registry (reduce tools/register-tool
+                         (tools/create-registry {:approval-check (fn [_] {:allow true})})
+                         (fs-tool/create-fs-tools {:roots [(.getAbsolutePath root)]}))
+        provider (scripted-provider
+                  [{:tool-calls [{:id "write-1"
+                                  :function {:name "fs_write"
+                                             :arguments (json/generate-string
+                                                         {:path (.getAbsolutePath file)
+                                                          :content "changed"})}}]}
+                   {:response "no" :comment "write blocked"}])
+        result (file-review/run!
+                {:provider provider
+                 :role :melchior
+                 :system-prompt "Review."
+                 :payload {:question "Safe?"}
+                 :schema {:type "object"
+                          :properties {:response {:type "string"}
+                                       :comment {:type "string"}}
+                          :required ["response"]}
+                 :timeout-ms 1000
+                 :config {:max-tool-calls 1
+                          :max-tool-rounds 1
+                          :max-evidence-chars 2000
+                          :max-tool-result-chars 1000}
+                 :tool-registry-fn (constantly registry)})]
+    (try
+      (is (= "no" (get-in result [:output :response])))
+      (is (= "failed" (get-in result [:trace 0 :status])))
+      (is (str/includes? (get-in result [:trace 0 :error]) "not allowed"))
+      (is (= "unchanged" (slurp file)))
+      (finally
+        (io/delete-file file true)
+        (.delete root)))))

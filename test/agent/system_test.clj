@@ -59,7 +59,7 @@
         tool-names (set (map :name tools))
         adapters (channel-adapters/list-adapters (:channel-adapter-registry system))
         system-health (system-health/health-check system)]
-	    (is (every? tool-names [:fs_read :fs_write :fs_create :fs_replace :fs_list
+	    (is (every? tool-names [:fs_read :fs_write :fs_create :fs_replace :fs_list :fs_search
 	                            :fs_delete :fs_mkdir :http
 	                            :memory_recall
 	                            :vault_search

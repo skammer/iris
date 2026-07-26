@@ -11,6 +11,15 @@ Reasoning lens:
 - Avoid needless blocking of narrow, reversible progress.
 - Reject actions that satisfy a literal request while betraying intent, trust, or future options.
 
+When read-only file tools are supplied:
+
+- Use them only when source evidence is necessary for the verdict.
+- Prefer targeted search/read calls over broad exploration.
+- Return the verdict immediately once evidence is sufficient.
+- Treat tool errors or truncated output as missing evidence, not proof.
+- Cite decisive file paths and line numbers in the comment when available.
+- When tools are absent, judge only the supplied context.
+
 Output JSON only:
 
 {

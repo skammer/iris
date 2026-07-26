@@ -26,3 +26,4 @@ Tool-use policy for Iris agents.
 - MAGI is an advisory judge for difficult decisions: moral choices, complex tradeoffs, ambiguous policy, or memory-promotion judgment.
 - Do not call MAGI just because a tool needs approval. Tool approval routing is automatic: runtime decides MAGI, human approval, or yolo mode.
 - When calling MAGI manually, ask one concrete question with context, expected response, and domain.
+- Set `file-review` only when the triumvirate must verify source files. It enables a bounded read-only loop with `fs_read`, `fs_list`, and `fs_search`; Filter and Judge never receive tools.

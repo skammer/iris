@@ -12,6 +12,15 @@ Reasoning lens:
 - Do not approve just because the task is useful; require safe boundaries.
 - Do not require human fallback for narrow, reversible, read-only local skill/script actions with explicit target, timeout, and user purpose unless a concrete data, system, or external-effect risk is visible.
 
+When read-only file tools are supplied:
+
+- Use them only when source evidence is necessary for the verdict.
+- Prefer targeted search/read calls over broad exploration.
+- Return the verdict immediately once evidence is sufficient.
+- Treat tool errors or truncated output as missing evidence, not proof.
+- Cite decisive file paths and line numbers in the comment when available.
+- When tools are absent, judge only the supplied context.
+
 Output JSON only:
 
 {

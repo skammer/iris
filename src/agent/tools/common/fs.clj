@@ -2,11 +2,12 @@
   "Filesystem tool with bounded roots."
   (:require
    [agent.tools.core :as tools]
+   [agent.util :as util]
    [clojure.java.io :as io]
    [clojure.string :as str])
   (:import
    [java.nio.charset StandardCharsets]
-   [java.nio.file Files LinkOption OpenOption StandardOpenOption]
+   [java.nio.file FileSystems Files LinkOption OpenOption StandardOpenOption]
    [java.nio.file.attribute BasicFileAttributes]))
 
 (defn- expand-home [path]
@@ -79,6 +80,144 @@
                                        (nofollow-open-options))]
     (slurp in)))
 
+(defn- search-pattern [query regex? case-sensitive?]
+  (try
+    (java.util.regex.Pattern/compile
+     (if regex? query (java.util.regex.Pattern/quote query))
+     (if case-sensitive?
+       0
+       (bit-or java.util.regex.Pattern/CASE_INSENSITIVE
+               java.util.regex.Pattern/UNICODE_CASE)))
+    (catch java.util.regex.PatternSyntaxException e
+      (throw (tools/validation-error "query is not a valid regular expression"
+                                     {:query query
+                                      :error (.getDescription e)})))))
+
+(defn- glob-matcher [glob]
+  (when-not (str/blank? glob)
+    (try
+      (.getPathMatcher (FileSystems/getDefault) (str "glob:" glob))
+      (catch IllegalArgumentException e
+        (throw (tools/validation-error "glob is invalid"
+                                       {:glob glob
+                                        :error (.getMessage e)}))))))
+
+(defn- glob-matches? [matcher root-path file-path]
+  (or (nil? matcher)
+      (let [relative (if (= root-path file-path)
+                       (.getFileName file-path)
+                       (.relativize root-path file-path))]
+        (or (.matches matcher relative)
+            (.matches matcher (.getFileName file-path))))))
+
+(defn- search-line-matches [pattern path lines max-results max-line-chars]
+  (loop [line-no 1
+         remaining lines
+         matches []]
+    (if (or (empty? remaining) (>= (count matches) max-results))
+      matches
+      (let [line (first remaining)
+            matcher (.matcher pattern line)]
+        (recur (inc line-no)
+               (rest remaining)
+               (cond-> matches
+                 (.find matcher)
+                 (conj {:path path
+                        :line line-no
+                        :column (inc (.start matcher))
+                        :text (util/truncate line max-line-chars #(str " [truncated " % " chars]"))})))))))
+
+(defn- search-files!
+  [{:keys [path nio-path] :as root-info}
+   {:keys [query regex? case-sensitive? glob max-results]}
+   {:keys [max-search-files max-search-file-bytes max-search-results
+           max-search-line-chars search-timeout-ms]}]
+  (ensure-no-symlink-segments! root-info)
+  (when-not (or (Files/isDirectory nio-path (nofollow-link-options))
+                (Files/isRegularFile nio-path (nofollow-link-options)))
+    (throw (tools/tool-error :not-found "Search path not found" {:path path})))
+  (let [pattern (search-pattern query regex? case-sensitive?)
+        matcher (glob-matcher glob)
+        result-limit (min (long (or max-results max-search-results))
+                          (long max-search-results))
+        deadline (+ (System/nanoTime) (* 1000000 (long search-timeout-ms)))
+        root-path (if (Files/isDirectory nio-path (nofollow-link-options))
+                    nio-path
+                    (.getParent nio-path))]
+    (loop [pending [(io/file path)]
+           cursor 0
+           scanned-files 0
+           matches []]
+      (cond
+        (>= (count matches) result-limit)
+        {:path path
+         :query query
+         :matches (vec (take result-limit matches))
+         :scanned-files scanned-files
+        :truncated true
+        :truncation-reason "max-results"}
+
+        (>= cursor (count pending))
+        {:path path
+         :query query
+         :matches matches
+         :scanned-files scanned-files
+         :truncated false}
+
+        (>= scanned-files max-search-files)
+        {:path path
+         :query query
+         :matches matches
+         :scanned-files scanned-files
+         :truncated true
+         :truncation-reason "max-files"}
+
+        (>= (System/nanoTime) deadline)
+        {:path path
+         :query query
+         :matches matches
+         :scanned-files scanned-files
+         :truncated true
+         :truncation-reason "timeout"}
+
+        :else
+        (let [file (nth pending cursor)
+              file-path (.toPath file)]
+          (cond
+            (Files/isSymbolicLink file-path)
+            (recur pending (inc cursor) scanned-files matches)
+
+            (Files/isDirectory file-path (nofollow-link-options))
+            (let [children (->> (or (.listFiles file) (make-array java.io.File 0))
+                                (sort-by #(.getName ^java.io.File %))
+                                vec)]
+              (recur (into pending children) (inc cursor) scanned-files matches))
+
+            (Files/isRegularFile file-path (nofollow-link-options))
+            (let [scanned-files* (inc scanned-files)
+                  attrs (Files/readAttributes file-path BasicFileAttributes (nofollow-link-options))
+                  searchable? (and (<= (.size attrs) max-search-file-bytes)
+                                   (glob-matches? matcher root-path file-path))]
+              (if-not searchable?
+                (recur pending (inc cursor) scanned-files* matches)
+                (let [content (read-file-content! {:nio-path file-path})
+                      binary? (str/includes? content "\u0000")
+                      remaining (- result-limit (count matches))
+                      found (if binary?
+                              []
+                              (search-line-matches pattern
+                                                   (.getCanonicalPath file)
+                                                   (str/split-lines content)
+                                                   remaining
+                                                   max-search-line-chars))]
+                  (recur pending
+                         (inc cursor)
+                         scanned-files*
+                         (into matches found)))))
+
+            :else
+            (recur pending (inc cursor) scanned-files matches)))))))
+
 (defn- write-file-content! [path-info content create-new?]
   (ensure-no-symlink-segments! path-info)
   (Files/write (:nio-path path-info)
@@ -105,14 +244,22 @@
   [opts]
   (let [config (merge {:roots ["."]
                        :max-read-bytes 1048576
-                       :max-write-bytes 1048576}
+                       :max-write-bytes 1048576
+                       :max-search-files 5000
+                       :max-search-file-bytes 1048576
+                       :max-search-results 200
+                       :max-search-line-chars 500
+                       :search-timeout-ms 5000}
                       opts)
         roots (mapv canonical-path (:roots config))
         health (fn []
                  {:healthy true
                   :details {:roots roots
                             :max-read-bytes (:max-read-bytes config)
-                            :max-write-bytes (:max-write-bytes config)}})
+                            :max-write-bytes (:max-write-bytes config)
+                            :max-search-files (:max-search-files config)
+                            :max-search-results (:max-search-results config)
+                            :search-timeout-ms (:search-timeout-ms config)}})
         path-info (fn [input]
                     (resolve-allowed-path! roots (:path input)))
         write-size! (fn [path content]
@@ -271,6 +418,36 @@
                                   :type (if (.isDirectory entry) "directory" "file")}))
                           (sort-by :name)
                           vec)}))})
+     (tools/create-tool
+      {:description
+       (tools/create-tool-description
+        :fs_search
+        "Recursively search text files under configured filesystem roots."
+        :category :system
+        :input-schema [:map {:closed true}
+                       [:path :string]
+                       [:query :string]
+                       [:regex? {:optional true} [:maybe :boolean]]
+                       [:case-sensitive? {:optional true} [:maybe :boolean]]
+                       [:glob {:optional true} [:maybe :string]]
+                       [:max-results {:optional true}
+                        [:maybe [:int {:min 1
+                                      :max (:max-search-results config)}]]]]
+        :operation :read
+        :parallel-safe? true
+        :timeout-ms (:search-timeout-ms config)
+        :source :builtin)
+       :health-fn health
+       :validate-fn
+       (fn [input]
+         (when (str/blank? (:query input))
+           (throw (tools/validation-error "query must be a non-blank string"
+                                          {:query (:query input)})))
+         input)
+       :execute-fn
+       (fn [input context]
+         (ensure-permission! context :read)
+         (search-files! (path-info input) input config))})
      (tools/create-tool
       {:description
        (tools/create-tool-description

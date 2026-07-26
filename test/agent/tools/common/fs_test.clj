@@ -93,6 +93,11 @@
                             (tools/execute-tool registry :fs_write {:path (.getAbsolutePath link)
                                                               :content "blocked"}
                                                 {:permissions #{:filesystem-write}})))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"symlink"
+                            (tools/execute-tool registry :fs_search {:path (.getAbsolutePath link)
+                                                                     :query "safe"}
+                                                {:permissions #{:filesystem-read}})))
       (is (= "safe" (slurp target)))
       (catch UnsupportedOperationException _
         (is true "symbolic links unsupported"))
@@ -120,3 +125,98 @@
     (is (= "one four one" (slurp file-path)))
     (io/delete-file file-path true)
     (.delete root)))
+
+(deftest fs-search-finds-bounded-literal-regex-and-glob-matches-test
+  (let [root (temp-dir)
+        source-dir (io/file root "src")
+        clj-file (io/file source-dir "review.clj")
+        text-file (io/file source-dir "notes.txt")
+        _ (.mkdirs source-dir)
+        _ (spit clj-file "(defn review []\n  \"MAGI verdict\")\n")
+        _ (spit text-file "magi note\n")
+        tools* (fs-tool/create-fs-tools {:roots [(.getAbsolutePath root)]
+                                         :max-search-results 10})
+        registry (approved-registry tools*)
+        context {:permissions #{:filesystem-read}}
+        literal (tools/execute-tool registry
+                                    :fs_search
+                                    {:path (.getAbsolutePath root)
+                                     :query "magi"
+                                     :glob "*.clj"}
+                                    context)
+        regex (tools/execute-tool registry
+                                  :fs_search
+                                  {:path (.getAbsolutePath root)
+                                   :query "defn\\s+review"
+                                   :regex? true
+                                   :case-sensitive? true}
+                                  context)]
+    (is (= 1 (count (:matches literal))))
+    (is (= 2 (get-in literal [:matches 0 :line])))
+    (is (= (.getCanonicalPath clj-file) (get-in literal [:matches 0 :path])))
+    (is (= 1 (count (:matches regex))))
+    (is (= 1 (get-in regex [:matches 0 :line])))
+    (is (false? (:truncated literal)))
+    (io/delete-file clj-file true)
+    (io/delete-file text-file true)
+    (.delete source-dir)
+    (.delete root)))
+
+(deftest fs-search-enforces-result-and-pattern-limits-test
+  (let [root (temp-dir)
+        file (io/file root "many.txt")
+        _ (spit file "hit one\nhit two\nhit three\n")
+        tools* (fs-tool/create-fs-tools {:roots [(.getAbsolutePath root)]
+                                         :max-search-results 2})
+        registry (approved-registry tools*)
+        context {:permissions #{:filesystem-read}}
+        result (tools/execute-tool registry
+                                   :fs_search
+                                   {:path (.getAbsolutePath root)
+                                    :query "hit"}
+                                   context)]
+    (is (= 2 (count (:matches result))))
+    (is (:truncated result))
+    (is (= "max-results" (:truncation-reason result)))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"valid regular expression"
+                          (tools/execute-tool registry
+                                              :fs_search
+                                              {:path (.getAbsolutePath root)
+                                               :query "["
+                                               :regex? true}
+                                              context)))
+    (io/delete-file file true)
+    (.delete root)))
+
+(deftest fs-search-skips-binary-and-oversized-files-and-enforces-root-test
+  (let [root (temp-dir)
+        outside (temp-dir)
+        binary (io/file root "binary.dat")
+        oversized (io/file root "large.txt")
+        outside-file (io/file outside "outside.txt")
+        _ (spit binary "needle\u0000binary")
+        _ (spit oversized "needle is too large")
+        _ (spit outside-file "needle")
+        tools* (fs-tool/create-fs-tools {:roots [(.getAbsolutePath root)]
+                                         :max-search-file-bytes 16})
+        registry (approved-registry tools*)
+        context {:permissions #{:filesystem-read}}
+        result (tools/execute-tool registry
+                                   :fs_search
+                                   {:path (.getAbsolutePath root)
+                                    :query "needle"}
+                                   context)]
+    (is (empty? (:matches result)))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"outside allowed roots"
+                          (tools/execute-tool registry
+                                              :fs_search
+                                              {:path (.getAbsolutePath outside)
+                                               :query "needle"}
+                                              context)))
+    (io/delete-file binary true)
+    (io/delete-file oversized true)
+    (io/delete-file outside-file true)
+    (.delete root)
+    (.delete outside)))

@@ -944,7 +944,7 @@
         (is (str/includes? (:body ui-operator-board) "Approval queue"))
         (is (str/includes? (:body ui-operator-board) "Kernel receipts"))
         (is (= 200 (:status health)))
-        (is (= 13 (get-in health-body [:tools :count])))
+        (is (= 14 (get-in health-body [:tools :count])))
         (is (= true (get-in health-body [:memory :healthy])))
         (is (= 1 (get-in health-body [:channel-adapters :count])))
         (is (map? (:health-snapshot health-body)))
@@ -954,7 +954,7 @@
         (is (map? (get-in health-body [:sse :metrics])))
         (is (integer? (get-in health-body [:sse :metrics :opened])))
         (is (= 200 (:status tools)))
-        (is (= ["fs_create" "fs_delete" "fs_list" "fs_mkdir" "fs_read" "fs_replace" "fs_write"
+        (is (= ["fs_create" "fs_delete" "fs_list" "fs_mkdir" "fs_read" "fs_replace" "fs_search" "fs_write"
                 "http" "shell" "todo_get" "todo_list" "todo_search" "todo_write"]
                (mapv :name (:data tools-body))))
         (is (= "builtin" (get-in tools-body [:data 0 :source])))
