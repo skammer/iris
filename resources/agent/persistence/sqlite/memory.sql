@@ -18,11 +18,11 @@ delete from vault_chunk_embeddings
 insert into vault_note_index
 (path, id, type, title, description, tags_json, timestamp,
  iris_scope, iris_status, iris_confidence, origins_json,
- frontmatter_json, body_hash, updated_at)
+ frontmatter_json, body_hash, content_hash, updated_at)
 values
 (:path, :id, :type, :title, :description, :tags_json, :timestamp,
  :iris_scope, :iris_status, :iris_confidence, :origins_json,
- :frontmatter_json, :body_hash, :updated_at)
+ :frontmatter_json, :body_hash, :content_hash, :updated_at)
 
 -- :name insert-vault-chunk :! :n
 insert into vault_chunks
@@ -52,7 +52,8 @@ values
 select c.chunk_id, c.path, c.heading, c.block_id, c.content_hash, c.text,
        n.id as note_id, n.type, n.title, n.description, n.tags_json,
        n.timestamp, n.iris_scope, n.iris_status, n.iris_confidence,
-       n.origins_json, n.frontmatter_json, n.updated_at
+       n.origins_json, n.frontmatter_json, n.body_hash,
+       n.content_hash as note_revision, n.updated_at
 from vault_chunks c
 join vault_note_index n on n.path = c.path
 where ((n.iris_status = 'approved' and n.iris_scope in ('global', 'project'))
@@ -73,7 +74,8 @@ limit :limit
 select c.chunk_id, c.path, c.heading, c.block_id, c.content_hash, c.text,
        n.id as note_id, n.type, n.title, n.description, n.tags_json,
        n.timestamp, n.iris_scope, n.iris_status, n.iris_confidence,
-       n.origins_json, n.frontmatter_json, n.updated_at,
+       n.origins_json, n.frontmatter_json, n.body_hash,
+       n.content_hash as note_revision, n.updated_at,
        bm25(vault_chunks_fts) as retrieval_score
 from vault_chunks_fts
 join vault_chunks c on c.chunk_id = vault_chunks_fts.chunk_id
@@ -90,11 +92,55 @@ limit :limit
 -- :name list-vault-notes :? :*
 select path, id, type, title, description, tags_json, timestamp,
        iris_scope, iris_status, iris_confidence, origins_json,
-       frontmatter_json, body_hash, updated_at
+       frontmatter_json, body_hash, content_hash, updated_at
 from vault_note_index
 where (:status is null or iris_status = :status)
 order by updated_at desc
 limit :limit
+
+-- :name get-vault-note-by-id :? :1
+select path, id, type, title, description, tags_json, timestamp,
+       iris_scope, iris_status, iris_confidence, origins_json,
+       frontmatter_json, body_hash, content_hash, updated_at
+from vault_note_index
+where id = :id
+
+-- :name insert-memory-note-update :! :n
+insert into memory_note_updates
+(id, target_id, target_path, base_revision, proposed_revision,
+ changes_json, proposed_content, diff, evidence_json, source, status,
+ decision, decision_reason, created_at, updated_at, decided_at)
+values
+(:id, :target_id, :target_path, :base_revision, :proposed_revision,
+ :changes_json, :proposed_content, :diff, :evidence_json, :source, :status,
+ :decision, :decision_reason, :created_at, :updated_at, :decided_at)
+
+-- :name get-memory-note-update :? :1
+select id, target_id, target_path, base_revision, proposed_revision,
+       changes_json, proposed_content, diff, evidence_json, source, status,
+       decision, decision_reason, created_at, updated_at, decided_at
+from memory_note_updates
+where id = :id
+
+-- :name list-memory-note-updates :? :*
+select id, target_id, target_path, base_revision, proposed_revision,
+       changes_json, proposed_content, diff, evidence_json, source, status,
+       decision, decision_reason, created_at, updated_at, decided_at
+from memory_note_updates
+where (:status is null or status = :status)
+  and (:target_id is null or target_id = :target_id)
+order by created_at asc
+limit :limit
+
+-- :name update-memory-note-update-status :! :n
+update memory_note_updates
+set status = :status,
+    decision = :decision,
+    decision_reason = :decision_reason,
+    updated_at = :updated_at,
+    decided_at = :decided_at
+where id = :id
+  and status = :expected_status
 
 -- :name count-vault-notes :? :1
 select count(*) as n

@@ -116,7 +116,8 @@
                           :default-scope :session}}
                  store)
         responses (atom [(json/generate-string
-                          {:notes [{:type "Decision"
+                          {:notes [{:operation "create"
+                                    :type "Decision"
                                     :title "Manual memory extraction"
                                     :description "Memory extraction is explicit."
                                     :body "Memory extraction runs from an explicit session command, not every chat turn."
@@ -212,6 +213,57 @@
         (is (str/includes? result "mem_ops"))
         (is (str/includes? result "agent.example.invalid")))
       (finally
+        (io/delete-file path true)
+        (io/delete-file root true)))))
+
+(deftest memory-propose-update-tool-creates-pending-diff-test
+  (let [path (temp-db-path)
+        root (temp-dir "iris-memory-update-tool")
+        note-file (io/file root "preferences/style.md")
+        store (sqlite/create-store {:path path})
+        service (memory/create-memory-service
+                 {:vault {:paths [(.getAbsolutePath root)]
+                          :writable? true}
+                  :notes {:extractor {:enabled false}}}
+                 store)
+        registry* (registry service)]
+    (try
+      (.mkdirs (.getParentFile note-file))
+      (spit note-file
+            (str "---\n"
+                 "id: mem_tool_update\n"
+                 "type: Preference\n"
+                 "title: Answer style\n"
+                 "description: Detailed answers.\n"
+                 "iris:\n"
+                 "  scope: global\n"
+                 "  status: approved\n"
+                 "---\n\n# Answer style\n\nDetailed answers.\n"))
+      (memory/reindex-vault! service)
+      (let [revision (:revision (sqlite/get-vault-note-by-id store "mem_tool_update"))
+            search-result (tools/execute-tool registry*
+                                              :vault_search
+                                              {:query "Detailed answers"}
+                                              {:permissions #{:memory-read}})
+            result (tools/execute-tool
+                    registry*
+                    :memory_propose_update
+                    {:note-id "mem_tool_update"
+                     :expected-revision revision
+                     :changes {:description "Concise answers."
+                               :body "Concise answers."}
+                     :reason "User corrected answer style."}
+                    {:permissions #{:memory-write}
+                     :request-id "req-tool-update"
+                     :magi-context {:user-request "Be concise."}})
+            proposal (first (sqlite/list-memory-note-updates store {:status "pending"}))]
+        (is (str/includes? search-result (str "revision=" revision)))
+        (is (str/includes? result "Memory update proposal"))
+        (is (= "mem_tool_update" (:target-id proposal)))
+        (is (= "Be concise." (get-in proposal [:evidence :user])))
+        (is (str/includes? (slurp note-file) "Detailed answers.")))
+      (finally
+        (sqlite/close-store! store)
         (io/delete-file path true)
         (io/delete-file root true)))))
 

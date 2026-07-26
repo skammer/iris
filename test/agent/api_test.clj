@@ -802,9 +802,11 @@
                                          :payload {}})
             vault-missing (http-post (str base-url "/v1/memory/vault/read")
                                      {:path "memory/missing.md"})
-            vault-read-only (http-post (str base-url "/v1/memory/vault/write")
-                                       {:path "memory/blocked.md"
-                                        :content "blocked"})
+            vault-read-only (http-post
+                             (str base-url "/v1/memory/vault/propose-update")
+                             {:note_id "missing"
+                              :expected_revision "missing"
+                              :changes {:body "blocked"}})
             unknown-provider-health (http-get (str base-url "/v1/providers/missing/health"))
             unknown-provider-models (http-get (str base-url "/v1/providers/missing/models"))
             provider-models (json/parse-string

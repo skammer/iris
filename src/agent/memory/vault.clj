@@ -63,7 +63,7 @@
    (io/file root "inbox" (str id "-" (slug title) ".md"))))
 
 (defn- note-markdown
-  [{:keys [id type title description body tags scope confidence origins timestamp evidence]}]
+  [{:keys [id type title description body tags scope status confidence origins timestamp evidence]}]
   (let [body* (str/trim (or body description ""))]
     (str "---\n"
          "id: " (yaml-value id) "\n"
@@ -74,7 +74,7 @@
          "timestamp: " (yaml-value timestamp) "\n"
          "iris:\n"
          "  scope: " (yaml-value (or scope "session")) "\n"
-         "  status: \"candidate\"\n"
+         "  status: " (yaml-value (or status "candidate")) "\n"
          "  confidence: " (yaml-value (or confidence 0.7)) "\n"
          "  origins:\n"
          (apply str
@@ -93,6 +93,9 @@
          (quote-block (:user evidence)) "\n\n"
          "### Assistant\n\n"
          (quote-block (:assistant evidence)) "\n")))
+
+(defn content-revision [content]
+  (security/sha256-hex (or content "")))
 
 (defn- unquote-string [value]
   (let [value* (str/trim (or value ""))]
@@ -336,6 +339,7 @@
      :frontmatter frontmatter
      :body body
      :body-hash (security/sha256-hex body)
+     :revision (content-revision content)
      :updated-at (str (java.time.Instant/ofEpochMilli (.lastModified file)))
      :chunks chunks
      :parse-errors (vec (:parse-errors parsed))
@@ -695,14 +699,56 @@
   (let [pattern (re-pattern (str "^\\s+" (name field) ":.*$"))]
     (remove #(re-matches pattern %) lines)))
 
-(defn- update-iris-block [block {:keys [scope status]}]
-  (let [block* (-> block
-                   (remove-iris-field :scope)
-                   (remove-iris-field :status))
+(defn- remove-iris-origins [lines]
+  (loop [remaining lines
+         result []
+         skipping? false]
+    (if-let [line (first remaining)]
+      (cond
+        (re-matches #"^\s+origins:\s*$" line)
+        (recur (rest remaining) result true)
+
+        (and skipping? (re-matches #"^  [A-Za-z0-9_.-]+:.*$" line))
+        (recur remaining result false)
+
+        skipping?
+        (recur (rest remaining) result true)
+
+        :else
+        (recur (rest remaining) (conj result line) false))
+      result)))
+
+(defn- origin-lines [origins]
+  (when (seq origins)
+    (vec
+     (concat
+      ["  origins:"]
+      (mapcat (fn [origin]
+                (let [session-id (or (:session-id origin) (:session_id origin))
+                      message-id (or (:message-id origin) (:message_id origin))
+                      event-id (or (:event-id origin) (:event_id origin))
+                      request-id (or (:request-id origin) (:request_id origin))
+                      vault-path (or (:vault-path origin) (:vault_path origin))]
+                  (remove nil?
+                          [(str "  - type: " (yaml-value (:type origin)))
+                           (when session-id (str "    session_id: " (yaml-value session-id)))
+                           (when message-id (str "    message_id: " (yaml-value message-id)))
+                           (when event-id (str "    event_id: " (yaml-value event-id)))
+                           (when request-id (str "    request_id: " (yaml-value request-id)))
+                           (when vault-path (str "    vault_path: " (yaml-value vault-path)))])))
+              origins)))))
+
+(defn- update-iris-block [block {:keys [scope status origins]}]
+  (let [without-fields (-> block
+                           (remove-iris-field :scope)
+                           (remove-iris-field :status))
+        block* (remove nil? (if (some? origins)
+                              (remove-iris-origins without-fields)
+                              without-fields))
         fields (cond-> []
                  scope (conj (iris-field-line :scope scope))
                  status (conj (iris-field-line :status status)))]
-    (vec (concat fields block*))))
+    (vec (concat fields block* (origin-lines origins)))))
 
 (defn- upsert-iris-frontmatter [frontmatter-lines changes]
   (let [lines (vec frontmatter-lines)
@@ -738,6 +784,99 @@
            "\n---\n\n"
            (or content "")))))
 
+(defn- upsert-top-level-field [lines field value]
+  (let [pattern (re-pattern (str "^" (name field) ":.*$"))
+        replacement (str (name field) ": " (yaml-value value))
+        found? (some #(re-matches pattern %) lines)]
+    (if found?
+      (mapv #(if (re-matches pattern %) replacement %) lines)
+      (let [iris-idx (or (first (keep-indexed #(when (re-matches #"^iris:\s*$" %2) %1)
+                                               lines))
+                         (count lines))]
+        (vec (concat (subvec (vec lines) 0 iris-idx)
+                     [replacement]
+                     (subvec (vec lines) iris-idx)))))))
+
+(defn- update-top-level-frontmatter [lines changes]
+  (reduce (fn [result field]
+            (if (contains? changes field)
+              (upsert-top-level-field result field (get changes field))
+              result))
+          (vec lines)
+          [:type :title :description :tags]))
+
+(defn- replace-note-heading [body title]
+  (let [lines (vec (str/split-lines (or body "")))]
+    (if (and (seq lines) (str/starts-with? (first lines) "# "))
+      (str/join "\n" (assoc lines 0 (str "# " title)))
+      (str "# " title "\n\n" (or body "")))))
+
+(defn- evidence-section [body]
+  (when-let [idx (str/index-of (or body "") "\n## Evidence\n")]
+    (subs body idx)))
+
+(defn- durable-body [body]
+  (let [without-evidence (if-let [idx (str/index-of (or body "") "\n## Evidence\n")]
+                           (subs body 0 idx)
+                           (or body ""))
+        lines (vec (str/split-lines (str/trim without-evidence)))
+        lines* (if (and (seq lines) (str/starts-with? (first lines) "# "))
+                 (subvec lines 1)
+                 lines)]
+    (str/trim (str/join "\n" lines*))))
+
+(defn- update-evidence [evidence]
+  (when (or (not (str/blank? (:user evidence)))
+            (not (str/blank? (:assistant evidence))))
+    (str "\n\n### Update User\n\n"
+         (quote-block (:user evidence))
+         "\n\n### Update Assistant\n\n"
+         (quote-block (:assistant evidence)))))
+
+(defn proposed-note-content
+  "Build a full approved note revision from partial structured changes while
+   preserving unknown frontmatter and prior evidence."
+  [content changes evidence origins]
+  (let [lines (vec (str/split-lines (or content "")))
+        frontmatter? (= "---" (first lines))
+        [frontmatter-lines rest-lines] (if frontmatter?
+                                         (split-with #(not= "---" %) (rest lines))
+                                         [[] lines])
+        body-lines (if (and frontmatter? (= "---" (first rest-lines)))
+                     (rest rest-lines)
+                     rest-lines)
+        parsed (parse-note-content content)
+        current-title (or (get-in parsed [:frontmatter :title]) "Memory note")
+        title (or (:title changes) current-title)
+        current-body (str/join "\n" body-lines)
+        preserved-evidence (evidence-section current-body)
+        body-base (if (contains? changes :body)
+                    (str "# " title "\n\n" (str/trim (or (:body changes) ""))
+                         (or preserved-evidence "\n\n## Evidence\n"))
+                    (replace-note-heading current-body title))
+        body (str (str/trimr body-base) (or (update-evidence evidence) "") "\n")
+        combined-origins (vec (concat (or (get-in parsed [:frontmatter :iris :origins]) [])
+                                      (or origins [])))
+        frontmatter* (-> (update-top-level-frontmatter frontmatter-lines changes)
+                         (upsert-iris-frontmatter {:scope (or (:scope changes)
+                                                             (get-in parsed [:frontmatter :iris :scope])
+                                                             "global")
+                                                   :status "approved"
+                                                   :origins combined-origins}))]
+    (str "---\n"
+         (str/join "\n" frontmatter*)
+         "\n---\n\n"
+         body)))
+
+(defn note-change-values [content]
+  (let [{:keys [frontmatter body]} (parse-note-content content)]
+    {:type (:type frontmatter)
+     :title (:title frontmatter)
+     :description (:description frontmatter)
+     :tags (vec (or (:tags frontmatter) []))
+     :scope (get-in frontmatter [:iris :scope])
+     :body (durable-body body)}))
+
 (defn update-note-iris!
   [path changes]
   (let [file (io/file path)
@@ -747,6 +886,52 @@
     {:path (.getCanonicalPath file)
      :updated true
      :iris (select-keys changes [:scope :status])}))
+
+(defn replace-note-content!
+  [path expected-revision content]
+  (let [file (io/file path)
+        before (slurp file)
+        actual-revision (content-revision before)]
+    (when-not (= expected-revision actual-revision)
+      (throw (ex-info "Vault Note revision changed"
+                      {:type :stale-vault-note-revision
+                       :path (.getCanonicalPath file)
+                       :expected-revision expected-revision
+                       :actual-revision actual-revision})))
+    (let [target (.toPath file)
+          parent (.getParent target)
+          temp (java.nio.file.Files/createTempFile
+                parent
+                ".iris-memory-"
+                ".tmp"
+                (make-array java.nio.file.attribute.FileAttribute 0))]
+      (try
+        (java.nio.file.Files/writeString
+         temp
+         (or content "")
+         java.nio.charset.StandardCharsets/UTF_8
+         (into-array java.nio.file.OpenOption
+                     [java.nio.file.StandardOpenOption/TRUNCATE_EXISTING
+                      java.nio.file.StandardOpenOption/WRITE]))
+        (try
+          (java.nio.file.Files/move
+           temp
+           target
+           (into-array java.nio.file.CopyOption
+                       [java.nio.file.StandardCopyOption/ATOMIC_MOVE
+                        java.nio.file.StandardCopyOption/REPLACE_EXISTING]))
+          (catch java.nio.file.AtomicMoveNotSupportedException _
+            (java.nio.file.Files/move
+             temp
+             target
+             (into-array java.nio.file.CopyOption
+                         [java.nio.file.StandardCopyOption/REPLACE_EXISTING]))))
+        {:path (.getCanonicalPath file)
+         :updated true
+         :previous-revision actual-revision
+         :revision (content-revision content)}
+        (finally
+          (java.nio.file.Files/deleteIfExists temp))))))
 
 (defn move-note!
   [source-path target-path]

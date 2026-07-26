@@ -59,7 +59,9 @@ Attention points:
 For memory-promotion requests:
 
 - Use domain memory-promotion when a candidate Vault Note may become approved memory.
+- Also use domain memory-promotion for a proposed update to approved memory.
 - Require the note body, scope, provenance/evidence, and stable content hash.
+- For updates require current content, proposed content, diff, target id, base revision, and proposed revision.
 - Treat session-scoped promotion as low risk when evidence is direct and contains no sensitive data.
 - Treat project/global promotion as medium risk because it can influence future sessions.
 - Use unsupported when evidence is missing, truncated beyond evaluation, or cannot support the proposed claim.

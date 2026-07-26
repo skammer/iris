@@ -74,6 +74,27 @@
             "iris-memory-"
             (make-array java.nio.file.attribute.FileAttribute 0))))
 
+(defn write-approved-note! [root]
+  (let [file (io/file root "preferences/answer-style.md")]
+    (.mkdirs (.getParentFile file))
+    (spit file
+          (str "---\n"
+               "id: mem_answer_style\n"
+               "type: Preference\n"
+               "title: Answer style\n"
+               "description: User prefers detailed answers.\n"
+               "tags: [\"preference\"]\n"
+               "iris:\n"
+               "  scope: global\n"
+               "  status: approved\n"
+               "  confidence: 0.95\n"
+               "---\n\n"
+               "# Answer style\n\n"
+               "User prefers detailed answers.\n\n"
+               "## Evidence\n\n"
+               "### User\n\n> Explain in detail.\n"))
+    file))
+
 (defn test-service
   ([store cfg] (test-service store cfg {}))
   ([store cfg opts]
@@ -124,7 +145,8 @@
         root (temp-dir)
         store (sqlite/create-store {:path db-path})
         responses (atom [(json/generate-string
-                          {:notes [{:type "Preference"
+                          {:notes [{:operation "create"
+                                    :type "Preference"
                                     :title "Concise answers"
                                     :description "User prefers concise answers."
                                     :body "User prefers concise answers."
@@ -173,6 +195,130 @@
     (let [request (first @requests)]
       (is (= "memory_notes" (get-in request [:structured-output :name])))
       (is (nil? (:response-format request))))))
+
+(deftest approved-note-update-stays-in-recall-until-applied-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        file (write-approved-note! root)
+        store (sqlite/create-store {:path db-path})
+        service (test-service store {:vault {:paths [(.getAbsolutePath root)]
+                                             :writable? true}})]
+    (try
+      (memory/reindex-vault! service)
+      (let [revision (:revision (sqlite/get-vault-note-by-id store "mem_answer_style"))
+            proposal (memory/propose-vault-note-update!
+                      service
+                      "mem_answer_style"
+                      revision
+                      {:description "User prefers concise answers."
+                       :body "User prefers concise answers."}
+                      {:source :test
+                       :evidence {:user "Be concise."}})
+            before-recall (memory/search-vault service "detailed answers" {:limit 10})]
+        (is (= "pending" (:status proposal)))
+        (is (str/includes? (:diff proposal) "## body"))
+        (is (str/includes? (slurp file) "detailed answers"))
+        (is (= #{"mem_answer_style"} (set (map :note-id before-recall))))
+        (let [applied (memory/apply-memory-note-update! service (:id proposal) "supported")
+              note (sqlite/get-vault-note-by-id store "mem_answer_style")]
+          (is (= "applied" (:status applied)))
+          (is (= "approved" (:iris-status note)))
+          (is (not= revision (:revision note)))
+          (is (str/includes? (slurp file) "concise answers"))
+          (is (= #{"mem_answer_style"}
+                 (set (map :note-id
+                           (memory/search-vault service "concise answers" {:limit 10})))))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
+(deftest stale-approved-note-update-is-superseded-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        file (write-approved-note! root)
+        store (sqlite/create-store {:path db-path})
+        service (test-service store {:vault {:paths [(.getAbsolutePath root)]
+                                             :writable? true}})]
+    (try
+      (memory/reindex-vault! service)
+      (let [revision (:revision (sqlite/get-vault-note-by-id store "mem_answer_style"))
+            proposal (memory/propose-vault-note-update!
+                      service "mem_answer_style" revision
+                      {:body "User prefers concise answers."}
+                      {:source :test})]
+        (spit file (str (slurp file) "\nOperator edit.\n"))
+        (let [result (memory/apply-memory-note-update! service (:id proposal) "supported")]
+          (is (= "superseded" (:status result)))
+          (is (str/includes? (slurp file) "Operator edit."))
+          (is (not (str/includes? (slurp file) "concise answers")))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
+(deftest unchanged-approved-note-update-is-noop-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        _ (write-approved-note! root)
+        store (sqlite/create-store {:path db-path})
+        service (test-service store {:vault {:paths [(.getAbsolutePath root)]
+                                             :writable? true}})]
+    (try
+      (memory/reindex-vault! service)
+      (let [revision (:revision (sqlite/get-vault-note-by-id store "mem_answer_style"))
+            result (memory/propose-vault-note-update!
+                    service "mem_answer_style" revision
+                    {:description "User prefers detailed answers."
+                     :body "User prefers detailed answers."}
+                    {:source :test})]
+        (is (:noop result))
+        (is (empty? (sqlite/list-memory-note-updates store))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
+(deftest extraction-proposes-update-instead-of-duplicate-note-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        _ (write-approved-note! root)
+        store (sqlite/create-store {:path db-path})
+        service (test-service store {:notes {:extractor {:enabled true}}
+                                     :vault {:paths [(.getAbsolutePath root)]
+                                             :writable? true}})
+        requests (atom [])]
+    (try
+      (memory/reindex-vault! service)
+      (let [revision (:revision (sqlite/get-vault-note-by-id store "mem_answer_style"))
+            responses (atom [(json/generate-string
+                              {:notes [{:operation "update"
+                                        :target_id "mem_answer_style"
+                                        :expected_revision revision
+                                        :type "Preference"
+                                        :title "Answer style"
+                                        :description "User prefers concise answers."
+                                        :body "User prefers concise answers."
+                                        :tags ["preference"]
+                                        :scope "global"
+                                        :confidence 0.99}]})])
+            provider (->CapturingNoteProvider responses requests)
+            saved (memory/extract-and-save-notes!
+                   service provider
+                   {:user-message "Correction: be concise."
+                    :assistant-message "Understood."}
+                   {:session-id "s-update"
+                    :source-request-id "req-update"})]
+        (is (= 1 (count saved)))
+        (is (= "pending" (:status (first saved))))
+        (is (= 1 (sqlite/count-vault-notes store)))
+        (is (= 1 (count (sqlite/list-memory-note-updates store {:status "pending"}))))
+        (is (str/includes? (get-in (first @requests) [:messages 1 :content])
+                           "mem_answer_style")))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
 
 (deftest memory-extraction-supports-json-object-output-test
   (let [responses (atom [(json/generate-string {:notes []})])

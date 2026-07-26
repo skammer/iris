@@ -403,7 +403,7 @@
     :shell :shell
     (:fs_read :fs_write :fs_create :fs_replace :fs_list :fs_delete :fs_mkdir) :fs
     (:memory_recall :vault_search :scratchpad_read :scratchpad_search
-     :scratchpad_replace :memory_extract_session :message_search) :memory
+     :scratchpad_replace :memory_propose_update :memory_extract_session :message_search) :memory
     nil))
 
 (defn- tool-categories [tool-description]

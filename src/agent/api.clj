@@ -82,6 +82,7 @@
    :ui-memory-tool (fn [r] (ui/memory-tool-run (sys) r))
    :ui-memory-vault-status (fn [r] (ui/memory-vault-status (sys) r))
    :ui-memory-vault-magi (fn [r] (ui/memory-vault-magi (sys) r))
+   :ui-memory-vault-magi-update (fn [r] (ui/memory-vault-magi-update (sys) r))
    :ui-memory-vault-move (fn [r] (ui/memory-vault-move (sys) r))
    :ui-memory-vault-reindex (fn [r] (ui/memory-vault-reindex (sys) r))
    :ui-system-reload (fn [r] (ui/system-reload (sys) r))
@@ -135,7 +136,7 @@
    :memory-surfaces (fn [r] (memory/surfaces (sys) r))
    :memory-recall (fn [r] (memory/recall (sys) r))
    :memory-vault-read (fn [r] (memory/vault-read (sys) r))
-   :memory-vault-write (fn [r] (memory/vault-write (sys) r))
+   :memory-vault-propose-update (fn [r] (memory/vault-propose-update (sys) r))
    :memory-vault-reindex (fn [r] (memory/vault-reindex (sys) r))}))
 
 (defn- route-handler-ids [route-data]

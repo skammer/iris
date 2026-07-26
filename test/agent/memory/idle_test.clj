@@ -97,7 +97,8 @@
         store (sqlite/create-store {:path db-path})
         session (sqlite/create-session! store "idle-event")
         responses (atom [(json/generate-string
-                          {:notes [{:type "Runbook"
+                          {:notes [{:operation "create"
+                                    :type "Runbook"
                                     :title "Focused lint"
                                     :description "Use focused lint for this repo."
                                     :body "Use focused lint for this repo."

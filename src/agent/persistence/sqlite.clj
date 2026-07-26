@@ -226,6 +226,24 @@
   ([store] (memory/list-vault-notes store))
   ([store opts] (memory/list-vault-notes store opts)))
 
+(defn get-vault-note-by-id [store note-id]
+  (memory/get-vault-note-by-id store note-id))
+
+(defn create-memory-note-update! [store update]
+  (memory/create-memory-note-update! store update))
+
+(defn get-memory-note-update [store update-id]
+  (memory/get-memory-note-update store update-id))
+
+(defn list-memory-note-updates
+  ([store] (memory/list-memory-note-updates store))
+  ([store opts] (memory/list-memory-note-updates store opts)))
+
+(defn update-memory-note-update-status!
+  [store update-id expected-status status decision reason]
+  (memory/update-memory-note-update-status!
+   store update-id expected-status status decision reason))
+
 (defn count-vault-notes [store]
   (memory/count-vault-notes store))
 

@@ -10,6 +10,7 @@
    (java.time Instant)))
 
 (def review-event-type :memory.vault.magi_evaluated)
+(def update-review-event-type :memory.vault.update_magi_evaluated)
 
 (defn- normalize-keyword [value]
   (cond
@@ -48,6 +49,9 @@
 (defn- candidate-notes [system]
   (sqlite/list-vault-notes (:store system) {:status "candidate" :limit 1000}))
 
+(defn- pending-updates [system]
+  (sqlite/list-memory-note-updates (:store system) {:status "pending" :limit 1000}))
+
 (defn- note-by-path [system path]
   (some #(when (= path (:path %)) %) (candidate-notes system)))
 
@@ -57,6 +61,14 @@
                        {:event-type review-event-type
                         :entity-type :vault_note
                         :entity-id (or (:id note) (:path note))
+                        :limit 1})))
+
+(defn latest-update-review [system update]
+  (first
+   (sqlite/list-events (:store system)
+                       {:event-type update-review-event-type
+                        :entity-type :memory_note_update
+                        :entity-id (:id update)
                         :limit 1})))
 
 (defn- request-for [note content]
@@ -74,7 +86,25 @@
              :confidence (:iris-confidence note)
              :origins (:origins note)
              :content-hash (:body-hash note)
+             :revision (:revision note)
              :markdown content}})
+
+(defn- update-request-for [update current-content]
+  {:kind :yes-no
+   :domain :memory-promotion
+   :expected-response :permit
+   :question "Should Iris apply this proposed change to approved memory?"
+   :context {:operation :update
+             :proposal-id (:id update)
+             :target-id (:target-id update)
+             :target-path (:target-path update)
+             :base-revision (:base-revision update)
+             :proposed-revision (:proposed-revision update)
+             :changes (:changes update)
+             :diff (:diff update)
+             :evidence (:evidence update)
+             :current-markdown current-content
+             :proposed-markdown (:proposed-content update)}})
 
 (defn- emit! [system event]
   (if-let [event-sink (:event-sink system)]
@@ -118,6 +148,7 @@
                                             :origins :body-hash])
                    :input request
                    :content-hash (:body-hash note)
+                   :revision (:revision note)
                    :decision decision
                    :reason (:reason result)
                    :judge (select-keys result [:decision :reason])
@@ -133,8 +164,63 @@
                      :payload payload})
       payload)))
 
+(defn review-update!
+  [system update-id {:keys [apply? source] :or {apply? false source :advice}}]
+  (when-not (enabled? system)
+    (throw (ex-info "MAGI memory promotion is disabled"
+                    {:type :magi-memory-promotion-disabled})))
+  (let [update (or (memory/get-memory-note-update (:memory-service system) update-id)
+                   (throw (ex-info "Memory update proposal not found"
+                                   {:type :not-found :update-id update-id})))]
+    (when-not (= "pending" (:status update))
+      (throw (ex-info "Memory update proposal is not pending"
+                      {:type :memory-update-not-pending
+                       :update-id update-id
+                       :status (:status update)})))
+    (let [target (sqlite/get-vault-note-by-id (:store system) (:target-id update))
+          scope (or (get-in update [:changes :scope]) (:iris-scope target))]
+      (when-not (scope-allowed? system scope)
+        (throw (ex-info "Vault Note scope is outside MAGI promotion scope"
+                        {:type :magi-memory-scope-disabled :scope scope})))
+      (let [content (:content (memory/read-vault-file
+                               (:memory-service system)
+                               (:target-path update)))
+            request (update-request-for update content)
+            start (System/nanoTime)
+            result (magi/decide (:magi-service system) request)
+            duration-ms (long (/ (- (System/nanoTime) start) 1000000))
+            decision (normalize-keyword (:decision result))
+            should-apply? (and apply?
+                               (review-applies? system)
+                               (= :yes decision))
+            applied (when should-apply?
+                      (memory/apply-memory-note-update!
+                       (:memory-service system) update-id (:reason result)))
+            rejected (when (and apply? (= :no decision))
+                       (memory/decide-memory-note-update!
+                        (:memory-service system) update-id :rejected :no (:reason result)))
+            payload {:source (name source)
+                     :update (dissoc update :proposed-content)
+                     :input request
+                     :content-hash (:proposed-revision update)
+                     :decision decision
+                     :reason (:reason result)
+                     :judge (select-keys result [:decision :reason])
+                     :filter (:filter result)
+                     :agents (:agents result)
+                     :providers (:providers result)
+                     :duration-ms duration-ms
+                     :applied (= "applied" (:status applied))
+                     :status (or (:status applied) (:status rejected) (:status update))}]
+        (emit! system {:event-type update-review-event-type
+                       :entity-type :memory_note_update
+                       :entity-id update-id
+                       :request-id (str "magi-memory-update-" update-id "-" (util/now-str))
+                       :payload payload})
+        payload))))
+
 (defn- same-content-review? [note event]
-  (= (:body-hash note) (get-in event [:payload :content-hash])))
+  (= (:revision note) (get-in event [:payload :revision])))
 
 (defn- retry-after-error? [system event]
   (let [decision (normalize-keyword (get-in event [:payload :decision]))
@@ -152,32 +238,60 @@
         (retry-after-error? system event))
     true))
 
+(defn- pending-update-review? [system update]
+  (if-let [event (latest-update-review system update)]
+    (or (= "advice" (get-in event [:payload :source]))
+        (not= (:proposed-revision update) (get-in event [:payload :content-hash]))
+        (retry-after-error? system event))
+    true))
+
 (defn run-once! [system]
   (if-not (auto? system)
     {:processed 0 :skipped :disabled}
     (let [limit (positive-long (:max-candidates (config system)) 10 100)
-          runnable (->> (candidate-notes system)
-                        (filter #(scope-allowed? system (:iris-scope %)))
-                        (filter #(pending-review? system %))
-                        (take limit))
-          results (mapv (fn [note]
+          runnable-notes (->> (candidate-notes system)
+                              (filter #(scope-allowed? system (:iris-scope %)))
+                              (filter #(pending-review? system %))
+                              (map #(vector :note %)))
+          runnable-updates (->> (pending-updates system)
+                                (filter #(pending-update-review? system %))
+                                (map #(vector :update %)))
+          runnable (take limit (concat runnable-notes runnable-updates))
+          results (mapv (fn [[kind item]]
                           (try
-                            (review-note! system (:path note) {:apply? true :source :auto})
+                            (case kind
+                              :note (review-note! system (:path item) {:apply? true :source :auto})
+                              :update (review-update! system (:id item) {:apply? true :source :auto}))
                             (catch Exception e
                               (let [payload {:source "auto"
-                                             :note (select-keys note [:id :path :title :iris-scope :body-hash])
-                                             :content-hash (:body-hash note)
+                                             :kind (name kind)
+                                             :note (when (= kind :note)
+                                                     (select-keys item
+                                                                  [:id :path :title :iris-scope
+                                                                   :body-hash :revision]))
+                                             :update (when (= kind :update)
+                                                       (dissoc item :proposed-content))
+                                             :content-hash (if (= kind :note)
+                                                             (:revision item)
+                                                             (:proposed-revision item))
                                              :decision :error
                                              :reason (.getMessage e)
                                              :applied false}]
-                                (emit! system {:event-type review-event-type
-                                               :entity-type :vault_note
-                                               :entity-id (or (:id note) (:path note))
+                                (emit! system {:event-type (if (= kind :note)
+                                                            review-event-type
+                                                            update-review-event-type)
+                                               :entity-type (if (= kind :note)
+                                                              :vault_note
+                                                              :memory_note_update)
+                                               :entity-id (if (= kind :note)
+                                                            (or (:id item) (:path item))
+                                                            (:id item))
                                                :payload payload})
                                 payload))))
                         runnable)]
       {:processed (count results)
        :approved (count (filter :applied results))
+       :pending-updates (count (pending-updates system))
        :approved-inbox (count (memory/approved-inbox-notes (:memory-service system)))
        :results results})))
 

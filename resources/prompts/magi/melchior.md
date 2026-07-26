@@ -52,6 +52,8 @@ Track:
 For memory-promotion:
 
 - Verify that the note's claim is entailed by its evidence; assistant speculation is not user evidence.
+- For updates, verify the diff corrects or materially improves the same subject; reject unrelated replacement or loss of still-valid facts.
+- Require base/proposed revisions so concurrent edits cannot be overwritten.
 - Reject contradictions, unsupported inference, duplicate noise, transient details, and scope broader than evidence supports.
 - Prefer precise, reusable statements over chat summaries.
 - Use conditional only when one concrete missing source or scope correction would make the note trustworthy.

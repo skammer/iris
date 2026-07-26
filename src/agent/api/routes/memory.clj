@@ -11,10 +11,24 @@
 (def ^:private memory-vault-read-body
   [:map [:path schemas/NonBlankString]])
 
-(def ^:private memory-vault-write-body
+(def ^:private memory-note-update-changes
   [:map
-   [:path schemas/NonBlankString]
-   [:content schemas/NonBlankString]])
+   [:type {:optional true} :string]
+   [:title {:optional true} :string]
+   [:description {:optional true} :string]
+   [:body {:optional true} :string]
+   [:tags {:optional true} schemas/StringVec]
+   [:scope {:optional true} :string]])
+
+(def ^:private memory-vault-propose-update-body
+  [:map
+   [:note_id schemas/NonBlankString]
+   [:expected_revision schemas/NonBlankString]
+   [:changes memory-note-update-changes]
+   [:evidence {:optional true}
+    [:map
+     [:user {:optional true} :string]
+     [:assistant {:optional true} :string]]]])
 
 (def routes
   [["/v1/memory/surfaces" {:get {:handler/id :memory-surfaces}}]
@@ -22,6 +36,7 @@
                                 :parameters {:body memory-recall-body}}}]
    ["/v1/memory/vault/read" {:post {:handler/id :memory-vault-read
                                     :parameters {:body memory-vault-read-body}}}]
-   ["/v1/memory/vault/write" {:post {:handler/id :memory-vault-write
-                                     :parameters {:body memory-vault-write-body}}}]
+   ["/v1/memory/vault/propose-update"
+    {:post {:handler/id :memory-vault-propose-update
+            :parameters {:body memory-vault-propose-update-body}}}]
    ["/v1/memory/vault/reindex" {:post {:handler/id :memory-vault-reindex}}]])

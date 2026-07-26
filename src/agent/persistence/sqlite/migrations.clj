@@ -10,7 +10,7 @@
    (java.nio.charset StandardCharsets)
    (java.security MessageDigest)))
 
-(def latest-schema-version 8)
+(def latest-schema-version 9)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -54,6 +54,11 @@
     :id "008-memory-idle-extraction"
     :name "memory-idle-extraction"
     :up-resource "agent/persistence/sqlite/migrations/008-memory-idle-extraction.up.sql"
+    :irreversible? true}
+   {:version 9
+    :id "009-memory-note-updates"
+    :name "memory-note-updates"
+    :up-resource "agent/persistence/sqlite/migrations/009-memory-note-updates.up.sql"
     :irreversible? true}])
 
 (defn descriptor-by-version [version]

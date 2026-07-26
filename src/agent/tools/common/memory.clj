@@ -112,12 +112,13 @@
     (str "Vault results for: " query "\n"
          (str/join
           "\n"
-          (map (fn [{:keys [path note-id chunk-id heading text iris-status iris-scope
+          (map (fn [{:keys [path note-id chunk-id heading text iris-status iris-scope revision
                             reason score-breakdown]}]
                  (str "- " chunk-id
                       (when note-id (str " note=" note-id))
                       " " iris-status
                       " scope=" iris-scope
+                      (when revision (str " revision=" revision))
                       (when reason (str " reason=" (name reason)))
                       (when score-breakdown (str " why=" (pr-str score-breakdown)))
                       " path=" path
@@ -277,7 +278,63 @@
                                             :new-text new-text
                                             :expected-revision expected-revision}
                                      scope (assoc :scope scope)
-                                     (:session-id context) (assoc :session-id (:session-id context))))))}))
+                                   (:session-id context) (assoc :session-id (:session-id context))))))}))
+
+(def ^:private memory-update-changes-schema
+  [:map {:closed true}
+   [:type {:optional true} :string]
+   [:title {:optional true} :string]
+   [:description {:optional true} :string]
+   [:body {:optional true} :string]
+   [:tags {:optional true} [:vector :string]]
+   [:scope {:optional true}
+    [:or [:enum :global :session :agent :project]
+     [:enum "global" "session" "agent" "project"]]]])
+
+(defn- update-evidence [context reason]
+  {:user (get-in context [:magi-context :user-request])
+   :assistant reason})
+
+(defn- memory-update-text [update]
+  (if (:noop update)
+    (str "Memory update is a no-op for " (:target-id update)
+         " revision=" (:base-revision update))
+    (str "Memory update proposal " (:id update)
+         " status=" (:status update)
+         " target=" (:target-id update)
+         " base=" (:base-revision update)
+         " proposed=" (:proposed-revision update)
+         "\n"
+         (:diff update))))
+
+(defn create-memory-propose-update-tool [memory-service]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :memory_propose_update
+     "Propose partial changes to an approved memory note. The note stays active until MAGI approves the diff."
+     :category :memory
+     :input-schema [:map {:closed true}
+                    [:note-id :string]
+                    [:expected-revision :string]
+                    [:changes memory-update-changes-schema]
+                    [:reason :string]]
+     :operation :act
+     :approval-sensitive? false
+     :source :builtin)
+    :execute-fn
+    (fn [{:keys [note-id expected-revision changes reason]} context]
+      (ensure-permission! context :memory-write)
+      (memory-update-text
+       (memory/propose-vault-note-update!
+        memory-service
+        note-id
+        expected-revision
+        changes
+        {:source :tool
+         :request-id (:request-id context)
+         :session-id (:session-id context)
+         :evidence (update-evidence context reason)})))}))
 
 (defn- extract-session-text [{:keys [session-id total-message-count included-message-count note-count paths]}]
   (str "Memory extraction complete for session " session-id
@@ -320,7 +377,8 @@
             (create-vault-search-tool memory-service)
             (create-scratchpad-read-tool memory-service)
             (create-scratchpad-search-tool memory-service)
-            (create-scratchpad-replace-tool memory-service)]
+            (create-scratchpad-replace-tool memory-service)
+            (create-memory-propose-update-tool memory-service)]
      provider (conj (create-memory-extract-session-tool memory-service provider)))))
 
 (defn- message-search-text [query rows]

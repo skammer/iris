@@ -52,6 +52,7 @@ Track:
 For memory-promotion:
 
 - Reject secrets, credentials, private data without durable need, and details the user did not consent to retain.
+- For updates, compare removed and added content; reject privacy expansion, scope broadening, or destructive loss unsupported by evidence.
 - Check whether a wrong remembered claim could repeatedly harm trust or future actions.
 - Require global/project memory to be safe outside the original conversation.
 - Prefer leaving a note candidate when provenance or privacy boundaries are unclear.

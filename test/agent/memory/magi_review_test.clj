@@ -53,6 +53,22 @@
                "## Evidence\n\n> Be concise.\n"))
     file))
 
+(defn- write-approved! [root]
+  (let [file (io/file root "preferences/approved.md")]
+    (.mkdirs (.getParentFile file))
+    (spit file
+          (str "---\n"
+               "id: mem_magi_update\n"
+               "type: Preference\n"
+               "title: Answer detail\n"
+               "description: Detailed answers.\n"
+               "iris:\n"
+               "  scope: global\n"
+               "  status: approved\n"
+               "---\n\n"
+               "# Answer detail\n\nDetailed answers.\n"))
+    file))
+
 (defn- magi-service [mode decision requests]
   (let [agent-response (if (= decision :no) "no" "yes")]
     (magi/create-service
@@ -131,6 +147,64 @@
         (io/delete-file root true)
         (io/delete-file db-path true)))))
 
+(deftest magi-approved-update-applies-diff-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        file (write-approved! root)
+        store (sqlite/create-store {:path db-path})
+        requests (atom [])
+        system (test-system store root :manual :yes requests)]
+    (try
+      (let [note (sqlite/get-vault-note-by-id store "mem_magi_update")
+            proposal (memory/propose-vault-note-update!
+                      (:memory-service system)
+                      "mem_magi_update"
+                      (:revision note)
+                      {:description "Concise answers."
+                       :body "Concise answers."}
+                      {:source :test
+                       :evidence {:user "Be concise."}})
+            result (review/review-update! system (:id proposal)
+                                          {:apply? true :source :manual})]
+        (is (:applied result))
+        (is (= "applied"
+               (:status (memory/get-memory-note-update
+                         (:memory-service system) (:id proposal)))))
+        (is (str/includes? (slurp file) "Concise answers."))
+        (is (some #(str/includes? (get-in % [:messages 1 :content]) "## body")
+                  @requests)))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
+(deftest magi-rejected-update-leaves-approved-note-unchanged-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        file (write-approved! root)
+        store (sqlite/create-store {:path db-path})
+        requests (atom [])
+        system (test-system store root :manual :no requests)]
+    (try
+      (let [note (sqlite/get-vault-note-by-id store "mem_magi_update")
+            proposal (memory/propose-vault-note-update!
+                      (:memory-service system)
+                      "mem_magi_update"
+                      (:revision note)
+                      {:body "Unsupported replacement."}
+                      {:source :test})
+            result (review/review-update! system (:id proposal)
+                                          {:apply? true :source :manual})]
+        (is (false? (:applied result)))
+        (is (= "rejected"
+               (:status (memory/get-memory-note-update
+                         (:memory-service system) (:id proposal)))))
+        (is (str/includes? (slurp file) "Detailed answers.")))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
 (deftest auto-negative-verdict-keeps-candidate-and-dedupes-test
   (let [db-path (temp-db-path)
         root (temp-dir)
@@ -145,9 +219,38 @@
       (is (= "candidate"
              (:iris-status (first (sqlite/list-vault-notes store {:limit 10})))))
       (is (= 0 (:processed (review/run-once! system))))
-      (spit file (str (slurp file) "\nNew supporting detail.\n"))
+      (spit file (str/replace (slurp file)
+                              "description: User prefers concise answers."
+                              "description: User strongly prefers concise answers."))
       (memory/reindex-vault! (:memory-service system))
       (is (= 1 (:processed (review/run-once! system))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
+(deftest auto-worker-applies-pending-update-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        file (write-approved! root)
+        store (sqlite/create-store {:path db-path})
+        requests (atom [])
+        system (test-system store root :auto :yes requests)]
+    (try
+      (let [note (sqlite/get-vault-note-by-id store "mem_magi_update")
+            proposal (memory/propose-vault-note-update!
+                      (:memory-service system)
+                      "mem_magi_update"
+                      (:revision note)
+                      {:body "Concise answers."}
+                      {:source :test})
+            result (review/run-once! system)]
+        (is (= 1 (:processed result)))
+        (is (= 1 (:approved result)))
+        (is (= "applied"
+               (:status (memory/get-memory-note-update
+                         (:memory-service system) (:id proposal)))))
+        (is (str/includes? (slurp file) "Concise answers.")))
       (finally
         (sqlite/close-store! store)
         (io/delete-file root true)

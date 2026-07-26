@@ -16,6 +16,7 @@ Tool-use policy for Iris agents.
 - `scratchpad_*`: mutable working memory. Use for complex-task reasoning, transient notes, hypotheses, and handoff state. Do not write scratchpad before every tool call unless it materially improves the task. Read first; `scratchpad_replace` needs current revision and exact old text.
 - `memory_recall`: broad recall across relevant memory surfaces.
 - `vault_search`: indexed durable vault notes and chunks.
+- `memory_propose_update`: propose a revision-guarded diff to approved memory; MAGI decides before it affects recall.
 - `message_search`: persisted chat history.
 - `memory_extract_session`: explicit durable candidate-note extraction only; do not auto-save memory every turn.
 - `skills_list`: discover available slash skills by name and description. It does not load skill bodies; detailed instructions load only when the user invokes `/skill`.

@@ -33,10 +33,16 @@
     (responses/json-response 200
                              {:data (memory/read-vault-file (:memory-service system) path)})))
 
-(defn vault-write [system request]
-  (let [{:keys [path content]} (h/read-json-body request)]
+(defn vault-propose-update [system request]
+  (let [{:keys [note_id expected_revision changes evidence]} (h/read-json-body request)]
     (responses/json-response 201
-                             {:data (memory/write-vault-file! (:memory-service system) path content)})))
+                             {:data (memory/propose-vault-note-update!
+                                     (:memory-service system)
+                                     note_id
+                                     expected_revision
+                                     changes
+                                     {:source :api
+                                      :evidence evidence})})))
 
 (defn vault-reindex [system _request]
   (responses/json-response 200

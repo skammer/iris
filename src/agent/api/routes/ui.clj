@@ -35,6 +35,11 @@
    [:path schemas/NonBlankString]
    [:action [:enum "review" "advice"]]])
 
+(def ^:private ui-memory-update-magi-form
+  [:map
+   [:update_id schemas/NonBlankString]
+   [:action [:enum "review" "advice"]]])
+
 (def ^:private ui-tool-approval-decision-form
   [:map
    [:actor {:optional true} :string]
@@ -91,6 +96,9 @@
                                       :parameters {:form ui-memory-vault-status-form}}}]
    ["/ui/memory/vault/magi" {:post {:handler/id :ui-memory-vault-magi
                                     :parameters {:form ui-memory-vault-magi-form}}}]
+   ["/ui/memory/vault/magi-update"
+    {:post {:handler/id :ui-memory-vault-magi-update
+            :parameters {:form ui-memory-update-magi-form}}}]
    ["/ui/memory/vault/move" {:post {:handler/id :ui-memory-vault-move
                                     :parameters {:form ui-memory-vault-move-form}}}]
    ["/ui/memory/vault/reindex" {:post {:handler/id :ui-memory-vault-reindex}}]

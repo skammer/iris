@@ -266,6 +266,36 @@
                          (get by-status status)
                          (+ (count candidates) (count approved) (* 100 offset))))]))
 
+(defn- memory-update-action [idx update-id action label class-name]
+  (let [form-id (str "memory-update-magi-" idx "-" action)]
+    [:form.inline-form {:id form-id}
+     [:input {:type "hidden" :name "update_id" :value update-id}]
+     [:input {:type "hidden" :name "action" :value action}]
+     [:button {:type "button"
+               :class class-name
+               "data-on:click" (str "@post('/ui/memory/vault/magi-update', "
+                                    "{contentType: 'form', selector: '#" form-id "'})")}
+      label]]))
+
+(defn- memory-update-list [updates]
+  (when (seq updates)
+    [:section.panel.memory-overview
+     [:h2 "Pending Memory Updates"]
+     [:div.memory-note-list
+      (map-indexed
+       (fn [idx update]
+         [:article.memory-note-card
+          [:header.memory-note-card__header
+           [:h4 (str (:target-id update) " update")]
+           [:span.badge.memory-note-status (:status update)]]
+          [:pre.code (:diff update)]
+          [:footer.memory-note-actions
+           [:div.memory-note-actions__controls
+            (memory-update-action idx (:id update) "review" "Review"
+                                  "memory-action--magi")
+            (memory-update-action idx (:id update) "advice" "Advice" nil)]]])
+       updates)]]))
+
 (defn- review-row [kind note]
   [:div.row.memory-review-row
    [:span.row__id {:title (:path note)}
@@ -374,7 +404,9 @@
 	         health (memory/health-check memory-service)
           quality (:quality health)
 	         surfaces (memory/list-surfaces memory-service)
-	         notes (sqlite/list-vault-notes (:store memory-service) {:limit 50})
+		         notes (sqlite/list-vault-notes (:store memory-service) {:limit 50})
+          updates (sqlite/list-memory-note-updates (:store memory-service)
+                                                   {:status "pending" :limit 50})
           reviews (->> (sqlite/list-events (:store memory-service)
                                            {:event-type magi-review/review-event-type
                                             :entity-type :vault_note
@@ -431,5 +463,6 @@
          [:h2 "Vault Notes"]
          (if (seq notes)
            (vault-note-groups system reviews notes)
-           [:div.empty-line "none"])]
+	           [:div.empty-line "none"])]
+        (memory-update-list updates)
         (memory-reset-result reset-result)]]))))

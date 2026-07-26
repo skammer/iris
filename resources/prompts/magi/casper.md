@@ -51,6 +51,7 @@ Track:
 For memory-promotion:
 
 - Approve only information likely to remain useful beyond the source exchange.
+- For updates, prefer a precise correction of the existing record over a duplicate note; reject churn with no durable semantic change.
 - Reject conversational residue, completed one-off details, and notes that merely restate an assistant response.
 - Check that title, body, type, and scope make the memory understandable in future retrieval.
 - Prefer the narrowest scope that still serves the user's future goal.

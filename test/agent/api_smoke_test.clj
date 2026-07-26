@@ -59,27 +59,49 @@
         (is (= "application/javascript; charset=utf-8" (:content-type js)))
         (is (str/includes? (:body js) "customElements"))))))
 
-(deftest memory-vault-roundtrip-smoke
+(deftest memory-vault-update-proposal-smoke
   (let [vault-dir (java.io.File/createTempFile "iris-vault-" "")]
     (.delete vault-dir)
     (.mkdirs vault-dir)
     (try
+      (spit (io/file vault-dir "note.md")
+            (str "---\n"
+                 "id: mem_api_update\n"
+                 "type: Reference\n"
+                 "title: API update\n"
+                 "description: Before\n"
+                 "iris:\n"
+                 "  scope: global\n"
+                 "  status: approved\n"
+                 "---\n\n# API update\n\nBefore body.\n"))
       (with-server (fn [config]
                      (assoc-in config [:memory :vault]
                                {:paths [(.getAbsolutePath vault-dir)]
                                 :writable? true}))
         (fn [{:keys [base-url]}]
-          (let [vault-path (str (.getAbsolutePath vault-dir) "/note.txt")
-                write-resp (helpers/http-post (str base-url "/v1/memory/vault/write")
-                                              {:path vault-path :content "hello vault"})
-                write-body (json/parse-string (:body write-resp) true)
+          (let [vault-path (str (.getAbsolutePath vault-dir) "/note.md")
+                _ (helpers/http-post (str base-url "/v1/memory/vault/reindex") {})
                 read-resp (helpers/http-post (str base-url "/v1/memory/vault/read")
                                              {:path vault-path})
-                read-body (json/parse-string (:body read-resp) true)]
-            (is (= 201 (:status write-resp)))
-            (is (true? (get-in write-body [:data :written])))
+                read-body (json/parse-string (:body read-resp) true)
+                proposal-resp (helpers/http-post
+                               (str base-url "/v1/memory/vault/propose-update")
+                               {:note_id "mem_api_update"
+                                :expected_revision (get-in read-body [:data :revision])
+                                :changes {:description "After"
+                                          :body "After body."}
+                                :evidence {:user "Update it."}})
+                proposal-body (json/parse-string (:body proposal-resp) true)
+                read-after (json/parse-string
+                            (:body (helpers/http-post
+                                    (str base-url "/v1/memory/vault/read")
+                                    {:path vault-path}))
+                            true)]
             (is (= 200 (:status read-resp)))
-            (is (= "hello vault" (get-in read-body [:data :content]))))))
+            (is (= 201 (:status proposal-resp)))
+            (is (= "pending" (get-in proposal-body [:data :status])))
+            (is (str/includes? (get-in proposal-body [:data :diff]) "description"))
+            (is (str/includes? (get-in read-after [:data :content]) "Before body.")))))
       (finally
         (doseq [f (reverse (file-seq vault-dir))]
           (io/delete-file f true))))))

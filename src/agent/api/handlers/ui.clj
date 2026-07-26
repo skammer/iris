@@ -509,6 +509,17 @@
                              {:apply? review?
                               :source (if review? :manual :advice)}))))
 
+(defn memory-vault-magi-update [system request]
+  (let [{:keys [update_id action]} (h/read-form-body request)
+        review? (= "review" action)]
+    (memory-reset-response system
+                           (if review? "MAGI update review" "MAGI update advice")
+                           #(memory-magi-review/review-update!
+                             system
+                             update_id
+                             {:apply? review?
+                              :source (if review? :manual :advice)}))))
+
 (defn memory-vault-move [system request]
   (let [body (h/read-form-body request)]
     (memory-reset-response system
