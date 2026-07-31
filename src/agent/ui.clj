@@ -370,6 +370,7 @@
             [:button.session-link
              {:type "button"
               :class (when (= id active-id) "session-link--active")
+              :aria-current (when (= id active-id) "page")
              "data-route" (route-path {:tab :chat :session-id id})
              "data-on:click" (str "@get('/ui/session-detail?session_id=" id "')")}
              [:strong (or title "Untitled session")]
@@ -425,7 +426,16 @@
                             (when (:working? state) " | working")
                             (when (pos? (:queued-count state))
                               (str " | queued " (:queued-count state))))]]
-          (ui-render/trusted-fragment (session-messages-fragment system (:id session)))
+          [:div.chat-transcript
+           (ui-render/trusted-fragment (session-messages-fragment system (:id session)))
+           [:button.chat-scroll-bottom
+            {:type "button"
+             :hidden true
+             "data-chat-scroll-bottom" true
+             :aria-label "Scroll to latest message"
+             :title "Scroll to latest message"}
+            [:span {:aria-hidden true} "↓"]
+            "Latest"]]
           [:aside#tool-detail-sidebar.tool-detail-sidebar
            {:hidden true
             :aria-label "Tool detail"}
@@ -464,7 +474,9 @@
                     :name "image"
                     :accept "image/*"
                     :multiple true}]]
-          [:button {:type "button"
+          [:button.chat-stop {:type "button"
+                     :style (when-not status-visible? "display:none")
+                     "data-show" (if status-visible? "true" "$chatLoading")
                      "data-on:click" "@post('/ui/chat/stop', {contentType: 'form', selector: '#chat-form'})"}
             "Stop"]
            [:button {:type "submit"
@@ -479,7 +491,7 @@
             [:span.chat-status__text status-text]]]])))))
 
 (defn- streaming-message [{:keys [content thinking]}]
-  [:article.message.message--streaming
+  [:article.message.message--assistant.message--streaming
    [:div.message-role {:class "assistant"} "assistant"]
    (ui-render/thinking-content thinking "streaming")
    (when-not (str/blank? (str content))

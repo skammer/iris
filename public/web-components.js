@@ -200,15 +200,18 @@ class ChatStream extends HTMLElement {
   #manualScroll = false;
   #lastScrollTop = 0;
   #lastTouchY = null;
+  #bottomButton = null;
   #observer = new MutationObserver(() => this.afterChange());
 
   connectedCallback() {
+    this.#bottomButton = this.closest(".chat-transcript")?.querySelector("[data-chat-scroll-bottom]") || null;
     this.#lastScrollTop = this.scrollTop;
     this.#syncFollowState();
     this.addEventListener("scroll", this, { passive: true });
     this.addEventListener("wheel", this, { passive: true });
     this.addEventListener("touchstart", this, { passive: true });
     this.addEventListener("touchmove", this, { passive: true });
+    this.#bottomButton?.addEventListener("click", this);
     this.#observer.observe(this, { childList: true, subtree: true, characterData: true });
     requestAnimationFrame(() => this.scrollToAnchor());
   }
@@ -218,10 +221,16 @@ class ChatStream extends HTMLElement {
     this.removeEventListener("wheel", this);
     this.removeEventListener("touchstart", this);
     this.removeEventListener("touchmove", this);
+    this.#bottomButton?.removeEventListener("click", this);
+    this.#bottomButton = null;
     this.#observer.disconnect();
   }
 
   handleEvent(event) {
+    if (event.type === "click") {
+      this.followBottom();
+      return;
+    }
     if (event.type === "wheel") {
       if (event.deltaY < 0) this.releaseBottom();
       return;
@@ -262,6 +271,11 @@ class ChatStream extends HTMLElement {
 
   #syncFollowState() {
     this.dataset.followBottom = this.#stick ? "true" : "false";
+    if (this.#bottomButton instanceof HTMLButtonElement) {
+      const visible = !this.#stick && this.#distanceFromBottom() > AUTOSCROLL_THRESHOLD_PX;
+      this.#bottomButton.hidden = !visible;
+      this.#bottomButton.setAttribute("aria-hidden", String(!visible));
+    }
   }
 
   releaseBottom() {
@@ -271,11 +285,9 @@ class ChatStream extends HTMLElement {
   }
 
   scrollToAnchor() {
-    const anchor = this.querySelector(".chat-stream__bottom-anchor");
-    if (anchor instanceof HTMLElement) {
-      anchor.scrollIntoView({ block: "end" });
-      this.#lastScrollTop = this.scrollTop;
-    }
+    this.scrollTop = this.scrollHeight;
+    this.#lastScrollTop = this.scrollTop;
+    this.#syncFollowState();
   }
 
   // Sending a message is an explicit "take me to the conversation tail",

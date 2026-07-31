@@ -56,7 +56,10 @@
     (try
       (let [response (llm/invoke provider llm-request)
             duration (util/duration-ms start-ns)
-            step (-> response
+            response* (cond-> response
+                        (map? (:usage response))
+                        (assoc-in [:usage :duration-ms] duration))
+            step (-> response*
                      response->step
                      kernel-schema/normalize-step
                      kernel-schema/validate-step!)]
@@ -72,10 +75,10 @@
                                                        :model model
                                                        :duration-ms duration
                                                        :success? true
-                                                       :tokens (get-in response [:usage :tokens])
-                                                       :prompt-tokens (get-in response [:usage :prompt-tokens])
-                                                       :completion-tokens (get-in response [:usage :completion-tokens])
-                                                       :cached-tokens (get-in response [:usage :cached-tokens])}}))
+                                                       :tokens (get-in response* [:usage :tokens])
+                                                       :prompt-tokens (get-in response* [:usage :prompt-tokens])
+                                                       :completion-tokens (get-in response* [:usage :completion-tokens])
+                                                       :cached-tokens (get-in response* [:usage :cached-tokens])}}))
         (runtime-trace/record-event! trace
                                      {:event-type :llm.call
                                       :turn-id request-id
@@ -83,10 +86,10 @@
                                       :success true
                                       :payload {:agent-id agent-id
                                                 :duration-ms duration
-                                                :usage (:usage response)
-                                                :stop-reason (:stop-reason response)
-                                                :tool-call-count (count (:tool-calls response))}})
-        (assoc step :llm-response response))
+                                                :usage (:usage response*)
+                                                :stop-reason (:stop-reason response*)
+                                                :tool-call-count (count (:tool-calls response*))}})
+        (assoc step :llm-response response*))
       (catch Exception e
         (let [duration (util/duration-ms start-ns)]
           (telemetry/record-planner! telemetry

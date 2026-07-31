@@ -214,6 +214,7 @@
                                 (:id selected-session)
                                 "&apos;)")))
         (is (str/includes? html "session-link--active"))
+        (is (str/includes? html "aria-current=\"page\""))
         (is (str/includes? html "selected")))
       (finally
         (sqlite/close-store! store)
@@ -304,6 +305,31 @@
         (is (str/includes? html "type=\"file\""))
         (is (str/includes? html "accept=\"image/*\""))
         (is (str/includes? html "name=\"image\"")))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest chat-controls-reflect-generation-state
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [session (sqlite/create-session! store "controls")]
+        (with-redefs [chat/session-state (fn [_ _]
+                                           {:working? false
+                                            :loop-active? false
+                                            :queued-count 0})]
+          (let [html (ui/session-detail-fragment {:store store} (:id session))]
+            (is (str/includes? html "data-chat-scroll-bottom"))
+            (is (str/includes? html "chat-stop"))
+            (is (str/includes? html "style=\"display:none\""))
+            (is (str/includes? html "data-show=\"$chatLoading\""))))
+        (with-redefs [chat/session-state (fn [_ _]
+                                           {:working? true
+                                            :loop-active? false
+                                            :queued-count 0})]
+          (let [html (ui/session-detail-fragment {:store store} (:id session))]
+            (is (str/includes? html "data-show=\"true\""))
+            (is (not (str/includes? html "chat-stop style=\"display:none\""))))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
@@ -767,16 +793,19 @@
                                                     :completion-tokens 234 :cached-tokens 321}}})
         (sqlite/append-message! store (:id session) "assistant" "done"
                                 {:metadata {:usage {:tokens 5678 :prompt-tokens 5000
-                                                    :completion-tokens 678 :cached-tokens 0}}})
+                                                    :completion-tokens 678 :cached-tokens 0
+                                                    :duration-ms 2000}}})
         (let [html (ui/session-messages-fragment {:store store} (:id session))]
           ;; per-message badge: token count + tool count in the .meta footer
           (is (str/includes? html "1.2k tok"))
           (is (str/includes? html "321 cache"))
           (is (str/includes? html "1 tool"))
           (is (str/includes? html "5.7k tok"))
+          (is (str/includes? html "339.0 t/s"))
           ;; per-thread aggregate bar
           (is (str/includes? html "thread-stats"))
           (is (str/includes? html "6.9k"))
+          (is (str/includes? html "avg"))
           (is (str/includes? html "read"))))
       (finally
         (sqlite/close-store! store)

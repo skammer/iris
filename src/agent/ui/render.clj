@@ -552,14 +552,29 @@
   [metadata]
   (some-> (:usage metadata) :cached-tokens long))
 
+(defn- usage-tps
+  [metadata]
+  (let [{:keys [completion-tokens duration-ms]} (:usage metadata)]
+    (when (and (number? completion-tokens)
+               (pos? completion-tokens)
+               (number? duration-ms)
+               (pos? duration-ms))
+      (/ (* 1000.0 (double completion-tokens))
+         (double duration-ms)))))
+
+(defn format-tps [value]
+  (format "%.1f" (double value)))
+
 (defn- message-meta-suffix
   "Per-message stats badge text: token count for the turn + tool-call count."
   [metadata tool-calls]
   (let [tok (usage-tokens metadata)
         cached (usage-cached-tokens metadata)
+        tps (usage-tps metadata)
         n-tools (count tool-calls)]
     (str (when (and tok (pos? tok)) (str " | " (format-tokens tok) " tok"))
          (when (and cached (pos? cached)) (str " | " (format-tokens cached) " cache"))
+         (when tps (str " | " (format-tps tps) " t/s"))
          (when (pos? n-tools) (str " | " n-tools " tool" (when (> n-tools 1) "s"))))))
 
 (defn- message-meta-text
@@ -576,7 +591,7 @@
                      (tagged-thinking content))
         content* (if thinking (strip-think-tags content) content)
         content-visible? (not (str/blank? (str content*)))]
-    [:article.message.message--tool-turn
+    [:article.message.message--assistant.message--tool-turn
      (when (or content-visible? thinking)
        (list
         [:div.message-role {:class role} role]
@@ -605,7 +620,7 @@
        (tool-turn-message system msg {})
 
        :else
-       [:article.message
+       [:article.message {:class (str "message--" role)}
         [:div.message-role {:class role} role]
         (when (= "assistant" role)
           (thinking-content thinking id))
@@ -656,6 +671,11 @@
   (let [usages (keep #(get-in % [:metadata :usage]) messages)
         sum-key (fn [k] (reduce (fn [acc u] (+ acc (long (or (get u k) 0)))) 0 usages))
         latest (last usages)
+        timed-usages (filter #(and (pos? (long (or (:completion-tokens %) 0)))
+                                   (pos? (long (or (:duration-ms %) 0))))
+                             usages)
+        timed-completion-tokens (reduce + (map :completion-tokens timed-usages))
+        timed-duration-ms (reduce + (map :duration-ms timed-usages))
         tool-names (for [m messages
                          tc (:tool-calls m)
                          :let [nm (get-in tc [:function :name])]
@@ -672,6 +692,9 @@
      :context-tokens (when latest
                        (+ (long (or (:prompt-tokens latest) 0))
                           (long (or (:completion-tokens latest) 0))))
+     :average-tps (when (pos? timed-duration-ms)
+                    (/ (* 1000.0 (double timed-completion-tokens))
+                       (double timed-duration-ms)))
      :tool-calls (count tool-names)
      :tool-breakdown breakdown}))
 
@@ -680,7 +703,7 @@
    Returns nil when there is nothing to show yet."
   [messages]
   (let [{:keys [total-tokens prompt-tokens completion-tokens cached-tokens
-                context-tokens tool-calls tool-breakdown]} (thread-stats messages)]
+                context-tokens average-tps tool-calls tool-breakdown]} (thread-stats messages)]
     (when (or (pos? total-tokens) (pos? tool-calls))
       [:div.thread-stats {:aria-label "Thread usage"}
        [:span.thread-stats__group
@@ -695,6 +718,12 @@
           {:title "approximate tokens in the current context window (post-compaction)"}
           [:span.thread-stats__label "ctx"]
           [:span.thread-stats__value (str "~" (format-tokens context-tokens))]])
+       (when average-tps
+         [:span.thread-stats__group
+          {:title "weighted output speed: completion tokens / total model call time"}
+          [:span.thread-stats__label "avg"]
+          [:span.thread-stats__value (format-tps average-tps)]
+          [:span.thread-stats__unit "t/s"]])
        [:span.thread-stats__group
         {:title (when (seq tool-breakdown)
                   (str/join " · " (map (fn [[nm n]] (str nm " ×" n)) tool-breakdown)))}

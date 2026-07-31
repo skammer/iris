@@ -93,6 +93,19 @@
                                   :session-id "session-1"})
     (is (= "session-1" (:session-id @captured)))))
 
+(deftest planner-attaches-call-duration-to-usage-test
+  (let [provider (reify llm/ILLMProviderInvoke
+                   (invoke [_ _request]
+                     {:role "assistant"
+                      :content "ok"
+                      :tool-calls []
+                      :usage {:completion-tokens 10}})
+                   (generate [this messages opts]
+                     (llm/invoke this (assoc opts :messages messages))))
+        step (planner/plan-step! provider {:messages [{:role "user" :content "hi"}]})]
+    (is (number? (get-in step [:llm-response :usage :duration-ms])))
+    (is (<= 0 (get-in step [:llm-response :usage :duration-ms])))))
+
 (deftest planner-llm-call-event-includes-cached-tokens-test
   (let [events (atom [])
         observer (reify telemetry-observer/IObserver

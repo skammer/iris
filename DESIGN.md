@@ -58,6 +58,9 @@ Never use raw colors in component rules. Use semantic tokens.
 | `--scrollbar-thumb-hover` | `--primary` | `--primary` | Hovered thumb |
 | `--scrollbar-thumb-active` | `#e8e0d5` | `#24211d` | Dragged thumb |
 
+Scroll hints use `--scroll-fade-start`, `--scroll-fade-end`, `--scroll-fade-size`,
+and `--scroll-fade-reveal` to dissolve both long-list edges without overlays or JS listeners.
+
 #### Compatibility aliases
 
 | Token | Resolves to | Reason |
@@ -188,7 +191,7 @@ Action tiles combine icon, direct verb, one-line consequence, and directional af
 
 ### Composer
 
-The chat composer groups prompt, attachment, shortcut hint, stop/send, and working state into one bounded surface. Send is the terminal action at the trailing edge. Attachments remain secondary. Enter and Send must follow the same serialization path.
+The chat composer groups prompt, attachment, shortcut hint, stop/send, and working state into one bounded surface. It is an opaque structural footer: transcript content clips above it and never paints underneath. Send is the terminal action at the trailing edge. Attachments remain secondary. Enter and Send must follow the same serialization path.
 
 ### Status chips
 
