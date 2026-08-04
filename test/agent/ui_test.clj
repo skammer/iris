@@ -101,7 +101,7 @@
                 tools/registry-health (constantly {:count 0})
                 memory/health-check (constantly {:vault {:note-count 0}})
                 channel-adapters/registry-health (constantly {:count 0})
-                tool-approvals/list-requests (constantly [])
+                tool-approvals/list-review-requests (constantly [])
                 build-info/read-build-info (constantly {:version "abc123-dirty"
                                                         :commit-short "abc123"
                                                         :built-at "2026-06-14T10:20:30Z"})]
@@ -133,7 +133,7 @@
   (is (= "telegram" (ui-render/short-id "telegram"))))
 
 (deftest operator-board-renders-sections-with-counts
-  (with-redefs [tool-approvals/list-requests (constantly [])
+  (with-redefs [tool-approvals/list-review-requests (constantly [])
                 sqlite/list-events (constantly [])]
     (let [html (ui/operator-board-fragment {:store nil})]
       (is (str/includes? html "board-section"))
@@ -146,7 +146,7 @@
   (let [base {:requested-by "session-1"
               :reason "Agent requested filesystem access"
               :created-at "2026-07-12T10:00:00Z"
-              :expires-at "2026-07-12T11:00:00Z"
+              :expires-at "2999-07-12T11:00:00Z"
               :requested-permissions #{:filesystem-write}
               :input {:path "/workspace/report.md" :content "draft"}}
         pending-id "303ea8ca-9665-4edd-bd97-b5c3cec87438"
@@ -179,7 +179,7 @@
     (is (not (str/includes? html "shell-tool-form")))))
 
 (deftest route-fragment-patches-nav-and-workspace-only
-  (with-redefs [tool-approvals/list-requests (constantly [])]
+  (with-redefs [tool-approvals/list-review-records (constantly [])]
     (let [html (ui/route-fragment {:store nil} {:tab :tools})]
       (is (str/includes? html "id=\"shell-nav\""))
       (is (str/includes? html "id=\"workspace-content\""))

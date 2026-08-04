@@ -532,7 +532,7 @@
 (defn list-tool-approvals [system _request]
   (responses/html-response 200
                            (ui/tool-approvals-fragment
-                            (tool-approvals/list-requests (:store system) {:limit 50}))))
+                            (tool-approvals/list-review-records (:store system) {:limit 50}))))
 
 (defn tool-approval-detail [system _request approval-id]
   (responses/html-response 200
@@ -549,7 +549,7 @@
     (tool-approvals/log-decision! (:event-sink system) updated status actor reason)
     (responses/html-response 200
                              (ui/tool-approvals-fragment
-                              (tool-approvals/list-requests (:store system) {:limit 50})))))
+                              (tool-approvals/list-review-records (:store system) {:limit 50})))))
 
 (defn tool-approval-run [system _request approval-id]
   (let [{:keys [tool-name input permissions approval]} (tool-approvals/resolve-approved-request (:store system) approval-id)
@@ -558,7 +558,7 @@
       (responses/html-response
        200
        (str (ui/tool-approvals-fragment
-             (tool-approvals/list-requests (:store system) {:limit 50}))
+             (tool-approvals/list-review-records (:store system) {:limit 50}))
             (ui/tool-results-fragment
              tool-name
              200

@@ -117,7 +117,7 @@
                 [:div#tool-results-panel.tool-operation-result {:hidden true}]
                 (ui-render/trusted-fragment
                  (tool-approvals-fragment
-                  (tool-approvals/list-requests (:store system) {:limit 50})))]] )
+                  (tool-approvals/list-review-records (:store system) {:limit 50})))]] )
       :memory (memory-workspace-fragment system)
       :magi (ui-render/render-many
              [:section.workspace-grid.single
@@ -221,7 +221,7 @@
         tools-health (tools/registry-health (:tool-registry system))
         memory-health (memory/health-check (:memory-service system))
         adapter-health (channel-adapters/registry-health (:channel-adapter-registry system))
-        pending-approvals (count (tool-approvals/list-requests (:store system) {:status "pending" :limit 100}))
+        pending-approvals (count (tool-approvals/list-review-requests (:store system) {:limit 100}))
         reload-status (or (some-> system :reload-state deref)
                           {:status :idle})
         reload-label (str/join " · " (keep #(some-> % name)
@@ -300,7 +300,7 @@
         [:div.empty-line "none"])])))
 
 (defn operator-board-fragment [system]
-  (let [approvals (tool-approvals/list-requests (:store system) {:status "pending" :limit 8})
+  (let [approvals (tool-approvals/list-review-requests (:store system) {:limit 8})
         recent-events-pool (sqlite/list-events (:store system) {:limit 40})
         events (take 8 recent-events-pool)
         kernel-events (filter #(= "agent.kernel.step.executed" (:event-type %))
@@ -882,7 +882,7 @@
 
 (defn- approval-actions [approval]
   (concat
-   (when (= "pending" (:status approval))
+   (when (tool-approvals/review-required? approval)
      [[:form.approval-action-form.approval-action-form--approve {:id (str "approve-" (:id approval))}
        [:input {:type "hidden" :name "actor" :value "operator"}]
        [:label
@@ -899,7 +899,7 @@
        [:button {:type "button"
                  "data-on:click" (str "@post('/ui/tool-approvals/" (:id approval) "/deny', {contentType: 'form', selector: '#deny-" (:id approval) "'})")}
         "Deny"]]])
-   (when (= "approved" (:status approval))
+   (when (tool-approvals/runnable? approval)
      [[:form.approval-action-form.approval-action-form--run {:id (str "run-" (:id approval))}
        [:span "Approval granted. Execute the exact reviewed input."]
        [:button {:type "button"
@@ -921,8 +921,9 @@
          [:code (str value)])]])])
 
 (defn- approval-detail-node [approval]
-  (let [{:keys [id status requested-by actor decision-reason decided-at
-                expires-at input requested-permissions]} approval]
+  (let [{:keys [id requested-by actor decision-reason decided-at
+                expires-at input requested-permissions]} approval
+        status (tool-approvals/effective-status approval)]
     [:div.approval-record__detail {:id (str "approval-detail-" id)}
       [:div.approval-detail-grid
        [:section
@@ -964,7 +965,8 @@
       [:div.empty-line "Approval not found."]])))
 
 (defn- approval-record [approval]
-  (let [{:keys [id tool-name status requested-by reason created-at]} approval]
+  (let [{:keys [id tool-name requested-by reason created-at]} approval
+        status (tool-approvals/effective-status approval)]
     [:details.approval-record {:data-status status}
      [:summary.approval-record__summary
       {"data-on:click" (str "@get('/ui/tool-approvals/" id "/detail')")}
@@ -982,11 +984,11 @@
       [:div.empty-line "Loading details…"]]]))
 
 (defn tool-approvals-fragment [approvals]
-  (let [status-rank {"pending" 0 "approved" 1 "denied" 2}
+  (let [status-rank {"pending" 0 "approved" 1 "denied" 2 "expired" 3}
         approvals* (->> approvals
-                        (sort-by #(get status-rank (:status %) 9))
+                        (sort-by #(get status-rank (tool-approvals/effective-status %) 9))
                         vec)
-        counts (frequencies (map :status approvals*))]
+        counts (frequencies (map tool-approvals/effective-status approvals*))]
     (ui-render/render
      [:section#tool-approvals-panel.panel.approvals-page
       {"data-on-interval__duration.10s" "@get('/ui/tool-approvals')"}

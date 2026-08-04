@@ -173,3 +173,38 @@
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
+
+(deftest review-records-exclude-expired-and-prioritize-actionable-test
+  (let [expired {:id "expired" :status "pending" :expires-at "2000-01-01T00:00:00Z"}
+        pending {:id "pending" :status "pending" :expires-at "2999-01-01T00:00:00Z"}
+        recent (mapv (fn [n] {:id (str "recent-" n) :status "approved"}) (range 50))]
+    (with-redefs [approvals/list-requests
+                  (fn [_ opts]
+                    (if (= "pending" (:status opts))
+                      [expired pending]
+                      recent))]
+      (let [records (approvals/list-review-records ::store {:limit 50})]
+        (is (= 50 (count records)))
+        (is (= "pending" (:id (first records))))
+        (is (not-any? #(= "expired" (:id %)) records))))))
+
+(deftest expired-request-cannot-be-approved-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [approval (approvals/create-request!
+                      store
+                      {:tool-name :shell
+                       :input {:argv ["printf" "ok"]}
+                       :requested-by "tester"
+                       :reason "expired"
+                       :expires-at "2000-01-01T00:00:00Z"})
+            error (try
+                    (approvals/approve! store (:id approval) "operator" "late")
+                    nil
+                    (catch clojure.lang.ExceptionInfo e e))]
+        (is (= :approval-expired (:type (ex-data error))))
+        (is (= "pending" (:status (approvals/get-request store (:id approval))))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))

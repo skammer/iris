@@ -433,6 +433,11 @@
                               :async-chat? true}
                              opts))))
 
+(defn- current-system [system]
+  (if-let [system-ref (:system-ref system)]
+    (or @system-ref system)
+    system))
+
 (defn enabled? [service]
   (and (true? (get-in service [:config :enabled]))
        (not (str/blank? (get-in service [:config :bot-token])))))
@@ -441,10 +446,11 @@
   [system config opts last-offset update]
   (let [update-id (long (:update_id update))
         next-offset (inc update-id)
-        store (:store system)]
+        system* (current-system system)
+        store (:store system*)]
     (sqlite/upsert-channel-inbox-update! store :telegram update-id update)
     (try
-      (process-update! system config opts update)
+      (process-update! system* config opts update)
       (sqlite/mark-channel-inbox-update! store :telegram update-id :processed nil)
       (sqlite/save-channel-offset! store :telegram next-offset)
       (reset! last-offset next-offset)
@@ -481,10 +487,11 @@
                         (doseq [update updates]
                           (process-polled-update! system config opts last-offset update)))
                       (catch Exception e
-                        ((:event-sink system) {:event-type :telegram.error
-                                               :entity-type :telegram
-                                               :payload {:message (.getMessage e)
-                                                         :type (some-> e ex-data :type)}})
+                        ((:event-sink (current-system system))
+                         {:event-type :telegram.error
+                          :entity-type :telegram
+                          :payload {:message (.getMessage e)
+                                    :type (some-> e ex-data :type)}})
                         (Thread/sleep 1000))))))
         (notify-lifecycle! system config opts
                            :agent-start-notification

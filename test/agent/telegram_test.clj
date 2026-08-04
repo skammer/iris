@@ -212,6 +212,17 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest telegram-service-resolves-reloaded-system
+  (let [system-ref (atom nil)
+        old-system {:version :old
+                    :system-ref system-ref
+                    :config {:channel-adapters {:telegram {}}}}
+        new-system (assoc old-system :version :new)
+        service (telegram/create-service old-system)]
+    (reset! system-ref old-system)
+    (reset! system-ref new-system)
+    (is (= :new (:version (#'telegram/current-system (:system service)))))))
+
 (deftest telegram-reset-replaces-session
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path :evict-on-close? true})

@@ -79,7 +79,7 @@
     (is (= "ok" (get-in system-health [:health-snapshot :components "sqlite" :status])))
     (is (contains? (get-in system-health [:health-snapshot :components]) "runtime"))))
 
-(deftest soft-reload-refreshes-llm-registry-and-telegram-system
+(deftest soft-reload-refreshes-llm-and-reuses-unchanged-telegram
   (let [events (atom [])
         stopped (atom [])
         health-registry (health/create-registry)
@@ -97,7 +97,8 @@
                     :telemetry ::telemetry
                     :event-sink #(swap! events conj %)
                     :chat-service ::old-chat
-                    :telegram-service nil}]
+                    :telegram-service ::old-telegram
+                    :channel-adapter-registry ::old-channel-registry}]
     (reset! system-ref old-system)
     (with-redefs [config/load-config (fn [_] new-cfg)
                   llm-registry/create-registry (fn [llm-cfg] {:fresh? true :llm-cfg llm-cfg})
@@ -108,8 +109,8 @@
                   llm-service/create-llm-provider (fn [_] ::llm)
                   llm-service/create-note-llm-provider (fn [_] ::note-llm)
                   tool-service/create-tool-registry (fn [& _] ::tools)
-                  telegram/create-service (fn [system] {:telegram-system system})
-                  components/create-channel-adapter-registry (fn [_ service] {:service service})
+                  telegram/create-service (fn [_] (throw (ex-info "Telegram must not restart" {})))
+                  components/create-channel-adapter-registry (fn [& _] (throw (ex-info "Telegram registry must be reused" {})))
                   chat/create-service (fn [] ::new-chat)
                   chat/stop! (fn [service] (swap! stopped conj service))]
       (let [result (system/reload! old-system {:mode :soft})
@@ -117,8 +118,8 @@
         (is (= :reloaded (:status result)))
         (is (= {:fresh? true :llm-cfg (config/llm-config new-cfg)}
                (:llm-registry new-system)))
-        (is (= new-cfg (:config (get-in new-system [:telegram-service :telegram-system]))))
-        (is (= ::tools (get-in new-system [:telegram-service :telegram-system :tool-registry])))
+        (is (= ::old-telegram (:telegram-service new-system)))
+        (is (= ::old-channel-registry (:channel-adapter-registry new-system)))
         (is (= [::old-chat] @stopped))
         (is (= :system.config.reloaded (:event-type (last @events))))))))
 

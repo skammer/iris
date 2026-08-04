@@ -86,6 +86,17 @@
                                     {})))
             (throw e)))))))
 
+(defn- telegram-config [system]
+  (get-in system [:config :channel-adapters :telegram]))
+
+(defn- refresh-telegram [old-system new-system]
+  (if (= (telegram-config old-system) (telegram-config new-system))
+    (assoc new-system
+           :telegram-service (:telegram-service old-system)
+           :channel-adapter-registry (:channel-adapter-registry old-system))
+    (->> (components/attach-telegram-service new-system)
+         (replace-running-telegram! old-system))))
+
 (defn- safe-stop!
   [label f]
   (try
@@ -143,9 +154,9 @@
                     :memory-magi-review-service (components/create-memory-magi-review-service
                                                  (:system-ref old-system))
                     :skills-registry (components/create-skills-registry (:skills new-cfg)))]
-    (->> (components/attach-telegram-service
-          (assoc base :tool-registry (components/build-tool-registry base new-cfg)))
-         (replace-running-telegram! old-system))))
+    (refresh-telegram
+     old-system
+     (assoc base :tool-registry (components/build-tool-registry base new-cfg)))))
 
 (defn- soft-reload! [system opts]
   (let [system* (current-system system)

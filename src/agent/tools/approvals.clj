@@ -103,6 +103,45 @@
   ([store opts]
    (sqlite/list-tool-approvals store opts)))
 
+(defn request-expired?
+  [approval]
+  (boolean (expired? (:expires-at approval))))
+
+(defn effective-status
+  [approval]
+  (if (and (#{"pending" "approved"} (:status approval))
+           (request-expired? approval))
+    "expired"
+    (:status approval)))
+
+(defn review-required?
+  [approval]
+  (= "pending" (effective-status approval)))
+
+(defn runnable?
+  [approval]
+  (= "approved" (effective-status approval)))
+
+(defn list-review-requests
+  ([store] (list-review-requests store {}))
+  ([store {:keys [limit] :or {limit 100}}]
+   (->> (list-requests store {:status "pending" :limit 1000})
+        (filter review-required?)
+        (take limit)
+        vec)))
+
+(defn list-review-records
+  "Pending review requests first, then recent history, bounded by limit."
+  ([store] (list-review-records store {}))
+  ([store {:keys [limit] :or {limit 50}}]
+   (let [pending (list-review-requests store {:limit limit})
+         pending-ids (set (map :id pending))]
+     (->> (list-requests store {:limit limit})
+          (remove #(contains? pending-ids (:id %)))
+          (concat pending)
+          (take limit)
+          vec))))
+
 (defn get-request
   [store approval-id]
   (sqlite/get-tool-approval store approval-id))
@@ -112,6 +151,12 @@
 
 (defn approve!
   [store approval-id actor reason]
+  (when-let [approval (get-request store approval-id)]
+    (when (request-expired? approval)
+      (throw (tools/tool-error :approval-expired
+                               "Approval request is expired"
+                               {:approval-id approval-id
+                                :expires-at (:expires-at approval)}))))
   (sqlite/decide-tool-approval! store approval-id :approved actor (clean-reason reason)))
 
 (defn deny!
