@@ -284,7 +284,7 @@ Filter/sidebar rail + primary table or canvas + persistent pagination/zoom. Use 
 
 ### Conversation workspace
 
-Session rail + transcript + composer. Tool detail opens as a parallel side panel, not a modal, so conversation context remains available.
+Session rail + transcript + composer. Thread usage stays sticky inside the transcript scroll owner, above a separate message fade layer. Tool detail opens as a parallel side panel, not a modal, so conversation context remains available.
 
 ### Responsive rules
 

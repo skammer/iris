@@ -28,6 +28,11 @@
   to { --scroll-fade-end: 0px; }
 }
 
+@keyframes chat-scroll-fade-reveal-start {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 @font-face {
   font-family: "IoskeleyMono";
   src: url("/public/IoskeleyMono/WOFF2/IoskeleyMono-Medium.woff2") format("woff2");
@@ -894,15 +899,13 @@ textarea {
   --scroll-fade-reveal: 72px;
   -webkit-mask-image: linear-gradient(
     to bottom,
-    transparent 0,
-    #000 var(--scroll-fade-start),
+    #000 0,
     #000 calc(100% - var(--scroll-fade-end)),
     transparent 100%
   );
   mask-image: linear-gradient(
     to bottom,
-    transparent 0,
-    #000 var(--scroll-fade-start),
+    #000 0,
     #000 calc(100% - var(--scroll-fade-end)),
     transparent 100%
   );
@@ -912,20 +915,15 @@ textarea {
 
 @supports (animation-timeline: scroll()) {
   #session-messages-panel {
-    animation:
-      scroll-fade-reveal-start 1ms ease-in-out,
-      scroll-fade-reveal-end 1ms ease-in-out;
-    animation-timeline: scroll(self y), scroll(self y);
-    animation-range:
-      0 var(--scroll-fade-reveal),
-      calc(100% - var(--scroll-fade-reveal)) 100%;
+    animation: scroll-fade-reveal-end 1ms ease-in-out;
+    animation-timeline: scroll(self y);
+    animation-range: calc(100% - var(--scroll-fade-reveal)) 100%;
     animation-fill-mode: both;
   }
 }
 
 @supports not (animation-timeline: scroll()) {
   #session-messages-panel {
-    --scroll-fade-start: var(--scroll-fade-size);
     --scroll-fade-end: var(--scroll-fade-size);
   }
 }
@@ -958,6 +956,32 @@ textarea {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-secondary);
+}
+
+.thread-stats::after {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  height: var(--scroll-fade-size);
+  background: linear-gradient(to bottom, var(--surface), transparent);
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+}
+
+@supports (animation-timeline: scroll()) {
+  .thread-stats::after {
+    animation: chat-scroll-fade-reveal-start 1ms ease-in-out both;
+    animation-timeline: scroll(nearest y);
+    animation-range: 0 var(--scroll-fade-reveal);
+  }
+}
+
+@supports not (animation-timeline: scroll()) {
+  .thread-stats::after {
+    opacity: 1;
+  }
 }
 
 .thread-stats__group {

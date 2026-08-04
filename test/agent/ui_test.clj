@@ -795,7 +795,8 @@
                                 {:metadata {:usage {:tokens 5678 :prompt-tokens 5000
                                                     :completion-tokens 678 :cached-tokens 0
                                                     :duration-ms 2000}}})
-        (let [html (ui/session-messages-fragment {:store store} (:id session))]
+        (let [html (ui/session-messages-fragment {:store store} (:id session))
+              doc (Jsoup/parse html)]
           ;; per-message badge: token count + tool count in the .meta footer
           (is (str/includes? html "1.2k tok"))
           (is (str/includes? html "321 cache"))
@@ -806,7 +807,8 @@
           (is (str/includes? html "thread-stats"))
           (is (str/includes? html "6.9k"))
           (is (str/includes? html "avg"))
-          (is (str/includes? html "read"))))
+          (is (str/includes? html "read"))
+          (is (= 1 (.size (.select doc "#session-messages-panel > .thread-stats"))))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
