@@ -8,13 +8,13 @@
    [clojure.string :as str]))
 
 (def ^:private dsml-tool-calls-re
-  #"(?s)<｜DSML｜tool_calls>(.*?)</｜DSML｜tool_calls>")
+  #"(?s)<｜+DSML｜+tool_calls>(.*?)</｜+DSML｜+tool_calls>")
 
 (def ^:private dsml-invoke-re
-  #"(?s)<｜DSML｜invoke\s+name=\"([^\"]+)\">(.*?)</｜DSML｜invoke>")
+  #"(?s)<｜+DSML｜+invoke\s+name=\"([^\"]+)\">(.*?)</｜+DSML｜+invoke>")
 
 (def ^:private dsml-parameter-re
-  #"(?s)<｜DSML｜parameter\s+name=\"([^\"]+)\"[^>]*>(.*?)</｜DSML｜parameter>")
+  #"(?s)<｜+DSML｜+parameter\s+name=\"([^\"]+)\"[^>]*>(.*?)</｜+DSML｜+parameter>")
 
 (def ^:private tool-call-re
   #"(?s)<tool_call>(.*?)</tool_call>")
@@ -28,12 +28,15 @@
 (def ^:private tool-markup-openers
   ["<｜DSML｜tool_calls>" "<tool_call>"])
 
+(defn- normalize-marker-bars [text]
+  (str/replace text #"｜+" "｜"))
+
 (defn- starts-with-tool-markup? [text]
-  (let [trimmed (str/triml (str text))]
+  (let [trimmed (normalize-marker-bars (str/triml (str text)))]
     (some #(str/starts-with? trimmed %) tool-markup-openers)))
 
 (defn- possible-tool-markup-prefix? [text]
-  (let [trimmed (str/triml (str text))]
+  (let [trimmed (normalize-marker-bars (str/triml (str text)))]
     (or (str/blank? trimmed)
         (some #(or (str/starts-with? % trimmed)
                    (str/starts-with? trimmed %))
@@ -41,35 +44,39 @@
 
 (defn guard-content-delta
   "Suppress streamed leaked tool markup while still allowing normal text.
-   Only enable when tools were sent; otherwise markup is ordinary content."
-  [on-content-delta tools]
-  (cond
-    (nil? on-content-delta) nil
-    (empty? tools) on-content-delta
-    :else
-    (let [mode (atom :undecided)
-          buffered (atom "")]
-      (fn [chunk]
-        (case @mode
-          :streaming
-          (on-content-delta chunk)
+   Normally enabled only when tools were sent. `force?` protects recovery
+   responses, where tools are intentionally unavailable but models may still
+   leak tool markup copied from conversation history."
+  ([on-content-delta tools]
+   (guard-content-delta on-content-delta tools false))
+  ([on-content-delta tools force?]
+   (cond
+     (nil? on-content-delta) nil
+     (and (empty? tools) (not force?)) on-content-delta
+     :else
+     (let [mode (atom :undecided)
+           buffered (atom "")]
+       (fn [chunk]
+         (case @mode
+           :streaming
+           (on-content-delta chunk)
 
-          :suppressing
-          nil
+           :suppressing
+           nil
 
-          :undecided
-          (let [text (swap! buffered str chunk)]
-            (cond
-              (starts-with-tool-markup? text)
-              (reset! mode :suppressing)
+           :undecided
+           (let [text (swap! buffered str chunk)]
+             (cond
+               (starts-with-tool-markup? text)
+               (reset! mode :suppressing)
 
-              (possible-tool-markup-prefix? text)
-              nil
+               (possible-tool-markup-prefix? text)
+               nil
 
-              :else
-              (do
-                (reset! mode :streaming)
-                (on-content-delta text)))))))))
+               :else
+               (do
+                 (reset! mode :streaming)
+                 (on-content-delta text))))))))))
 
 (defn- parse-parameters [re invoke-body]
   (->> (re-seq re invoke-body)

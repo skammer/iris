@@ -57,7 +57,7 @@
         total (assoc :tokens total)
         cached (assoc :cached-tokens cached)))))
 
-(defn complete-with-telemetry!
+(defn invoke-with-telemetry!
   [collector provider messages opts attrs]
   (let [start-ns (System/nanoTime)
         observer (:observer attrs)
@@ -105,8 +105,7 @@
                                 :tool-calls tool-calls
                                 :stop-reason (:stop-reason turn)})]
         (observe! observation)
-        ;; Preserve the string-content contract every caller relies on.
-        content)
+        turn)
       (catch Exception e
         (let [observation (merge attrs*
                                  (usage-estimate provider messages "" opts*)
@@ -115,3 +114,7 @@
                                   :error e})]
           (observe! observation))
         (throw e)))))
+
+(defn complete-with-telemetry!
+  [collector provider messages opts attrs]
+  (:content (invoke-with-telemetry! collector provider messages opts attrs)))

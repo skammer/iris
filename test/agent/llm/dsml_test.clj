@@ -12,6 +12,14 @@
        "</｜DSML｜invoke>  "
        "</｜DSML｜tool_calls>"))
 
+(def doubled-leaked-fs-call
+  (str "<｜｜DSML｜｜tool_calls>  "
+       "<｜｜DSML｜｜invoke name=\"fs\">  "
+       "<｜｜DSML｜｜parameter name=\"action\" string=\"true\">list</｜｜DSML｜｜parameter>  "
+       "<｜｜DSML｜｜parameter name=\"path\" string=\"true\">/Users/example</｜｜DSML｜｜parameter>  "
+       "</｜｜DSML｜｜invoke>  "
+       "</｜｜DSML｜｜tool_calls>"))
+
 (deftest recovers-single-invoke
   (let [{:keys [content tool-calls]} (dsml/recover-tool-calls
                                       {:content leaked-fs-call
@@ -24,6 +32,23 @@
       (is (= "fs" (-> tc :function :name)))
       (is (= {"action" "list" "path" "/Users/example"}
              (json/parse-string (-> tc :function :arguments)))))))
+
+(deftest recovers-doubled-delimiter-invoke
+  (let [{:keys [content tool-calls]} (dsml/recover-tool-calls
+                                      {:content doubled-leaked-fs-call
+                                       :tool-calls []})]
+    (is (= "" content))
+    (is (= 1 (count tool-calls)))
+    (is (= "fs" (-> tool-calls first :function :name)))
+    (is (= {"action" "list" "path" "/Users/example"}
+           (json/parse-string (-> tool-calls first :function :arguments))))))
+
+(deftest forced-stream-guard-suppresses-doubled-delimiter-without-tools
+  (let [chunks (atom [])
+        guard (dsml/guard-content-delta #(swap! chunks conj %) [] true)]
+    (doseq [chunk ["<｜" "｜DSML｜" "｜tool_calls>" doubled-leaked-fs-call]]
+      (guard chunk))
+    (is (empty? @chunks))))
 
 (deftest recovers-tool-call-function-tags
   (let [content (str "<tool_call>\n"

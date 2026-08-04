@@ -71,8 +71,10 @@
 
 (defn post-stream
   [url request error-fn]
-  (checked-response
-   (http/post url (assoc (http-request-options request)
-                         :throw-exceptions false
-                         :as :stream))
-   error-fn))
+  (apply llm-core/retry-with-backoff
+         #(checked-response
+           (http/post url (assoc (http-request-options request)
+                                 :throw-exceptions false
+                                 :as :stream))
+           error-fn)
+         (retry-args request)))

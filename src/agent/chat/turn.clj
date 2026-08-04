@@ -16,6 +16,7 @@
    [agent.kernel.runtime :as kernel-runtime]
    [agent.kernel.schema :as kernel-schema]
    [agent.llm.core :as llm-core]
+   [agent.llm.dsml :as dsml]
    [agent.llm.instrumented :as llm-instrumented]
    [agent.llm.messages :as llm-messages]
    [agent.persistence.sqlite :as sqlite]
@@ -28,7 +29,6 @@
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [agent.util :as util]
-   [clojure.core.async :as async]
    [clojure.string :as str]))
 
 (defn- iris-context-message [system]
@@ -71,48 +71,43 @@
 (defn- error-content [error]
   (str "Chat failed: " (.getMessage ^Throwable error)))
 
-(defn- stream-delta-text [value]
-  (cond
-    (string? value) value
-    (= :error (:type value)) (throw (ex-info (or (:error value) "LLM stream failed")
-                                             (merge {:type :llm-stream-error}
-                                                    (:details value))))
-    (map? value) (or (:content value)
-                     (get-in value [:delta :content])
-                     (get-in value [:message :content])
-                     "")
-    (nil? value) ""
-    :else (str value)))
+(def ^:private fallback-system-message
+  {:role "system"
+   :content (str "The primary agent step failed. Produce a final user-facing answer "
+                 "using only information and tool results already present in the conversation. "
+                 "Do not call tools and do not emit tool-call or DSML markup.")})
 
-(defn- consume-llm-stream-with!
-  [ch emit-delta]
-  (loop [acc ""]
-    (if-let [value (async/<!! ch)]
-      (let [delta (stream-delta-text value)]
-        (emit-delta delta)
-        (recur (str acc delta)))
-      acc)))
+(defn- fallback-messages [messages]
+  (into [fallback-system-message] messages))
 
 (defn- fallback-content!
   [system model messages session-id request-id error stream? emit-delta]
   (try
-    (let [content (if stream?
-                    (let [ch (llm-core/stream (:llm-provider system)
-                                              messages
-                                              {:model model
-                                               :session-id session-id})]
-                      (consume-llm-stream-with! ch emit-delta))
-                    (llm-instrumented/complete-with-telemetry! (:telemetry system)
-                                                               (:llm-provider system)
-                                                               messages
-                                                               {}
-                                                               {:agent-id (or session-id "chat")
-                                                                :session-id session-id
-                                                                :observer (:observer system)
-                                                                :trace (:trace system)
-                                                                :request-id request-id
-                                                                :model model}))]
+    (let [guarded-delta (when stream?
+                          (dsml/guard-content-delta emit-delta [] true))
+          turn (llm-instrumented/invoke-with-telemetry!
+                (:telemetry system)
+                (:llm-provider system)
+                (fallback-messages messages)
+                (cond-> {}
+                  guarded-delta (assoc :on-content-delta guarded-delta))
+                {:agent-id (or session-id "chat")
+                 :session-id session-id
+                 :observer (:observer system)
+                 :trace (:trace system)
+                 :request-id request-id
+                 :model model})
+          content (:content turn)
+          tool-calls (:tool-calls turn)]
+      (when (seq tool-calls)
+        (throw (ex-info "Fallback response attempted tool calls instead of a final answer"
+                        {:type :fallback-tool-calls
+                         :tool-call-count (count tool-calls)})))
+      (when (str/blank? (str content))
+        (throw (ex-info "Fallback response was empty"
+                        {:type :empty-fallback-response})))
       {:content content
+       :usage (:usage turn)
        :fallback? true})
     (catch Exception fallback-error
       {:content (error-content fallback-error)

@@ -293,6 +293,27 @@
                 (filter #(= :agent-end (:event-type %)))
                 (mapv #(get-in % [:payload :stop-reason])))))))
 
+(deftest provider-error-fallback-receives-latest-tool-results-test
+  (let [steps (atom [(tool-step)
+                     (delay (throw (ex-info "provider down" {:type :provider-error})))])
+        fallback-input (atom nil)
+        {:keys [result]}
+        (run-loop {:planner-fn (fn [_ _]
+                                (let [step (first @steps)]
+                                  (swap! steps rest)
+                                  (if (instance? clojure.lang.IDeref step) @step step)))
+                   :fallback-fn (fn [{:keys [messages]}]
+                                  (reset! fallback-input messages)
+                                  {:content "recovered from tool result"
+                                   :fallback? true})})]
+    (is (= "recovered from tool result" (:content result)))
+    (is (= ["user" "assistant" "tool"]
+           (mapv :role @fallback-input)))
+    (is (= "listed"
+           (:result (json/parse-string
+                     (get-in (last @fallback-input) [:content 0 :content])
+                     true))))))
+
 (deftest max-step-stop-test
   (let [{:keys [result]} (run-loop {:max-steps 1
                                     :planner-fn (fn [_ _] (tool-step))})]

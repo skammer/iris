@@ -267,6 +267,7 @@
         stream?* (true? stream?)
         env {:sink event-sink :base base :request-id request-id :stream? stream?*}
         chat-profile* (nudge/normalize-profile chat-profile)
+        fallback-messages (atom messages*)
         delta-emitted? (atom false)
         pending-deltas (atom [])
         buffer-deltas? (nudge/enabled? chat-profile*)
@@ -309,6 +310,7 @@
                 _ (discard-pending-deltas!)
                 _ (runtime-events/emit! event-sink :message-start base {:role "assistant" :step step-no})
                 {planner-messages* :messages repairs :repairs} (runtime-messages/normalize-chat-history planner-messages)
+                _ (reset! fallback-messages planner-messages*)
                 _ (when (seq repairs)
                     (runtime-events/emit! event-sink :message-update base {:kind :history-repaired :repairs repairs}))
                 context-pack-raw (context-pack-fn {:messages planner-messages*
@@ -490,7 +492,7 @@
               (runtime-events/emit! event-sink :message-start base {:role "assistant"
                                                                     :fallback? true
                                                                     :reason (.getMessage e)})
-              (let [fallback (fallback-fn {:messages messages*
+              (let [fallback (fallback-fn {:messages @fallback-messages
                                            :error e
                                            :stream? stream?*
                                            :emit-delta emit-delta!})

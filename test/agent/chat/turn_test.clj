@@ -432,6 +432,30 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest run-turn-streaming-fallback-emits-normal-content-test
+  (let [path (harness/temp-db-path)
+        responses (atom [(delay (throw (ex-info "planner boom" {:type :planner-down})))
+                         {:content "recovered by fallback"
+                          :stream-chunks ["recovered " "by fallback"]}])
+        requests (atom [])
+        provider (chat-test/->PlannerProvider responses requests)
+        system (test-system path provider no-extractor)
+        session (sessions/create-session! system "turn-streaming-fallback")]
+    (try
+      (let [result (turn/run-turn! system {:session-id (:id session)
+                                           :messages [{:role "user" :content "hello"}]
+                                           :stream? true})
+            deltas (->> (session-events system (:id session))
+                        (filter #(and (= "message-update" (:event-type %))
+                                      (contains? (:payload %) :delta)))
+                        (mapv #(get-in % [:payload :delta])))]
+        (is (= "recovered by fallback" (:content result)))
+        (is (= "recovered by fallback" (apply str deltas)))
+        (is (true? (:fallback? result)))
+        (is (not (:error? result))))
+      (finally
+        (io/delete-file path true)))))
+
 (deftest run-turn-error-result-when-planner-and-fallback-fail-test
   (let [path (harness/temp-db-path)
         provider (chat-test/->FailingProvider)
@@ -452,6 +476,40 @@
                         (= "error" (get-in % [:payload :stop-reason]))
                         (true? (get-in % [:payload :fallback?])))
                   events)))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest run-turn-fallback-does-not-leak-dsml-tool-markup-test
+  (let [path (harness/temp-db-path)
+        leaked (str "<｜｜DSML｜｜tool_calls>"
+                    "<｜｜DSML｜｜invoke name=\"homeassistant\">"
+                    "<｜｜DSML｜｜parameter name=\"action\">get_state</｜｜DSML｜｜parameter>"
+                    "</｜｜DSML｜｜invoke>"
+                    "</｜｜DSML｜｜tool_calls>")
+        responses (atom [(delay (throw (ex-info "LLM request failed: 503"
+                                                {:type :http-error :status 503})))
+                         {:content ""
+                          :tool-calls [{:id "dsml_call"
+                                        :type "function"
+                                        :function {:name "homeassistant"
+                                                   :arguments "{\"action\":\"get_state\"}"}}]
+                          :stream-chunks ["<｜" "｜DSML｜｜tool_calls>" leaked]}])
+        requests (atom [])
+        provider (chat-test/->PlannerProvider responses requests)
+        system (test-system path provider no-extractor)
+        session (sessions/create-session! system "turn-fallback-dsml")]
+    (try
+      (let [result (turn/run-turn! system {:session-id (:id session)
+                                           :messages [{:role "user" :content "report"}]
+                                           :stream? true})
+            messages (sqlite/list-messages (:store system) (:id session))
+            fallback-request (second (invoke-requests @requests))]
+        (is (true? (:error? result)))
+        (is (= :error (:stop-reason result)))
+        (is (str/includes? (:content result) "Fallback response attempted tool calls"))
+        (is (not-any? #(str/includes? (str (:content %)) "DSML") messages))
+        (is (str/includes? (message-text (first (get-in fallback-request [:request :messages])))
+                           "Do not call tools")))
       (finally
         (io/delete-file path true)))))
 

@@ -182,6 +182,32 @@
         (is (not (contains? (first @calls) :timeout-ms)))
         (is (not (contains? (first @calls) :max-retries)))))))
 
+(deftest openai-compatible-stream-retries-retryable-status-test
+  (let [calls (atom 0)
+        failed-body-closed? (atom false)]
+    (with-redefs [http/post (fn [_ _]
+                              (if (= 1 (swap! calls inc))
+                                {:status 503
+                                 :headers {"Content-Type" "text/plain"}
+                                 :body (closing-byte-stream "temporarily unavailable"
+                                                            failed-body-closed?)}
+                                {:status 200
+                                 :headers {"Content-Type" "text/event-stream"}
+                                 :body (byte-stream
+                                        (str "data: {\"choices\":[{\"delta\":{\"content\":\"recovered\"}}]}\n\n"
+                                             "data: [DONE]\n\n"))}))]
+      (let [llm (provider/create-openai-compatible-provider
+                 {:api-key "oa-key"
+                  :max-retries 1
+                  :initial-delay 1})
+            response (llm-core/invoke
+                      llm
+                      {:messages [{:role "user" :content "hi"}]
+                       :on-content-delta (fn [_])})]
+        (is (= "recovered" (:content response)))
+        (is (= 2 @calls))
+        (is (true? @failed-body-closed?))))))
+
 (deftest openai-compatible-responses-complete-test
   (let [url* (atom nil)
         body* (atom nil)]
@@ -570,6 +596,32 @@
                                          "data: {\"choices\":[{\"delta\":{\"content\":\"<｜DSML｜invoke name=\\\"shell\\\">\"}}]}\n\n"
                                          "data: {\"choices\":[{\"delta\":{\"content\":\"<｜DSML｜parameter name=\\\"command\\\" string=\\\"true\\\">df -h</｜DSML｜parameter>\"}}]}\n\n"
                                          "data: {\"choices\":[{\"delta\":{\"content\":\"</｜DSML｜invoke></｜DSML｜tool_calls>\"}}]}\n\n"
+                                         "data: [DONE]\n\n"))})]
+    (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})
+          chunks (atom [])
+          response (llm-core/invoke
+                    llm
+                    {:messages [{:role "user" :content "run df"}]
+                     :tools [{:type "function"
+                              :function {:name "shell"
+                                         :description "Local shell"
+                                         :parameters {:type "object"}}}]
+                     :on-content-delta #(swap! chunks conj %)})
+          tc (first (:tool-calls response))]
+      (is (empty? @chunks))
+      (is (= "" (:content response)))
+      (is (= "shell" (:name tc)))
+      (is (= {:command "df -h"} (:arguments tc))))))
+
+(deftest invoke-suppresses-streamed-doubled-dsml-test
+  (with-redefs [http/post (fn [_ _]
+                            {:status 200
+                             :headers {"Content-Type" "text/event-stream"}
+                             :body (byte-stream
+                                    (str "data: {\"choices\":[{\"delta\":{\"content\":\"<｜｜DSML｜｜tool_calls>\"}}]}\n\n"
+                                         "data: {\"choices\":[{\"delta\":{\"content\":\"<｜｜DSML｜｜invoke name=\\\"shell\\\">\"}}]}\n\n"
+                                         "data: {\"choices\":[{\"delta\":{\"content\":\"<｜｜DSML｜｜parameter name=\\\"command\\\" string=\\\"true\\\">df -h</｜｜DSML｜｜parameter>\"}}]}\n\n"
+                                         "data: {\"choices\":[{\"delta\":{\"content\":\"</｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>\"}}]}\n\n"
                                          "data: [DONE]\n\n"))})]
     (let [llm (provider/create-openai-compatible-provider {:api-key "oa-key"})
           chunks (atom [])
