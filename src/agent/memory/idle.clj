@@ -29,9 +29,12 @@
     "chat.operation.failed"
     "session.title.updated"})
 
-(def ^:private message-max-chars 1200)
+(def ^:private user-message-max-chars 2400)
+(def ^:private assistant-message-max-chars 5000)
+(def ^:private other-message-max-chars 1200)
+(def ^:private tool-message-max-chars 500)
 (def ^:private event-max-chars 800)
-(def ^:private transcript-max-chars 20000)
+(def ^:private transcript-max-chars 40000)
 
 (defn- idle-config [system]
   (merge default-config
@@ -63,9 +66,43 @@
         (pos? (long (or queued-count 0)))
         loop-active?)))
 
+(defn- tool-result-summary [content]
+  (try
+    (let [payload (json/parse-string content true)
+          input (:input payload)
+          result (:result payload)
+          purpose (some-> (:purpose input)
+                          str
+                          (util/truncate 240 #(str " [truncated " % " chars]")))
+          result-status (when (map? result) (:status result))
+          exit (when (map? result) (:exit result))]
+      (str/join
+       " "
+       (cond-> [(str "tool=" (or (:tool-name payload) "unknown"))
+                (str "status=" (or (:status payload) "unknown"))]
+         (:action input) (conj (str "action=" (:action input)))
+         (:method input) (conj (str "method=" (:method input)))
+         purpose (conj (str "purpose=" (pr-str purpose)))
+         result-status (conj (str "result-status=" result-status))
+         (some? exit) (conj (str "exit=" exit)))))
+    (catch Exception _
+      "tool result omitted")))
+
+(defn- message-content-limit [role]
+  (case role
+    "user" user-message-max-chars
+    "assistant" assistant-message-max-chars
+    "tool" tool-message-max-chars
+    other-message-max-chars))
+
 (defn- message-line [{:keys [id role content]}]
-  (str "[" id "] " role ": "
-       (util/truncate content message-max-chars #(str " [truncated " % " chars]"))))
+  (let [content* (if (= "tool" role)
+                   (tool-result-summary content)
+                   content)]
+    (str "[" id "] " role ": "
+         (util/truncate content*
+                        (message-content-limit role)
+                        #(str " [truncated " % " chars]")))))
 
 (defn- safe-payload [event]
   (let [payload (:payload event)]

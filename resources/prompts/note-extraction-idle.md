@@ -7,12 +7,17 @@ Schema:
 Save only:
 - Stable user preferences, constraints, project decisions, reusable runbooks.
 - Durable project facts that will improve future work quality.
+- Verified research conclusions that constrain future source, API, tool, or
+  architecture choices. Multi-turn follow-ups on one subject are strong evidence
+  that the research belongs to ongoing work.
 - Corrections to prior assumptions that should affect future behavior.
 - Environment/tool facts that are likely reusable across sessions.
 
 Skip:
 - Greetings, acknowledgements, status chatter, routine progress updates.
-- One-off requests already completed.
+- One-off answers with no likely future utility. Do not skip a validated
+  conclusion merely because its research request is complete when it affects an
+  ongoing topic or likely future implementation.
 - Transient debugging details unless the final reusable cause/fix is clear.
 - Raw logs, command output, credentials, API keys, tokens, private secrets.
 - Weak guesses, inferred preferences, or facts with confidence below 0.85.
@@ -24,6 +29,9 @@ Rules:
 - Creates and updates are candidates only. Do not mark memory approved.
 - Use scope "session" unless clearly durable across sessions.
 - Use OKF-style types: Preference, Decision, Runbook, ProjectNote, Reference.
+- Use Reference for reusable researched facts, comparisons, limitations, and
+  recommendations. Save the decision-relevant conclusion, not source dumps or a
+  conversation summary.
 - Prefer {"notes":[]} over noisy notes.
 - Consolidate repeated/final conclusions; do not summarize the conversation.
 
@@ -41,3 +49,8 @@ Input:
 {"user":"[1] user: my HA token is abc123","assistant":"Idle memory extraction.","existing_notes":[]}
 Output:
 {"notes":[]}
+
+Input:
+{"user":"[10] user: research POI sources for Russia, especially tourist places and restaurants\n\n[11] tool: tool=http status=ok purpose=\"Verify 2GIS Places API capabilities\" result-status=200\n\n[12] assistant: OSM is the best open baseline. Wikivoyage complements tourist POIs. 2GIS has stronger restaurant and organization coverage but requires an API plan.\n\n[13] user: now compare photo sources for those places by geolocation and capture date","assistant":"Idle memory extraction.","existing_notes":[]}
+Output:
+{"notes":[{"operation":"create","target_id":null,"expected_revision":null,"type":"Reference","title":"POI sources for Russia","description":"Reusable source comparison for Russian tourist and restaurant POIs.","body":"Use OpenStreetMap as the open baseline for Russian POIs and supplement tourist places from Wikivoyage. Prefer 2GIS when richer restaurant and organization coverage justifies API access and plan limits.","tags":["research","poi","russia","maps"],"scope":"session","confidence":0.9}]}

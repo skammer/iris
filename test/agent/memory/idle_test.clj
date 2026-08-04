@@ -133,6 +133,42 @@
         (io/delete-file root true)
         (io/delete-file db-path true)))))
 
+(deftest idle-extraction-compacts-tools-and-keeps-long-conclusions-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        store (sqlite/create-store {:path db-path})
+        session (sqlite/create-session! store "idle-research")
+        responses (atom [(json/generate-string {:notes []})])
+        requests (atom [])
+        provider (->IdleProvider responses requests (atom false))
+        system (test-system store root provider {})
+        user-content (str "Research requirements " (apply str (repeat 1600 "u")) " USER-END")
+        assistant-content (str "Verified conclusion " (apply str (repeat 3000 "a")) " ASSISTANT-END")
+        tool-content (json/generate-string
+                      {:status "ok"
+                       :tool-name "http"
+                       :input {:method "get"
+                               :purpose "Verify POI API capabilities"}
+                       :result {:status 200
+                                :body (apply str (repeat 10000 "secret-json"))}})]
+    (try
+      (sqlite/append-message! store (:id session) "user" user-content)
+      (sqlite/append-message! store (:id session) "tool" tool-content)
+      (sqlite/append-message! store (:id session) "assistant" assistant-content)
+      (is (= 1 (:processed (idle/run-once! system))))
+      (let [request-body (get-in (first @requests) [:messages 1 :content])
+            transcript (:user (json/parse-string request-body true))]
+        (is (str/includes? transcript "USER-END"))
+        (is (str/includes? transcript "ASSISTANT-END"))
+        (is (str/includes? transcript "tool=http status=ok"))
+        (is (str/includes? transcript "purpose=\"Verify POI API capabilities\""))
+        (is (str/includes? transcript "result-status=200"))
+        (is (not (str/includes? transcript "secret-json"))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
 (deftest idle-extraction-skips-active-session-test
   (let [db-path (temp-db-path)
         root (temp-dir)
