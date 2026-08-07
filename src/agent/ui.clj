@@ -531,10 +531,11 @@
   ([system session-id]
    (session-messages-fragment system session-id {}))
   ([system session-id opts]
-   (let [messages (sqlite/list-messages (:store system) session-id)
-         limit (visible-message-limit (:limit opts))
-         visible-messages (vec (take-last limit messages))
-         hidden-count (- (count messages) (count visible-messages))
+   (let [limit (visible-message-limit (:limit opts))
+         message-count (sqlite/count-messages (:store system) session-id)
+         visible-messages (sqlite/list-recent-messages (:store system) session-id limit)
+         hidden-count (- message-count (count visible-messages))
+         thread-stats (sqlite/session-thread-stats (:store system) session-id)
          state (chat/session-state system session-id)
          streaming (streaming-state system session-id opts)
          streaming* (cond-> {}
@@ -545,9 +546,9 @@
          streaming? (seq streaming*)]
      (ui-render/render
       [:chat-stream#session-messages-panel
-       (if (or (seq messages) streaming? (:working? state))
+       (if (or (seq visible-messages) streaming? (:working? state))
          (list*
-          (ui-render/thread-stats-bar messages)
+          (ui-render/thread-stats-bar thread-stats)
           (when (pos? hidden-count)
             [:button.chat-history-more
              {:type "button"

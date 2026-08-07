@@ -45,6 +45,59 @@ from messages
 where session_id = :session_id
 order by coalesce(json_extract(metadata_json, '$.activated-at'), created_at) asc, id asc
 
+-- :name count-messages :? :1
+select count(*) as n
+from messages
+where session_id = :session_id
+
+-- :name list-recent-messages :? :*
+select id, role, content, tool_calls, tool_call_id, metadata_json, excluded_from_context, created_at
+from (
+  select id, role, content, tool_calls, tool_call_id, metadata_json, excluded_from_context, created_at
+  from messages
+  where session_id = :session_id
+  order by coalesce(json_extract(metadata_json, '$.activated-at'), created_at) desc, id desc
+  limit :limit
+)
+order by coalesce(json_extract(metadata_json, '$.activated-at'), created_at) asc, id asc
+
+-- :name message-usage-stats :? :1
+select
+  coalesce(sum(cast(json_extract(metadata_json, '$."usage"."tokens"') as integer)), 0) as total_tokens,
+  coalesce(sum(cast(json_extract(metadata_json, '$."usage"."prompt-tokens"') as integer)), 0) as prompt_tokens,
+  coalesce(sum(cast(json_extract(metadata_json, '$."usage"."completion-tokens"') as integer)), 0) as completion_tokens,
+  coalesce(sum(cast(json_extract(metadata_json, '$."usage"."cached-tokens"') as integer)), 0) as cached_tokens,
+  coalesce(sum(case
+    when cast(json_extract(metadata_json, '$."usage"."completion-tokens"') as integer) > 0
+     and cast(json_extract(metadata_json, '$."usage"."duration-ms"') as integer) > 0
+    then cast(json_extract(metadata_json, '$."usage"."completion-tokens"') as integer)
+    else 0 end), 0) as timed_completion_tokens,
+  coalesce(sum(case
+    when cast(json_extract(metadata_json, '$."usage"."completion-tokens"') as integer) > 0
+     and cast(json_extract(metadata_json, '$."usage"."duration-ms"') as integer) > 0
+    then cast(json_extract(metadata_json, '$."usage"."duration-ms"') as integer)
+    else 0 end), 0) as timed_duration_ms
+from messages
+where session_id = :session_id
+
+-- :name latest-message-usage :? :1
+select
+  cast(json_extract(metadata_json, '$."usage"."prompt-tokens"') as integer) as prompt_tokens,
+  cast(json_extract(metadata_json, '$."usage"."completion-tokens"') as integer) as completion_tokens
+from messages
+where session_id = :session_id
+  and json_type(metadata_json, '$."usage"') = 'object'
+order by coalesce(json_extract(metadata_json, '$.activated-at'), created_at) desc, id desc
+limit 1
+
+-- :name message-tool-counts :? :*
+select json_extract(tool.value, '$.function.name') as tool_name, count(*) as n
+from messages message, json_each(coalesce(message.tool_calls, '[]')) tool
+where message.session_id = :session_id
+  and json_extract(tool.value, '$.function.name') is not null
+group by tool_name
+order by n desc, tool_name asc
+
 -- :name list-messages-after :? :*
 select id, role, content, tool_calls, tool_call_id, metadata_json, excluded_from_context, created_at
 from messages

@@ -109,6 +109,15 @@
 (defn list-messages [store session-id]
   (sessions/list-messages store session-id))
 
+(defn count-messages [store session-id]
+  (sessions/count-messages store session-id))
+
+(defn list-recent-messages [store session-id limit]
+  (sessions/list-recent-messages store session-id limit))
+
+(defn session-thread-stats [store session-id]
+  (sessions/session-thread-stats store session-id))
+
 (defn list-messages-after [store session-id opts]
   (sessions/list-messages-after store session-id opts))
 

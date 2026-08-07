@@ -140,6 +140,14 @@
         (is (str/includes? body "id=\"workflow\""))
         (is (str/includes? body "Source of truth: DESIGN.md"))))))
 
+(deftest ui-deep-link-pages-smoke
+  (with-server nil
+    (fn [{:keys [base-url]}]
+      (doseq [path ["/overview" "/chat" "/tools" "/memory" "/magi" "/cron" "/logs"]]
+        (let [{:keys [status body]} (helpers/http-get (str base-url path))]
+          (is (= 200 status) path)
+          (is (str/includes? body "datastar.js") path))))))
+
 (deftest ui-events-page-smoke
   (with-server nil
     (fn [{:keys [base-url]}]

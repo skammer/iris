@@ -734,10 +734,14 @@
 
 (defn thread-stats-bar
   "Compact per-thread stats strip rendered live inside the message panel.
-   Returns nil when there is nothing to show yet."
-  [messages]
+   Accepts either the message list or a pre-aggregated stats map. Returns nil
+   when there is nothing to show yet."
+  [messages-or-stats]
   (let [{:keys [total-tokens prompt-tokens completion-tokens cached-tokens
-                context-tokens average-tps tool-calls tool-breakdown]} (thread-stats messages)]
+                context-tokens average-tps tool-calls tool-breakdown]}
+        (if (map? messages-or-stats)
+          messages-or-stats
+          (thread-stats messages-or-stats))]
     (when (or (pos? total-tokens) (pos? tool-calls))
       [:div.thread-stats {:aria-label "Thread usage"}
        [:span.thread-stats__group

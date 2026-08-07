@@ -220,7 +220,6 @@
                         (reset! thinking-accumulator "")
                         (reset! pending-thinking "")
                         ((:reset! scheduler))
-                        (swap! draft-id rotate-draft-id)
                         (when (or (not (str/blank? text))
                                   (not (str/blank? thinking)))
                           (if @rich-ok?
@@ -246,6 +245,10 @@
                            (let [text @thinking-accumulator]
                              (reset! thinking-accumulator "")
                              (swap! pending-thinking str text)))
+     ;; One live draft id per turn. Tool status must overwrite the assistant
+     ;; preview that was just persisted, otherwise both previews coexist for
+     ;; Telegram's 30-second draft TTL and look like duplicate messages.
+     :draft-id draft-id
      :finalize! finalize!
      :stop! (:stop! scheduler)}))
 
@@ -317,7 +320,7 @@
             receipts (atom [])
             started-calls (atom [])
             running-calls (atom [])
-            draft-id (atom (next-draft-id))
+            draft-id (or (:draft-id stream-controls) (atom (next-draft-id)))
             rich? (rich/enabled? config)
             rich-ok? (atom rich?)
             draft? (and rich? (some? stream-controls))
@@ -371,7 +374,6 @@
                            (reset! started-calls [])
                            (reset! running-calls [])
                            (when scheduler ((:reset! scheduler)))
-                           (swap! draft-id rotate-draft-id)
                            (when (seq batch)
                              (let [rich-summary
                                    (tool-display/telegram-rich-batch-summary system batch)

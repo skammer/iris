@@ -33,6 +33,9 @@ Read `~/.config/iris/docs/configuration.md` first. In a source checkout, use
 
 - Never infer filenames or permissions from tool names.
 - `cronjob` is a tool. Its permissions are `cron-read` and `cron-manage`.
+- `iris config set` accepts one dotted path, never separate EDN keyword path segments.
+- `:tools :permissions` entrypoint grants and `:tools :profiles` cron restrictions are unrelated maps.
+- `cron-observe` and `cron-automation` are built in; do not duplicate them in user config unless intentionally overriding fields.
 - Skills add instructions, not tools or permissions.
 - Use `shell.argv` for literal process arguments and `shell.command` for shell
   syntax. Never nest either inside `arguments`.

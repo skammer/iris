@@ -20,6 +20,9 @@ Tool-use policy for Iris agents.
 
 - Invoke `/iris-config` before inspecting or changing Iris configuration.
 - Permissions are capabilities, not tool names. Cron uses `cron-read` and `cron-manage`; `cronjob` is the tool name, never a permission.
+- `:tools :permissions` grants entrypoint capabilities; `:tools :profiles` restricts tools inside cron runs. Never treat `:api`, `:ui`, `:agent`, or `:chat` as cron tool profiles.
+- `iris config set` takes one dotted path plus one EDN value: `iris config set tools.profiles.cron-observe '{...}'`. Never pass keyword path segments as separate arguments.
+- `cron-observe` and `cron-automation` are built-in profiles. Verify live behavior with `cronjob preview`; do not copy defaults into user config merely because a different running JAR cannot see them.
 - Prefer a minimal root config plus focused include files. Do not copy built-in defaults into every fragment.
 - Run `iris config validate` before every reload/restart. Continue only after exit code 0 and `:status :valid`.
 

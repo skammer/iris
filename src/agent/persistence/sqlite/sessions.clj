@@ -243,6 +243,28 @@
                             (list-session-entries-sqlvec {:session_id session-id})
                             identity)))
 
+(defn- message-entry-overrides-for-ids [conn session-id message-ids]
+  (if-not (seq message-ids)
+    {}
+    (let [placeholders (str/join "," (repeat (count message-ids) "?"))
+          sql (str "select id, session_id, parent_id, type, payload_json, created_at "
+                   "from session_entries where session_id = ? and type = 'message' "
+                   "and cast(json_extract(payload_json, '$.\"message-id\"') as integer) "
+                   "in (" placeholders ")")]
+      (into {}
+            (keep (fn [row]
+                    (let [{:keys [type payload]} (row->entry row)]
+                      (when (and (= :message type) (:message-id payload))
+                        [(:message-id payload)
+                         (select-keys payload [:content-blocks
+                                               :tool-calls
+                                               :tool-call-id
+                                               :metadata
+                                               :excluded-from-context?])]))))
+            (common/select-many conn
+                                (into [sql session-id] message-ids)
+                                identity)))))
+
 (defn- merge-entry-overrides [message overrides]
   (if-let [entry (get overrides (:id message))]
     (let [metadata (merge (:metadata entry) (:metadata message))]
@@ -260,6 +282,60 @@
               (common/select-many conn
                                   (list-messages-sqlvec {:session_id session-id})
                                   identity))))))
+
+(defn count-messages [store session-id]
+  (common/with-connection
+    store
+    (fn [conn]
+      (long (or (:n (common/select-one conn
+                                       (count-messages-sqlvec {:session_id session-id})
+                                       identity))
+                0)))))
+
+(defn list-recent-messages [store session-id limit]
+  (common/with-connection
+    store
+    (fn [conn]
+      (let [rows (common/select-many conn
+                                     (list-recent-messages-sqlvec
+                                      {:session_id session-id
+                                       :limit (common/bounded-limit limit 60 400)})
+                                     identity)
+            messages (mapv row->message rows)
+            overrides (message-entry-overrides-for-ids conn session-id (mapv :id messages))]
+        (mapv #(assoc (merge-entry-overrides % overrides) :session-id session-id)
+              messages)))))
+
+(defn session-thread-stats [store session-id]
+  (common/with-connection
+    store
+    (fn [conn]
+      (let [{:keys [total_tokens prompt_tokens completion_tokens cached_tokens
+                    timed_completion_tokens timed_duration_ms]}
+            (common/select-one conn
+                               (message-usage-stats-sqlvec {:session_id session-id})
+                               identity)
+            latest (common/select-one conn
+                                      (latest-message-usage-sqlvec {:session_id session-id})
+                                      identity)
+            breakdown (mapv (fn [{:keys [tool_name n]}] [tool_name (long n)])
+                            (common/select-many conn
+                                                (message-tool-counts-sqlvec
+                                                 {:session_id session-id})
+                                                identity))
+            duration-ms (long (or timed_duration_ms 0))]
+        {:total-tokens (long (or total_tokens 0))
+         :prompt-tokens (long (or prompt_tokens 0))
+         :completion-tokens (long (or completion_tokens 0))
+         :cached-tokens (long (or cached_tokens 0))
+         :context-tokens (when latest
+                           (+ (long (or (:prompt_tokens latest) 0))
+                              (long (or (:completion_tokens latest) 0))))
+         :average-tps (when (pos? duration-ms)
+                        (/ (* 1000.0 (double (or timed_completion_tokens 0)))
+                           (double duration-ms)))
+         :tool-calls (reduce + 0 (map second breakdown))
+         :tool-breakdown breakdown}))))
 
 (defn list-messages-after
   [store session-id {:keys [after-id through-id limit] :or {after-id 0 limit 80}}]

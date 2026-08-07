@@ -253,7 +253,10 @@
       (let [session (sqlite/create-session! store "history")]
         (doseq [n (range 65)]
           (sqlite/append-message! store (:id session) "user" (str "message-" n)))
-        (let [html (ui/session-messages-fragment {:store store} (:id session))
+        (let [html (with-redefs [sqlite/list-messages
+                                 (fn [& _]
+                                   (throw (ex-info "full history must not be loaded" {})))]
+                     (ui/session-messages-fragment {:store store} (:id session)))
               doc (Jsoup/parse html)]
           (is (= 60 (.size (.select doc "article.message"))))
           (is (str/includes? html "Load 5 older"))

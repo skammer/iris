@@ -1288,6 +1288,50 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest telegram-rich-reuses-live-draft-across-assistant-and-tool-status
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        recorders {:sent (atom []) :html-sent (atom []) :drafts (atom [])
+                   :rich-sent (atom []) :rich-drafts (atom [])}
+        system {:store store
+                :event-bus (system-events/create-event-bus)
+                :event-sink (fn [_] nil)}
+        opts (recording-opts recorders)]
+    (try
+      (with-redefs [chat/run! (chat-stub
+                               (fn [_ emit!]
+                                 (emit! :message-update {:delta "before tool"})
+                                 (Thread/sleep 1100)
+                                 (emit! :tool-execution-start
+                                        {:tool-name "shell" :tool-call-id "c1"})
+                                 (Thread/sleep 1100)
+                                 (emit! :tool-execution-end
+                                        {:receipt {:tool-name "shell"
+                                                   :tool-call-id "c1"
+                                                   :status :ok
+                                                   :input {:argv ["true"]}}})
+                                 (emit! :message-end
+                                        {:role "assistant"
+                                         :tool-turn? true
+                                         :content "before tool"})
+                                 (emit! :message-update {:delta "after tool"})
+                                 (emit! :message-end {:content "after tool" :final? true})
+                                 {:content "after tool"}))]
+        (is (= :processed
+               (telegram/process-update! system (rich-test-config) opts
+                                         (update-for 1 100 7 "hi")))))
+      (let [drafts @(:rich-drafts recorders)]
+        (is (some #(= "before tool" (:markdown %)) drafts))
+        (is (some #(str/includes? (:markdown %) "Calling 1 tool... shell") drafts))
+        (is (= 1 (count (set (map :draft-id drafts))))
+            "one draft id lets tool status replace the persisted assistant preview"))
+      (is (= 1 (count (filter #(= "before tool" (:markdown %))
+                             @(:rich-sent recorders))))
+          "assistant segment is persisted exactly once")
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest telegram-rich-empty-partial-does-not-downgrade-ha-report
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path :evict-on-close? true})
