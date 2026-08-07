@@ -15,11 +15,13 @@
         session (session-service/create-session! system title)]
     (responses/json-response 201 (ser/session->response session))))
 
-(defn list-sessions [system _request]
-  (responses/json-response 200
-                           {:data (mapv ser/session->response
-                                        (map #(with-state system %)
-                                             (session-service/list-sessions system)))}))
+(defn list-sessions [system request]
+  (let [kind (some-> request :parameters :query :kind keyword)]
+    (responses/json-response 200
+                             {:data (mapv ser/session->response
+                                          (map #(with-state system %)
+                                               (session-service/list-sessions system
+                                                                              {:kind (or kind :chat)})))})))
 
 (defn get-session [system _request session-id]
   (h/ensure-session-exists! system session-id)

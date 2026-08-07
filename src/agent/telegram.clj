@@ -416,7 +416,9 @@
     (let [message* (channels/normalize-send-message destination message)]
       (when (seq (:attachments message*))
         (channels/unsupported-operation! :send-attachments {:adapter :telegram}))
-      (tg-api/send-message! (:bot-token config) (:recipient message*) (:content message*))))
+      (if (not= false (:rich-messages? config))
+        ((rich-send-fn system config opts) (:recipient message*) (:content message*))
+        (tg-api/send-message! (:bot-token config) (:recipient message*) (:content message*)))))
   channels/IChannelTyping
   (send-adapter-typing! [_ recipient _metadata]
     (tg-api/send-chat-action! (:bot-token config) recipient "typing")))

@@ -7,6 +7,7 @@
    [agent.channels.core :as channel-adapters]
    [agent.chat :as chat]
    [agent.config :as config]
+   [agent.cron.service :as cron]
    [agent.health :as health]
    [agent.llm.registry :as llm-registry]
    [agent.llm.service :as llm-service]
@@ -112,6 +113,8 @@
 
 (defn- stop-runtime-edges!
   [system]
+  (safe-stop! :agent.system.lifecycle/cron-stop-failed
+              #(some-> (:cron-service system) cron/stop!))
   (safe-stop! :agent.system.lifecycle/memory-magi-review-stop-failed
               #(some-> (:memory-magi-review-service system) memory-magi-review/stop!))
   (safe-stop! :agent.system.lifecycle/memory-idle-stop-failed
@@ -137,6 +140,7 @@
                                                            llm-provider))
         observer (components/create-observer (:telemetry old-system) (:observer new-cfg))
         trace (components/create-trace new-cfg)
+        cron-service (cron/create-service (:system-ref old-system) (:store old-system) (:cron new-cfg))
         base (assoc old-system
                     :config new-cfg
                     :llm-registry (llm-registry/create-registry llm-cfg)
@@ -148,6 +152,7 @@
                                          #(llm-service/create-note-llm-provider new-cfg))
                     :observer observer
                     :trace trace
+                    :cron-service cron-service
                     :memory-service memory-service
                     :memory-idle-service (components/create-memory-idle-service
                                           (:system-ref old-system))
@@ -164,13 +169,17 @@
         old-cfg (:config system*)
         new-cfg (config/load-config (:config-path system*))
         idle-running? (memory-idle/running? (:memory-idle-service system*))
+        cron-running? (cron/running? (:cron-service system*))
         new-system (rebuild-hot-system system* new-cfg)
         result (reload-result :soft old-cfg new-cfg :reloaded)]
     (chat/stop! (:chat-service system*))
+    (cron/stop! (:cron-service system*))
     (memory-idle/stop! (:memory-idle-service system*))
     (memory-magi-review/stop! (:memory-magi-review-service system*))
     (logging/start! (:logging new-cfg))
     (reset! system-ref new-system)
+    (when cron-running?
+      (cron/start! (:cron-service new-system)))
     (when idle-running?
       (memory-idle/start! (:memory-idle-service new-system)))
     (memory-magi-review/start! (:memory-magi-review-service new-system))
@@ -305,4 +314,5 @@
         (reset! system-ref system*))
       (memory-idle/start! (:memory-idle-service system*))
       (memory-magi-review/start! (:memory-magi-review-service system*))
+      (cron/start! (:cron-service system*))
       system*)))

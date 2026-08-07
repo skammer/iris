@@ -66,8 +66,10 @@
              {:id :id
               :title :title
               :active_mode :active-mode
+              :kind [:kind #(some-> % name)]
               :created_at :created-at}
-             {:state [:state #(serialize % session-state-fields)]}))
+             {:metadata :metadata
+              :state [:state #(serialize % session-state-fields)]}))
 
 (defn message->response [message]
   (serialize message

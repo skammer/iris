@@ -1,6 +1,7 @@
 (ns agent.api.routes
   (:require
    [agent.api.routes.chat :as chat]
+   [agent.api.routes.cron :as cron]
    [agent.api.routes.a2a :as a2a]
    [agent.api.routes.events :as events]
    [agent.api.routes.memory :as memory]
@@ -17,6 +18,7 @@
                 a2a/routes
                 sessions/routes
                 chat/routes
+                cron/routes
                 providers/routes
                 tools/routes
                 events/routes

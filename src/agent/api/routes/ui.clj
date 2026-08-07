@@ -70,6 +70,11 @@
    ["/ui/route" {:get {:handler/id :ui-route
                        :parameters {:query shell-query}}}]
    ["/ui/dashboard" {:get {:handler/id :ui-dashboard}}]
+   ["/ui/cron" {:get {:handler/id :ui-cron}
+                 :post {:handler/id :ui-cron-create}}]
+   ["/ui/cron/jobs" {:post {:handler/id :ui-cron-create}}]
+   ["/ui/cron/preview" {:post {:handler/id :ui-cron-preview}}]
+   ["/ui/cron/action" {:post {:handler/id :ui-cron-action}}]
    ["/ui/operator-board" {:get {:handler/id :ui-operator-board}}]
    ["/ui/sessions" {:get {:handler/id :ui-sessions
                           :parameters {:query optional-session-id-query}}

@@ -6,12 +6,14 @@
    [agent.channels.core :as channel-adapters]
    [agent.chat :as chat]
    [agent.config :as config]
+   [agent.cron.service :as cron]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.trace :as runtime-trace]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [agent.ui.memory :as ui-memory]
+   [agent.ui.cron :as ui-cron]
    [agent.ui.render :as ui-render]
    [cheshire.core :as json]
    [clojure.string :as str]))
@@ -35,6 +37,7 @@
 (def ^:private tabs
   [{:key :overview :label "Overview"}
    {:key :chat :label "Chat"}
+   {:key :cron :label "Cron"}
    {:key :tools :label "Tools"}
    {:key :memory :label "Memory"}
    {:key :magi :label "MAGI"}
@@ -43,6 +46,7 @@
 (def memory-search-results-fragment ui-memory/memory-search-results-fragment)
 (def memory-tool-result-fragment ui-memory/memory-tool-result-fragment)
 (def memory-workspace-fragment ui-memory/memory-workspace-fragment)
+(def cron-fragment ui-cron/fragment)
 
 (defn- normalize-tab [value]
   (let [tab (some-> value name str/lower-case keyword)]
@@ -52,6 +56,7 @@
   (case (normalize-tab tab)
     :overview "/overview"
     :chat (if session-id (str "/chat/" session-id) "/chat")
+    :cron "/cron"
     :tools "/tools"
     :memory "/memory"
     :magi "/magi"
@@ -65,6 +70,7 @@
     (case segment
       "overview" {:tab :overview}
       "chat" (cond-> {:tab :chat} id (assoc :session-id id))
+      "cron" {:tab :cron}
       "tools" {:tab :tools}
       "memory" {:tab :memory}
       "magi" {:tab :magi}
@@ -111,6 +117,9 @@
              [:section.workspace-grid.chat-workspace
               (ui-render/trusted-fragment (sessions-fragment system session-id))
               (ui-render/trusted-fragment (session-detail-fragment system session-id))])
+      :cron (ui-render/render-many
+             [:section.workspace-grid.single
+              (ui-render/trusted-fragment (ui-cron/fragment system))])
       :tools (ui-render/render-many
               [:section.workspace-grid.single
                [:div.tools-workspace
@@ -220,6 +229,7 @@
         llm-config (get-in system [:config :llm])
         tools-health (tools/registry-health (:tool-registry system))
         memory-health (memory/health-check (:memory-service system))
+        cron-health (cron/health-check (:cron-service system))
         adapter-health (channel-adapters/registry-health (:channel-adapter-registry system))
         pending-approvals (count (tool-approvals/list-review-requests (:store system) {:limit 100}))
         reload-status (or (some-> system :reload-state deref)
@@ -239,9 +249,10 @@
          [:div [:dt "Model"] [:dd (or (config/active-model llm-config) "-")]]]]
        [:nav.overview-action-grid {:aria-label "Primary workspaces"}
         (for [[mark label detail href] [["01" "Open chat" "Sessions and messages" "/chat"]
-                                        ["02" "Review tools" (str pending-approvals " pending approvals") "/tools"]
-                                        ["03" "Browse memory" (str (get-in memory-health [:vault :note-count] 0) " vault notes") "/memory"]
-                                        ["04" "Inspect logs" (str (get-in storage [:details :event-count] 0) " events") "/logs"]]]
+                                        ["02" "Cron jobs" (str (:active-jobs cron-health) " active · " (:running-runs cron-health) " running") "/cron"]
+                                        ["03" "Review tools" (str pending-approvals " pending approvals") "/tools"]
+                                        ["04" "Browse memory" (str (get-in memory-health [:vault :note-count] 0) " vault notes") "/memory"]
+                                        ["05" "Inspect logs" (str (get-in storage [:details :event-count] 0) " events") "/logs"]]]
           [:a.overview-action-tile {:href href}
            [:span.overview-action-tile__mark {:aria-hidden "true"} mark]
            [:span.overview-action-tile__copy
@@ -271,6 +282,7 @@
          (for [[label value alert?] [["Sessions" (get-in storage [:details :session-count] 0) false]
                                      ["Events" (get-in storage [:details :event-count] 0) false]
                                      ["Tools" (:count tools-health) false]
+                                     ["Cron" (if (:running cron-health) "RUN" "STOP") (or (not (:running cron-health)) (:last-error cron-health))]
                                      ["Adapters" (:count adapter-health) false]
                                      ["Approvals" pending-approvals (pos? pending-approvals)]]]
            [:div.overview-metric

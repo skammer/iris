@@ -18,8 +18,8 @@
      session)))
 
 (defn list-sessions
-  [system]
-  (sqlite/list-sessions (:store system)))
+  ([system] (sqlite/list-sessions (:store system)))
+  ([system opts] (sqlite/list-sessions (:store system) opts)))
 
 (defn get-session
   [system session-id]

@@ -162,10 +162,17 @@
                   :default-headers {"User-Agent" "iris/0.1"}}
            :yolo? false
            :max-parallelism 6
-           :permissions {:api [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute]
+           :permissions {:api [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute :cron-read :cron-manage]
                          :ui [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute]
-                         :agent [:http-request :memory-read :memory-write :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute]
-                         :chat [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec :magi-evaluate :homeassistant :wasm-execute]}
+                         :agent [:http-request :memory-read :memory-write :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute :cron-read :cron-manage]
+                         :chat [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec :magi-evaluate :homeassistant :wasm-execute :cron-read :cron-manage]}
+           :profiles {:cron-observe {:permissions [:filesystem-read :http-request :memory-read :homeassistant]
+                                     :allowed-tools [:fs_read :fs_list :fs_search :http :memory_recall
+                                                     :vault_search :message_search :homeassistant]
+                                     :allowed-actions {:http [:get :head]
+                                                       :homeassistant [:get_state :list_states :search_states :list_services]}}
+                      :cron-automation {:permissions [:filesystem-read :filesystem-write :http-request :shell-exec]
+                                        :allowed-tools [:fs_read :fs_list :fs_search :fs_write :http :shell]}}
            :policy {:allowlist []
                     :blocklist []
                     :tool-scopes {}}
@@ -269,6 +276,16 @@
                            :full? true
                            :per-tool {}}}}
    :skills {:dirs ["skills"]}
+   :cron {:enabled true
+          :poll-interval-seconds 15
+          :max-concurrency 2
+          :run-timeout-seconds 1800
+          :misfire-grace-seconds 3600
+          :timezone "UTC"
+          :provider nil
+          :model nil
+          :tool-profile :cron-observe
+          :output-max-chars 200000}
    :memory {:search {:default-limit 10
                      :max-limit 10
                      :min-score 0.3}
@@ -366,7 +383,7 @@
 (def context-file-names (into [config-file-name] markdown-file-names))
 (def template-file-names context-file-names)
 (def app-config-keys
-  [:llm :storage :tools :skills :memory :magi :channel-adapters :runners
+  [:llm :storage :tools :skills :memory :magi :cron :channel-adapters :runners
    :telemetry :observer :trace :logging :api :chat :loop])
 
 (defn- getenv [name]
@@ -602,6 +619,39 @@
       :message (str "legacy LLM config key " k
                     " is no longer loaded; run config migrate and use :llm/:providers")})))
 
+(def ^:private cron-action-values
+  {:http #{:get :head :post :put :patch :delete}
+   :homeassistant #{:get_state :list_states :search_states :list_services :call_service}})
+
+(defn- cron-config-errors [cfg]
+  (let [{:keys [provider model timezone tool-profile]} (:cron cfg)
+        provider-cfg (get-in cfg [:llm :providers provider])
+        model-ids (set (concat [(:model provider-cfg)]
+                               (when (map? (:models provider-cfg)) (keys (:models provider-cfg)))
+                               (when (sequential? (:models provider-cfg)) (map :model-id (:models provider-cfg)))))
+        profiles (get-in cfg [:tools :profiles])]
+    (vec
+     (concat
+      (when (not= (boolean provider) (boolean model))
+        [{:path [:cron :provider] :message "cron provider and model must be configured together"}])
+      (when (and provider (nil? provider-cfg))
+        [{:path [:cron :provider] :message (str "unknown cron provider " provider)}])
+      (when (and model provider-cfg (not (contains? model-ids model)))
+        [{:path [:cron :model] :message (str "cron model is not configured for provider " provider)}])
+      (when-not (contains? profiles tool-profile)
+        [{:path [:cron :tool-profile] :message (str "unknown cron tool profile " tool-profile)}])
+      (try
+        (java.time.ZoneId/of timezone)
+        []
+        (catch Exception _
+          [{:path [:cron :timezone] :message "cron timezone must be a valid IANA timezone"}]))
+      (for [[profile-key profile] profiles
+            [tool actions] (:allowed-actions profile)
+            :let [known (get cron-action-values tool)]
+            :when (or (nil? known) (not-every? known (map keyword actions)))]
+        {:path [:tools :profiles profile-key :allowed-actions tool]
+         :message (str "unsupported allowed action for " tool)})))))
+
 (defn- config-validation-errors [cfg]
   (let [llm-cfg (:llm cfg)
         provider (:active-provider llm-cfg)
@@ -622,6 +672,9 @@
       (into (legacy-llm-config-errors llm-cfg))
 
       true
+      (into (cron-config-errors cfg))
+
+      true
       (into (keep #(positive-number-error cfg %)
                   [[:loop :max-iterations]
                    [:loop :summary-max-chars]
@@ -635,7 +688,12 @@
                    [:tools :fs :max-search-file-bytes]
                    [:tools :fs :max-search-results]
                    [:tools :fs :max-search-line-chars]
-                   [:tools :fs :search-timeout-ms]])))))
+                   [:tools :fs :search-timeout-ms]
+                   [:cron :poll-interval-seconds]
+                   [:cron :max-concurrency]
+                   [:cron :run-timeout-seconds]
+                   [:cron :misfire-grace-seconds]
+                   [:cron :output-max-chars]])))))
 
 (defn- validate-config! [cfg]
   (let [errors (config-validation-errors cfg)]

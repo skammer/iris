@@ -1,10 +1,11 @@
 -- :name create-session :! :n
-insert into sessions (id, title, created_at)
-values (:id, :title, :created_at)
+insert into sessions (id, title, kind, metadata_json, created_at)
+values (:id, :title, :kind, :metadata_json, :created_at)
 
 -- :name list-sessions :? :*
-select id, title, active_mode, created_at
+select id, title, active_mode, kind, metadata_json, created_at
 from sessions
+where kind = :kind
 order by coalesce((select max(messages.created_at)
                    from messages
                    where messages.session_id = sessions.id),
@@ -12,7 +13,7 @@ order by coalesce((select max(messages.created_at)
          created_at desc
 
 -- :name get-session :? :1
-select id, title, active_mode, created_at
+select id, title, active_mode, kind, metadata_json, created_at
 from sessions
 where id = :id
 limit 1

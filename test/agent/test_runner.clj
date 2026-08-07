@@ -15,6 +15,7 @@
    [clojure.test :as t]
    [endive-clj.core-test]
    [agent.config-test]
+   [agent.cron-test]
    [agent.health-test]
    [agent.system-test]
    [agent.telegram.format-test]
@@ -78,6 +79,7 @@
     agent.chat-test
     endive-clj.core-test
     agent.config-test
+    agent.cron-test
     agent.health-test
     agent.system-test
     agent.telegram.format-test

@@ -171,15 +171,20 @@
          providers (into {}
                          (map (fn [[provider-key provider-cfg]]
                                 (let [provider-key* (normalize-provider-key provider-key)
-                                      model-id (:model provider-cfg)]
+                                      configured (:models provider-cfg)
+                                      model-ids (->> (concat [(:model provider-cfg)]
+                                                             (cond
+                                                               (map? configured) (keys configured)
+                                                               (sequential? configured) (map :model-id configured)
+                                                               :else []))
+                                                     (remove nil?)
+                                                     distinct)]
                                   [provider-key*
                                    {:key provider-key*
                                     :config provider-cfg
                                     :metadata (provider-defaults provider-key* provider-cfg)
-                                    :models (cond-> []
-                                              model-id (conj (model-metadata provider-key*
-                                                                             provider-cfg
-                                                                             model-id)))}])))
+                                    :models (mapv #(model-metadata provider-key* provider-cfg %)
+                                                  model-ids)}])))
                          (:providers llm-cfg*))]
      {:active-provider active-provider
       :providers providers

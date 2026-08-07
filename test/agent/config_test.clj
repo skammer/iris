@@ -83,9 +83,9 @@
 	      (is (not (contains? (get-in cfg [:chat :guardrails :doom-loop]) :action)))
       (is (false? (get-in cfg [:tools :yolo?])))
       (is (= 6 (get-in cfg [:tools :max-parallelism])))
-      (is (= [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute]
+      (is (= [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute :cron-read :cron-manage]
              (get-in cfg [:tools :permissions :api])))
-      (is (= [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec :magi-evaluate :homeassistant :wasm-execute]
+      (is (= [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec :magi-evaluate :homeassistant :wasm-execute :cron-read :cron-manage]
              (get-in cfg [:tools :permissions :chat])))
       (is (= {:allowlist []
               :blocklist []

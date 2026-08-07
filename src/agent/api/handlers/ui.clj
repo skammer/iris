@@ -7,6 +7,7 @@
    [agent.api.streaming :as streaming]
    [agent.broker.core :as broker]
    [agent.chat :as chat]
+   [agent.cron.service :as cron-service]
    [agent.defaults :as defaults]
    [agent.memory.core :as memory]
    [agent.memory.magi-review :as memory-magi-review]
@@ -15,6 +16,7 @@
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [agent.ui :as ui]
+   [agent.ui.render]
    [clojure.core.async :as async]
    [clojure.string :as str])
   (:import
@@ -97,6 +99,80 @@
 
 (defn dashboard [system _request]
   (responses/html-response 200 (ui/dashboard-fragment system)))
+
+(defn cron [system _request]
+  (responses/html-response 200 (ui/cron-fragment system)))
+
+(defn- cron-form-schedule [{:keys [schedule_kind cron_expression at every_seconds anchor_at]}]
+  (case schedule_kind
+    "at" {:kind :at :at at}
+    "interval" {:kind :interval :every-seconds (parse-long every_seconds)
+                 :anchor-at (or (not-empty anchor_at) (str (java.time.Instant/now)))}
+    {:kind :cron :expression cron_expression}))
+
+(defn- cron-model-pin [model-pair]
+  (when-not (str/blank? model-pair)
+    (let [[provider model] (str/split model-pair #"\|" 2)]
+      {:provider (keyword provider) :model model})))
+
+(defn cron-create [system request]
+  (let [{:keys [name prompt timezone max_occurrences tool_profile model_pair
+                notify_policy telegram_recipient] :as body} (h/read-form-body request)
+        target (when-not (str/blank? telegram_recipient)
+                 {:kind :channel :adapter :telegram :recipient telegram_recipient})
+        input (cond-> (merge {:name name :prompt prompt :timezone timezone
+                       :schedule (cron-form-schedule body)
+                       :notification {:policy (keyword (or notify_policy "never")) :target target}}
+                             (cron-model-pin model_pair))
+                (not (str/blank? max_occurrences)) (assoc :max-occurrences (parse-long max_occurrences))
+                (not (str/blank? tool_profile)) (assoc :tool-profile (keyword tool_profile)))]
+    (cron-service/create-job! (:cron-service system) input {:created-by "ui"})
+    (responses/html-response 200 (ui/cron-fragment system))))
+
+(defn cron-preview [system request]
+  (let [{:keys [name prompt timezone max_occurrences tool_profile model_pair
+                notify_policy telegram_recipient] :as body} (h/read-form-body request)
+        target (when-not (str/blank? telegram_recipient)
+                 {:kind :channel :adapter :telegram :recipient telegram_recipient})
+        input (cond-> (merge {:name name :prompt prompt :timezone timezone
+                       :schedule (cron-form-schedule body)
+                       :notification {:policy (keyword (or notify_policy "never")) :target target}}
+                             (cron-model-pin model_pair))
+                (not (str/blank? max_occurrences)) (assoc :max-occurrences (parse-long max_occurrences))
+                (not (str/blank? tool_profile)) (assoc :tool-profile (keyword tool_profile)))
+        preview (cron-service/preview (:cron-service system) input)]
+    (responses/html-response
+     200
+     (agent.ui.render/render
+      [:div#cron-preview.cron-preview
+       [:strong "Next runs"]
+       [:ol (for [instant (:next-runs preview)] [:li instant])]
+       [:small (str (get-in preview [:resolved-model :provider]) "/"
+                    (get-in preview [:resolved-model :model]) " · "
+                    (get-in preview [:resolved-tools :tool-profile]))]]))))
+
+(defn cron-action [system request]
+  (let [{:keys [id revision action name prompt timezone max_occurrences tool_profile
+                model_pair notify_policy telegram_recipient] :as body} (h/read-form-body request)
+        service (:cron-service system)
+        revision* (parse-long revision)]
+    (case action
+      "pause" (cron-service/set-status! service id :paused revision*)
+      "resume" (cron-service/set-status! service id :active revision*)
+      "delete" (cron-service/set-status! service id :deleted revision*)
+      "run" (cron-service/run-now! service id)
+      "update" (let [target (when-not (str/blank? telegram_recipient)
+                              {:kind :channel :adapter :telegram :recipient telegram_recipient})
+                       changes (merge {:name name :prompt prompt :timezone timezone
+                                       :schedule (cron-form-schedule body)
+                                       :notification {:policy (keyword (or notify_policy "never")) :target target}
+                                       :max-occurrences (when-not (str/blank? max_occurrences)
+                                                          (parse-long max_occurrences))
+                                       :tool-profile (when-not (str/blank? tool_profile) (keyword tool_profile))}
+                                      (or (cron-model-pin model_pair) {:provider nil :model nil}))]
+                   (cron-service/update-job! service id revision* changes))
+      (throw (errors/api-error 400 "bad_request" "Unknown cron action")))
+    (responses/html-response 200 (ui/cron-fragment system))))
 
 (defn operator-board [system _request]
   (responses/html-response 200 (ui/operator-board-fragment system)))

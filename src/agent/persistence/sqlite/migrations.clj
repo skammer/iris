@@ -10,7 +10,7 @@
    (java.nio.charset StandardCharsets)
    (java.security MessageDigest)))
 
-(def latest-schema-version 9)
+(def latest-schema-version 10)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -59,6 +59,11 @@
     :id "009-memory-note-updates"
     :name "memory-note-updates"
     :up-resource "agent/persistence/sqlite/migrations/009-memory-note-updates.up.sql"
+    :irreversible? true}
+   {:version 10
+    :id "010-cron-jobs"
+    :name "cron-jobs"
+    :up-resource "agent/persistence/sqlite/migrations/010-cron-jobs.up.sql"
     :irreversible? true}])
 
 (defn descriptor-by-version [version]

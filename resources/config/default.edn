@@ -140,10 +140,17 @@
                 :default-headers {"User-Agent" "iris/0.1"}}
          :yolo? false
          :max-parallelism 6
-         :permissions {:api [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute]
+         :permissions {:api [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute :cron-read :cron-manage]
                        :ui [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute]
-                       :agent [:http-request :memory-read :memory-write :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute]
-                       :chat [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec :magi-evaluate :homeassistant :wasm-execute]}
+                       :agent [:http-request :memory-read :memory-write :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute :cron-read :cron-manage]
+                       :chat [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec :magi-evaluate :homeassistant :wasm-execute :cron-read :cron-manage]}
+         :profiles {:cron-observe {:permissions [:filesystem-read :http-request :memory-read :homeassistant]
+                                   :allowed-tools [:fs_read :fs_list :fs_search :http :memory_recall
+                                                   :vault_search :message_search :homeassistant]
+                                   :allowed-actions {:http [:get :head]
+                                                     :homeassistant [:get_state :list_states :search_states :list_services]}}
+                    :cron-automation {:permissions [:filesystem-read :filesystem-write :http-request :shell-exec]
+                                      :allowed-tools [:fs_read :fs_list :fs_search :fs_write :http :shell]}}
          :policy {:allowlist []
                   :blocklist []
                   :tool-scopes {}}
@@ -261,6 +268,16 @@
                          :full? true
                          :per-tool {}}}}
  :skills {:dirs ["skills"]}
+ :cron {:enabled true
+        :poll-interval-seconds 15
+        :max-concurrency 2
+        :run-timeout-seconds 1800
+        :misfire-grace-seconds 3600
+        :timezone "UTC"
+        :provider nil
+        :model nil
+        :tool-profile :cron-observe
+        :output-max-chars 200000}
  :memory {:search {:default-limit 10
                    :max-limit 10
                    :min-score 0.3}

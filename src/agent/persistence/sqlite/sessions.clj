@@ -97,9 +97,12 @@
 
 (defn create-session!
   ([store] (create-session! store nil))
-  ([store title]
+  ([store title] (create-session! store title {}))
+  ([store title {:keys [kind metadata] :or {kind :chat}}]
    (let [session {:id (common/uuid-str)
                   :title title
+                  :kind (name kind)
+                  :metadata_json (common/json-string metadata)
                   :created_at (common/now-str)}]
      (common/with-connection store
        (fn [conn]
@@ -107,20 +110,26 @@
      {:id (:id session)
       :title title
       :active-mode nil
+      :kind kind
+      :metadata metadata
       :created-at (:created_at session)})))
 
-(defn- row->session [{:keys [id title active_mode created_at]}]
+(defn- row->session [{:keys [id title active_mode kind metadata_json created_at]}]
   {:id id
    :title title
    :active-mode active_mode
+   :kind (keyword (or kind "chat"))
+   :metadata (common/parse-json-string metadata_json)
    :created-at created_at})
 
-(defn list-sessions [store]
+(defn list-sessions
+  ([store] (list-sessions store {}))
+  ([store {:keys [kind] :or {kind :chat}}]
   (common/with-connection
     store
     (fn [conn]
       (mapv row->session
-            (common/select-many conn (list-sessions-sqlvec) identity)))))
+            (common/select-many conn (list-sessions-sqlvec {:kind (name kind)}) identity))))))
 
 (defn count-sessions [store]
   (common/count-rows store (count-sessions-sqlvec)))

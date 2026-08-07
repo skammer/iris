@@ -781,6 +781,7 @@ textarea {
 .tools-workspace,
 .logs-page,
 .magi-log,
+.scroll-fade,
 .workspace-grid.overview-workspace {
   --scroll-fade-size: min(12%, 40px);
   --scroll-fade-reveal: 96px;
@@ -811,6 +812,7 @@ textarea {
   .tools-workspace,
   .logs-page,
   .magi-log,
+  .scroll-fade,
   .workspace-grid.overview-workspace {
     animation:
       scroll-fade-reveal-start 1ms ease-in-out,
@@ -832,6 +834,7 @@ textarea {
   .tools-workspace,
   .logs-page,
   .magi-log,
+  .scroll-fade,
   .workspace-grid.overview-workspace {
     --scroll-fade-start: var(--scroll-fade-size);
     --scroll-fade-end: var(--scroll-fade-size);
@@ -4608,6 +4611,35 @@ button.row--link:focus-visible {
 .ui-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; font-size: 11px; }
 .ui-table th { color: var(--text-secondary); font: 500 9px/1.2 "IoskeleyMono", monospace; letter-spacing: 0.08em; text-transform: uppercase; }
 .ui-table tbody tr:hover { background: var(--surface-raised); }
+
+.cron-workspace { display: grid; gap: 16px; min-width: 0; }
+.cron-summary .overview-metrics { margin-top: 12px; }
+.cron-table-wrap { overflow: auto; max-height: 48vh; }
+.cron-table td { vertical-align: top; }
+.cron-table td small { display: block; margin-top: 4px; color: var(--text-secondary); max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+.cron-row--active { box-shadow: inset 2px 0 0 var(--success); }
+.cron-actions { display: flex; gap: 6px; }
+.cron-inline-form { display: inline; }
+.cron-inline-form button { min-height: 28px; padding: 4px 8px; }
+.cron-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.cron-form-grid label { display: grid; gap: 6px; color: var(--text-secondary); font: 500 10px/1.2 "IoskeleyMono", monospace; text-transform: uppercase; letter-spacing: .06em; }
+.cron-form-grid input, .cron-form-grid select, .cron-form-grid textarea { width: 100%; color: var(--text-primary); background: var(--surface); border: 1px solid var(--border); padding: 9px 10px; font: 400 12px/1.4 "IoskeleyMono", monospace; }
+.cron-prompt { grid-column: 1 / -1; }
+.cron-editor__actions { display: flex; justify-content: flex-end; margin-top: 14px; }
+.cron-editor__actions { gap: 8px; }
+.cron-editors { display: grid; gap: 8px; margin-top: 14px; }
+.cron-job-editor { border-top: 1px solid var(--border); padding-top: 10px; }
+.cron-job-editor summary { cursor: pointer; color: var(--text-secondary); font: 500 11px/1.4 "IoskeleyMono", monospace; }
+.cron-edit-form { padding-top: 12px; }
+.cron-preview { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--border); color: var(--text-secondary); }
+.cron-preview ol { margin: 8px 0; padding-left: 22px; }
+.cron-table details pre { max-width: 640px; max-height: 260px; overflow: auto; white-space: pre-wrap; }
+.status-badge { display: inline-flex; align-items: center; min-height: 22px; padding: 3px 7px; border: 1px solid var(--border); border-radius: 2px; font: 600 9px/1 "IoskeleyMono", monospace; letter-spacing: .06em; text-transform: uppercase; }
+.status-badge--active, .status-badge--running, .status-badge--succeeded { color: var(--success); border-color: color-mix(in srgb, var(--success) 45%, var(--border)); }
+.status-badge--paused, .status-badge--completed, .status-badge--skipped, .status-badge--abandoned { color: var(--text-secondary); }
+.status-badge--claimed { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); }
+.status-badge--failed, .status-badge--deleted, .status-badge--cancelled { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+@media (max-width: 900px) { .cron-form-grid { grid-template-columns: 1fr; } .cron-prompt { grid-column: auto; } }
 .ui-avatar { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; background: var(--text-display); color: var(--surface); font-size: 9px; }
 
 .ui-pagination {

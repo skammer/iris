@@ -22,7 +22,8 @@
   [:map [:mode [:maybe schemas/NonBlankString]]])
 
 (def routes
-  [["/v1/sessions" {:get {:handler/id :list-sessions}
+  [["/v1/sessions" {:get {:handler/id :list-sessions
+                           :parameters {:query [:map [:kind {:optional true} [:enum "chat" "cron"]]]}}
                     :post {:handler/id :create-session
                            :parameters {:body create-session-body}}}]
    ["/v1/sessions/:session-id" {:get {:handler/id :get-session}}]

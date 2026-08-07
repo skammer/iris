@@ -4,6 +4,7 @@
    [agent.chat :as chat]
    [agent.cli.render :as cli-render]
    [agent.config :as cfg]
+   [agent.cron.cli :as cron-cli]
    [agent.loop :as loop]
    [agent.logging :as logging]
    [agent.sessions.service :as sessions]
@@ -39,6 +40,7 @@
     "  clojure -M -m agent.core bundle enable bundle.id [version]"
     "  clojure -M -m agent.core bundle disable bundle.id"
     "  clojure -M -m agent.core skills [prefix]"
+    "  clojure -M -m agent.core cron list|create|get|update|pause|resume|run|delete|runs|status"
     "  clojure -M -m agent.core loop --prompt \"task\" --plan LOOP_PLAN.md --max 10"
     "  clojure -M -m agent.core serve"
     "  clojure -M -m agent.core --config path/to/config.edn \"prompt text\""]))
@@ -106,10 +108,12 @@
           "--no-session"
           (recur (next remaining) (assoc parsed :no-session? true))
 
-          (if (and (contains? #{"serve" "loop" "skills" "config" "bundle"} arg)
+          (if (and (contains? #{"serve" "loop" "skills" "config" "bundle" "cron"} arg)
                    (empty? (:prompt-parts parsed))
                    (nil? (:command parsed)))
-            (recur (next remaining) (assoc parsed :command arg))
+            (if (= "cron" arg)
+              (recur nil (assoc parsed :command arg :command-args (vec (rest remaining))))
+              (recur (next remaining) (assoc parsed :command arg)))
             (recur (next remaining) (update parsed :prompt-parts conj arg))))))))
 
 (defn- find-session [sessions value]
@@ -406,6 +410,9 @@
 
       (= "skills" command)
       (with-system! config-path #(print-skills! % prompt))
+
+      (= "cron" command)
+      (with-system! config-path #(cron-cli/run! % (:command-args parsed)))
 
       (= "loop" command)
       (with-system! config-path #(run-loop! % parsed))

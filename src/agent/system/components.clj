@@ -6,6 +6,7 @@
    [agent.channels.core :as channel-adapters]
    [agent.chat :as chat]
    [agent.config :as config]
+   [agent.cron.service :as cron]
    [agent.llm.registry :as llm-registry]
    [agent.llm.service :as llm-service]
    [agent.logging :as logging]
@@ -96,6 +97,7 @@
        :telemetry (:telemetry system)
        :memory-service (:memory-service system)
        :skills-registry (:skills-registry system)
+       :cron-service (:cron-service system)
        :channel-adapters-cfg (:channel-adapters cfg)
        :system-control (:system-control system)
        :observer (:observer system)
@@ -146,7 +148,8 @@
                                                  llm-cfg
                                                  llm-provider))
         chat-service (system-health/with-component-health health-registry :chat
-                       #(chat/create-service))]
+                       #(chat/create-service))
+        cron-service (cron/create-service system-ref store (:cron cfg))]
     (logging/log! :agent.system.lifecycle/created
                   {:config-path config-path
                    :provider (name (config/active-provider-key (:llm cfg)))
@@ -170,6 +173,7 @@
                        :broker broker-instance
                        :event-sink event-sink
                        :chat-service chat-service
+                       :cron-service cron-service
                        :memory-idle-service (create-memory-idle-service system-ref)
                        :memory-magi-review-service (create-memory-magi-review-service system-ref)
                        :skills-registry (create-skills-registry-from-config cfg)

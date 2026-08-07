@@ -6,6 +6,7 @@
    [agent.api.handlers.channel-adapters :as channel-adapters]
    [agent.api.handlers.a2a :as a2a]
    [agent.api.handlers.chat :as chat]
+   [agent.api.handlers.cron :as cron]
    [agent.api.handlers.events :as events]
    [agent.api.handlers.health :as health]
    [agent.api.handlers.memory :as memory]
@@ -66,6 +67,10 @@
    :ui-shell (fn [r] (ui/shell (sys) r))
    :ui-route (fn [r] (ui/route (sys) r))
    :ui-dashboard (fn [r] (ui/dashboard (sys) r))
+   :ui-cron (fn [r] (ui/cron (sys) r))
+   :ui-cron-create (fn [r] (ui/cron-create (sys) r))
+   :ui-cron-preview (fn [r] (ui/cron-preview (sys) r))
+   :ui-cron-action (fn [r] (ui/cron-action (sys) r))
    :ui-operator-board (fn [r] (ui/operator-board (sys) r))
    :ui-sessions (fn [r] (ui/sessions (sys) r))
    :ui-create-session (fn [r] (ui/create-session (sys) r))
@@ -114,6 +119,19 @@
 
    :chat-completions (fn [r] (chat/completions-response (sys) r))
    :chat-stop (fn [r] (chat/stop-response (sys) r))
+
+   :list-cron-jobs (fn [r] (cron/list-jobs (sys) r))
+   :create-cron-job (fn [r] (cron/create-job (sys) r))
+   :get-cron-job (fn [r] (cron/get-job (sys) r))
+   :update-cron-job (fn [r] (cron/update-job (sys) r))
+   :delete-cron-job (fn [r] (cron/delete-job (sys) r))
+   :pause-cron-job (fn [r] (cron/set-status (sys) r :paused))
+   :resume-cron-job (fn [r] (cron/set-status (sys) r :active))
+   :run-cron-job (fn [r] (cron/run-job (sys) r))
+   :list-cron-runs (fn [r] (cron/list-runs (sys) r))
+   :get-cron-run (fn [r] (cron/get-run (sys) r))
+   :cron-status (fn [r] (cron/status (sys) r))
+   :preview-cron-job (fn [r] (cron/preview (sys) r))
 
    :list-providers (fn [r] (providers/list-providers (sys) r))
    :provider-health (fn [r] (providers/provider-health (sys) r (path-param r :provider-key)))

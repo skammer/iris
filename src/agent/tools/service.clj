@@ -10,6 +10,7 @@
    [agent.telemetry :as telemetry]
    [agent.telemetry.observer :as telemetry-observer]
    [agent.tools.approvals :as tool-approvals]
+   [agent.tools.common.cron :as cron-tool]
    [agent.tools.common.fs :as fs-tool]
    [agent.tools.common.homeassistant :as homeassistant-tool]
    [agent.tools.common.http :as http-tool]
@@ -148,7 +149,7 @@
   "Build the production tool registry from a dependency map:
    {:cfg <:tools config> :event-sink :store :telemetry :memory-service
     :skills-registry :channel-adapters-cfg :system-control :observer :trace}"
-  [{:keys [cfg event-sink store memory-service skills-registry channel-adapters-cfg
+  [{:keys [cfg event-sink store memory-service skills-registry channel-adapters-cfg cron-service
            system-control observer trace magi-service note-llm-provider llm-provider]
     telemetry-collector :telemetry}]
    (let [http-cfg (get cfg :http)
@@ -237,6 +238,10 @@
              (reduce tools/register-tool
                      registry*
                      (todo-tool/create-todo-tools store)))
+
+       cron-service
+       (-> (tools/register-tool (cron-tool/create-cronjob-tool cron-service))
+           (tools/register-tool (cron-tool/create-cron-notify-tool cron-service)))
 
        (not= false (:enabled shell-cfg))
        (tools/register-tool (shell-tool/create-shell-tool shell-cfg))

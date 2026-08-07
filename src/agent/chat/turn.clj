@@ -81,13 +81,13 @@
   (into [fallback-system-message] messages))
 
 (defn- fallback-content!
-  [system model messages session-id request-id error stream? emit-delta]
+  [system provider-config model messages session-id request-id error stream? emit-delta]
   (try
     (let [guarded-delta (when stream?
                           (dsml/guard-content-delta emit-delta [] true))
           turn (llm-instrumented/invoke-with-telemetry!
                 (:telemetry system)
-                (:llm-provider system)
+                provider-config
                 (fallback-messages messages)
                 (cond-> {}
                   guarded-delta (assoc :on-content-delta guarded-delta))
@@ -174,7 +174,9 @@
    persistence (user turn, compaction, history reads) but installs no event
    subscriptions; that wiring stays in run-turn!."
   [system {:keys [messages session-id max-steps stream? on-delta on-thinking-delta
-                  cancellation-token persist-user? user-message]
+                  cancellation-token persist-user? user-message model provider-config
+                  chat-profile tool-descriptions permission-profile allowed-tools
+                  allowed-actions]
            :or {persist-user? true}
            :as opts}]
   (let [config (:config system)
@@ -199,8 +201,13 @@
      :history history
      :recall recall
      :context-injectors (context-injectors system session-id prompt recall)
-     :model (config/active-model llm-config)
-     :chat-profile (config/chat-profile config)
+     :model (or model (config/active-model llm-config))
+     :provider-config (or provider-config (:llm-provider system))
+     :chat-profile (or chat-profile (config/chat-profile config))
+     :tool-descriptions tool-descriptions
+     :permission-profile (or permission-profile :chat)
+     :allowed-tools allowed-tools
+     :allowed-actions allowed-actions
      :compaction-config (:compaction chat-config)
      :max-steps (long (or max-steps
                           (:max-steps chat-config)
@@ -254,17 +261,31 @@
    the live wiring (event sink, kernel ops, thinking callback) created by
    run-turn!."
   [system
-   {:keys [session-id request-id cancelled? history context-injectors model
+   {:keys [session-id request-id cancelled? history context-injectors model provider-config
+           tool-descriptions allowed-tools allowed-actions
            chat-profile max-steps stream-content? doom-loop-config
            max-parallelism yolo?]
     :as env}
    {:keys [event-sink ops on-thinking-delta]}]
+  (let [restrict-description
+        (fn [description]
+          (if-let [allowed (get allowed-actions (:name description))]
+            (if-let [field (case (:name description) :http :method :homeassistant :action nil)]
+              (assoc-in description [:input-schema :properties field]
+                        {:type "string" :enum (mapv name allowed)})
+              description)
+            description))]
   {:messages history
    :context-injectors context-injectors
    :system-prompt (planner/planner-system-prompt)
-   :tools (tools/list-tools (:tool-registry system))
+   :tools (or tool-descriptions
+              (let [allowed (some-> allowed-tools set)]
+                (->> (tools/list-tools (:tool-registry system))
+                     (filter #(and (or allowed (not= :cron_notify (:name %)))
+                                   (or (nil? allowed) (contains? allowed (:name %)))))
+                     (mapv restrict-description))))
    :model model
-   :provider-config (:llm-provider system)
+   :provider-config provider-config
    :chat-profile chat-profile
    :telemetry (:telemetry system)
    :observer (:observer system)
@@ -293,13 +314,14 @@
                   (mapv #(request-approval! system session-id %) receipts))
    :fallback-fn (fn [{:keys [messages error stream? emit-delta]}]
                   (fallback-content! system
+                                     provider-config
                                      model
                                      messages
                                      session-id
                                      request-id
                                      error
                                      stream?
-                                     emit-delta))})
+                                     emit-delta))}))
 
 (defn run-turn!
   "Run a chat turn for `session-id`. Public wrapper keeps persistence, transport
@@ -318,7 +340,10 @@
                  (subscribers/loop-event-sink system subscribers)
                  (get-in system [:chat-service :stream-flush-scheduler]))
         event-sink (:emit! flusher)
-        tool-context (assoc (or context {}) :magi-context (magi-context env))
+        tool-context (merge (or context {})
+                            {:magi-context (magi-context env)
+                             :permission-profile (:permission-profile env)}
+                            (select-keys env [:allowed-tools :allowed-actions]))
         ops (chat-kernel-ops/->ChatKernelOps system session-id request-id tool-context)]
     (event-sink (memory-recalled-event env))
     (try

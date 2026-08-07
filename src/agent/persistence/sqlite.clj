@@ -81,10 +81,12 @@
 
 (defn create-session!
   ([store] (sessions/create-session! store))
-  ([store title] (sessions/create-session! store title)))
+  ([store title] (sessions/create-session! store title))
+  ([store title opts] (sessions/create-session! store title opts)))
 
-(defn list-sessions [store]
-  (sessions/list-sessions store))
+(defn list-sessions
+  ([store] (sessions/list-sessions store))
+  ([store opts] (sessions/list-sessions store opts)))
 
 (defn get-session [store session-id]
   (sessions/get-session store session-id))

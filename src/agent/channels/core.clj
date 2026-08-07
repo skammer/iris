@@ -172,6 +172,9 @@
        (sort-by key)
        (mapv (fn [[_ adapter]] (describe-adapter adapter)))))
 
+(defn get-adapter [registry name]
+  (get (:adapters registry) (if (keyword? name) name (keyword name))))
+
 (defn registry-health
   [registry]
   (let [adapters (:adapters registry)
