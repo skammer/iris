@@ -10,6 +10,27 @@
 (def actions #{:list :get :history :create :update :pause :resume :run :delete :preview})
 (def read-actions #{:list :get :history :preview})
 
+(def ^:private schedule-schema
+  [:or
+   [:map {:closed true :title "Five-field cron schedule"}
+    [:kind {:description "Schedule type."} [:enum :cron "cron"]]
+    [:expression
+     {:description "Five-field UNIX cron expression: minute hour day-of-month month day-of-week. Example: 0 9 * * 1-5."}
+     [:string {:min 1}]]]
+   [:map {:closed true :title "One-shot schedule"}
+    [:kind {:description "Schedule type."} [:enum :at "at"]]
+    [:at
+     {:description "ISO-8601 UTC instant or relative value such as 'in 15m'."}
+     [:string {:min 1}]]]
+   [:map {:closed true :title "Interval schedule"}
+    [:kind {:description "Schedule type."} [:enum :interval "interval"]]
+    [:every-seconds
+     {:description "Interval in seconds; minimum 60."}
+     [:int {:min 60}]]
+    [:anchor-at
+     {:description "ISO-8601 UTC instant anchoring the interval."}
+     [:string {:min 1}]]]])
+
 (defn- normalize-action [value]
   (if (keyword? value) value (some-> value str/lower-case keyword)))
 
@@ -39,7 +60,9 @@
    {:description
     (tools/create-tool-description
      :cronjob
-     "Create, inspect, update, pause, resume, run, or delete persistent scheduled agent jobs."
+     (str "Create, inspect, update, pause, resume, run, or delete persistent scheduled agent jobs. "
+          "Cron schedules use schedule.expression, for example "
+          "{\"kind\":\"cron\",\"expression\":\"0 9 * * 1-5\"}; never use schedule.cron or schedule.expr.")
      :category :system
      :required-permissions #{:cron-read}
      :input-schema [:map {:closed true}
@@ -48,7 +71,10 @@
                     [:id {:optional true} [:maybe :string]]
                     [:name {:optional true} [:maybe :string]]
                     [:prompt {:optional true} [:maybe :string]]
-                    [:schedule {:optional true} [:maybe :map]]
+                    [:schedule
+                     {:optional true
+                      :description "Typed schedule. Required for preview/create; include only fields for the selected kind."}
+                     [:maybe schedule-schema]]
                     [:timezone {:optional true} [:maybe :string]]
                     [:notification {:optional true} [:maybe :map]]
                     [:provider {:optional true} [:maybe :string]]

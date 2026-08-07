@@ -5,6 +5,7 @@
    [agent.cron.schedule :as schedule]
    [agent.cron.store :as cron-store]
    [agent.persistence.sqlite :as sqlite]
+   [agent.tools.common.cron :as cron-tool]
    [agent.tools.core :as tools]
    [clojure.java.io :as io]
    [clojure.test :refer [deftest is testing]])
@@ -24,9 +25,34 @@
            (str (schedule/next-fire {:kind :interval :every-seconds 7200
                                      :anchor-at "2026-08-07T00:00:00Z"}
                                     "UTC" (Instant/parse "2026-08-07T02:00:01Z"))))))
+  (testing "missing expression names the required field"
+    (let [error (try
+                  (schedule/normalize {:kind :cron :cron "0 9 * * *"})
+                  nil
+                  (catch clojure.lang.ExceptionInfo e e))]
+      (is (= "cron schedule requires schedule.expression" (.getMessage error)))
+      (is (= :expression (:field (ex-data error))))))
   (testing "one shot exhausts"
     (is (nil? (schedule/next-fire {:kind :at :at "2026-08-07T01:00:00Z"}
                                   "UTC" (Instant/parse "2026-08-07T01:00:00Z"))))))
+
+(deftest cron-tool-publishes-and-validates-typed-schedule-test
+  (let [tool (cron-tool/create-cronjob-tool nil)
+        validate-input (:validate-fn tool)
+        description (tools/describe tool)
+        schedule-json-schema (get-in description [:input-schema :properties :schedule])
+        valid {:action "preview"
+               :name "weekday-report"
+               :prompt "Report"
+               :schedule {:kind "cron" :expression "0 9 * * 1-5"}}]
+    (is (= (assoc valid :action :preview) (validate-input valid)))
+    (is (re-find #"expression" (pr-str schedule-json-schema)))
+    (is (re-find #"Five-field UNIX cron" (pr-str schedule-json-schema)))
+    (let [error (try
+                  (validate-input (assoc-in valid [:schedule :cron] "0 9 * * 1-5"))
+                  nil
+                  (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :validation-failed (:type (ex-data error)))))))
 
 (deftest cron-claim-session-and-overlap-test
   (let [{:keys [path store]} (temp-store)

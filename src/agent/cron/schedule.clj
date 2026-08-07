@@ -45,6 +45,9 @@
 
 (defn- cron! [expression]
   (let [expression* (some-> expression str str/trim)]
+    (when (str/blank? expression*)
+      (validation-error "cron schedule requires schedule.expression"
+                        {:field :expression :value expression}))
     (when-not (= 5 (count (remove str/blank? (str/split (or expression* "") #"\s+"))))
       (validation-error "cron expression must contain exactly five fields"
                         {:field :expression :value expression}))

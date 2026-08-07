@@ -26,6 +26,12 @@ Tool-use policy for Iris agents.
 - Prefer a minimal root config plus focused include files. Do not copy built-in defaults into every fragment.
 - Run `iris config validate` before every reload/restart. Continue only after exit code 0 and `:status :valid`.
 
+## Cron
+
+- Use `schedule: {"kind":"cron","expression":"0 9 * * 1-5"}` for five-field UNIX cron. Field name is `expression`, never `cron` or `expr`.
+- One-shot: `{"kind":"at","at":"2026-08-10T06:00:00Z"}` or relative `at: "in 15m"`.
+- Interval: `{"kind":"interval","every-seconds":3600,"anchor-at":"2026-08-10T00:00:00Z"}`; minimum 60 seconds.
+
 ## Memory Tools
 
 - `todo_*`: session task state. Use for multi-step work, blockers, and progress. Available operations are write/get/list/search; `todo_write` replaces the whole list. Prefer one in-progress item, but do not force todos for simple tasks.
