@@ -1,0 +1,5 @@
+;; User override file. Iris deep-merges it over built-in defaults.
+;; Keep only intentional overrides here; full reference: docs/configuration.md.
+;; Split larger setups with :config/includes, for example:
+;; :config/includes ["config/provider.edn" "config/tools.edn" "config/secrets.edn"]
+{:iris/config-version 1}

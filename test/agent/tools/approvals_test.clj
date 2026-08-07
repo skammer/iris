@@ -68,6 +68,19 @@
        (shell/create-shell-tool {:default-decision :ask
                                  :rules []})))))
 
+(defn- approval-sensitive-tool [tool-name result]
+  (tools/create-tool
+   {:description (tools/create-tool-description
+                  tool-name
+                  "Approval-sensitive test tool"
+                  :category :system
+                  :required-permissions #{:cron-read}
+                  :input-schema [:map [:action :string]]
+                  :operation :act
+                  :approval-sensitive? true
+                  :sensitive (constantly true))
+    :execute-fn (fn [_ _] result)}))
+
 (deftest magi-auto-yes-approves-and-allows-tool-test
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})
@@ -98,6 +111,29 @@
                       (get-in % [:payload :approval-reason]))
                    @events)))
       (is (some #(= :tool.approval.magi_evaluated (:event-type %)) @events))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest approval-sensitive-metadata-covers-cronjob-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        events (atom [])
+        reg (-> (registry store (magi-service :yes "safe cron mutation") events)
+                (tools/register-tool (approval-sensitive-tool :cronjob {:created true})))]
+    (try
+      (is (= {:created true}
+             (tools/execute-tool reg
+                                 :cronjob
+                                 {:action "create"}
+                                 {:permissions #{:cron-read}
+                                  :user "tester"})))
+      (let [approval (first (sqlite/list-tool-approvals store {:limit 10}))]
+        (is (= "cronjob" (:tool-name approval)))
+        (is (= "approved" (:status approval)))
+        (is (= "magi" (:actor approval)))
+        (is (= #{:cron-read :cron-manage}
+               (:requested-permissions approval))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))

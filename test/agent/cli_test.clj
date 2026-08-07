@@ -67,6 +67,22 @@
              {:explicit-path "local.edn"}]]
            @calls))))
 
+(deftest config-validate-cli-checks-effective-config-without-starting-system-test
+  (let [calls (atom [])]
+    (with-redefs [config/validate-effective-config
+                  (fn [path]
+                    (swap! calls conj path)
+                    {:status :valid
+                     :source path
+                     :provider :deepseek
+                     :model "deepseek-v4-flash"
+                     :chat-max-steps 64})]
+      (is (= (str "{:status :valid, :source \"local.edn\", :provider :deepseek, "
+                  ":model \"deepseek-v4-flash\", :chat-max-steps 64}\n")
+             (with-out-str
+               (cli/main ["--config" "local.edn" "config" "validate"]))))
+      (is (= ["local.edn"] @calls)))))
+
 (deftest one-shot-cli-closes-system-test
   (let [closed (atom [])]
     (with-redefs [system/create-system (fn [_] {:id :prompt})

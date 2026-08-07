@@ -2,7 +2,7 @@
   (:require
    [agent.tools.common.shell :as shell-tool]
    [agent.tools.core :as tools]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defn temp-dir []
   (.toFile (java.nio.file.Files/createTempDirectory
@@ -20,6 +20,36 @@
                                    {:permissions #{:shell-exec}})]
     (is (= 0 (:exit result)))
     (is (= "hello" (:stdout result)))
+    (.delete root)))
+
+(deftest shell-tool-command-supports-shell-syntax-test
+  (let [root (temp-dir)
+        tool (shell-tool/create-shell-tool {:roots [(.getAbsolutePath root)]
+                                            :working-dir (.getAbsolutePath root)
+                                            :timeout-ms 5000})
+        registry (-> (tools/create-registry {:approval-check (constantly {:allow true})})
+                     (tools/register-tool tool))
+        result (tools/execute-tool registry
+                                   :shell
+                                   {:command "printf hello | tr a-z A-Z"}
+                                   {:permissions #{:shell-exec}})]
+    (is (= ["/bin/bash" "-lc" "printf hello | tr a-z A-Z"] (:argv result)))
+    (is (= 0 (:exit result)))
+    (is (= "HELLO" (:stdout result)))
+    (.delete root)))
+
+(deftest shell-tool-requires-exactly-one-input-form-test
+  (let [root (temp-dir)
+        tool (shell-tool/create-shell-tool {:roots [(.getAbsolutePath root)]
+                                            :working-dir (.getAbsolutePath root)})
+        registry (-> (tools/create-registry)
+                     (tools/register-tool tool))]
+    (doseq [input [{}
+                   {:argv ["pwd"] :command "pwd"}
+                   {:command "  "}]]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (tools/execute-tool registry :shell input
+                                       {:permissions #{:shell-exec}}))))
     (.delete root)))
 
 (deftest shell-tool-blocks-non-allowlisted-command-test
@@ -83,6 +113,12 @@
                           #"authoritative shell safety rule"
                           (tools/execute-tool registry :shell {:argv ["sh" "-c" "rm -rf /tmp/iris-shell-deny-test"]}
                                               {:permissions #{:shell-exec}})))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"authoritative shell safety rule"
+                          (tools/execute-tool registry :shell
+                                              {:command "printf ok; rm -rf /tmp/iris-shell-deny-test"}
+                                              {:permissions #{:shell-exec}
+                                               :yolo? true})))
     (.delete root)))
 
 (deftest shell-tool-default-script-build-commands-require-approval-test
@@ -141,7 +177,7 @@
                      (tools/register-tool tool))]
     (let [result (tools/execute-tool registry :shell {:command "printf hello"}
                                      {:permissions #{:shell-exec}})]
-      (is (= ["printf" "hello"] (:argv result)))
+      (is (= ["/bin/bash" "-lc" "printf hello"] (:argv result)))
       (is (= 0 (:exit result)))
       (is (= "hello" (:stdout result))))
     (.delete root)))

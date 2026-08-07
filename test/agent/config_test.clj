@@ -460,6 +460,8 @@
       (is (not (.exists (io/file dir "HEARBEAT.md"))))
       (is (re-find #":iris/config-version"
                    (slurp (io/file dir "config.edn"))))
+      (is (not (re-find #":active-provider"
+                        (slurp (io/file dir "config.edn")))))
       (is (not (re-find #"^#:iris"
                         (slurp (io/file dir "config.edn"))))))))
 

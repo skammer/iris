@@ -59,6 +59,18 @@
             :function {:name "search"
 	                       :arguments "{\"q\":\"clojure\"}"}}]))))
 
+(deftest tool-call-directive-unwraps-redundant-arguments-envelope
+  (is (= {:argv ["bash" "-lc" "pwd"]
+          :purpose "inspect workspace"}
+         (get-in
+          (llm-core/tool-call->directive
+           {:id "call-shell"
+            :type "function"
+            :function {:name "shell"
+                       :arguments
+                       "{\"arguments\":\"{\\\"argv\\\":[\\\"bash\\\",\\\"-lc\\\",\\\"pwd\\\"],\\\"purpose\\\":\\\"inspect workspace\\\"}\"}"}})
+          [:payload :input]))))
+
 (deftest stream-error-event-redacts-raw-provider-data-test
   (let [event (llm-core/stream-error-event
                (ex-info "rate limited"

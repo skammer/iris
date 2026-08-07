@@ -70,7 +70,7 @@
 	                            :todo_write :todo_get :todo_list :todo_search]))
     (is (= ["Telegram"] (mapv :display-name adapters)))
     (is (every? (set (mapv :name (skills/list-skills (:skills-registry system))))
-                ["memory-vault" "dream" "distill"]))
+                ["memory-vault" "dream" "distill" "iris-config"]))
 	    (is (= 2 (count (memory/list-surfaces system))))
     (is (false? (get-in system-health [:logging :enabled])))
     (is (= :local (get-in system-health [:broker :backend])))
@@ -79,7 +79,7 @@
     (is (= "ok" (get-in system-health [:health-snapshot :components "sqlite" :status])))
     (is (contains? (get-in system-health [:health-snapshot :components]) "runtime"))))
 
-(deftest soft-reload-refreshes-llm-and-reuses-unchanged-telegram
+(deftest soft-reload-refreshes-llm-without-cancelling-chat-queue
   (let [events (atom [])
         stopped (atom [])
         health-registry (health/create-registry)
@@ -111,7 +111,7 @@
                   tool-service/create-tool-registry (fn [& _] ::tools)
                   telegram/create-service (fn [_] (throw (ex-info "Telegram must not restart" {})))
                   components/create-channel-adapter-registry (fn [& _] (throw (ex-info "Telegram registry must be reused" {})))
-                  chat/create-service (fn [] ::new-chat)
+                  chat/create-service (fn [] (throw (ex-info "Chat queue must be reused" {})))
                   chat/stop! (fn [service] (swap! stopped conj service))]
       (let [result (system/reload! old-system {:mode :soft})
             new-system @system-ref]
@@ -120,7 +120,8 @@
                (:llm-registry new-system)))
         (is (= ::old-telegram (:telegram-service new-system)))
         (is (= ::old-channel-registry (:channel-adapter-registry new-system)))
-        (is (= [::old-chat] @stopped))
+        (is (= ::old-chat (:chat-service new-system)))
+        (is (empty? @stopped))
         (is (= :system.config.reloaded (:event-type (last @events))))))))
 
 (deftest full-reload-stops-old-api-before-starting-new-api
@@ -177,6 +178,29 @@
         (is (= system-ref (:system-ref new-system)))
         (is (= ::new-tools (get-in new-system [:telegram-service :telegram-system :tool-registry])))
         (is (= :system.config.reloaded (:event-type (last @events))))))))
+
+(deftest full-reload-validates-before-scheduling-test
+  (let [system-ref (atom nil)
+        reload-state (atom {:status :idle})
+        health-registry (health/create-registry)
+        system* {:config config/default-config
+                 :config-path "broken.edn"
+                 :system-ref system-ref
+                 :reload-state reload-state
+                 :health-registry health-registry}]
+    (reset! system-ref system*)
+    (with-redefs [config/validate-effective-config
+                  (fn [_]
+                    (throw (ex-info "invalid provider config"
+                                    {:type :config-invalid})))
+                  components/create-system-components
+                  (fn [& _]
+                    (throw (ex-info "must not build" {})))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"invalid provider config"
+                            (system/reload! system* {:mode :full :source "test"})))
+      (is (= :failed (:status @reload-state)))
+      (is (= "invalid provider config" (:message @reload-state))))))
 
 (deftest tool-policy-blocks-and-yolo-skips-approval-only
   (let [path (temp-db-path)

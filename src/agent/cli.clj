@@ -33,6 +33,7 @@
     "  clojure -M -m agent.core --session session-id \"continue session\""
     "  clojure -M -m agent.core --no-session \"ephemeral prompt\""
     "  clojure -M -m agent.core config init"
+    "  clojure -M -m agent.core config validate"
     "  clojure -M -m agent.core config migrate path/to/config.edn"
     "  clojure -M -m agent.core config set dotted.path value"
     "  clojure -M -m agent.core bundle install path/to/package.skill"
@@ -226,6 +227,13 @@
                           {:type :invalid-cli-args})))
         (print-edn! (cfg/migrate-config-file path)))
 
+      "validate"
+      (do
+        (when (or path (seq extra))
+          (throw (ex-info "config validate takes no arguments; use --config PATH"
+                          {:type :invalid-cli-args})))
+        (print-edn! (cfg/validate-effective-config config-path)))
+
       "set"
       (do
         (when (or (str/blank? path) (not (seq extra)))
@@ -236,7 +244,7 @@
                      (str/join " " extra)
                      {:explicit-path config-path})))
 
-      (throw (ex-info "config command must be init, migrate, or set"
+      (throw (ex-info "config command must be init, validate, migrate, or set"
                       {:type :invalid-cli-args
                        :subcommand subcommand})))))
 

@@ -51,7 +51,9 @@ clojure -J--enable-native-access=ALL-UNNAMED -M -m agent.core --config config/de
 
 Configuration:
 
-- `~/.config/iris/config.edn` uses the same shape as `resources/config/default.edn`. Create missing global files with `clojure -M -m agent.core config init`.
+- Full operator reference: [`docs/configuration.md`](docs/configuration.md).
+- Validate the complete effective config before restart with `clojure -M -m agent.core config validate` (or add `--config path/to/config.edn`).
+- `~/.config/iris/config.edn` is a minimal override map using the same shape as `resources/config/default.edn`. Create missing global files with `clojure -M -m agent.core config init`.
 - LLM model settings live under provider entries: `{:llm {:active-provider :ollama :providers {:ollama {:type :ollama :base-url "http://localhost:11434" :model "llama3.2:3b"} :deepseek {:type :openai-compatible :api :chat-completions :base-url "https://api.deepseek.com/v1" :api-key "..." :model "deepseek-chat"}}}}`.
 - OpenAI-compatible providers default to `:api :chat-completions`; use `:api :responses` only for endpoints/models that support `/responses`.
 - Legacy LLM config can be converted with `clojure -M -m agent.core config migrate path/to/config.edn`.

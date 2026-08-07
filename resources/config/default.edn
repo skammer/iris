@@ -1,3 +1,5 @@
+;; Canonical built-in defaults. User config deep-merges over this map.
+;; Override only changed values; see docs/configuration.md.
 {:iris/config-version 1
  :llm {:active-provider :ollama
        :stream-content? true
@@ -57,7 +59,7 @@
                     :minimum-idle 2
                     :connection-timeout-ms 30000
                     :destructive-reset-on-drift? false}}
- :chat {:max-steps 6
+ :chat {:max-steps 64
         :profiles {:default {:small-model? false
                              :respond-tool? false
                              :force-tool-choice? false

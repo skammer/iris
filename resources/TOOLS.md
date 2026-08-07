@@ -10,6 +10,19 @@ Tool-use policy for Iris agents.
 - Use tool output as evidence. Do not claim success until the relevant output confirms it.
 - Do not expose secrets from configs, logs, tokens, or request bodies.
 
+## Shell
+
+- Pass exactly one top-level input form. Use `argv` for one executable with literal arguments: `{"argv":["rg","TODO","src"]}`.
+- Use `command` for shell syntax: `{"command":"find . -name '*.md' | head"}`. Iris runs it with `/bin/bash -lc`.
+- Never put either form inside an `arguments` field and never JSON-encode tool input yourself.
+
+## Configuration
+
+- Invoke `/iris-config` before inspecting or changing Iris configuration.
+- Permissions are capabilities, not tool names. Cron uses `cron-read` and `cron-manage`; `cronjob` is the tool name, never a permission.
+- Prefer a minimal root config plus focused include files. Do not copy built-in defaults into every fragment.
+- Run `iris config validate` before every reload/restart. Continue only after exit code 0 and `:status :valid`.
+
 ## Memory Tools
 
 - `todo_*`: session task state. Use for multi-step work, blockers, and progress. Available operations are write/get/list/search; `todo_write` replaces the whole list. Prefer one in-progress item, but do not force todos for simple tasks.

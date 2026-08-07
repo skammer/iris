@@ -114,15 +114,29 @@
 
 (declare llm-error stream-error-event)
 
+(defn- parse-json-arguments [arguments]
+  (if (string? arguments)
+    (try
+      (json/parse-string arguments true)
+      (catch Exception _ arguments))
+    arguments))
+
+(defn- unwrap-arguments-envelope [value]
+  (let [argument-key (cond
+                       (and (map? value) (contains? value :arguments)) :arguments
+                       (and (map? value) (contains? value "arguments")) "arguments")]
+    (if (and argument-key (= 1 (count value)))
+      (let [nested (parse-json-arguments (get value argument-key))]
+        (if (map? nested) nested value))
+      value)))
+
 (defn- parse-tool-arguments [arguments]
-  (cond
-    (nil? arguments) {}
-    (map? arguments) arguments
-    (string? arguments) (try
-                          (json/parse-string arguments true)
-                          (catch Exception _
-                            {:arguments arguments}))
-    :else {:arguments arguments}))
+  (let [parsed (parse-json-arguments arguments)
+        unwrapped (unwrap-arguments-envelope parsed)]
+    (cond
+      (nil? unwrapped) {}
+      (map? unwrapped) unwrapped
+      :else {:arguments unwrapped})))
 
 (defn tool-call->directive
   [tool-call]

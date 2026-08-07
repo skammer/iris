@@ -144,8 +144,10 @@
         base (assoc old-system
                     :config new-cfg
                     :llm-registry (llm-registry/create-registry llm-cfg)
-                    :chat-service (system-health/with-component-health health-registry :chat
-                                    #(chat/create-service))
+                    ;; Active turns belong to this queue. Replacing/stopping it
+                    ;; during a soft reload cancels the turn which requested the
+                    ;; reload and can leave queued Telegram work as `Stopped.`.
+                    :chat-service (:chat-service old-system)
                     :llm-provider llm-provider
                     :magi-service magi-service
                     :note-llm-provider (system-health/with-component-health health-registry :llm-provider
@@ -172,7 +174,6 @@
         cron-running? (cron/running? (:cron-service system*))
         new-system (rebuild-hot-system system* new-cfg)
         result (reload-result :soft old-cfg new-cfg :reloaded)]
-    (chat/stop! (:chat-service system*))
     (cron/stop! (:cron-service system*))
     (memory-idle/stop! (:memory-idle-service system*))
     (memory-magi-review/stop! (:memory-magi-review-service system*))
@@ -245,11 +246,13 @@
 
 (defn- schedule-full-reload! [system opts]
   (let [system* (current-system system)
-        reload-state (:reload-state system*)]
+        reload-state (:reload-state system*)
+        validation (config/validate-effective-config (:config-path system*))]
     (reset! reload-state
             {:mode :full
              :status :scheduled
              :source (:source opts)
+             :validation validation
              :scheduled-at (util/now-str)})
     (future
       (Thread/sleep (long (or (:delay-ms opts) 500)))

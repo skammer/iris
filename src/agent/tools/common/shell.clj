@@ -61,6 +61,9 @@
 (defn- split-command [command]
   (vec (remove str/blank? (str/split (str/trim (or command "")) #"\s+"))))
 
+(defn- command-argv [command]
+  ["/bin/bash" "-lc" command])
+
 (defn- binary-basename [value]
   (.getName (io/file (or value ""))))
 
@@ -72,12 +75,47 @@
 (def ^:private shell-wrapper-binaries #{"sh" "bash" "zsh" "dash"})
 (def ^:private always-denied-binaries #{"dd" "mkfs" "fdisk" "mkswap"})
 
+(defn- shell-script [args]
+  (when (and (str/starts-with? (or (first args) "") "-")
+             (str/includes? (first args) "c"))
+    (second args)))
+
+(defn- simple-shell-script? [script]
+  (not (re-find #"[|&;<>()`$\n\r]" (or script ""))))
+
+(defn- policy-command-argv [argv]
+  (let [[binary & args] (policy-argv argv)
+        script (when (contains? shell-wrapper-binaries binary)
+                 (shell-script args))]
+    (if (and script (simple-shell-script? script))
+      (split-command script)
+      argv)))
+
 (defn- rm-recursive-force? [args]
   (let [options (filter #(str/starts-with? % "-") args)
         recursive? (some #(or (str/includes? % "r")
                               (str/includes? % "R")) options)
         force? (some #(str/includes? % "f") options)]
     (boolean (and recursive? force?))))
+
+(defn- script-tokens [script]
+  (->> (str/split (or script "") #"[^A-Za-z0-9_./=+-]+")
+       (remove str/blank?)
+       vec))
+
+(defn- authoritative-script-deny [script argv]
+  (let [tokens (script-tokens script)
+        binaries (mapv binary-basename tokens)
+        dangerous-binary (some #(when (contains? always-denied-binaries %) %) binaries)
+        recursive-rm? (some (fn [[idx binary]]
+                              (when (= "rm" binary)
+                                (rm-recursive-force? (subvec tokens (inc idx)))))
+                            (map-indexed vector binaries))]
+    (when (or dangerous-binary recursive-rm?)
+      {:decision :deny
+       :reason "Command denied by authoritative shell safety rule"
+       :details {:binary (or dangerous-binary "rm")
+                 :argv argv}})))
 
 (defn- authoritative-deny [argv]
   (let [[binary & args] (policy-argv argv)]
@@ -88,9 +126,9 @@
       (authoritative-deny (vec args))
 
       (and (contains? shell-wrapper-binaries binary)
-           (= "-c" (first args))
-           (second args))
-      (authoritative-deny (split-command (second args)))
+           (shell-script args))
+      (or (authoritative-script-deny (shell-script args) argv)
+          (authoritative-deny (split-command (shell-script args))))
 
       (and (= "rm" binary)
            (rm-recursive-force? args))
@@ -179,14 +217,22 @@
 (defn- shell-policy-decision [config argv]
   (if-let [deny (authoritative-deny argv)]
     deny
-    (if (legacy-policy-config? config)
-      (legacy-policy-decision config argv)
-      (rule-policy-decision config argv))))
+    (let [policy-argv* (policy-command-argv argv)]
+      (if (legacy-policy-config? config)
+        (legacy-policy-decision config policy-argv*)
+        (rule-policy-decision config policy-argv*)))))
 
 (defn- validate-input [input]
-  (let [argv (or (:argv input)
-                 (when (contains? input :command)
-                   (split-command (:command input))))]
+  (let [argv? (contains? input :argv)
+        command? (contains? input :command)
+        command (:command input)
+        _ (when (= argv? command?)
+            (throw (tools/validation-error
+                    "provide exactly one of argv or command"
+                    {:input input})))
+        _ (when (and command? (str/blank? command))
+            (throw (tools/validation-error "command must be non-blank" {:input input})))
+        argv (if argv? (:argv input) (command-argv command))]
     (when-not (and (vector? argv) (seq argv) (every? string? argv))
       (throw (tools/validation-error "argv must be a non-empty vector of strings" {:input input})))
     (-> input
@@ -237,13 +283,17 @@
      {:description
       (tools/create-tool-description
        :shell
-       "Local shell execution tool"
+       "Run a local process. Pass exactly one top-level field: argv for an executable plus literal arguments, or command for shell syntax such as pipes, redirects, variables, and &&. Never wrap input inside an arguments field."
        :category :system
        :timeout-ms (:timeout-ms config)
        :required-permissions #{:shell-exec}
        :input-schema [:map {:closed true}
-                      [:argv {:optional true} [:vector {:min 1} :string]]
-                      [:command {:optional true} :string]
+                      [:argv {:optional true
+                              :description "Exact executable and arguments, e.g. [\"rg\" \"TODO\" \"src\"]. No shell parsing."}
+                       [:vector {:min 1} :string]]
+                      [:command {:optional true
+                                 :description "Shell command string for pipes, redirects, variables, globs, or &&; executed with /bin/bash -lc."}
+                       :string]
                       [:working-dir {:optional true} :string]
                       [:timeout-ms {:optional true} [:int {:min 1}]]]
        :operation :act

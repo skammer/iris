@@ -4,7 +4,7 @@
 (def llm-temperature 0.2)
 (def llm-max-tokens 1024)
 
-(def chat-max-steps 6)
+(def chat-max-steps 64)
 (def tool-output-max-chars 8000)
 
 (def broker-channel-buffer-size 64)

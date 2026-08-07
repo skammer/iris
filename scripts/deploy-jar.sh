@@ -54,6 +54,19 @@ if [[ -d "skills" ]]; then
   scp "${scp_args[@]}" -r skills/. "${remote}:${remote_skills_dir}/"
 fi
 
+remote_docs_dir="${remote_config_dir%/}/docs"
+printf -v remote_docs_dir_quoted '%q' "${remote_docs_dir}"
+if [[ -d "docs" ]]; then
+  printf 'Uploading operator docs: docs/ -> %s:%s/\n' "${remote}" "${remote_docs_dir}"
+  ssh "${ssh_args[@]}" "${remote}" "mkdir -p ${remote_docs_dir_quoted}"
+  scp "${scp_args[@]}" -r docs/. "${remote}:${remote_docs_dir}/"
+fi
+
+if [[ -f "obsidian/guides/cron-jobs.md" ]]; then
+  printf 'Uploading cron guide: obsidian/guides/cron-jobs.md -> %s:%s/cron-jobs.md\n' "${remote}" "${remote_docs_dir}"
+  scp "${scp_args[@]}" obsidian/guides/cron-jobs.md "${remote}:${remote_docs_dir}/cron-jobs.md"
+fi
+
 printf 'Installing launcher: %s:%s/%s\n' "${remote}" "${remote_dir}" "${remote_bin_name}"
 ssh "${ssh_args[@]}" "${remote}" "bash -s" -- "${remote_dir}" "${remote_jar_name}" "${remote_bin_name}" <<'REMOTE_SCRIPT'
 set -euo pipefail

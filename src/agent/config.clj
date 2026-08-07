@@ -459,7 +459,7 @@
 
 (defn- resource-template-content [name]
   (when-let [resource (io/resource (if (= config-file-name name)
-                                     "config/default.edn"
+                                     "config/user.edn"
                                      name))]
     (slurp resource)))
 
@@ -1110,6 +1110,17 @@
 (defn active-model
   [llm-cfg]
   (:model (active-provider-config llm-cfg)))
+
+(defn validate-effective-config
+  "Load and validate the complete effective config without exposing secrets."
+  ([] (validate-effective-config nil))
+  ([path]
+   (let [cfg (load-config path)]
+     {:status :valid
+      :source (or path :automatic)
+      :provider (active-provider-key (:llm cfg))
+      :model (active-model (:llm cfg))
+      :chat-max-steps (get-in cfg [:chat :max-steps])})))
 
 (defn chat-profile
   "Resolve chat profile for active provider/model. Precedence:

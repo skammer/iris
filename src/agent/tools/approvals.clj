@@ -5,6 +5,7 @@
    [agent.persistence.sqlite :as sqlite]
    [agent.security :as security]
    [agent.tools.core :as tools]
+   [clojure.set :as set]
    [clojure.string :as str])
   (:import
    (java.time Instant)))
@@ -14,6 +15,8 @@
   (case tool-name
     :shell true
     :homeassistant (= :call_service (some-> (:action _input) keyword))
+    :cronjob (not (contains? #{:list :get :history :preview}
+                             (some-> (:action _input) keyword)))
     (:fs_write :fs_create :fs_replace :fs_delete :fs_mkdir) true
     false))
 
@@ -22,6 +25,10 @@
   (case tool-name
     :shell #{:shell-exec}
     :homeassistant #{:homeassistant}
+    :cronjob (if (contains? #{:list :get :history :preview}
+                            (some-> (:action _input) keyword))
+               #{:cron-read}
+               #{:cron-read :cron-manage})
     (:fs_write :fs_create :fs_replace :fs_delete :fs_mkdir) #{:filesystem-write}
     (:fs_read :fs_list) #{:filesystem-read}
     #{}))
@@ -45,12 +52,13 @@
     (.isAfter (Instant/now) (Instant/parse expires-at))))
 
 (defn create-request!
-  [store {:keys [tool-name input requested-by reason expires-at]}]
+  [store {:keys [tool-name input requested-permissions requested-by reason expires-at]}]
   (sqlite/create-tool-approval! store
                                 {:tool-name tool-name
                                  :input input
                                  :input-hash (input-hash input)
-                                 :requested-permissions (granted-permissions tool-name input)
+                                 :requested-permissions (or requested-permissions
+                                                            (granted-permissions tool-name input))
                                  :requested-by requested-by
                                  :reason reason
                                  :expires-at expires-at}))
@@ -358,7 +366,12 @@
           {:store store-or-opts})]
     (fn [{:keys [tool input context]}]
       (let [tool-name (:name tool)]
-        (when (approval-required? tool-name input)
+        ;; `enforce-approval!` only calls this hook for inputs the tool itself
+        ;; marked sensitive. Keep legacy action rules for tools whose public
+        ;; metadata is intentionally read-oriented, and honor the generic
+        ;; approval contract for new tools such as cronjob.
+        (when (or (approval-required? tool-name input)
+                  (:approval-sensitive? tool))
           (let [approval-id (:approval-id context)
                 approval (when approval-id (get-request store approval-id))]
             (if (valid-approval? approval tool-name input context)
@@ -374,6 +387,9 @@
                                 :event-sink event-sink}
                                {:tool-name tool-name
                                 :input input
+                                :requested-permissions
+                                (set/union (set (:required-permissions tool))
+                                           (granted-permissions tool-name input))
                                 :requested-by (or (:user context) "tool")
                                 :reason (default-approval-reason tool-name input)
                                 :expires-at (expires-at approval-ttl-seconds)}
