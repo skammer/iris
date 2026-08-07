@@ -209,6 +209,9 @@
   ([store] (events/list-events store))
   ([store opts] (events/list-events store opts)))
 
+(defn get-event [store id]
+  (events/get-event store id))
+
 (defn latest-event-id [store]
   (events/latest-event-id store))
 

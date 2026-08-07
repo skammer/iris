@@ -126,7 +126,7 @@
                 [:div#tool-results-panel.tool-operation-result {:hidden true}]
                 (ui-render/trusted-fragment
                  (tool-approvals-fragment
-                  (tool-approvals/list-review-records (:store system) {:limit 50})))]] )
+                  (tool-approvals/list-review-records (:store system) {:limit 20})))]] )
       :memory (memory-workspace-fragment system)
       :magi (ui-render/render-many
              [:section.workspace-grid.single
@@ -589,9 +589,25 @@
      [:pre.code (json/generate-string payload {:pretty true})]
      [:div.empty-line "none"])])
 
-(defn- event-log-record [{:keys [event-type entity-type entity-id created-at payload]}]
+(defn- event-log-detail [{:keys [id event-type entity-type entity-id created-at payload]}]
+  [:div.log-record__detail {:id (str "log-detail-event-" id)}
+   [:dl.log-record__metadata
+    [:div [:dt "Event"] [:dd event-type]]
+    [:div [:dt "Entity"] [:dd (or entity-type "system")]]
+    [:div [:dt "Entity ID"]
+     [:dd
+      (if entity-id
+        [:code {:title entity-id} (ui-render/short-id entity-id)]
+        "-")]]
+    [:div [:dt "Created"] [:dd (or created-at "-")]]]
+   (log-payload payload)])
+
+(defn- event-log-record [{:keys [id event-type entity-type entity-id created-at]}]
   [:details.log-record
+   {:id (str "log-record-event-" id)
+    "data-preserve-attr" "open"}
    [:summary.log-record__summary
+    {"data-on:click" (str "@get('/ui/logs/event/" id "/detail')")}
     (log-state "event" "log-state--neutral")
     [:span.log-record__event event-type]
     [:span.log-record__source (or entity-type "system")]
@@ -601,25 +617,34 @@
      (if entity-id (ui-render/short-id entity-id) "-")]
     [:time {:datetime created-at} (ui-render/short-timestamp created-at)]
     [:span.log-record__chevron {:aria-hidden "true"} "⌄"]]
-   [:div.log-record__detail
-    [:dl.log-record__metadata
-     [:div [:dt "Event"] [:dd event-type]]
-     [:div [:dt "Entity"] [:dd (or entity-type "system")]]
-     [:div [:dt "Entity ID"]
-      [:dd
-       (if entity-id
-         [:code {:title entity-id} (ui-render/short-id entity-id)]
-         "-")]]
-     [:div [:dt "Created"] [:dd (or created-at "-")]]]
-    (log-payload payload)]])
+   [:div.log-record__detail {:id (str "log-detail-event-" id)}
+    [:div.empty-line "Loading details…"]]])
 
-(defn- trace-log-record [{:keys [event-type timestamp turn-id channel model success error-message payload]}]
+(defn- trace-log-detail [{:keys [id event-type timestamp turn-id channel model error-message payload]}]
+  [:div.log-record__detail {:id (str "log-detail-trace-" id)}
+   [:dl.log-record__metadata
+    [:div [:dt "Event"] [:dd event-type]]
+    [:div [:dt "Turn ID"]
+     [:dd
+      (if turn-id
+        [:code {:title turn-id} (ui-render/short-id turn-id)]
+        "-")]]
+    [:div [:dt "Channel"] [:dd (or channel "-")]]
+    [:div [:dt "Model"] [:dd (or model "-")]]
+    [:div [:dt "Timestamp"] [:dd (or timestamp "-")]]
+    [:div [:dt "Error"] [:dd (or error-message "-")]]]
+   (log-payload payload)])
+
+(defn- trace-log-record [{:keys [id event-type timestamp turn-id channel model success]}]
   (let [[state-label state-class] (cond
                                     (false? success) ["failed" "log-state--failed"]
                                     (true? success) ["ok" "log-state--ok"]
                                     :else ["trace" "log-state--neutral"])]
     [:details.log-record
+     {:id (str "log-record-trace-" id)
+      "data-preserve-attr" "open"}
      [:summary.log-record__summary
+      {"data-on:click" (str "@get('/ui/logs/trace/" id "/detail')")}
       (log-state state-label state-class)
       [:span.log-record__event event-type]
       [:span.log-record__source (or channel "runtime")]
@@ -627,19 +652,16 @@
        (or model (some-> turn-id ui-render/short-id) "-")]
       [:time {:datetime timestamp} (ui-render/short-timestamp timestamp)]
       [:span.log-record__chevron {:aria-hidden "true"} "⌄"]]
-     [:div.log-record__detail
-      [:dl.log-record__metadata
-       [:div [:dt "Event"] [:dd event-type]]
-       [:div [:dt "Turn ID"]
-        [:dd
-         (if turn-id
-           [:code {:title turn-id} (ui-render/short-id turn-id)]
-           "-")]]
-       [:div [:dt "Channel"] [:dd (or channel "-")]]
-       [:div [:dt "Model"] [:dd (or model "-")]]
-       [:div [:dt "Timestamp"] [:dd (or timestamp "-")]]
-       [:div [:dt "Error"] [:dd (or error-message "-")]]]
-      (log-payload payload)]]))
+     [:div.log-record__detail {:id (str "log-detail-trace-" id)}
+      [:div.empty-line "Loading details…"]]]))
+
+(defn log-detail-fragment [source record]
+  (ui-render/render
+   (cond
+     (nil? record) [:div#log-detail-missing.log-record__detail
+                    [:div.empty-line "Log record not found."]]
+     (= source :trace) (trace-log-detail record)
+     :else (event-log-detail record))))
 
 (defn- log-table [records record-fn empty-copy]
   [:section.log-table
@@ -656,21 +678,26 @@
         (record-fn record))]
      [:div.log-table__empty empty-copy])])
 
-(defn logs-fragment [system]
-  (let [events (sqlite/list-events (:store system) {:limit 40})
+(defn logs-fragment
+  ([system] (logs-fragment system {:limit 20}))
+  ([system {:keys [limit] :or {limit 20}}]
+   (let [events (sqlite/list-events (:store system) {:limit limit})
         trace (:trace system)
         trace-health (runtime-trace/health-check trace)
-        trace-events (runtime-trace/load-events trace {:limit 40})
+        trace-events (runtime-trace/load-events trace {:limit limit})
         trace-failures (count (filter #(false? (:success %)) trace-events))]
-    (ui-render/render
-     [:section#logs-panel.panel.logs-page
-      {"data-on-interval__duration.5s" "@get('/ui/logs')"}
+     (ui-render/render
+      [:section#logs-panel.panel.logs-page
       [:header.logs-page__header
        [:div
         [:span.overview-kicker "Runtime observability"]
         [:h1 "Logs"]
         [:p "SQLite events are durable application history. Runtime Trace is a separate diagnostic stream."]]
-       [:span.badge "Latest 40 per source"]]
+       [:div.panel-head__form
+        [:span.badge (str "Latest " limit " per source")]
+        [:button {:type "button"
+                  "data-on:click" (str "@get('/ui/logs?limit=" limit "')")}
+         "Refresh"]]]
       [:div.log-metrics
        (for [[label value] [["Events" (count events)]
                             ["Trace entries" (count trace-events)]
@@ -698,30 +725,35 @@
          (log-table trace-events trace-log-record "Trace enabled; no entries yet.")
          [:div.log-trace-disabled
           [:strong "Trace disabled"]
-          [:span "Enable rolling trace in local/dev configuration when diagnostic events are needed."]])]])))
+          [:span "Enable rolling trace in local/dev configuration when diagnostic events are needed."]])]
+      (when (or (= (count events) limit) (= (count trace-events) limit))
+        [:button.chat-history-more
+         {:type "button"
+          "data-on:click" (str "@get('/ui/logs?limit=" (min 200 (+ limit 20)) "')")}
+         "Load 20 older"])]))))
 
-(defn- magi-decision-events [system]
+(defn- magi-decision-events [system limit]
   (concat
    (sqlite/list-events (:store system)
                        {:event-type :tool.approval.magi_evaluated
-                        :limit 1000})
+                        :limit limit})
    (sqlite/list-events (:store system)
                        {:event-type :memory.vault.magi_evaluated
-                        :limit 1000})))
+                        :limit limit})))
 
 (defn- magi-tool-event? [{:keys [event-type payload]}]
   (and (= "tool-execution-end" event-type)
        (= "magi" (:tool-name payload))))
 
-(defn- magi-invocation-events [system]
-  (let [approval-events (magi-decision-events system)
+(defn- magi-invocation-events [system limit]
+  (let [approval-events (magi-decision-events system limit)
         tool-events (->> (sqlite/list-events (:store system)
                                              {:event-type :tool-execution-end
-                                              :limit 1000})
+                                              :limit (min 1000 (* 5 limit))})
                          (filter magi-tool-event?))]
     (->> (concat approval-events tool-events)
          (sort-by #(long (or (:id %) 0)) >)
-         (take 1000)
+         (take limit)
          vec)))
 
 (defn- decision-class [decision]
@@ -823,7 +855,10 @@
 (defn- magi-invocation-row [{:keys [id created-at] :as event}]
   (let [{:keys [source tool-name decision duration-ms reason]} (magi-event-view event)]
     [:details.magi-invocation
+     {:id (str "magi-invocation-" id)
+      "data-preserve-attr" "open"}
      [:summary.magi-invocation__summary
+      {"data-on:click" (str "@get('/ui/magi/" id "/detail')")}
       [:span.magi-log-id (str "#" (or id "-"))]
       [:span source]
       [:span (or tool-name "-")]
@@ -833,17 +868,28 @@
       [:span (str (or duration-ms 0) "ms")]
       [:span (or created-at "-")]]
      [:div.magi-invocation__detail
+      {:id (str "magi-detail-" id)}
+      [:div.empty-line "Loading details…"]]]))
+
+(defn magi-detail-fragment [event]
+  (ui-render/render
+   (if event
+     [:div.magi-invocation__detail {:id (str "magi-detail-" (:id event))}
       (magi-decision-card event)
       [:div.magi-readout.magi-readout--wide
        [:span "event"]
-       [:pre (compact-json event)]]]]))
+       [:pre (compact-json event)]]]
+     [:div#magi-detail-missing.magi-invocation__detail
+      [:div.empty-line "MAGI event not found."]])))
 
-(defn magi-fragment [system]
-  (let [invocations (magi-invocation-events system)
+(defn magi-fragment
+  ([system] (magi-fragment system {:limit 25}))
+  ([system {:keys [limit] :or {limit 25}}]
+   (let [invocations (magi-invocation-events system limit)
         decision-events (filter #(str/ends-with? (:event-type %) ".magi_evaluated") invocations)
         latest (first invocations)]
-    (ui-render/render
-     [:section#magi-panel.panel.magi-panel
+     (ui-render/render
+      [:section#magi-panel.panel.magi-panel
       [:div.magi-console
        [:div.panel-head.magi-console__header
         [:h2 "MAGI"]
@@ -851,7 +897,7 @@
          [:span.reload-status "decision log"]
          [:button.magi-refresh
           {:type "button"
-           "data-on:click" "@get('/ui/magi')"}
+           "data-on:click" (str "@get('/ui/magi?limit=" limit "')")}
           "Refresh"]]]
        [:div.fact-strip.magi-facts
         [:span.fact
@@ -868,7 +914,7 @@
           [:section.magi-invocation-log
            [:div.magi-section-head
             [:h2 "Invocation Log"]
-            [:span "latest 1000 records"]]
+            [:span (str "latest " (count invocations) " records")]]
            [:div.magi-invocation__head
             [:span "id"]
             [:span "source"]
@@ -878,9 +924,14 @@
             [:span "time"]
             [:span "created"]]
            (for [event invocations]
-             (magi-invocation-row event))]]
+             (magi-invocation-row event))
+           (when (= (count invocations) limit)
+             [:button.chat-history-more
+              {:type "button"
+               "data-on:click" (str "@get('/ui/magi?limit=" (min 200 (+ limit 25)) "')")}
+              "Load 25 older"])] ]
          [:div.magi-empty
-          [:div.empty "No MAGI decisions yet."]])]])))
+          [:div.empty "No MAGI decisions yet."]])]]))))
 
 (defn tool-results-fragment [tool-name status payload]
   (ui-render/render
@@ -979,7 +1030,10 @@
 (defn- approval-record [approval]
   (let [{:keys [id tool-name requested-by reason created-at]} approval
         status (tool-approvals/effective-status approval)]
-    [:details.approval-record {:data-status status}
+    [:details.approval-record
+     {:id (str "approval-record-" id)
+      :data-status status
+      "data-preserve-attr" "open"}
      [:summary.approval-record__summary
       {"data-on:click" (str "@get('/ui/tool-approvals/" id "/detail')")}
       (approval-status status)
@@ -993,23 +1047,35 @@
       [:span.approval-record__chevron {:aria-hidden "true"} "⌄"]]
      [:div.approval-record__detail.approval-record__detail--loading
       {:id (str "approval-detail-" id)}
-      [:div.empty-line "Loading details…"]]]))
+     [:div.empty-line "Loading details…"]]]))
 
-(defn tool-approvals-fragment [approvals]
-  (let [status-rank {"pending" 0 "approved" 1 "denied" 2 "expired" 3}
-        approvals* (->> approvals
-                        (sort-by #(get status-rank (tool-approvals/effective-status %) 9))
-                        vec)
-        counts (frequencies (map tool-approvals/effective-status approvals*))]
+(defn tool-approvals-status-fragment [approvals limit]
+  (let [pending (count (filter #(= "pending" (tool-approvals/effective-status %)) approvals))]
     (ui-render/render
-     [:section#tool-approvals-panel.panel.approvals-page
-      {"data-on-interval__duration.10s" "@get('/ui/tool-approvals')"}
+     [:div#tool-approvals-live-status.panel-head__form
+      {"data-on-interval__duration.10s"
+       (str "@get('/ui/tool-approvals/status?limit=" limit "')")}
+      [:span.badge (str pending " pending")]
+      [:button {:type "button"
+                "data-on:click" (str "@get('/ui/tool-approvals?limit=" limit "')")}
+       "Refresh"]])))
+
+(defn tool-approvals-fragment
+  ([approvals] (tool-approvals-fragment approvals {:limit 20}))
+  ([approvals {:keys [limit] :or {limit 20}}]
+   (let [status-rank {"pending" 0 "approved" 1 "denied" 2 "expired" 3}
+         approvals* (->> approvals
+                         (sort-by #(get status-rank (tool-approvals/effective-status %) 9))
+                         vec)
+         counts (frequencies (map tool-approvals/effective-status approvals*))]
+     (ui-render/render
+      [:section#tool-approvals-panel.panel.approvals-page
       [:header.approvals-page__header
        [:div
         [:span.overview-kicker "Operator review"]
         [:h1 "Tool Approvals"]
         [:p "Review sensitive actions requested by agents. Open a row for full context and decision controls."]]
-       [:span.badge (str "Latest " (count approvals*) " / 50")]]
+       (ui-render/trusted-fragment (tool-approvals-status-fragment approvals* limit))]
       [:div.approval-metrics
        (for [[label status] [["Total" nil]
                              ["Pending" "pending"]
@@ -1032,4 +1098,9 @@
             (approval-record approval))]
          [:div.approval-table__empty
           [:strong "Queue clear"]
-          [:span "No approval requests yet."]])]])))
+          [:span "No approval requests yet."]])]
+      (when (= (count approvals*) limit)
+        [:button.chat-history-more
+         {:type "button"
+          "data-on:click" (str "@get('/ui/tool-approvals?limit=" (min 100 (+ limit 20)) "')")}
+         "Load 20 older"])]))))

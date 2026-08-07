@@ -59,14 +59,11 @@
     [(str (name provider) "|" (:model-id model))
      (str (name provider) "/" (:model-id model))]))
 
-(defn- job-editors [system jobs]
+(defn- job-editor-detail-node [system job]
   (let [profiles (keys (get-in system [:config :tools :profiles]))
         model-pairs (configured-model-pairs system)]
-  [:section.cron-editors
-   (for [job jobs]
-     [:details.cron-job-editor
-      [:summary (str "Edit · " (:name job))]
-      [:form.cron-edit-form
+    [:div.cron-job-editor__detail {:id (str "cron-job-detail-" (:id job))}
+     [:form.cron-edit-form
        {:method "post"
         "data-on:submit" "@post('/ui/cron/action', {contentType: 'form', selector: el})"}
        [:input {:type "hidden" :name "action" :value "update"}]
@@ -106,7 +103,25 @@
         [:label [:span "Telegram chat ID"]
          [:input {:name "telegram_recipient" :value (get-in job [:notification :target :recipient])}]]
         [:label.cron-prompt [:span "Prompt"] [:textarea {:name "prompt" :rows 5 :required true} (:prompt job)]]]
-       [:div.cron-editor__actions [:button {:type "submit"} "Save changes"]]]])]))
+       [:div.cron-editor__actions [:button {:type "submit"} "Save changes"]]]]))
+
+(defn job-editor-detail-fragment [system job]
+  (render/render
+   (if job
+     (job-editor-detail-node system job)
+     [:div#cron-job-detail-missing.cron-job-editor__detail "Cron job not found."])))
+
+(defn- job-editors [jobs]
+  [:section.cron-editors
+   (for [job jobs]
+     [:details.cron-job-editor
+      {:id (str "cron-job-editor-" (:id job))
+       "data-preserve-attr" "open"}
+      [:summary
+       {"data-on:click" (str "@get('/ui/cron/jobs/" (:id job) "/detail')")}
+       (str "Edit · " (:name job))]
+      [:div.cron-job-editor__detail {:id (str "cron-job-detail-" (:id job))}
+       "Loading editor…"]])])
 
 (defn- duration-label [run]
   (when (and (:started-at run) (:finished-at run))
@@ -126,17 +141,28 @@
            [:tr
             [:td [:strong (subs (:id run) 0 8)] [:small (:scheduled-for run)]]
             [:td (or (names (:job-id run)) (:job-id run))]
-            [:td (name (:trigger run))]
-            [:td [:span.status-badge {:class (str "status-badge--" (name (:status run)))} (name (:status run))]
-             (when-let [text (or (:error run) (:output run))]
-               [:details
-                [:summary "Result"]
-                [:pre (subs text 0 (min 4000 (count text)))]])]
+             [:td (name (:trigger run))]
+             [:td [:span.status-badge {:class (str "status-badge--" (name (:status run)))} (name (:status run))]
+             (when (or (:error run) (:output run))
+               [:details {:id (str "cron-run-result-" (:id run))
+                          "data-preserve-attr" "open"}
+                [:summary {"data-on:click" (str "@get('/ui/cron/runs/" (:id run) "/detail')")}
+                 "Result"]
+                [:div {:id (str "cron-run-detail-" (:id run))} "Loading result…"]])]
             [:td (or (duration-label run) "—")]
             [:td (name (:notification-status run))]
             [:td [:a {:href (str "/chat/" (:session-id run))} "Transcript"] " · "
              [:a {:href "/logs" :title (:request-id run)} "Logs"]]])
          [:tr [:td {:colspan 7} "No runs yet."]])]]]))
+
+(defn run-detail-fragment [run]
+  (render/render
+   (if run
+     [:div {:id (str "cron-run-detail-" (:id run))}
+      (if-let [text (or (:error run) (:output run))]
+        [:pre (subs text 0 (min 12000 (count text)))]
+        [:span "No output."])]
+     [:div#cron-run-detail-missing "Cron run not found."])))
 
 (defn- create-form [system]
   (let [cron-cfg (get-in system [:config :cron])
@@ -190,31 +216,48 @@
       [:button {:type "submit"} "Create job"]]
      [:div#cron-preview.cron-preview "Preview schedule before saving."]]))
 
-(defn fragment [system]
-  (let [service (:cron-service system)
+(defn- summary-node [health limit]
+  [:section#cron-summary.panel.cron-summary
+   {"data-on-interval__duration.15s" (str "@get('/ui/cron/status?limit=" limit "')")}
+   [:div.panel-head
+    [:div [:span.overview-kicker "Scheduler"] [:h2 "Cron jobs"]]
+    [:div.panel-head__form
+     [:span.status-badge {:class (if (:running health) "status-badge--active" "status-badge--paused")}
+      (if (:running health) "running" "stopped")]
+     [:button {:type "button"
+               "data-on:click" (str "@get('/ui/cron?limit=" limit "')")}
+      "Refresh"]]]
+   [:div.overview-metrics
+    (for [[label value] [["Active jobs" (:active-jobs health)]
+                         ["Running" (:running-runs health)]
+                         ["Failures / 24h" (:recent-failures health)]
+                         ["Workers" (:worker-count health)]]]
+      [:div.overview-metric [:span.label label] [:strong (str (or value 0))]])]
+   (when-let [error (:last-error health)] [:p.value--warn error])])
+
+(defn status-fragment [system limit]
+  (render/render (summary-node (cron/health-check (:cron-service system)) limit)))
+
+(defn fragment
+  ([system] (fragment system {:limit 20}))
+  ([system {:keys [limit] :or {limit 20}}]
+   (let [service (:cron-service system)
         health (cron/health-check service)
-        jobs (cron/list-jobs service {})
-        runs (cron/list-runs service nil 50)]
-    (render/render
-     [:section#cron-workspace.cron-workspace
-      {"data-on-interval__duration.15s" "@get('/ui/cron')"}
-      [:section.panel.cron-summary
-       [:div.panel-head
-        [:div [:span.overview-kicker "Scheduler"] [:h2 "Cron jobs"]]
-        [:span.status-badge {:class (if (:running health) "status-badge--active" "status-badge--paused")}
-         (if (:running health) "running" "stopped")]]
-       [:div.overview-metrics
-        (for [[label value] [["Active jobs" (:active-jobs health)]
-                             ["Running" (:running-runs health)]
-                             ["Failures / 24h" (:recent-failures health)]
-                             ["Workers" (:worker-count health)]]]
-          [:div.overview-metric [:span.label label] [:strong (str (or value 0))]])]
-       (when-let [error (:last-error health)] [:p.value--warn error])]
+        jobs (cron/list-jobs service {:limit limit})
+        runs (cron/list-runs service nil limit)]
+     (render/render
+      [:section#cron-workspace.cron-workspace
+      (summary-node health limit)
       [:section.panel
        [:div.panel-head [:div [:span.overview-kicker "Persistent schedules"] [:h2 "Jobs"]]]
        (jobs-table jobs)
-       (job-editors system jobs)]
+       (job-editors jobs)]
       [:section.panel
        [:div.panel-head [:div [:span.overview-kicker "Audit"] [:h2 "Recent runs"]]]
        (runs-table runs jobs)]
-      (create-form system)])))
+      (when (or (= (count jobs) limit) (= (count runs) limit))
+        [:button.chat-history-more
+         {:type "button"
+          "data-on:click" (str "@get('/ui/cron?limit=" (min 100 (+ limit 20)) "')")}
+         "Load 20 older"])
+      (create-form system)]))))

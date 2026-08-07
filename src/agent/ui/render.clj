@@ -429,6 +429,33 @@
     :else
     (not-empty (concise-value value max-chars))))
 
+(defn- tool-entry-detail-node [assistant-message tool-call result-message detail-id]
+  (let [args (tool-call-arguments tool-call)
+        result-data (when result-message (tool-result-data result-message))]
+    [:div.tool-entry__detail
+     (cond-> {:id (str detail-id "-detail")}
+       result-message (assoc "data-ignore-morph" true))
+     [:section.tool-entry__section
+      [:h3 "Call"]
+      [:pre.tool-detail__pre.code
+       (pretty-json {:message-id (:id assistant-message)
+                     :created-at (:created-at assistant-message)
+                     :tool-call tool-call
+                     :arguments args})]]
+     [:section.tool-entry__section
+      [:h3 "Result"]
+      (if result-data
+        [:pre.tool-detail__pre.code
+         (pretty-json {:message-id (get-in result-data [:message :id])
+                       :created-at (get-in result-data [:message :created-at])
+                       :tool-call-id (:tool-call-id result-data)
+                       :status (:status result-data)
+                       :content-block (:block result-data)
+                       :parsed (:parsed result-data)
+                       :result (:result result-data)
+                       :raw-content (:raw-content result-data)})]
+        [:div.empty "No result yet."])]]))
+
 (defn- tool-entry [system assistant-message tool-call result-message]
   (let [call-id (tool-call-id tool-call)
         name* (tool-call-name tool-call)
@@ -449,6 +476,10 @@
      {:id detail-id
       "data-preserve-attr" "open"}
      [:summary.tool-row.tool-entry__summary
+      {"data-on:click" (str "@get('/ui/chat/tool-detail?session_id="
+                            (url-encode (:session-id assistant-message))
+                            "&message_id=" (url-encode (:id assistant-message))
+                            "&tool_call_id=" (url-encode call-id) "')")}
       [:span.tool-row__main
        (status-dot status)
        [:span.tool-row__name tool-name]
@@ -458,27 +489,8 @@
         [:span.tool-row__args.code args-preview])
       (when-not (str/blank? preview)
         [:span.tool-result__args.code preview])]
-     [:div.tool-entry__detail
-      [:section.tool-entry__section
-       [:h3 "Call"]
-       [:pre.tool-detail__pre.code
-        (pretty-json {:message-id (:id assistant-message)
-                      :created-at (:created-at assistant-message)
-                      :tool-call tool-call
-                      :arguments args})]]
-      [:section.tool-entry__section
-       [:h3 "Result"]
-       (if result-data
-         [:pre.tool-detail__pre.code
-          (pretty-json {:message-id (get-in result-data [:message :id])
-                        :created-at (get-in result-data [:message :created-at])
-                        :tool-call-id (:tool-call-id result-data)
-                        :status (:status result-data)
-                        :content-block (:block result-data)
-                        :parsed (:parsed result-data)
-                        :result (:result result-data)
-                        :raw-content (:raw-content result-data)})]
-         [:div.empty "No result yet."])]]]))
+     [:div.tool-entry__detail {:id (str detail-id "-detail")}
+      [:div.empty "Open to load call and result."]]]))
 
 (defn- orphan-tool-entry [system message]
   (let [data (tool-result-data message)
@@ -632,6 +644,28 @@
 
 (defn- result-message-call-id [message]
   (:tool-call-id (tool-result-data message)))
+
+(defn tool-detail-fragment [messages message-id call-id]
+  (let [assistant-message (some #(when (= (str message-id) (str (:id %))) %) messages)
+        orphan-data (when (tool-result-message? assistant-message)
+                      (tool-result-data assistant-message))
+        tool-call (or (some #(when (= call-id (tool-call-id %)) %)
+                            (:tool-calls assistant-message))
+                      (when (= call-id (:tool-call-id orphan-data))
+                        {:id call-id
+                         :name (or (:tool-name orphan-data) "tool")
+                         :arguments (or (:input orphan-data) {})}))
+        result-message (or (when orphan-data assistant-message)
+                           (some #(when (and (tool-result-message? %)
+                                             (= call-id (result-message-call-id %)))
+                                    %)
+                                 messages))
+        detail-id (safe-dom-id "tool-entry" (or call-id message-id))]
+    (render
+     (if tool-call
+       (tool-entry-detail-node assistant-message tool-call result-message detail-id)
+       [:div.tool-entry__detail {:id (str detail-id "-detail")}
+        [:div.empty "Tool call not found."]]))))
 
 (defn- consume-tool-results [messages call-ids]
   (loop [remaining (seq messages)

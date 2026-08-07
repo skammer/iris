@@ -10,6 +10,7 @@
    [agent.tools.core :as tools]
    [agent.ui :as ui]
    [agent.ui.catalog :as ui-catalog]
+   [agent.ui.memory :as ui-memory]
    [agent.ui.render :as ui-render]
    [clojure.java.io :as io]
    [clojure.string :as str]
@@ -173,6 +174,10 @@
       (is (= "303ea8ca" (.text id-code)))
       (is (= pending-id (.attr id-code "title"))))
     (is (str/includes? html (str "/ui/tool-approvals/" pending-id "/detail")))
+    (is (str/includes? html "data-preserve-attr=\"open\""))
+    (is (str/includes? html "/ui/tool-approvals/status?limit=20"))
+    (is (not (.hasAttr (.first (.select doc "#tool-approvals-panel"))
+                       "data-on-interval__duration.10s")))
     (is (not (str/includes? html "Local Tools")))
     (is (not (str/includes? html "tool-approvals/request")))
     (is (not (str/includes? html "fs-tool-form")))
@@ -530,7 +535,13 @@
         (is (str/includes? html "memory-note-card"))
         (is (str/includes? html "memory-note-actions"))
         (is (str/includes? html "Source details"))
-        (is (str/includes? html "memory-source-details"))
+        (is (str/includes? html "/ui/memory/vault/mem_ui/detail"))
+        (is (not (str/includes? html "memory-source-details")))
+        (let [detail-html (ui-memory/vault-note-detail-fragment
+                           (sqlite/get-vault-note-by-id store "mem_ui_approved")
+                           nil)]
+          (is (str/includes? detail-html "memory-source-details"))
+          (is (str/includes? detail-html "Stable interface preference")))
         (is (not (str/includes? html "source json")))
         (is (not (str/includes? html "memory-facts"))))
       (finally
@@ -594,6 +605,9 @@
         (is (str/includes? html "log-metrics"))
         (is (= 2 (.size (.select (Jsoup/parse html) ".log-table"))))
         (is (= 2 (.size (.select (Jsoup/parse html) ".log-record"))))
+        (is (str/includes? html "data-preserve-attr=\"open\""))
+        (is (not (str/includes? html "data-on-interval")))
+        (is (not (str/includes? html "&quot;ok&quot;")))
         (is (not (str/includes? html "event-item"))))
       (finally
         (sqlite/close-store! store)
@@ -663,23 +677,28 @@
                                     :reason "supported"
                                     :duration-ms 9
                                     :applied true}})
-      (let [html (ui/magi-fragment {:store store})]
+      (let [html (ui/magi-fragment {:store store})
+            event (first (sqlite/list-events store {:event-type :tool.approval.magi_evaluated
+                                                     :limit 1}))
+            detail-html (ui/magi-detail-fragment event)]
         (is (str/includes? html "decision log"))
         (is (str/includes? html "Invocation Log"))
         (is (not (str/includes? html "Decision Console")))
-        (is (str/includes? html "latest 1000 records"))
+        (is (str/includes? html "latest 3 records"))
         (is (str/includes? html "approval"))
         (is (str/includes? html "tool"))
-        (is (str/includes? html "BALTHASAR"))
-        (is (str/includes? html "MELCHIOR"))
-        (is (str/includes? html "input"))
-        (is (str/includes? html "filter"))
-        (is (str/includes? html "judge"))
-        (is (str/includes? html "event"))
+        (is (str/includes? html "/ui/magi/1/detail"))
+        (is (not (str/includes? html "BALTHASAR")))
         (is (str/includes? html "CONDITIONAL"))
-        (is (str/includes? html "printf"))
-        (is (str/includes? html "double check"))
-        (is (str/includes? html "vault-note")))
+        (is (not (str/includes? html "printf")))
+        (is (str/includes? html "vault-note"))
+        (is (str/includes? detail-html "BALTHASAR"))
+        (is (str/includes? detail-html "MELCHIOR"))
+        (is (str/includes? detail-html "input"))
+        (is (str/includes? detail-html "filter"))
+        (is (str/includes? detail-html "judge"))
+        (is (str/includes? detail-html "event"))
+        (is (str/includes? detail-html "printf")))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
@@ -691,14 +710,18 @@
       (let [session (sqlite/create-session! store "tools")
             payload "{\"status\":\"ok\",\"tool-name\":\"web\",\"input\":{\"query\":\"clojure\"},\"result\":{\"answer\":\"done\"}}"]
         (sqlite/append-message! store (:id session) "tool" payload {:tool-call-id "call_1"})
-        (let [html (ui/session-messages-fragment {:store store} (:id session))]
+        (let [messages (sqlite/list-messages store (:id session))
+              html (ui/session-messages-fragment {:store store} (:id session))
+              detail-html (ui-render/tool-detail-fragment messages "1" "call_1")]
           (is (str/includes? html "web"))
           (is (str/includes? html "done"))
           (is (str/includes? html "query: clojure"))
           (is (str/includes? html "<details"))
           (is (str/includes? html "tool-entry"))
           (is (str/includes? html "data-preserve-attr=\"open\""))
-          (is (str/includes? html "answer"))))
+          (is (str/includes? html "answer"))
+          (is (str/includes? detail-html "Call"))
+          (is (str/includes? detail-html "Result"))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
@@ -736,13 +759,18 @@
             payload "{\"status\":\"ok\",\"tool-name\":\"web_search\",\"input\":{\"q\":\"clojure\"},\"result\":{\"results\":[{\"title\":\"one\"},{\"title\":\"two\"}]}}"]
         (sqlite/append-message! store (:id session) "assistant" "" {:tool-calls tool-calls})
         (sqlite/append-message! store (:id session) "tool" payload {:tool-call-id "call_1"})
-        (let [html (ui/session-messages-fragment {:store store} (:id session))]
+        (let [messages (sqlite/list-messages store (:id session))
+              html (ui/session-messages-fragment {:store store} (:id session))
+              detail-html (ui-render/tool-detail-fragment messages "1" "call_1")]
           (is (= 1 (count (re-seq #"<details class=\"tool-entry\"" html))))
           (is (str/includes? html "web_search"))
           (is (str/includes? html "done"))
           (is (str/includes? html "2 results"))
-          (is (str/includes? html "Call"))
-          (is (str/includes? html "Result"))
+          (is (str/includes? html "/ui/chat/tool-detail"))
+          (is (not (str/includes? html ">Call<")))
+          (is (str/includes? detail-html "Call"))
+          (is (str/includes? detail-html "Result"))
+          (is (str/includes? detail-html "data-ignore-morph"))
           (is (not (str/includes? html "message--tool\"")))))
       (finally
         (sqlite/close-store! store)

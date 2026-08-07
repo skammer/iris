@@ -13,6 +13,12 @@ where (:entity_type is null or entity_type = :entity_type)
 order by id desc
 limit :limit
 
+-- :name get-event :? :1
+select id, event_type, entity_type, entity_id, request_id, payload, created_at
+from agent_events
+where id = :id
+limit 1
+
 -- :name search-events-like :? :*
 select id, event_type, entity_type, entity_id, request_id, payload, created_at
 from agent_events

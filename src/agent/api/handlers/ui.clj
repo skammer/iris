@@ -12,10 +12,14 @@
    [agent.memory.core :as memory]
    [agent.memory.magi-review :as memory-magi-review]
    [agent.memory.recall :as memory-recall]
+   [agent.persistence.sqlite :as sqlite]
+   [agent.runtime.trace :as runtime-trace]
    [agent.sessions.service :as session-service]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
    [agent.ui :as ui]
+   [agent.ui.cron :as ui-cron]
+   [agent.ui.memory :as ui-memory]
    [agent.ui.render]
    [clojure.core.async :as async]
    [clojure.string :as str])
@@ -25,6 +29,17 @@
 
 (def ^:private max-chat-image-bytes (* 10 1024 1024))
 (defonce ^:private ui-session-streams (atom {}))
+
+(defn- request-ui-limit
+  ([request] (request-ui-limit request 20 100))
+  ([request default maximum]
+   (let [raw (-> request :parameters :query :limit)]
+     (try
+       (-> (if (str/blank? raw) default (Long/parseLong raw))
+           (max 1)
+           (min maximum)
+           long)
+       (catch NumberFormatException _ default)))))
 
 (defn- close-ui-session-stream! [client-id]
   (when-let [ctx (and (not (str/blank? client-id))
@@ -100,8 +115,26 @@
 (defn dashboard [system _request]
   (responses/html-response 200 (ui/dashboard-fragment system)))
 
-(defn cron [system _request]
-  (responses/html-response 200 (ui/cron-fragment system)))
+(defn cron [system request]
+  (let [limit (request-ui-limit request 20 100)]
+    (responses/html-response 200 (ui/cron-fragment system {:limit limit}))))
+
+(defn cron-status [system request]
+  (let [limit (request-ui-limit request 20 100)]
+    (responses/html-response 200 (ui-cron/status-fragment system limit))))
+
+(defn cron-job-detail [system _request job-id]
+  (responses/html-response
+   200
+   (ui-cron/job-editor-detail-fragment
+    system
+    (cron-service/get-job (:cron-service system) job-id))))
+
+(defn cron-run-detail [system _request run-id]
+  (responses/html-response
+   200
+   (ui-cron/run-detail-fragment
+    (cron-service/get-run (:cron-service system) run-id))))
 
 (defn- cron-form-schedule [{:keys [schedule_kind cron_expression at every_seconds anchor_at]}]
   (case schedule_kind
@@ -177,8 +210,16 @@
 (defn operator-board [system _request]
   (responses/html-response 200 (ui/operator-board-fragment system)))
 
-(defn magi [system _request]
-  (responses/html-response 200 (ui/magi-fragment system)))
+(defn magi [system request]
+  (let [limit (request-ui-limit request 25 200)]
+    (responses/html-response 200 (ui/magi-fragment system {:limit limit}))))
+
+(defn magi-detail [system _request event-id]
+  (responses/html-response
+   200
+   (ui/magi-detail-fragment
+    (when-let [id (parse-long event-id)]
+      (sqlite/get-event (:store system) id)))))
 
 (defn sessions [system request]
   (responses/html-response 200
@@ -214,6 +255,16 @@
     (responses/html-response 200
                              (ui/session-messages-fragment system session-id
                                                            {:limit (:limit query)}))))
+
+(defn chat-tool-detail [system request]
+  (let [{:keys [session_id message_id tool_call_id]} (-> request :parameters :query)]
+    (h/ensure-session-exists! system session_id)
+    (responses/html-response
+     200
+     (agent.ui.render/tool-detail-fragment
+      (sqlite/list-messages (:store system) session_id)
+      message_id
+      tool_call_id))))
 
 (defn- relevant-session-event? [event session-id]
   (and (= "session" (:entity-type event))
@@ -439,8 +490,21 @@
 (defn events [system _request]
   (responses/html-response 200 (ui/events-fragment system)))
 
-(defn logs [system _request]
-  (responses/html-response 200 (ui/logs-fragment system)))
+(defn logs [system request]
+  (let [limit (request-ui-limit request 20 200)]
+    (responses/html-response 200 (ui/logs-fragment system {:limit limit}))))
+
+(defn log-detail [system _request source entry-id]
+  (let [source* (keyword source)
+        record (case source*
+                 :event (when-let [id (parse-long entry-id)]
+                          (sqlite/get-event (:store system) id))
+                 :trace (->> (runtime-trace/load-events
+                              (:trace system)
+                              {:limit (or (get-in system [:trace :rolling-max-entries]) 1000)})
+                             (some #(when (= entry-id (:id %)) %)))
+                 nil)]
+    (responses/html-response 200 (ui/log-detail-fragment source* record))))
 
 (defn events-live-response
   [system request]
@@ -463,6 +527,28 @@
            (when (streaming/take! ctx ch)
              (streaming/send-datastar-patch! ctx (ui/events-fragment system))
             (recur))))))))
+
+(defn memory-workspace [system request]
+  (let [limit (request-ui-limit request 20 100)]
+    (responses/html-response
+     200
+     (ui/memory-workspace-fragment system nil {:limit limit}))))
+
+(defn memory-vault-detail [system _request note-id]
+  (let [store (get-in system [:memory-service :store])
+        note (sqlite/get-vault-note-by-id store note-id)
+        review (first (sqlite/list-events store
+                                          {:event-type memory-magi-review/review-event-type
+                                           :entity-type :vault_note
+                                           :entity-id note-id
+                                           :limit 1}))]
+    (responses/html-response 200 (ui-memory/vault-note-detail-fragment note review))))
+
+(defn memory-update-detail [system _request update-id]
+  (responses/html-response
+   200
+   (ui-memory/memory-update-detail-fragment
+    (sqlite/get-memory-note-update (get-in system [:memory-service :store]) update-id))))
 
 (defn memory-search [system request]
   (let [{:keys [query]} (h/read-form-body request)]
@@ -605,10 +691,20 @@
                              (:path body)
                              (:folder body)))))
 
-(defn list-tool-approvals [system _request]
-  (responses/html-response 200
-                           (ui/tool-approvals-fragment
-                            (tool-approvals/list-review-records (:store system) {:limit 50}))))
+(defn list-tool-approvals [system request]
+  (let [limit (request-ui-limit request)]
+    (responses/html-response 200
+                             (ui/tool-approvals-fragment
+                              (tool-approvals/list-review-records (:store system) {:limit limit})
+                              {:limit limit}))))
+
+(defn tool-approvals-status [system request]
+  (let [limit (request-ui-limit request)]
+    (responses/html-response
+     200
+     (ui/tool-approvals-status-fragment
+      (tool-approvals/list-review-records (:store system) {:limit 100})
+      limit))))
 
 (defn tool-approval-detail [system _request approval-id]
   (responses/html-response 200
@@ -625,7 +721,7 @@
     (tool-approvals/log-decision! (:event-sink system) updated status actor reason)
     (responses/html-response 200
                              (ui/tool-approvals-fragment
-                              (tool-approvals/list-review-records (:store system) {:limit 50})))))
+                              (tool-approvals/list-review-records (:store system) {:limit 20})))))
 
 (defn tool-approval-run [system _request approval-id]
   (let [{:keys [tool-name input permissions approval]} (tool-approvals/resolve-approved-request (:store system) approval-id)
@@ -634,7 +730,7 @@
       (responses/html-response
        200
        (str (ui/tool-approvals-fragment
-             (tool-approvals/list-review-records (:store system) {:limit 50}))
+             (tool-approvals/list-review-records (:store system) {:limit 20}))
             (ui/tool-results-fragment
              tool-name
              200

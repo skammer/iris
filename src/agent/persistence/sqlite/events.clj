@@ -54,6 +54,13 @@
                                                       :limit (common/bounded-limit limit)})
                                  identity))))))
 
+(defn get-event [store id]
+  (common/with-connection
+    store
+    (fn [conn]
+      (some-> (common/select-one conn (get-event-sqlvec {:id id}) identity)
+              row->event))))
+
 (defn search-events
   ([store query] (search-events store query {}))
   ([store query {:keys [limit entity-type entity-id] :or {limit 20}}]

@@ -217,8 +217,8 @@
      (when (:applied payload)
        [:span.memory-note-magi-applied "applied"])]))
 
-(defn- vault-note-row [system reviews idx {:keys [path id title type iris-status iris-scope updated-at
-                                                  iris-confidence origins frontmatter description]}]
+(defn- vault-note-row [system idx {:keys [path id title type iris-status iris-scope updated-at
+                                          iris-confidence description]}]
   [:article.memory-note-card {:data-status (or iris-status "unknown")}
    [:header.memory-note-card__header
     [:div
@@ -231,17 +231,29 @@
     [:span.badge (str "confidence " (or iris-confidence "-"))]]
    (when-not (str/blank? description)
      [:p.memory-note-description description])
-   (magi-verdict (get reviews (or id path)))
    [:details.memory-note-source
-    [:summary "Source details"]
-    [:dl.memory-source-details
-     (source-field "Path" path)
-     (source-field "Description" description)
-     (source-field "Origins" origins)
-     (source-field "Metadata" frontmatter)]]
+    {:id (str "memory-note-source-" id)
+     "data-preserve-attr" "open"}
+    [:summary
+     {"data-on:click" (str "@get('/ui/memory/vault/"
+                           (ui-render/url-encode id) "/detail')")}
+     "Source details"]
+    [:div {:id (str "memory-note-detail-" id)} "Loading details…"]]
    (vault-note-actions system idx path iris-status iris-scope)])
 
-(defn- vault-note-group [system reviews title status notes start-idx]
+(defn vault-note-detail-fragment [note review]
+  (ui-render/render
+   (if note
+     [:div {:id (str "memory-note-detail-" (:id note))}
+      (magi-verdict review)
+      [:dl.memory-source-details
+       (source-field "Path" (:path note))
+       (source-field "Description" (:description note))
+       (source-field "Origins" (:origins note))
+       (source-field "Metadata" (:frontmatter note))]]
+     [:div#memory-note-detail-missing "Memory note not found."])))
+
+(defn- vault-note-group [system title status notes start-idx]
   (when (seq notes)
     [:section.memory-note-group {:data-status status}
      [:header.memory-note-group__header
@@ -249,19 +261,19 @@
       [:span.count-badge (count notes)]]
      [:div.memory-note-list
       (map-indexed (fn [idx note]
-                     (vault-note-row system reviews (+ start-idx idx) note))
+                     (vault-note-row system (+ start-idx idx) note))
                    notes)]]))
 
-(defn- vault-note-groups [system reviews notes]
+(defn- vault-note-groups [system notes]
   (let [by-status (group-by #(or (:iris-status %) "unknown") notes)
         candidates (get by-status "candidate")
         approved (get by-status "approved")
         other-statuses (sort (remove #{"candidate" "approved"} (keys by-status)))]
     [:div.memory-note-groups
-     (vault-note-group system reviews "Candidates" "candidate" candidates 0)
-     (vault-note-group system reviews "Approved" "approved" approved (count candidates))
+     (vault-note-group system "Candidates" "candidate" candidates 0)
+     (vault-note-group system "Approved" "approved" approved (count candidates))
      (for [[offset status] (map-indexed vector other-statuses)]
-       (vault-note-group system reviews (str/capitalize status)
+       (vault-note-group system (str/capitalize status)
                          status
                          (get by-status status)
                          (+ (count candidates) (count approved) (* 100 offset))))]))
@@ -288,13 +300,25 @@
           [:header.memory-note-card__header
            [:h4 (str (:target-id update) " update")]
            [:span.badge.memory-note-status (:status update)]]
-          [:pre.code (:diff update)]
+          [:details {:id (str "memory-update-" (:id update))
+                     "data-preserve-attr" "open"}
+           [:summary
+            {"data-on:click" (str "@get('/ui/memory/updates/" (:id update) "/detail')")}
+            "View diff"]
+           [:div {:id (str "memory-update-detail-" (:id update))} "Loading diff…"]]
           [:footer.memory-note-actions
            [:div.memory-note-actions__controls
             (memory-update-action idx (:id update) "review" "Review"
                                   "memory-action--magi")
             (memory-update-action idx (:id update) "advice" "Advice" nil)]]])
        updates)]]))
+
+(defn memory-update-detail-fragment [update]
+  (ui-render/render
+   (if update
+     [:div {:id (str "memory-update-detail-" (:id update))}
+      [:pre.code (:diff update)]]
+     [:div#memory-update-detail-missing "Memory update not found."])))
 
 (defn- review-row [kind note]
   [:div.row.memory-review-row
@@ -398,24 +422,17 @@
    [:div#memory-search-results-panel.empty "No recall output."]])
 
 (defn memory-workspace-fragment
-  ([system] (memory-workspace-fragment system nil))
-	   ([system reset-result]
+  ([system] (memory-workspace-fragment system nil {:limit 20}))
+  ([system reset-result] (memory-workspace-fragment system reset-result {:limit 20}))
+	   ([system reset-result {:keys [limit] :or {limit 20}}]
 	    (let [memory-service (:memory-service system)
 	         health (memory/health-check memory-service)
           quality (:quality health)
 	         surfaces (memory/list-surfaces memory-service)
-		         notes (sqlite/list-vault-notes (:store memory-service) {:limit 50})
+          notes (sqlite/list-vault-notes (:store memory-service) {:limit limit})
+          update-limit (min 20 limit)
           updates (sqlite/list-memory-note-updates (:store memory-service)
-                                                   {:status "pending" :limit 50})
-          reviews (->> (sqlite/list-events (:store memory-service)
-                                           {:event-type magi-review/review-event-type
-                                            :entity-type :vault_note
-                                            :limit 1000})
-                       (reduce (fn [by-note event]
-                                 (if (contains? by-note (:entity-id event))
-                                   by-note
-                                   (assoc by-note (:entity-id event) event)))
-                               {}))
+                                                   {:status "pending" :limit update-limit})
           global-scratchpad (try
                               (memory/read-scratchpad memory-service {:scope {:type :global}})
                               (catch Exception e
@@ -462,7 +479,12 @@
         [:section.panel.memory-overview
          [:h2 "Vault Notes"]
          (if (seq notes)
-           (vault-note-groups system reviews notes)
+           (vault-note-groups system notes)
 	           [:div.empty-line "none"])]
         (memory-update-list updates)
+        (when (or (= (count notes) limit) (= (count updates) update-limit))
+          [:button.chat-history-more
+           {:type "button"
+            "data-on:click" (str "@get('/ui/memory?limit=" (min 100 (+ limit 20)) "')")}
+           "Load 20 older"])
         (memory-reset-result reset-result)]]))))

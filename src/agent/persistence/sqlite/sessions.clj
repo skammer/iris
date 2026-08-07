@@ -255,7 +255,8 @@
     store
     (fn [conn]
       (let [overrides (message-entry-overrides conn session-id)]
-        (mapv #(merge-entry-overrides (row->message %) overrides)
+        (mapv #(assoc (merge-entry-overrides (row->message %) overrides)
+                      :session-id session-id)
               (common/select-many conn
                                   (list-messages-sqlvec {:session_id session-id})
                                   identity))))))
@@ -266,7 +267,8 @@
     store
     (fn [conn]
       (let [overrides (message-entry-overrides conn session-id)]
-        (mapv #(merge-entry-overrides (row->message %) overrides)
+        (mapv #(assoc (merge-entry-overrides (row->message %) overrides)
+                      :session-id session-id)
               (common/select-many conn
                                   (list-messages-after-sqlvec
                                    {:session_id session-id
