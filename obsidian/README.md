@@ -5,6 +5,11 @@ This Obsidian vault contains documentation for the Clojure-based AI agent projec
 
 ## Directory Structure
 
+### Guides
+
+- **guides/cron-jobs.md**: Practical Cron UI, agent-tool, CLI, and API usage; prompt,
+  skill, script, notification, persistence, and edge-case behavior
+
 ### 1. Research
 - **core-async-flow.md**: Flow-based programming for agents
 - **llm-integration.md**: LiteLLM-clj and custom library approaches

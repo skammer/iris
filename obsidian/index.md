@@ -1,5 +1,9 @@
 # Obsidian Vault Index
 
+## Guides
+
+- [[cron-jobs]] - Create, operate, secure, and debug persistent scheduled jobs
+
 ## Research
 - [[core-async-flow]] - Flow-based programming for agents
 - [[llm-integration]] - LiteLLM-clj and custom approaches

@@ -3,6 +3,8 @@
 Status: implemented. Migration, runtime, notifications, tool, CLI, API, and Web
 UI complete.
 
+Operator guide: [Cron Jobs](obsidian/guides/cron-jobs.md).
+
 ## Implementation result
 
 - Migration 010 persists jobs, runs, and `kind=cron` sessions.
@@ -113,6 +115,25 @@ Deferred alternatives:
   response are still retained whether or not it stages one.
 - `run now` works for active or paused jobs, does not alter the recurring next
   fire, and refuses overlap with an already-running instance.
+
+### Prompt-driven execution
+
+- `prompt` is the single required task definition. Every cron job runs through
+  the normal agent loop; v1 has no empty-prompt, direct-command, or script-only
+  execution mode.
+- Invoke installed skills directly in the prompt with their normal slash syntax,
+  for example `/ha-report`. Multiple slash skills may be listed in the same
+  prompt. Cron uses the same skill discovery and instruction injection as Chat;
+  there is no separate per-job `skills` field.
+- Script and command work is also expressed in the prompt. The agent calls
+  `shell` or another appropriate tool instead of the scheduler owning a second
+  executable-job protocol.
+- Slash skills provide instructions, not permissions. The resolved cron tool
+  profile must expose every tool/action the skill or requested script needs;
+  global policy and approval rules still apply.
+- These choices deliberately keep one execution, persistence, audit, timeout,
+  and notification path for all cron jobs. Add a separate execution mode only
+  if a concrete workload proves agent-directed tool use insufficient.
 
 ### Scheduling semantics
 
@@ -488,6 +509,10 @@ Dashboard shows unhealthy scheduler separately from agent/provider health.
 - DST spring gap skips; autumn repeated local slot runs once.
 - Run uses fresh context, `:cron` permissions, configured model, memory, and no
   cron-management tool.
+- Slash skills named in the prompt are injected exactly as in Chat; no separate
+  job setting is required. Unknown or unavailable skills grant nothing.
+- A prompt may request script execution only when its resolved tool profile
+  exposes the required tool/action; skill instructions never widen permissions.
 - Default/pinned tool profiles expose exactly their allowed tools/actions before
   inference and enforce the same policy during execution. Global policy can only
   restrict them further.
@@ -515,7 +540,7 @@ Dashboard shows unhealthy scheduler separately from agent/provider health.
 - Natural-language scheduler parsing, seconds field, sub-minute intervals.
 - Calendar exclusions/holidays, RRULE, per-job jitter, start/end windows.
 - Multiple notification targets/fan-out and file artifact delivery.
-- Attached skills, workdir, script-only/no-LLM jobs, job dependencies.
+- Per-job workdir and job dependencies.
 - Per-job overlap/retry/misfire policies.
 - Job-scoped standing approvals and continuation after approval.
 - Continuable Telegram threads and merging cron transcripts into the originating
