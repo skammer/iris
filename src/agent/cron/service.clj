@@ -43,6 +43,15 @@
                       {:type :validation-failed :field field})))
     value*))
 
+(defn- optional-text [value]
+  (let [value* (some-> value str str/trim)]
+    (when-not (str/blank? value*) value*)))
+
+(defn- optional-keyword [value]
+  (if (keyword? value)
+    value
+    (some-> value optional-text keyword)))
+
 (defn- configured-pair! [system provider model]
   (let [registry (:llm-registry system)
         provider* (if (keyword? provider) provider (keyword provider))
@@ -63,7 +72,8 @@
 
 (defn- resolve-profile [service job]
   (let [system (current-system service)
-        profile-key (or (:tool-profile job) (get-in service [:config :tool-profile]))
+        profile-key (or (optional-keyword (:tool-profile job))
+                        (get-in service [:config :tool-profile]))
         profile (get-in system [:config :tools :profiles profile-key])
         messaging-tools (->> (tools/list-tools (:tool-registry system))
                              (filter #(= :messaging (:category %)))
@@ -95,18 +105,19 @@
         _ (when (and max-occurrences (not (pos? (long max-occurrences))))
             (throw (ex-info "max-occurrences must be positive"
                             {:type :validation-failed :field :max-occurrences})))
-        provider (:provider merged)
-        model (:model merged)
+        provider (optional-keyword (:provider merged))
+        model (optional-text (:model merged))
+        tool-profile (optional-keyword (:tool-profile merged))
         _ (when (not= (boolean provider) (boolean model))
-            (throw (ex-info "provider and model must be pinned together"
+            (throw (ex-info "provider and model overrides must be set together; omit both to inherit cron defaults"
                             {:type :validation-failed :field :provider})))
         _ (when provider (configured-pair! (current-system service) provider model))
-        _ (resolve-profile service merged)
+        _ (resolve-profile service (assoc merged :tool-profile tool-profile))
         notification* (notification/normalize (:notification merged) (:origin merged))]
     (assoc merged
            :name name :prompt prompt :timezone timezone :schedule canonical
-           :notification notification* :provider (some-> provider keyword)
-           :model model :max-occurrences max-occurrences)))
+           :notification notification* :provider provider :model model
+           :tool-profile tool-profile :max-occurrences max-occurrences)))
 
 (defn preview [service input]
   (let [job (normalize-job service input nil)]

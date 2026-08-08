@@ -31,6 +31,8 @@ Tool-use policy for Iris agents.
 - Use `schedule: {"kind":"cron","expression":"0 9 * * 1-5"}` for five-field UNIX cron. Field name is `expression`, never `cron` or `expr`.
 - One-shot: `{"kind":"at","at":"2026-08-10T06:00:00Z"}` or relative `at: "in 15m"`.
 - Interval: `{"kind":"interval","every-seconds":3600,"anchor-at":"2026-08-10T00:00:00Z"}`; minimum 60 seconds.
+- Omit `provider`, `model`, and `tool-profile` for normal jobs; Iris inherits cron defaults. Override only when needed.
+- Model override uses separate values: `provider: "deepseek"`, `model: "deepseek-v4-flash"`. Never prefix model with provider.
 
 ## Memory Tools
 

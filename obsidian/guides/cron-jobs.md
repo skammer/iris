@@ -221,6 +221,10 @@ Model selection has two modes:
 - **Pinned**: store both provider and model on the job. They must be configured
   as a valid pair.
 
+Agent/API calls should omit `provider`, `model`, and `tool-profile` unless the
+job genuinely needs an override. Model overrides use separate fields; `model`
+contains the provider-local model ID, not `provider/model`.
+
 Every run snapshots the resolved model and tool profile. Config or job changes
 do not mutate an in-flight run.
 

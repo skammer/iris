@@ -59,6 +59,13 @@
     [(str (name provider) "|" (:model-id model))
      (str (name provider) "/" (:model-id model))]))
 
+(defn- default-model-label [system]
+  (let [cron-cfg (get-in system [:config :cron])
+        llm-cfg (get-in system [:config :llm])
+        provider (or (:provider cron-cfg) (:active-provider llm-cfg))
+        model (or (:model cron-cfg) (get-in llm-cfg [:providers provider :model]))]
+    (str "Cron default (" (name provider) "/" model ")")))
+
 (defn- job-editor-detail-node [system job]
   (let [profiles (keys (get-in system [:config :tools :profiles]))
         model-pairs (configured-model-pairs system)]
@@ -90,7 +97,7 @@
             [:option {:value (name profile) :selected (= profile (:tool-profile job))} (name profile)])]]
         [:label [:span "Model"]
          [:select {:name "model_pair"}
-          [:option {:value "" :selected (nil? (:provider job))} "Cron default"]
+          [:option {:value "" :selected (nil? (:provider job))} (default-model-label system)]
           (for [[value label] model-pairs]
             [:option {:value value
                       :selected (= value (str (some-> (:provider job) name) "|" (:model job)))} label])]]
@@ -198,7 +205,7 @@
         (for [profile profiles] [:option {:value (name profile)} (name profile)])]]
       [:label [:span "Model"]
        [:select {:name "model_pair"}
-        [:option {:value ""} "Cron default"]
+        [:option {:value ""} (default-model-label system)]
         (for [[value label] model-pairs] [:option {:value value} label])]]
       [:label [:span "Notify"]
        [:select {:name "notify_policy"}

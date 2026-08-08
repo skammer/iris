@@ -62,7 +62,8 @@
      :cronjob
      (str "Create, inspect, update, pause, resume, run, or delete persistent scheduled agent jobs. "
           "Cron schedules use schedule.expression, for example "
-          "{\"kind\":\"cron\",\"expression\":\"0 9 * * 1-5\"}; never use schedule.cron or schedule.expr.")
+          "{\"kind\":\"cron\",\"expression\":\"0 9 * * 1-5\"}; never use schedule.cron or schedule.expr. "
+          "Omit provider, model, and tool-profile to inherit configured cron defaults; set them only for a per-job override.")
      :category :system
      :required-permissions #{:cron-read}
      :input-schema [:map {:closed true}
@@ -77,9 +78,18 @@
                      [:maybe schedule-schema]]
                     [:timezone {:optional true} [:maybe :string]]
                     [:notification {:optional true} [:maybe :map]]
-                    [:provider {:optional true} [:maybe :string]]
-                    [:model {:optional true} [:maybe :string]]
-                    [:tool-profile {:optional true} [:maybe :string]]
+                    [:provider
+                     {:optional true
+                      :description "Per-job provider override. Omit together with model to inherit cron/global defaults."}
+                     [:maybe :string]]
+                    [:model
+                     {:optional true
+                      :description "Per-job model ID, without provider prefix. Set together with provider; omit both to inherit defaults."}
+                     [:maybe :string]]
+                    [:tool-profile
+                     {:optional true
+                      :description "Per-job tool profile override. Omit to inherit the configured cron tool profile."}
+                     [:maybe :string]]
                     [:max-occurrences {:optional true} [:maybe :int]]
                     [:revision {:optional true} [:maybe :int]]
                     [:status {:optional true} [:maybe :string]]

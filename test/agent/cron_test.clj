@@ -3,7 +3,9 @@
    [agent.chat.kernel-ops :as kernel-ops]
    [agent.chat.turn :as chat-turn]
    [agent.cron.schedule :as schedule]
+   [agent.cron.service :as cron-service]
    [agent.cron.store :as cron-store]
+   [agent.llm.registry :as llm-registry]
    [agent.persistence.sqlite :as sqlite]
    [agent.tools.common.cron :as cron-tool]
    [agent.tools.core :as tools]
@@ -48,11 +50,39 @@
     (is (= (assoc valid :action :preview) (validate-input valid)))
     (is (re-find #"expression" (pr-str schedule-json-schema)))
     (is (re-find #"Five-field UNIX cron" (pr-str schedule-json-schema)))
+    (is (re-find #"inherit configured cron defaults" (:description description)))
     (let [error (try
                   (validate-input (assoc-in valid [:schedule :cron] "0 9 * * 1-5"))
                   nil
                   (catch clojure.lang.ExceptionInfo e e))]
       (is (= :validation-failed (:type (ex-data error)))))))
+
+(deftest cron-job-defaults-and-string-overrides-test
+  (let [llm-cfg {:active-provider :deepseek
+                 :providers {:deepseek {:type :deepseek
+                                        :model "deepseek-v4-flash"
+                                        :models {"deepseek-v4-flash" {}}}}}
+        system {:config {:llm llm-cfg
+                         :tools {:profiles {:cron-observe {:permissions [:filesystem-read]
+                                                          :allowed-tools [:fs_read]}}}}
+                :llm-registry (llm-registry/create-registry llm-cfg)
+                :tool-registry (tools/create-registry)}
+        service (cron-service/create-service
+                 (atom system) nil
+                 {:timezone "UTC" :provider nil :model nil :tool-profile :cron-observe})
+        base {:name "daily" :prompt "Inspect"
+              :schedule {:kind :cron :expression "0 9 * * *"}}
+        inherited (cron-service/preview service base)
+        overridden (cron-service/preview
+                    service
+                    (assoc base :provider "deepseek" :model "deepseek-v4-flash"
+                                :tool-profile "cron-observe"))]
+    (is (= {:provider :deepseek :model "deepseek-v4-flash"}
+           (:resolved-model inherited)))
+    (is (= :cron-observe (get-in inherited [:resolved-tools :tool-profile])))
+    (is (= {:provider :deepseek :model "deepseek-v4-flash"}
+           (:resolved-model overridden)))
+    (is (= :cron-observe (get-in overridden [:resolved-tools :tool-profile])))))
 
 (deftest cron-claim-session-and-overlap-test
   (let [{:keys [path store]} (temp-store)
