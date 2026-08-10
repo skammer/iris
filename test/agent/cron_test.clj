@@ -1,5 +1,6 @@
 (ns agent.cron-test
   (:require
+   [agent.api.handlers.ui :as ui-handlers]
    [agent.chat.kernel-ops :as kernel-ops]
    [agent.chat.turn :as chat-turn]
    [agent.cron.schedule :as schedule]
@@ -9,13 +10,93 @@
    [agent.persistence.sqlite :as sqlite]
    [agent.tools.common.cron :as cron-tool]
    [agent.tools.core :as tools]
+   [agent.ui.cron :as ui-cron]
    [clojure.java.io :as io]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is testing]])
   (:import (java.time Instant)))
 
 (defn- temp-store []
   (let [path (.getAbsolutePath (java.io.File/createTempFile "iris-cron-" ".db"))]
     {:path path :store (sqlite/create-store {:path path})}))
+
+(defn- test-system [store]
+  (let [llm-cfg {:active-provider :deepseek
+                 :providers {:deepseek {:type :deepseek
+                                        :model "deepseek-v4-flash"
+                                        :models {"deepseek-v4-flash" {}}}}}
+        config {:llm llm-cfg
+                :cron {:timezone "UTC" :provider nil :model nil :tool-profile :cron-observe}
+                :tools {:profiles {:cron-observe {:permissions [:filesystem-read]
+                                                  :allowed-tools [:fs_read]}}}}
+        system-ref (atom nil)
+        service (cron-service/create-service system-ref store (:cron config))
+        system {:config config
+                :store store
+                :cron-service service
+                :llm-registry (llm-registry/create-registry llm-cfg)
+                :tool-registry (tools/create-registry)}]
+    (reset! system-ref system)
+    system))
+
+(deftest cron-ui-tabs-and-delivery-controls-test
+  (let [{:keys [path store]} (temp-store)
+        system (test-system store)
+        job (cron-store/create-job!
+             store
+             {:name "daily" :prompt "Report" :schedule {:kind :cron :expression "0 9 * * *"}
+              :timezone "UTC" :status :active :notification {:policy :never}
+              :next-run-at "2026-08-11T09:00:00Z" :created-by "test"})]
+    (try
+      (let [jobs-html (ui-cron/fragment system {:tab :jobs :limit 20})
+            runs-html (ui-cron/fragment system {:tab :runs :limit 20})
+            stats-html (ui-cron/fragment system {:tab :stats :limit 20})
+            new-html (ui-cron/fragment system {:tab :new :limit 20})
+            editor-html (ui-cron/job-editor-detail-fragment system job)]
+        (is (= 4 (count (re-seq #"role=\"tab\"" jobs-html))))
+        (is (str/includes? jobs-html "Persistent schedules"))
+        (is (str/includes? jobs-html "cron-job-link"))
+        (is (str/includes? jobs-html "scrollIntoView"))
+        (is (not (str/includes? jobs-html "Scheduler")))
+        (is (not (str/includes? jobs-html "Recent runs")))
+        (is (str/includes? runs-html "Recent runs"))
+        (is (not (str/includes? runs-html "Persistent schedules")))
+        (is (str/includes? stats-html "Scheduler"))
+        (is (str/includes? stats-html "Active jobs"))
+        (is (not (str/includes? stats-html "Persistent schedules")))
+        (is (str/includes? new-html "Create job"))
+        (is (str/includes? new-html "Telegram — always send result"))
+        (is (str/includes? editor-html "update-run"))
+        (is (str/includes? editor-html "this.form.elements.action.value=&apos;update-run&apos;"))
+        (is (str/includes? editor-html "Save &amp; run"))
+        (is (str/includes? editor-html "notify_policy.value === &apos;never&apos;")))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest cron-ui-run-action-claims-manual-run-test
+  (let [{:keys [path store]} (temp-store)
+        system (test-system store)
+        job (cron-store/create-job!
+             store
+             {:name "manual-report" :prompt "Report" :schedule {:kind :cron :expression "0 9 * * *"}
+              :timezone "UTC" :status :active :notification {:policy :never}
+              :next-run-at "2026-08-11T09:00:00Z" :created-by "test"})]
+    (try
+      (let [response (ui-handlers/cron-action
+                      system
+                      {:form-params {"id" (:id job)
+                                     "revision" (str (:revision job))
+                                     "action" "run"
+                                     "cron_tab" "jobs"}})
+            run (first (cron-store/list-runs store (:id job) 1))]
+        (is (= 200 (:status response)))
+        (is (= :manual (:trigger run)))
+        (is (= :claimed (:status run)))
+        (is (str/includes? (:body response) "Recent runs")))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
 
 (deftest typed-schedule-next-fire-test
   (testing "five-field cron and timezone"
@@ -51,6 +132,8 @@
     (is (re-find #"expression" (pr-str schedule-json-schema)))
     (is (re-find #"Five-field UNIX cron" (pr-str schedule-json-schema)))
     (is (re-find #"inherit configured cron defaults" (:description description)))
+    (is (re-find #"kind.*origin" (:description description)))
+    (is (re-find #"cron_notify" (pr-str (get-in description [:input-schema :properties :notification]))))
     (let [error (try
                   (validate-input (assoc-in valid [:schedule :cron] "0 9 * * 1-5"))
                   nil

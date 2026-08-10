@@ -31,6 +31,24 @@
      {:description "ISO-8601 UTC instant anchoring the interval."}
      [:string {:min 1}]]]])
 
+(def ^:private notification-schema
+  [:map {:closed true}
+   [:policy
+    {:description "never saves locally; always sends the final answer; agent sends only content staged with cron_notify."}
+    [:or [:enum :never :always :agent] [:enum "never" "always" "agent"]]]
+   [:target
+    {:optional true
+     :description "Use kind=origin to reply to the Telegram chat creating the job, or kind=channel with an explicit adapter and recipient."}
+    [:maybe
+     [:or
+      [:map {:closed true}
+       [:kind [:or [:enum :origin] [:enum "origin"]]]]
+      [:map {:closed true}
+       [:kind [:or [:enum :channel] [:enum "channel"]]]
+       [:adapter [:or :keyword :string]]
+       [:recipient [:or :int :string]]]]]]
+   [:notify-on-error {:optional true} :boolean]])
+
 (defn- normalize-action [value]
   (if (keyword? value) value (some-> value str/lower-case keyword)))
 
@@ -63,7 +81,9 @@
      (str "Create, inspect, update, pause, resume, run, or delete persistent scheduled agent jobs. "
           "Cron schedules use schedule.expression, for example "
           "{\"kind\":\"cron\",\"expression\":\"0 9 * * 1-5\"}; never use schedule.cron or schedule.expr. "
-          "Omit provider, model, and tool-profile to inherit configured cron defaults; set them only for a per-job override.")
+          "Omit provider, model, and tool-profile to inherit configured cron defaults; set them only for a per-job override. "
+          "For Telegram delivery from a Telegram chat, use notification "
+          "{\"policy\":\"always\",\"target\":{\"kind\":\"origin\"}}; policy=never never sends a message.")
      :category :system
      :required-permissions #{:cron-read}
      :input-schema [:map {:closed true}
@@ -77,7 +97,7 @@
                       :description "Typed schedule. Required for preview/create; include only fields for the selected kind."}
                      [:maybe schedule-schema]]
                     [:timezone {:optional true} [:maybe :string]]
-                    [:notification {:optional true} [:maybe :map]]
+                    [:notification {:optional true} [:maybe notification-schema]]
                     [:provider
                      {:optional true
                       :description "Per-job provider override. Omit together with model to inherit cron/global defaults."}

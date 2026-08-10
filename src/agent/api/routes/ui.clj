@@ -57,6 +57,11 @@
 (def ^:private progressive-limit-query
   [:map [:limit {:optional true} :string]])
 
+(def ^:private cron-query
+  [:map
+   [:limit {:optional true} :string]
+   [:tab {:optional true} :string]])
+
 (def ^:private session-id-query
   [:map
    [:session_id schemas/NonBlankString]
@@ -80,11 +85,11 @@
                        :parameters {:query shell-query}}}]
    ["/ui/dashboard" {:get {:handler/id :ui-dashboard}}]
    ["/ui/cron" {:get {:handler/id :ui-cron
-                        :parameters {:query progressive-limit-query}}
+                        :parameters {:query cron-query}}
                  :post {:handler/id :ui-cron-create}}]
    ["/ui/cron/jobs" {:post {:handler/id :ui-cron-create}}]
    ["/ui/cron/status" {:get {:handler/id :ui-cron-status
-                              :parameters {:query progressive-limit-query}}}]
+                              :parameters {:query cron-query}}}]
    ["/ui/cron/jobs/:job-id/detail" {:get {:handler/id :ui-cron-job-detail}}]
    ["/ui/cron/runs/:run-id/detail" {:get {:handler/id :ui-cron-run-detail}}]
    ["/ui/cron/preview" {:post {:handler/id :ui-cron-preview}}]

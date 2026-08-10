@@ -602,18 +602,6 @@ button:hover,
   background: color-mix(in srgb, var(--text-display) 7%, var(--surface-raised));
   color: var(--text-display);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-display) 20%, transparent);
-  padding-left: 24px;
-}
-
-.session-link.session-link--active::before {
-  content: "";
-  position: absolute;
-  left: 10px;
-  top: 50%;
-  width: 6px;
-  height: 6px;
-  background: var(--success);
-  transform: translateY(-50%);
 }
 
 .session-link.session-link--active strong {
@@ -4614,9 +4602,16 @@ button.row--link:focus-visible {
 
 .cron-workspace { display: grid; gap: 16px; min-width: 0; }
 .cron-summary .overview-metrics { margin-top: 12px; }
-.cron-table-wrap { overflow: auto; max-height: 48vh; }
+.cron-tabs { display: flex; gap: 4px; min-width: 0; padding: 4px; border: 1px solid var(--border); background: var(--surface-raised); }
+.cron-tab { flex: 1; min-width: 0; border: 0; color: var(--text-secondary); }
+.cron-tab:hover { background: var(--surface); }
+.cron-tab.cron-tab--active { background: var(--surface); color: var(--text-display); box-shadow: var(--shadow-sm); }
+.cron-tab-panel { min-width: 0; min-height: 420px; }
+.cron-table-wrap { overflow-x: auto; overflow-y: visible; }
 .cron-table td { vertical-align: top; }
 .cron-table td small { display: block; margin-top: 4px; color: var(--text-secondary); max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+.cron-job-link { display: block; max-width: 280px; padding: 0; border: 0; background: transparent; color: var(--text-display); font-weight: 600; letter-spacing: 0; text-align: left; text-transform: none; }
+.cron-job-link:hover { color: var(--primary); }
 .cron-row--active { box-shadow: inset 2px 0 0 var(--success); }
 .cron-actions { display: flex; gap: 6px; }
 .cron-inline-form { display: inline; }
@@ -4627,6 +4622,7 @@ button.row--link:focus-visible {
 .cron-prompt { grid-column: 1 / -1; }
 .cron-editor__actions { display: flex; justify-content: flex-end; margin-top: 14px; }
 .cron-editor__actions { gap: 8px; }
+.cron-delivery-help { margin: 12px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
 .cron-editors { display: grid; gap: 8px; margin-top: 14px; }
 .cron-job-editor { border-top: 1px solid var(--border); padding-top: 10px; }
 .cron-job-editor summary { cursor: pointer; color: var(--text-secondary); font: 500 11px/1.4 "IoskeleyMono", monospace; }

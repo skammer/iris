@@ -17,6 +17,17 @@
       (str (name (keyword (:adapter target))) ":" (:recipient target))
       "local only")))
 
+(def ^:private tabs [[:stats "Stats"] [:jobs "Jobs"] [:runs "Runs"] [:new "New job"]])
+
+(defn- tab-link [tab label active-tab limit]
+  [:button.cron-tab
+   {:type "button"
+    :class (when (= tab active-tab) "cron-tab--active")
+    :role "tab"
+    :aria-selected (= tab active-tab)
+    "data-on:click" (str "@get('/ui/cron?tab=" (name tab) "&limit=" limit "')")}
+   label])
+
 (defn- action-form [job action label]
   [:form.cron-inline-form
    {:method "post"
@@ -24,7 +35,18 @@
    [:input {:type "hidden" :name "id" :value (:id job)}]
    [:input {:type "hidden" :name "revision" :value (:revision job)}]
    [:input {:type "hidden" :name "action" :value action}]
+   [:input {:type "hidden" :name "cron_tab" :value "jobs"}]
    [:button.btn-small {:type "submit"} label]])
+
+(defn- edit-job-button [job label class]
+  (let [editor-id (str "cron-job-editor-" (:id job))]
+    [:button {:type "button"
+              :class class
+              :onclick (str "const editor=document.getElementById('" editor-id
+                            "');editor.open=true;editor.scrollIntoView({behavior:'smooth',block:'start'});"
+                            "return false;")
+              "data-on:click" (str "@get('/ui/cron/jobs/" (:id job) "/detail')")}
+     label]))
 
 (defn- jobs-table [jobs]
   [:div.cron-table-wrap.scroll-fade
@@ -36,7 +58,8 @@
      (if (seq jobs)
        (for [job jobs]
          [:tr {:class (when (= :active (:status job)) "cron-row--active")}
-          [:td [:strong (:name job)] [:small (str "r" (:revision job) " · " (:id job))]]
+          [:td (edit-job-button job (:name job) "cron-job-link")
+           [:small (str "r" (:revision job) " · " (:id job))]]
           [:td [:span.status-badge {:class (str "status-badge--" (name (:status job)))}
                 (name (:status job))]]
           [:td [:span (schedule-label (:schedule job))] [:small (:timezone job)]]
@@ -49,6 +72,7 @@
            (if (= :active (:status job))
              (action-form job "pause" "Pause")
              (action-form job "resume" "Resume"))
+           (edit-job-button job "Edit" "btn-small")
            (action-form job "run" "Run now")
            (action-form job "delete" "Delete")]])
        [:tr [:td {:colspan 7} "No cron jobs."]])]]])
@@ -103,14 +127,26 @@
                       :selected (= value (str (some-> (:provider job) name) "|" (:model job)))} label])]]
         [:label [:span "Notify"]
          [:select {:name "notify_policy"}
-          (for [policy [:never :always :agent]]
+          (for [[policy label] [[:never "Local only — save result"]
+                                [:always "Telegram — always send result"]
+                                [:agent "Telegram — only when agent calls cron_notify"]]]
             [:option {:value (name policy)
                       :selected (= policy (keyword (get-in job [:notification :policy] :never)))}
-             (name policy)])]]
+             label])]]
         [:label [:span "Telegram chat ID"]
-         [:input {:name "telegram_recipient" :value (get-in job [:notification :target :recipient])}]]
+         [:input {:name "telegram_recipient"
+                  :placeholder "Required for Telegram delivery"
+                  :oninput "if(this.value.trim() && this.form.elements.notify_policy.value === 'never'){this.form.elements.notify_policy.value='always'}"
+                  :value (get-in job [:notification :target :recipient])}]]
         [:label.cron-prompt [:span "Prompt"] [:textarea {:name "prompt" :rows 5 :required true} (:prompt job)]]]
-       [:div.cron-editor__actions [:button {:type "submit"} "Save changes"]]]]))
+       [:p.cron-delivery-help "Local only keeps output in Runs. Telegram modes require a saved chat ID."]
+       [:div.cron-editor__actions
+        [:button {:type "submit"
+                  :onclick "this.form.elements.action.value='update'"}
+         "Save"]
+        [:button {:type "submit"
+                  :onclick "this.form.elements.action.value='update-run'"}
+         "Save & run"]]]]))
 
 (defn job-editor-detail-fragment [system job]
   (render/render
@@ -209,13 +245,17 @@
         (for [[value label] model-pairs] [:option {:value value} label])]]
       [:label [:span "Notify"]
        [:select {:name "notify_policy"}
-        [:option {:value "never"} "Never"]
-        [:option {:value "always"} "Always"]
-        [:option {:value "agent"} "When agent calls cron_notify"]]]
-      [:label [:span "Telegram chat ID"] [:input {:name "telegram_recipient"}]]
+        [:option {:value "never"} "Local only — save result"]
+        [:option {:value "always"} "Telegram — always send result"]
+        [:option {:value "agent"} "Telegram — only when agent calls cron_notify"]]]
+      [:label [:span "Telegram chat ID"]
+       [:input {:name "telegram_recipient"
+                :placeholder "Required for Telegram delivery"
+                :oninput "if(this.value.trim() && this.form.elements.notify_policy.value === 'never'){this.form.elements.notify_policy.value='always'}"}]]
       [:label.cron-prompt [:span "Prompt"]
        [:textarea {:name "prompt" :required true :rows 7
                    :placeholder "Inspect logs. Notify only if suspicious."}]]]
+     [:p.cron-delivery-help "Every run and full transcript are saved. Delivery is separate: Always sends the final answer; Agent sends only content passed to cron_notify."]
      [:div.cron-editor__actions
       [:button {:type "button"
                 "data-on:click" "@post('/ui/cron/preview', {contentType: 'form', selector: '#cron-create-form'})"}
@@ -223,16 +263,17 @@
       [:button {:type "submit"} "Create job"]]
      [:div#cron-preview.cron-preview "Preview schedule before saving."]]))
 
-(defn- summary-node [health limit]
+(defn- summary-node [health limit tab]
   [:section#cron-summary.panel.cron-summary
-   {"data-on-interval__duration.15s" (str "@get('/ui/cron/status?limit=" limit "')")}
+   {"data-on-interval__duration.15s" (str "@get('/ui/cron/status?tab=" (name tab)
+                                               "&limit=" limit "')")}
    [:div.panel-head
     [:div [:span.overview-kicker "Scheduler"] [:h2 "Cron jobs"]]
     [:div.panel-head__form
      [:span.status-badge {:class (if (:running health) "status-badge--active" "status-badge--paused")}
       (if (:running health) "running" "stopped")]
      [:button {:type "button"
-               "data-on:click" (str "@get('/ui/cron?limit=" limit "')")}
+               "data-on:click" (str "@get('/ui/cron?tab=" (name tab) "&limit=" limit "')")}
       "Refresh"]]]
    [:div.overview-metrics
     (for [[label value] [["Active jobs" (:active-jobs health)]
@@ -242,29 +283,39 @@
       [:div.overview-metric [:span.label label] [:strong (str (or value 0))]])]
    (when-let [error (:last-error health)] [:p.value--warn error])])
 
-(defn status-fragment [system limit]
-  (render/render (summary-node (cron/health-check (:cron-service system)) limit)))
+(defn status-fragment [system limit tab]
+  (render/render (summary-node (cron/health-check (:cron-service system)) limit tab)))
 
 (defn fragment
-  ([system] (fragment system {:limit 20}))
-  ([system {:keys [limit] :or {limit 20}}]
+  ([system] (fragment system {:limit 20 :tab :jobs}))
+  ([system {:keys [limit tab] :or {limit 20 tab :jobs}}]
    (let [service (:cron-service system)
-        health (cron/health-check service)
-        jobs (cron/list-jobs service {:limit limit})
-        runs (cron/list-runs service nil limit)]
+         tab* (if (contains? (set (map first tabs)) tab) tab :jobs)
+         health (when (= :stats tab*) (cron/health-check service))
+         jobs (when (contains? #{:jobs :runs} tab*)
+                (cron/list-jobs service {:limit limit}))
+         runs (when (= :runs tab*) (cron/list-runs service nil limit))]
      (render/render
       [:section#cron-workspace.cron-workspace
-      (summary-node health limit)
-      [:section.panel
-       [:div.panel-head [:div [:span.overview-kicker "Persistent schedules"] [:h2 "Jobs"]]]
-       (jobs-table jobs)
-       (job-editors jobs)]
-      [:section.panel
-       [:div.panel-head [:div [:span.overview-kicker "Audit"] [:h2 "Recent runs"]]]
-       (runs-table runs jobs)]
+      [:nav.cron-tabs {:role "tablist" :aria-label "Cron sections"}
+       (for [[tab label] tabs] (tab-link tab label tab* limit))]
+      (case tab*
+        :stats (summary-node health limit tab*)
+        :runs [:section.panel.cron-tab-panel
+               [:div.panel-head
+                [:div [:span.overview-kicker "Audit"] [:h2 "Recent runs"]]
+                [:button {:type "button"
+                          "data-on:click" (str "@get('/ui/cron?tab=runs&limit=" limit "')")}
+                 "Refresh"]]
+               (runs-table runs jobs)]
+        :new (create-form system)
+        [:section.panel.cron-tab-panel
+         [:div.panel-head [:div [:span.overview-kicker "Persistent schedules"] [:h2 "Jobs"]]]
+         (jobs-table jobs)
+         (job-editors jobs)])
       (when (or (= (count jobs) limit) (= (count runs) limit))
         [:button.chat-history-more
          {:type "button"
-          "data-on:click" (str "@get('/ui/cron?limit=" (min 100 (+ limit 20)) "')")}
-         "Load 20 older"])
-      (create-form system)]))))
+          "data-on:click" (str "@get('/ui/cron?tab=" (name tab*) "&limit="
+                               (min 100 (+ limit 20)) "')")}
+         "Load 20 older"])]))))

@@ -33,6 +33,8 @@ Tool-use policy for Iris agents.
 - Interval: `{"kind":"interval","every-seconds":3600,"anchor-at":"2026-08-10T00:00:00Z"}`; minimum 60 seconds.
 - Omit `provider`, `model`, and `tool-profile` for normal jobs; Iris inherits cron defaults. Override only when needed.
 - Model override uses separate values: `provider: "deepseek"`, `model: "deepseek-v4-flash"`. Never prefix model with provider.
+- Telegram every run: `notification: {"policy":"always","target":{"kind":"origin"}}` when creating from Telegram, or use an explicit channel target. `never` only saves the run; it never sends.
+- Conditional Telegram alert: use `policy: "agent"` and tell the run prompt exactly when to call `cron_notify`. No call means successful, suppressed delivery.
 
 ## Memory Tools
 

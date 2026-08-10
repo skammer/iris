@@ -116,12 +116,14 @@
   (responses/html-response 200 (ui/dashboard-fragment system)))
 
 (defn cron [system request]
-  (let [limit (request-ui-limit request 20 100)]
-    (responses/html-response 200 (ui/cron-fragment system {:limit limit}))))
+  (let [limit (request-ui-limit request 20 100)
+        tab (some-> request :parameters :query :tab keyword)]
+    (responses/html-response 200 (ui/cron-fragment system {:limit limit :tab tab}))))
 
 (defn cron-status [system request]
-  (let [limit (request-ui-limit request 20 100)]
-    (responses/html-response 200 (ui-cron/status-fragment system limit))))
+  (let [limit (request-ui-limit request 20 100)
+        tab (or (some-> request :parameters :query :tab keyword) :jobs)]
+    (responses/html-response 200 (ui-cron/status-fragment system limit tab))))
 
 (defn cron-job-detail [system _request job-id]
   (responses/html-response
@@ -160,7 +162,7 @@
                 (not (str/blank? max_occurrences)) (assoc :max-occurrences (parse-long max_occurrences))
                 (not (str/blank? tool_profile)) (assoc :tool-profile (keyword tool_profile)))]
     (cron-service/create-job! (:cron-service system) input {:created-by "ui"})
-    (responses/html-response 200 (ui/cron-fragment system))))
+    (responses/html-response 200 (ui/cron-fragment system {:tab :jobs}))))
 
 (defn cron-preview [system request]
   (let [{:keys [name prompt timezone max_occurrences tool_profile model_pair
@@ -184,9 +186,22 @@
                     (get-in preview [:resolved-model :model]) " · "
                     (get-in preview [:resolved-tools :tool-profile]))]]))))
 
+(defn- cron-update! [service id revision body]
+  (let [{:keys [name prompt timezone max_occurrences tool_profile
+                model_pair notify_policy telegram_recipient]} body
+        target (when-not (str/blank? telegram_recipient)
+                 {:kind :channel :adapter :telegram :recipient telegram_recipient})
+        changes (merge {:name name :prompt prompt :timezone timezone
+                        :schedule (cron-form-schedule body)
+                        :notification {:policy (keyword (or notify_policy "never")) :target target}
+                        :max-occurrences (when-not (str/blank? max_occurrences)
+                                           (parse-long max_occurrences))
+                        :tool-profile (when-not (str/blank? tool_profile) (keyword tool_profile))}
+                       (or (cron-model-pin model_pair) {:provider nil :model nil}))]
+    (cron-service/update-job! service id revision changes)))
+
 (defn cron-action [system request]
-  (let [{:keys [id revision action name prompt timezone max_occurrences tool_profile
-                model_pair notify_policy telegram_recipient] :as body} (h/read-form-body request)
+  (let [{:keys [id revision action cron_tab] :as body} (h/read-form-body request)
         service (:cron-service system)
         revision* (parse-long revision)]
     (case action
@@ -194,18 +209,16 @@
       "resume" (cron-service/set-status! service id :active revision*)
       "delete" (cron-service/set-status! service id :deleted revision*)
       "run" (cron-service/run-now! service id)
-      "update" (let [target (when-not (str/blank? telegram_recipient)
-                              {:kind :channel :adapter :telegram :recipient telegram_recipient})
-                       changes (merge {:name name :prompt prompt :timezone timezone
-                                       :schedule (cron-form-schedule body)
-                                       :notification {:policy (keyword (or notify_policy "never")) :target target}
-                                       :max-occurrences (when-not (str/blank? max_occurrences)
-                                                          (parse-long max_occurrences))
-                                       :tool-profile (when-not (str/blank? tool_profile) (keyword tool_profile))}
-                                      (or (cron-model-pin model_pair) {:provider nil :model nil}))]
-                   (cron-service/update-job! service id revision* changes))
+      "update" (cron-update! service id revision* body)
+      "update-run" (let [job (cron-update! service id revision* body)]
+                     (cron-service/run-now! service (:id job)))
       (throw (errors/api-error 400 "bad_request" "Unknown cron action")))
-    (responses/html-response 200 (ui/cron-fragment system))))
+    (responses/html-response
+     200
+     (ui/cron-fragment system
+                       {:tab (if (contains? #{"run" "update-run"} action)
+                               :runs
+                               (or (some-> cron_tab keyword) :jobs))}))))
 
 (defn operator-board [system _request]
   (responses/html-response 200 (ui/operator-board-fragment system)))
