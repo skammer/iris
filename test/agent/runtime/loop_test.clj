@@ -32,6 +32,29 @@
                                 :function {:name (name tool-name)
                                            :arguments (json/generate-string input)}}]}}))
 
+(defn- tool-batch-step [id-prefix tool-name inputs]
+  (let [calls (mapv (fn [idx input]
+                      {:id (str id-prefix "_" idx)
+                       :input input})
+                    (range)
+                    inputs)]
+    {:schema-version kernel-schema/current-step-schema-version
+     :state {}
+     :directives (mapv (fn [{:keys [id input]}]
+                         {:type :tool-call
+                          :payload {:tool-name tool-name
+                                    :input input
+                                    :context {:provider-tool-call-id id}}})
+                       calls)
+     :receipts []
+     :llm-response {:content ""
+                    :tool-calls (mapv (fn [{:keys [id input]}]
+                                        {:id id
+                                         :type "function"
+                                         :function {:name (name tool-name)
+                                                    :arguments (json/generate-string input)}})
+                                      calls)}}))
+
 (defn- execute-step [step]
   (assoc step
          :receipts
@@ -174,6 +197,34 @@
     (is (= 4 @execute-count))
     (is (= "done" (:content result)))
     (is (= :completed (:stop-reason result)))))
+
+(deftest doom-loop-guard-blocks-repeated-multi-step-sequence-test
+  (let [execute-count (atom 0)
+        sensor-inputs (mapv (fn [idx]
+                              {:action "get_state"
+                               :entity_id (str "sensor.plant_" idx)})
+                            (range 8))
+        sensor-step #(tool-batch-step (str "ha_" %) :homeassistant sensor-inputs)
+        shell-step #(tool-step (str "shell_" %) :shell {:command "read-yesterday"})
+        steps (atom [(sensor-step 1) (shell-step 1)
+                     (sensor-step 2) (shell-step 2)
+                     (sensor-step 3) (shell-step 3)])
+        {:keys [result events]}
+        (run-loop {:max-steps 7
+                   :planner-fn (fn [_ _]
+                                 (let [step (first @steps)]
+                                   (swap! steps rest)
+                                   step))
+                   :execute-step-fn (fn [step]
+                                      (swap! execute-count inc)
+                                      (execute-step step))})
+        detection (some #(when (= :doom-loop-detected (get-in % [:payload :kind]))
+                           (:payload %))
+                        @events)]
+    (is (= 5 @execute-count))
+    (is (= :doom-loop (:stop-reason result)))
+    (is (= :repeated-sequence (:detection detection)))
+    (is (= 2 (:sequence-length detection)))))
 
 (deftest doom-loop-guard-disabled-bypasses-repeat-check-test
   (let [execute-count (atom 0)

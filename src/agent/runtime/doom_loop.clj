@@ -7,7 +7,10 @@
 (def default-config
   {:enabled? true
    :threshold 3
-   :window-size 16})
+   :window-size 16
+   :sequence-threshold 3
+   :sequence-window-size 24
+   :max-sequence-length 8})
 
 (defn normalize-config
   [config]
@@ -18,7 +21,8 @@
   (true? (:enabled? (normalize-config config))))
 
 (defn new-state []
-  {:recent []})
+  {:recent []
+   :recent-steps []})
 
 (declare canonical-value)
 
@@ -81,15 +85,52 @@
     {:state state*
      :detected? (>= count* threshold)
      :count count*
+     :detection :identical-call
      :call call}))
+
+(defn- step-signature [step]
+  (->> (tool-calls step)
+       (map :fingerprint)
+       sort
+       vec))
+
+(defn- repeated-tail [steps threshold max-length]
+  (let [step-count (count steps)
+        max-period (min max-length (quot step-count threshold))]
+    (some (fn [period]
+            (let [pattern (subvec steps (- step-count period))
+                  repeated (vec (mapcat identity (repeat threshold pattern)))
+                  tail (subvec steps (- step-count (count repeated)))]
+              (when (= repeated tail)
+                {:sequence-length period
+                 :sequence pattern})))
+          (range 1 (inc max-period)))))
+
+(defn- record-step [state config step]
+  (let [{:keys [sequence-threshold sequence-window-size max-sequence-length]}
+        (normalize-config config)
+        signature (step-signature step)]
+    (if (empty? signature)
+      {:state state :detected? false}
+      (let [recent (conj (vec (:recent-steps state)) signature)
+            recent* (vec (take-last sequence-window-size recent))
+            repeated (repeated-tail recent* sequence-threshold max-sequence-length)]
+        (cond-> {:state (assoc state :recent-steps recent*)
+                 :detected? (boolean repeated)
+                 :detection :repeated-sequence
+                 :count (when repeated sequence-threshold)}
+          repeated (merge repeated))))))
 
 (defn check-step
   [state config step]
   (if-not (enabled? config)
     {:state state :detected? false}
-    (reduce (fn [{:keys [state detected?] :as acc} call]
-              (if detected?
-                acc
-                (record-call state config call)))
-            {:state state :detected? false}
-            (tool-calls step))))
+    (let [call-check (reduce (fn [{:keys [state detected?] :as acc} call]
+                               (if detected?
+                                 acc
+                                 (record-call state config call)))
+                             {:state state :detected? false}
+                             (tool-calls step))]
+      (if (:detected? call-check)
+        call-check
+        (record-step (:state call-check) config step)))))

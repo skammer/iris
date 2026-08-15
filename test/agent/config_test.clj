@@ -76,7 +76,10 @@
              (:loop cfg)))
 	      (is (= {:enabled? true
 	              :threshold 3
-	              :window-size 16}
+	              :window-size 16
+	              :sequence-threshold 3
+	              :sequence-window-size 24
+	              :max-sequence-length 8}
 	             (get-in cfg [:chat :guardrails :doom-loop])))
 	      (is (empty? (select-keys (:guardrails (:chat cfg))
 	                                [:enabled? :max-retries :respond-tool? :force-tool-choice? :tool-routing?])))

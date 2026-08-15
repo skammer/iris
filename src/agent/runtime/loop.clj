@@ -190,13 +190,21 @@
 
 (defn- doom-loop-terminal! [{:keys [sink base request-id stream?]} doom-check config step-no final-messages trace usage]
   (let [call (:call doom-check)
-        payload {:kind :doom-loop-detected
-                 :tool-name (:tool-name call)
-                 :input (:input call)
-                 :fingerprint (:fingerprint call)
-                 :count (:count doom-check)
-                 :threshold (:threshold config)
-                 :window-size (:window-size config)}]
+        sequence? (= :repeated-sequence (:detection doom-check))
+        payload (cond-> {:kind :doom-loop-detected
+                         :detection (:detection doom-check)
+                         :count (:count doom-check)
+                         :threshold (if sequence?
+                                      (:sequence-threshold config)
+                                      (:threshold config))
+                         :window-size (if sequence?
+                                        (:sequence-window-size config)
+                                        (:window-size config))}
+                  call (assoc :tool-name (:tool-name call)
+                              :input (:input call)
+                              :fingerprint (:fingerprint call))
+                  sequence? (assoc :sequence-length (:sequence-length doom-check)
+                                   :sequence (:sequence doom-check)))]
     (runtime-events/emit! sink :tool-execution-update base payload)
     (runtime-events/emit-terminal-message! sink base runtime-messages/doom-loop-content {:stop-reason :doom-loop
                                                                                          :metadata payload})

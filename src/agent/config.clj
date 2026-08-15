@@ -106,7 +106,10 @@
                     }
 	          :guardrails {:doom-loop {:enabled? true
 	                                   :threshold 3
-	                                   :window-size 16}}
+	                                   :window-size 16
+	                                   :sequence-threshold 3
+	                                   :sequence-window-size 24
+	                                   :max-sequence-length 8}}
           :compaction {:max-context-tokens 8192
                        :reserve-output-tokens 1024
                        :keep-recent-tokens 2048
