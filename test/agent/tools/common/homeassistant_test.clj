@@ -108,6 +108,53 @@
              (:result-text result)))
       (is (not (str/includes? (pr-str result) ":attributes"))))))
 
+(deftest homeassistant-get-states-returns-one-exact-compact-batch
+  (let [requests (atom [])]
+    (with-redefs [http/request (fn [request]
+                                 (swap! requests conj request)
+                                 {:status 200
+                                  :headers {"content-type" "application/json"}
+                                  :body (json/generate-string
+                                         [{:entity_id "sensor.unrelated"
+                                           :state "99"
+                                           :attributes {:friendly_name "Unrelated"}}
+                                          {:entity_id "sensor.plant_temperature"
+                                           :state "24.6"
+                                           :attributes {:friendly_name "Plant temperature"
+                                                        :device_class "temperature"
+                                                        :unit_of_measurement "°C"}}
+                                          {:entity_id "sensor.plant_moisture"
+                                           :state "41"
+                                           :attributes {:friendly_name "Plant moisture"
+                                                        :device_class "moisture"
+                                                        :unit_of_measurement "%"}}])})]
+      (let [result (tools/execute-tool (registry configured-cfg)
+                                       :homeassistant
+                                       {:action "get_states"
+                                        :entity_ids ["sensor.plant_moisture"
+                                                     "sensor.missing"
+                                                     "sensor.plant_temperature"]}
+                                       {:permissions #{:homeassistant}})]
+        (is (= 1 (count @requests)))
+        (is (= "http://ha.local:8123/api/states" (:url (first @requests))))
+        (is (= {:requested 3
+                :returned 2
+                :missing ["sensor.missing"]
+                :entities [{:entity_id "sensor.plant_moisture"
+                            :state "41"
+                            :friendly_name "Plant moisture"
+                            :device_class "moisture"
+                            :unit_of_measurement "%"}
+                           {:entity_id "sensor.plant_temperature"
+                            :state "24.6"
+                            :friendly_name "Plant temperature"
+                            :device_class "temperature"
+                            :unit_of_measurement "°C"}]}
+               (:body result)))
+        (is (= "homeassistant.get_states ok: returned 2/3 requested, missing 1\nmissing: sensor.missing\nsensor.plant_moisture = 41 | Plant moisture | moisture | %\nsensor.plant_temperature = 24.6 | Plant temperature | temperature | °C"
+               (:result-text result)))
+        (is (not (str/includes? (pr-str result) ":attributes")))))))
+
 (deftest homeassistant-search-states-filters-compact-results
   (with-redefs [http/request (fn [_]
                                {:status 200
@@ -186,7 +233,7 @@
   (let [description (tools/describe (ha-tool/create-homeassistant-tool configured-cfg))]
     (is (= :homeassistant (:name description)))
     (is (= :action (:action-key description)))
-    (is (= #{:get_state :list_states :search_states :list_services}
+    (is (= #{:get_state :get_states :list_states :search_states :list_services}
            (:read-only-actions description)))
     (is (false? (:approval-sensitive? description)))))
 

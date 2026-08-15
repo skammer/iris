@@ -32,14 +32,15 @@
     (is (= "homeassistant" (:name bundle)))
     (is (str/ends-with? (:module-path bundle) "module.wasm"))
     (is (= [:map {:closed true}
-            [:action [:enum "get_state" "list_states" "search_states" "list_services" "call_service"]]
-            [:entity_id {:optional true} :string]
-            [:query {:optional true} :string]
-            [:domain {:optional true} :string]
+            [:action [:enum "get_state" "get_states" "list_states" "search_states" "list_services" "call_service"]]
+            [:data {:optional true} [:map-of :any :any]]
             [:device_class {:optional true} :string]
+            [:domain {:optional true} :string]
+            [:entity_id {:optional true} :string]
+            [:entity_ids {:optional true} [:vector {:min 1, :max 200} :string]]
             [:limit {:optional true} [:int {:min 1 :max 200}]]
-            [:service {:optional true} :string]
-            [:data {:optional true} [:map-of :any :any]]]
+            [:query {:optional true} :string]
+            [:service {:optional true} :string]]
            (:input-schema bundle)))))
 
 (deftest bundle-skill-is-visible-test
@@ -55,7 +56,7 @@
     (is (some? tool))
     (is (= :wasm-bundle (:source description)))
     (is (= #{:wasm-execute} (:required-permissions description)))
-    (is (= #{:get_state :list_states :search_states :list_services}
+    (is (= #{:get_state :get_states :list_states :search_states :list_services}
            (:read-only-actions description)))))
 
 (deftest homeassistant-bundle-search-states-test

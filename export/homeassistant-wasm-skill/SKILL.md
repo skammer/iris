@@ -15,8 +15,9 @@ Use when the user asks to inspect or control Home Assistant devices.
 1. Read before control.
 2. Use `search_states` to find entities by name/domain/device class.
 3. Use `get_state` when current state matters.
-4. Use `call_service` only when entity and service are clear.
-5. Prefer entity-scoped calls. Global services require `global_services` config.
+4. Use `get_states` when several exact entity IDs are already known.
+5. Use `call_service` only when entity and service are clear.
+6. Prefer entity-scoped calls. Global services require `global_services` config.
 
 ## Tool Input
 
@@ -29,6 +30,10 @@ Use when the user asks to inspect or control Home Assistant devices.
 ```
 
 ```json
+{"action":"get_states","entity_ids":["sensor.plant_moisture","sensor.plant_temperature"]}
+```
+
+```json
 {"action":"call_service","domain":"light","service":"turn_on","entity_id":"light.kitchen","data":{"brightness_pct":70}}
 ```
 
@@ -37,6 +42,7 @@ Use when the user asks to inspect or control Home Assistant devices.
 - `list_states`: compact Home Assistant state summaries, default limit `25`, max `200`.
 - `search_states`: same as `list_states`, filtered by `query`, `domain`, `device_class`.
 - `get_state`: one entity from `/api/states/{entity_id}`.
+- `get_states`: exact compact summaries for several known entities using one `/api/states` request.
 - `list_services`: compact domain/service list from `/api/services`.
 - `call_service`: guarded POST to `/api/services/{domain}/{service}`.
 

@@ -173,7 +173,7 @@
                                      :allowed-tools [:fs_read :fs_list :fs_search :http :memory_recall
                                                      :vault_search :message_search :homeassistant]
                                      :allowed-actions {:http [:get :head]
-                                                       :homeassistant [:get_state :list_states :search_states :list_services]}}
+                                                       :homeassistant [:get_state :get_states :list_states :search_states :list_services]}}
                       :cron-automation {:permissions [:filesystem-read :filesystem-write :http-request :shell-exec]
                                         :allowed-tools [:fs_read :fs_list :fs_search :fs_write :http :shell]}}
            :policy {:allowlist []
@@ -630,7 +630,7 @@
 
 (def ^:private cron-action-values
   {:http #{:get :head :post :put :patch :delete}
-   :homeassistant #{:get_state :list_states :search_states :list_services :call_service}})
+   :homeassistant #{:get_state :get_states :list_states :search_states :list_services :call_service}})
 
 (defn- cron-config-errors [cfg]
   (let [{:keys [provider model timezone tool-profile]} (:cron cfg)

@@ -9,8 +9,8 @@
   "tags": ["iris", "homeassistant", "smart-home", "wasi"],
   "requiredPermissions": ["wasm-execute"],
   "actionKey": "action",
-  "readOnlyActions": ["get_state", "list_states", "search_states", "list_services"],
-  "parallelSafeActions": ["get_state", "list_states", "search_states", "list_services"],
+  "readOnlyActions": ["get_state", "get_states", "list_states", "search_states", "list_services"],
+  "parallelSafeActions": ["get_state", "get_states", "list_states", "search_states", "list_services"],
   "sensitiveActions": ["call_service"],
   "runtime": {
     "kind": "wasi-preview1",
@@ -32,9 +32,15 @@
     "properties": {
       "action": {
         "type": "string",
-        "enum": ["get_state", "list_states", "search_states", "list_services", "call_service"]
+        "enum": ["get_state", "get_states", "list_states", "search_states", "list_services", "call_service"]
       },
       "entity_id": { "type": "string" },
+      "entity_ids": {
+        "type": "array",
+        "items": { "type": "string" },
+        "minItems": 1,
+        "maxItems": 200
+      },
       "query": { "type": "string" },
       "domain": { "type": "string" },
       "device_class": { "type": "string" },

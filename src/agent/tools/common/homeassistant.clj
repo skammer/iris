@@ -9,8 +9,8 @@
   (:import
    [java.net URI]))
 
-(def ^:private actions #{:get_state :list_states :search_states :list_services :call_service})
-(def ^:private read-actions #{:get_state :list_states :search_states :list_services})
+(def ^:private actions #{:get_state :get_states :list_states :search_states :list_services :call_service})
+(def ^:private read-actions #{:get_state :get_states :list_states :search_states :list_services})
 (def ^:private default-allowed-domains #{:light :switch :scene :script})
 (def ^:private default-state-limit 25)
 (def ^:private max-state-limit 200)
@@ -273,9 +273,33 @@
                   :device_class device_class
                   :entities (mapv state-summary returned)})))
 
+(defn- compact-selected-states-response [response entity-ids]
+  (let [states-by-id (into {} (map (juxt :entity_id identity)) (or (:body response) []))
+        entities (mapv (comp state-summary states-by-id)
+                       (filter states-by-id entity-ids))
+        missing (filterv #(not (contains? states-by-id %)) entity-ids)]
+    (assoc response
+           :body {:requested (count entity-ids)
+                  :returned (count entities)
+                  :missing missing
+                  :entities entities})))
+
+(defn- selected-states-result-text [body]
+  (str/join "\n"
+            (cond-> [(format "homeassistant.get_states ok: returned %d/%d requested, missing %d"
+                             (:returned body)
+                             (:requested body)
+                             (count (:missing body)))]
+              (seq (:missing body)) (conj (str "missing: " (str/join ", " (:missing body))))
+              true (into (map state-summary-line (:entities body))))))
+
 (defn- validate-input [config input]
   (let [action (normalize-keyword (:action input))
         entity-id (clean-string (:entity_id input))
+        entity-ids (->> (:entity_ids input)
+                        (keep clean-string)
+                        distinct
+                        vec)
         domain (normalize-domain (:domain input))
         service (normalize-domain (:service input))
         query (clean-string (:query input))
@@ -288,10 +312,17 @@
     (when (and entity-id (not (entity-id? entity-id)))
       (throw (tools/validation-error "entity_id must look like domain.name"
                                      {:entity_id entity-id})))
+    (when-let [invalid (seq (remove entity-id? entity-ids))]
+      (throw (tools/validation-error "every entity_ids value must look like domain.name"
+                                     {:entity_ids invalid})))
     (case action
       :get_state
       (when-not entity-id
         (throw (tools/validation-error "get_state requires entity_id" {:input input})))
+
+      :get_states
+      (when-not (seq entity-ids)
+        (throw (tools/validation-error "get_states requires entity_ids" {:input input})))
 
       :call_service
       (let [domain-name (token-name (:domain input))
@@ -319,6 +350,7 @@
       nil)
     (cond-> {:action action}
       entity-id (assoc :entity_id entity-id)
+      (seq entity-ids) (assoc :entity_ids entity-ids)
       domain (assoc :domain (name domain))
       service (assoc :service (name service))
       query (assoc :query query)
@@ -343,15 +375,16 @@
      {:description
       (tools/create-tool-description
        :homeassistant
-       "Home Assistant API bridge. Use search_states with query/domain/device_class to find entities; list_states returns compact limited state summaries to avoid truncating full HA state dumps."
+       "Home Assistant API bridge. Use get_states with entity_ids for one compact exact batch; use search_states with query/domain/device_class to discover entities."
        :category :api
        :timeout-ms (:timeout-ms config*)
        :required-permissions #{:homeassistant}
        :input-schema [:map {:closed true}
                       [:action [:or
-                                [:enum :get_state :list_states :search_states :list_services :call_service]
-                                [:enum "get_state" "list_states" "search_states" "list_services" "call_service"]]]
+                                [:enum :get_state :get_states :list_states :search_states :list_services :call_service]
+                                [:enum "get_state" "get_states" "list_states" "search_states" "list_services" "call_service"]]]
                       [:entity_id {:optional true} :string]
+                      [:entity_ids {:optional true} [:vector {:min 1 :max 200} :string]]
                       [:query {:optional true} :string]
                       [:domain {:optional true} :string]
                       [:device_class {:optional true} :string]
@@ -375,7 +408,7 @@
                               :timeout-ms (:timeout-ms config*)
                               :allowed-domains (mapv name (normalize-set (:allowed-domains config*) default-allowed-domains))}})
       :execute-fn
-      (fn [{:keys [action entity_id domain service timeout-ms] :as input} _context]
+      (fn [{:keys [action entity_id entity_ids domain service timeout-ms] :as input} _context]
         (case action
           :list_states
           (let [response (assoc (compact-states-response
@@ -396,6 +429,13 @@
                                 :action "get_state"
                                 :entity_id entity_id)]
             (assoc response :result-text (single-state-result-text :get_state response)))
+
+          :get_states
+          (let [response (assoc (compact-selected-states-response
+                                 (request! config* :get "/api/states" {:timeout-ms timeout-ms})
+                                 entity_ids)
+                                :action "get_states")]
+            (assoc response :result-text (selected-states-result-text (:body response))))
 
           :list_services
           (let [response (assoc (request! config* :get "/api/services" {:timeout-ms timeout-ms})

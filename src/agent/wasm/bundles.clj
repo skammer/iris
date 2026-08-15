@@ -120,6 +120,11 @@
     (:minimum schema) (assoc :min (:minimum schema))
     (:maximum schema) (assoc :max (:maximum schema))))
 
+(defn- array-props [schema]
+  (cond-> {}
+    (:minItems schema) (assoc :min (:minItems schema))
+    (:maxItems schema) (assoc :max (:maxItems schema))))
+
 (defn- object-schema->malli [schema]
   (let [required (set (map keyword (:required schema)))
         closed? (false? (:additionalProperties schema))
@@ -130,7 +135,7 @@
                           (if entry-props
                             [k* entry-props (json-schema->malli child)]
                             [k* (json-schema->malli child)])))
-                      (:properties schema))]
+                      (sort-by (comp name key) (:properties schema)))]
     (if closed?
       (into [:map {:closed true}] entries)
       (if (seq entries)
@@ -151,7 +156,11 @@
                     :int))
       "number" number?
       "boolean" :boolean
-      "array" [:vector (json-schema->malli (:items schema))]
+      "array" (let [props (array-props schema)
+                    item-schema (json-schema->malli (:items schema))]
+                (if (seq props)
+                  [:vector props item-schema]
+                  [:vector item-schema]))
       :any)))
 
 (defn load-bundle-root

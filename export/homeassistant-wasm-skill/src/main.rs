@@ -88,11 +88,12 @@ fn run() -> Result<Value, ToolError> {
         "list_states" => list_states(&config, &action, args),
         "search_states" => list_states(&config, &action, args),
         "get_state" => get_state(&config, args),
+        "get_states" => get_states(&config, args),
         "list_services" => list_services(&config),
         "call_service" => call_service(&config, args),
         _ => Err(ToolError::with_details(
             "unsupported_action",
-            "action must be get_state, list_states, search_states, list_services, or call_service",
+            "action must be get_state, get_states, list_states, search_states, list_services, or call_service",
             json!({ "action": action }),
         )),
     }
@@ -309,6 +310,37 @@ fn get_state(config: &HaConfig, args: &Map<String, Value>) -> Result<Value, Tool
     ))
 }
 
+fn get_states(config: &HaConfig, args: &Map<String, Value>) -> Result<Value, ToolError> {
+    let entity_ids = required_entity_ids(args)?;
+    let (_, states_json) = ha_request(config, "GET", "/api/states", None)?;
+    let states = states_json.as_array().ok_or_else(|| {
+        ToolError::new(
+            "invalid_states_response",
+            "/api/states must return an array",
+        )
+    })?;
+    let mut entities = Vec::new();
+    let mut missing = Vec::new();
+
+    for entity_id in &entity_ids {
+        match states.iter().find(|state| {
+            value_string(state.get("entity_id")).as_deref() == Some(entity_id.as_str())
+        }) {
+            Some(state) => entities.push(state_summary(state)),
+            None => missing.push(entity_id.clone()),
+        }
+    }
+
+    let body = json!({
+        "requested": entity_ids.len(),
+        "returned": entities.len(),
+        "missing": missing,
+        "entities": entities
+    });
+    let result_text = selected_states_result_text(&body);
+    Ok(success("get_states", body, result_text))
+}
+
 fn list_services(config: &HaConfig) -> Result<Value, ToolError> {
     let (_, services_json) = ha_request(config, "GET", "/api/services", None)?;
     let domains = services_json.as_array().ok_or_else(|| {
@@ -430,6 +462,43 @@ fn required_string(args: &Map<String, Value>, key: &'static str) -> Result<Strin
 fn required_token(args: &Map<String, Value>, key: &'static str) -> Result<String, ToolError> {
     let raw = required_string(args, key)?;
     Ok(normalize_token(&raw))
+}
+
+fn required_entity_ids(args: &Map<String, Value>) -> Result<Vec<String>, ToolError> {
+    let values = args
+        .get("entity_ids")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ToolError::with_details(
+                "missing_required_argument",
+                "entity_ids must be a non-empty array",
+                json!({ "argument": "entity_ids" }),
+            )
+        })?;
+    let mut entity_ids = Vec::new();
+    for value in values {
+        let entity_id = value_string(Some(value))
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                ToolError::new(
+                    "invalid_entity_ids",
+                    "every entity_ids value must be a string",
+                )
+            })?;
+        validate_entity_id(&entity_id)?;
+        if !entity_ids.contains(&entity_id) {
+            entity_ids.push(entity_id);
+        }
+    }
+    if entity_ids.is_empty() || entity_ids.len() > MAX_STATE_LIMIT {
+        return Err(ToolError::with_details(
+            "invalid_entity_ids",
+            format!("entity_ids must contain 1 to {MAX_STATE_LIMIT} unique values"),
+            json!({ "count": entity_ids.len() }),
+        ));
+    }
+    Ok(entity_ids)
 }
 
 fn optional_string(args: &Map<String, Value>, key: &str) -> Option<String> {
@@ -656,6 +725,37 @@ fn states_result_text(action: &str, body: &Value) -> String {
             value_string(body.get("device_class")).unwrap_or_else(|| "*".to_string())
         ),
     ];
+    lines.extend(entities.iter().map(state_summary_line));
+    lines.join("\n")
+}
+
+fn selected_states_result_text(body: &Value) -> String {
+    let requested = body.get("requested").and_then(Value::as_u64).unwrap_or(0);
+    let returned = body.get("returned").and_then(Value::as_u64).unwrap_or(0);
+    let missing = body
+        .get("missing")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let entities = body
+        .get("entities")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut lines = vec![format!(
+        "homeassistant.get_states ok: returned {returned}/{requested} requested, missing {}",
+        missing.len()
+    )];
+    if !missing.is_empty() {
+        lines.push(format!(
+            "missing: {}",
+            missing
+                .iter()
+                .filter_map(|value| value_string(Some(value)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     lines.extend(entities.iter().map(state_summary_line));
     lines.join("\n")
 }

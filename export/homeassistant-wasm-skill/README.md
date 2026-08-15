@@ -129,6 +129,10 @@ Treat the module as trusted.
 ```
 
 ```json
+{"action":"get_states","entity_ids":["sensor.plant_soil_moisture","sensor.plant_temperature"]}
+```
+
+```json
 {"action":"list_services"}
 ```
 

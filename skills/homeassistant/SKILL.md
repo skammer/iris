@@ -11,6 +11,7 @@ Use this skill when the user asks to inspect or control smart-home devices.
 
 1. Read before control:
    - Use `homeassistant` with `action: "list_states"` to find entities.
+   - Use `action: "get_states"` with `entity_ids` when several exact entities are already known.
    - Use `action: "get_state"` before changing one entity when current state matters.
    - Use `action: "list_services"` if unsure which domain/service exists.
 2. Control only with `action: "call_service"` after entity and service are clear.
@@ -28,6 +29,12 @@ Read one entity:
 
 ```json
 {"action":"get_state","entity_id":"light.kitchen","purpose":"Check current light state before changing it"}
+```
+
+Read several exact entities in one compact call:
+
+```json
+{"action":"get_states","entity_ids":["sensor.plant_moisture","sensor.plant_temperature"],"purpose":"Read the requested sensors once"}
 ```
 
 Call a service:

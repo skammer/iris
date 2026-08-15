@@ -9,6 +9,8 @@ All notable project changes are recorded here. New entries go at the top.
 - Preserved every successful tool result produced during the active user turn while context remains below the destructive limit, preventing context packing from alternately erasing evidence and triggering repeated tool calls.
 - Kept active-turn evidence as bounded text rather than omission markers when destructive compaction is genuinely required.
 - Added multi-step cycle detection using canonical step signatures, stopping repeated alternating or batched tool sequences that evade the existing identical-call window.
+- Added exact batched Home Assistant state reads so agents can retrieve a known sensor set with one compact tool call and one Home Assistant request.
+- Versioned the daily plant/climate report skill and constrained it to one batched sensor read, one historical read, and one JSONL append without successful-call retries.
 
 ## 2026-07-13
 
