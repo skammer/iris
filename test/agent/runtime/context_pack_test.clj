@@ -84,6 +84,56 @@
     (is (str/includes? (text (second (:messages pack))) "compacted tool result omitted"))
     (is (= "fresh evidence" (text (last (:messages pack)))))))
 
+(deftest preserves-all-tool-results-in-active-user-turn-test
+  (let [pack (context-pack/pack-context
+              {:messages [{:role "user" :content "compare current and previous readings"}
+                          {:role "assistant"
+                           :content [{:type :tool-call :id "current" :name "homeassistant" :arguments {}}]}
+                          {:role "tool"
+                           :content [{:type :tool-result
+                                      :tool-call-id "current"
+                                      :content (big "c" 1200)}]}
+                          {:role "assistant"
+                           :content [{:type :tool-call :id "previous" :name "shell" :arguments {}}]}
+                          {:role "tool"
+                           :content [{:type :tool-result
+                                      :tool-call-id "previous"
+                                      :content (big "p" 1200)}]}]
+               :tools []
+               :config {:max-context-tokens 10000
+                        :reserve-output-tokens 0
+                        :tool-result-truncate-chars 2000
+                        :budgets {:pending-tool-result 100}}})]
+    (is (empty? (:decisions pack)))
+    (is (str/includes? (text (nth (:messages pack) 2)) (big "c" 100)))
+    (is (str/includes? (text (nth (:messages pack) 4)) (big "p" 100)))))
+
+(deftest truncates-active-old-evidence-only-at-destructive-threshold-test
+  (let [pack (context-pack/pack-context
+              {:messages [{:role "user" :content "compare current and previous readings"}
+                          {:role "assistant"
+                           :content [{:type :tool-call :id "current" :name "homeassistant" :arguments {}}]}
+                          {:role "tool"
+                           :content [{:type :tool-result
+                                      :tool-call-id "current"
+                                      :content (big "c" 2400)}]}
+                          {:role "assistant"
+                           :content [{:type :tool-call :id "previous" :name "shell" :arguments {}}]}
+                          {:role "tool"
+                           :content [{:type :tool-result
+                                      :tool-call-id "previous"
+                                      :content "fresh evidence"}]}]
+               :tools []
+               :config {:max-context-tokens 300
+                        :reserve-output-tokens 0
+                        :tool-result-truncate-chars 160
+                        :destructive-threshold 1.0
+                        :budgets {:pending-tool-result 100}}})]
+    (is (some #(= :truncate-active-tool-result (:action %)) (:decisions pack)))
+    (is (str/includes? (text (nth (:messages pack) 2)) "[context-pack truncated"))
+    (is (not (str/includes? (text (nth (:messages pack) 2)) "compacted tool result omitted")))
+    (is (= "fresh evidence" (text (nth (:messages pack) 4))))))
+
 (deftest preserves-recent-tool-call-skeleton-test
   (let [pack (context-pack/pack-context
               {:messages [{:role "user" :content (big "a" 1000)}

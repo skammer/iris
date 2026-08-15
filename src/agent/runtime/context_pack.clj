@@ -94,6 +94,11 @@
         (recur (inc idx) (conj acc idx))
         acc))))
 
+(defn- active-turn-indices [messages]
+  (if-let [start (latest-user-index messages)]
+    (set (range start (count messages)))
+    #{}))
+
 (defn- protected-indices [messages]
   (let [leading (set (range (leading-system-count messages)))
         latest-user (latest-user-index messages)
@@ -101,6 +106,10 @@
         recent-loop (or (tool-loop-indices messages loop-start) #{})]
     (cond-> (into leading recent-loop)
       latest-user (conj latest-user))))
+
+(defn- tool-budget-protected-indices [messages]
+  (into (protected-indices messages)
+        (active-turn-indices messages)))
 
 (defn- memory-message? [message]
   (and (= "system" (role message))
@@ -181,6 +190,24 @@
                                                           (:tool-result-truncate-chars cfg)
                                                           false))
                      (update :decisions conj {:action :truncate-tool-result
+                                              :index idx}))
+                 acc))
+             {:messages (vec messages) :decisions []}
+             (vec messages)))
+
+(defn- truncate-active-tool-results [messages active-turn protected cfg]
+  (reduce-kv (fn [acc idx message]
+               (if (and (tool-result-message? message)
+                        (contains? active-turn idx)
+                        (not (contains? protected idx))
+                        (> (message-tokens message)
+                           (tokens/estimate (:tool-result-truncate-chars cfg))))
+                 (-> acc
+                     (update :messages assoc idx
+                             (compact-tool-result-message message
+                                                          (:tool-result-truncate-chars cfg)
+                                                          false))
+                     (update :decisions conj {:action :truncate-active-tool-result
                                               :index idx}))
                  acc))
              {:messages (vec messages) :decisions []}
@@ -376,16 +403,31 @@
                           :tokens tokens-before
                           :threshold destructive-at}))
         protected (protected-indices messages*)
-        truncated (truncate-old-tool-results messages* protected cfg)
-        budgeted-tools (compact-excess-tool-results (:messages truncated) protected cfg)
+        active-turn (active-turn-indices messages*)
+        tool-budget-protected (tool-budget-protected-indices messages*)
+        truncated (truncate-old-tool-results messages* tool-budget-protected cfg)
+        budgeted-tools (compact-excess-tool-results (:messages truncated) tool-budget-protected cfg)
         tokens-after-budget (total-context-tokens {:messages (:messages budgeted-tools)
                                                     :system-prompt system-prompt
                                                     :tools tools
                                                     :reserve-output-tokens (:reserve-output-tokens cfg)})
+        active-truncated (if (and (>= tokens-before destructive-at)
+                                  (> tokens-after-budget destructive-at))
+                           (truncate-active-tool-results (:messages budgeted-tools)
+                                                         active-turn
+                                                         protected
+                                                         cfg)
+                           {:messages (:messages budgeted-tools) :decisions []})
         compacted-tools (if (and (>= tokens-before destructive-at)
-                                 (> tokens-after-budget destructive-at))
-                          (compact-old-tool-results (:messages budgeted-tools) protected)
-                          {:messages (:messages budgeted-tools) :decisions []})
+                                 (> (total-context-tokens
+                                     {:messages (:messages active-truncated)
+                                      :system-prompt system-prompt
+                                      :tools tools
+                                      :reserve-output-tokens (:reserve-output-tokens cfg)})
+                                    destructive-at))
+                          (compact-old-tool-results (:messages active-truncated)
+                                                    tool-budget-protected)
+                          {:messages (:messages active-truncated) :decisions []})
         tokens-after-tools (total-context-tokens {:messages (:messages compacted-tools)
                                                   :system-prompt system-prompt
                                                   :tools tools
@@ -398,10 +440,12 @@
                                                 cfg
                                                 (vec (concat (:decisions truncated)
                                                              (:decisions budgeted-tools)
+                                                             (:decisions active-truncated)
                                                              (:decisions compacted-tools))))
                         {:messages (:messages compacted-tools)
                          :decisions (vec (concat (:decisions truncated)
                                                  (:decisions budgeted-tools)
+                                                 (:decisions active-truncated)
                                                  (:decisions compacted-tools)))
                          :compaction nil})
         tokens-after (total-context-tokens {:messages (:messages prefix-packed)

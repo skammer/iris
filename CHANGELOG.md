@@ -2,6 +2,13 @@
 
 All notable project changes are recorded here. New entries go at the top.
 
+## 2026-08-15
+
+### Fixed
+
+- Preserved every successful tool result produced during the active user turn while context remains below the destructive limit, preventing context packing from alternately erasing evidence and triggering repeated tool calls.
+- Kept active-turn evidence as bounded text rather than omission markers when destructive compaction is genuinely required.
+
 ## 2026-07-13
 
 ### Changed
