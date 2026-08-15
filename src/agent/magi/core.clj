@@ -419,7 +419,10 @@
        :providers (provider-summary service)}
 
       (= :unsupported (:kind filter-result))
-      (info-result service filter-result "unsupported question")
+      (info-result service filter-result
+                   (if (true? (get-in filter-result [:context :truncated]))
+                     "input context exceeded MAGI budget"
+                     "insufficient context for MAGI review"))
 
       (and (= :critical (:risk filter-result))
            (not (true? (get-in service [:config :allow-critical?]))))

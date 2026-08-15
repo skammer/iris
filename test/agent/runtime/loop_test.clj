@@ -272,6 +272,26 @@
     (is (some #(= :context-warning (get-in % [:payload :kind])) @events))
     (is (some #(= :context-compacted (get-in % [:payload :kind])) @events))))
 
+(deftest context-pack-output-becomes-next-step-history-test
+  (let [calls (atom 0)
+        requests (atom [])
+        steps (atom [(tool-step) (complete-step "done")])]
+    (run-loop {:messages [{:role "user" :content "old context"}
+                          {:role "user" :content "current request"}]
+               :context-pack-fn
+               (fn [{:keys [messages]}]
+                 (if (= 1 (swap! calls inc))
+                   {:messages [(last messages)]}
+                   {:messages messages}))
+               :planner-fn (fn [_ request]
+                             (swap! requests conj request)
+                             (let [step (first @steps)]
+                               (swap! steps rest)
+                               step))})
+    (is (= 2 (count @requests)))
+    (is (not-any? #(= "old context" (:content %))
+                  (:messages (second @requests))))))
+
 (deftest cancellation-test
   (let [cancelled? (atom true)
         {:keys [result events]} (run-loop {:cancellation-token cancelled?

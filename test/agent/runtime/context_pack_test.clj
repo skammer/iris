@@ -60,6 +60,30 @@
     (is (some #(= :truncate-tool-result (:action %)) (:decisions pack)))
     (is (some #(str/includes? (text %) "[context-pack truncated") (:messages pack)))))
 
+(deftest compacts-old-tool-results-when-tool-budget-is-exceeded-test
+  (let [pack (context-pack/pack-context
+              {:messages [{:role "assistant"
+                           :content [{:type :tool-call :id "old" :name "http" :arguments {}}]}
+                          {:role "tool"
+                           :content [{:type :tool-result
+                                      :tool-call-id "old"
+                                      :content (big "x" 1200)}]}
+                          {:role "user" :content "continue"}
+                          {:role "assistant"
+                           :content [{:type :tool-call :id "new" :name "http" :arguments {}}]}
+                          {:role "tool"
+                           :content [{:type :tool-result
+                                      :tool-call-id "new"
+                                      :content "fresh evidence"}]}]
+               :tools []
+               :config {:max-context-tokens 10000
+                        :reserve-output-tokens 0
+                        :tool-result-truncate-chars 2000
+                        :budgets {:pending-tool-result 100}}})]
+    (is (some #(= :compact-tool-result-budget (:action %)) (:decisions pack)))
+    (is (str/includes? (text (second (:messages pack))) "compacted tool result omitted"))
+    (is (= "fresh evidence" (text (last (:messages pack)))))))
+
 (deftest preserves-recent-tool-call-skeleton-test
   (let [pack (context-pack/pack-context
               {:messages [{:role "user" :content (big "a" 1000)}

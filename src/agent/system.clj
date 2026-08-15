@@ -132,6 +132,8 @@
         llm-provider (system-health/with-component-health health-registry :llm-provider
                        #(llm-service/create-llm-provider llm-cfg))
         magi-service (magi/create-service new-cfg {:default-provider llm-provider})
+        note-llm-provider (system-health/with-component-health health-registry :llm-provider
+                            #(llm-service/create-note-llm-provider new-cfg))
         memory-service (system-health/with-component-health health-registry :memory
                          #(components/create-memory-service (:memory new-cfg)
                                                            (:tools new-cfg)
@@ -150,12 +152,16 @@
                     :chat-service (:chat-service old-system)
                     :llm-provider llm-provider
                     :magi-service magi-service
-                    :note-llm-provider (system-health/with-component-health health-registry :llm-provider
-                                         #(llm-service/create-note-llm-provider new-cfg))
+                    :note-llm-provider note-llm-provider
                     :observer observer
                     :trace trace
                     :cron-service cron-service
                     :memory-service memory-service
+                    :user-profile-service (components/create-user-profile-service
+                                           new-cfg
+                                           (:store old-system)
+                                           (or note-llm-provider llm-provider)
+                                           (:system-ref old-system))
                     :memory-idle-service (components/create-memory-idle-service
                                           (:system-ref old-system))
                     :memory-magi-review-service (components/create-memory-magi-review-service

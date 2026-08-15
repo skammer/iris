@@ -38,14 +38,15 @@ Tool-use policy for Iris agents.
 
 ## Memory Tools
 
-- `todo_*`: session task state. Use for multi-step work, blockers, and progress. Available operations are write/get/list/search; `todo_write` replaces the whole list. Prefer one in-progress item, but do not force todos for simple tasks.
-- `scratchpad_*`: mutable working memory. Use for complex-task reasoning, transient notes, hypotheses, and handoff state. Do not write scratchpad before every tool call unless it materially improves the task. Read first; `scratchpad_replace` needs current revision and exact old text.
+- `todo_*`: required session task state for multi-step work. Create before research, keep one item in progress, and replace the list at milestones. `todo_write` replaces the whole list.
+- `scratchpad_*`: mutable working memory for complex tasks. Read at task start, then record compact synthesized facts, source links, failed approaches, and partial deliverables. Reuse it instead of depending on raw tool history. `scratchpad_replace` needs current revision and exact old text.
 - `memory_recall`: broad recall across relevant memory surfaces.
 - `vault_search`: indexed durable vault notes and chunks.
 - `memory_propose_update`: propose a revision-guarded diff to approved memory; MAGI decides before it affects recall.
-- `message_search`: persisted chat history.
-- `memory_extract_session`: explicit durable candidate-note extraction only; do not auto-save memory every turn.
-- `skills_list`: discover available slash skills by name and description. It does not load skill bodies; detailed instructions load only when the user invokes `/skill`.
+- `message_search`: persisted user/assistant chat history; tool payloads are excluded.
+- `memory_extract_session`: bounded Dreaming pass; extracts durable candidate notes and updates Iris's managed USER.md profile section when high-confidence cross-session facts changed.
+- `skills_list`: discover skills by name and description.
+- `skills_read`: load one discovered skill's full instructions for autonomous use. User `/skill` invocation still injects it directly.
 
 ## MAGI
 

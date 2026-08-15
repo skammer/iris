@@ -28,6 +28,7 @@
    [agent.memory.core-test]
    [agent.memory.idle-test]
    [agent.memory.magi-review-test]
+   [agent.memory.user-profile-test]
    [agent.mcp.core-test]
    [agent.persistence.session-entries-test]
    [agent.persistence.sqlite-test]
@@ -92,6 +93,7 @@
     agent.memory.core-test
     agent.memory.idle-test
     agent.memory.magi-review-test
+    agent.memory.user-profile-test
     agent.mcp.core-test
     agent.persistence.session-entries-test
     agent.persistence.sqlite-test

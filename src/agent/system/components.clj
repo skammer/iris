@@ -14,6 +14,7 @@
    [agent.memory.core :as memory]
    [agent.memory.idle :as memory-idle]
    [agent.memory.magi-review :as memory-magi-review]
+   [agent.memory.user-profile :as user-profile]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.trace :as runtime-trace]
    [agent.skills :as skills]
@@ -75,6 +76,22 @@
   [system-ref]
   (memory-magi-review/create-service system-ref))
 
+(defn create-user-profile-service
+  [cfg store provider system-ref]
+  (user-profile/create-service
+   {:config (get-in cfg [:memory :user-profile])
+    :config-dir (get-in cfg [:iris :config-dir])
+    :model (or (get-in cfg [:memory :user-profile :model])
+               (get-in cfg [:memory :notes :extractor :model])
+               (config/active-model (:llm cfg)))
+    :provider provider
+    :store store
+    :on-update #(swap! system-ref
+                       (fn [system]
+                         (if system
+                           (update system :config config/refresh-contexts)
+                           system)))}))
+
 (defn create-channel-adapter-registry
   ([cfg] (create-channel-adapter-registry cfg nil))
   ([_cfg telegram-service]
@@ -96,6 +113,7 @@
        :store (:store system)
        :telemetry (:telemetry system)
        :memory-service (:memory-service system)
+       :user-profile-service (:user-profile-service system)
        :skills-registry (:skills-registry system)
        :cron-service (:cron-service system)
        :channel-adapters-cfg (:channel-adapters cfg)
@@ -141,6 +159,8 @@
                        :tool-registry-fn #(some-> @system-ref :tool-registry)})
         note-llm-provider (system-health/with-component-health health-registry :llm-provider
                             #(llm-service/create-note-llm-provider cfg))
+        user-profile-service (create-user-profile-service
+                              cfg store (or note-llm-provider llm-provider) system-ref)
         memory-service (system-health/with-component-health health-registry :memory
                          #(create-memory-service (:memory cfg)
                                                  (:tools cfg)
@@ -177,7 +197,8 @@
                        :memory-idle-service (create-memory-idle-service system-ref)
                        :memory-magi-review-service (create-memory-magi-review-service system-ref)
                        :skills-registry (create-skills-registry-from-config cfg)
-                       :memory-service memory-service}]
+                       :memory-service memory-service
+                       :user-profile-service user-profile-service}]
       (-> base-system
           (assoc :tool-registry (build-tool-registry base-system cfg))
           attach-telegram-service))))

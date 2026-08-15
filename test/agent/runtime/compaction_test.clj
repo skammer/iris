@@ -40,16 +40,24 @@
         (dotimes [idx 10]
           (sqlite/append-entry! store (:id session) :message {:role "user"
                                                               :content (str idx " " (apply str (repeat 100 "x")))}))
-        (is (true? (:compacted? (compaction/compact-session! store (:id session)
-                                                             {:max-context-tokens 100
-                                                              :reserve-output-tokens 10
-                                                              :keep-recent-tokens 20}))))
-        (is (true? (:compacted? (compaction/compact-session! store (:id session)
-                                                             {:max-context-tokens 100
-                                                              :reserve-output-tokens 10
-                                                              :keep-recent-tokens 20}))))
-        (is (<= 2 (count (filter #(= :compaction (:type %))
-                                 (sqlite/list-entries store (:id session))))))))))
+        (let [thresholds {:max-context-tokens 100
+                          :reserve-output-tokens 10
+                          :keep-recent-tokens 20}
+              first-result (compaction/compact-session! store (:id session) thresholds)
+              first-kept (get-in first-result [:plan :first-kept-entry-id])]
+          (is (true? (:compacted? first-result)))
+          (is (= {:compacted? false :reason :no-progress}
+                 (compaction/compact-session! store (:id session) thresholds)))
+          (dotimes [idx 8]
+            (sqlite/append-entry! store (:id session) :message
+                                  {:role "assistant"
+                                   :content (str idx " " (apply str (repeat 100 "y")))}))
+          (let [next-result (compaction/compact-session! store (:id session) thresholds)]
+            (is (true? (:compacted? next-result)))
+            (is (not= first-kept
+                      (get-in next-result [:plan :first-kept-entry-id]))))
+          (is (= 2 (count (filter #(= :compaction (:type %))
+                                  (sqlite/list-entries store (:id session)))))))))))
 
 (deftest split-turn-compaction-avoids-tool-result-start-test
   (with-store

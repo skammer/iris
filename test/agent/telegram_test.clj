@@ -839,7 +839,7 @@
       (let [texts (mapv :text @sent)]
         (is (some #(= "cherry paragraph" %) texts)
             "streamed pre-tool-call text must be promoted to a real message")
-        (is (some #(= (str "Called 1 tool\n\n"
+        (is (some #(= (str "Completed supporting work\n\n"
                            "🔧 list_dir status: completed path: ./obsidian")
                       %)
                   texts)
@@ -1239,7 +1239,11 @@
         system {:store store
                 :event-bus (system-events/create-event-bus)
                 :event-sink (fn [_] nil)}
-        opts (recording-opts recorders)]
+        opts (assoc (recording-opts recorders)
+                    :tool-summary-title-fn
+                    (fn [receipts]
+                      (is (= 2 (count receipts)))
+                      "Искал информацию по Ясной Поляне"))]
     (try
       (with-redefs [chat/run! (chat-stub
                                (fn [_ emit!]
@@ -1259,7 +1263,8 @@
                                  (emit! :tool-execution-end
                                         {:receipt {:tool-name "shell"
                                                    :tool-call-id "c2"
-                                                   :status :ok
+                                                   :status :error
+                                                   :reason "HTTP 404"
                                                    :input {:argv ["echo" "ok"]}}})
                                  (emit! :message-update {:delta "done"})
                                  (emit! :message-end {:content "done" :final? true})
@@ -1276,10 +1281,11 @@
       (is (= 2 (count @(:rich-sent recorders))))
       (let [summary (:markdown (first @(:rich-sent recorders)))]
         (is (str/starts-with? summary
-                              "<details><summary>Called 2 tools</summary>"))
+                              "<details><summary>Искал информацию по Ясной Поляне</summary>"))
         (is (str/includes? summary "<blockquote>"))
         (is (str/includes? summary "<b>1. homeassistant</b> · ok"))
-        (is (str/includes? summary "<b>2. shell</b> · ok"))
+        (is (str/includes? summary "<b>2. shell</b> · error"))
+        (is (str/includes? summary "HTTP 404"))
         (is (= 2 (count (re-seq #"<pre>" summary)))))
       (is (= "done" (:markdown (last @(:rich-sent recorders))))
           "final answer follows the aggregated tool summary")

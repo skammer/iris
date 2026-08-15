@@ -56,6 +56,11 @@ Preserve unknown frontmatter keys. Treat broken links and missing optional field
 - Use `session` for session-specific facts.
 - Use `global` only for stable user/project-independent memory.
 - Approved global notes need origins or an explicit manual/operator marker.
+- Extraction origins should use one compact message/event range with counts;
+  never append one origin entry per message or event.
+- Keep `## Evidence` decisive and bounded. Do not copy full transcripts.
+- `/dream` is the manual grooming pass for merging duplicates, proposing
+  approved-note updates, pruning stale candidates, and skill distillation.
 
 ## Scratchpad
 

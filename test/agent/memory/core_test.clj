@@ -152,7 +152,8 @@
                                     :body "User prefers concise answers."
                                     :tags ["preference"]
                                     :scope "global"
-                                    :confidence 0.9}]})])
+                                    :confidence 0.9
+                                    :evidence (apply str (repeat 10000 "e"))}]})])
         provider (->NoteProvider responses)
         service (test-service store {:notes {:extractor {:enabled true}
                                              :default-scope :session}
@@ -165,7 +166,7 @@
                                                    :assistant-message "noted"}
                                                   {:session-id "s1"
                                                    :source-request-id "req-1"
-                                                   :source-message-ids ["m1" "m2"]})
+                                                   :source-message-ids (mapv #(str "m" %) (range 1 81))})
             note-path (:path (first saved))
             content (slurp note-path)
             recall-results (:results (recall/recall service "concise answers" {:limit 10}))]
@@ -173,8 +174,12 @@
         (is (str/includes? note-path "/inbox/"))
         (is (str/includes? content "status: \"candidate\""))
         (is (str/includes? content "scope: \"global\""))
-        (is (str/includes? content "message_id: \"m1\""))
-        (is (str/includes? content "> I prefer concise answers"))
+        (is (str/includes? content "message_id_start: \"m1\""))
+        (is (str/includes? content "message_id_end: \"m80\""))
+        (is (str/includes? content "message_count: 80"))
+        (is (= 1 (count (re-seq #"(?m)^  - type:" content))))
+        (is (str/includes? content "[evidence truncated 6000 chars]"))
+        (is (< (count content) 6000))
         (is (= 1 (sqlite/count-vault-notes store)))
         (is (empty? (filter #(= :vault_chunk (:surface %)) recall-results))))
       (finally

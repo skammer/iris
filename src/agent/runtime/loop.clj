@@ -393,7 +393,7 @@
               (do
                 (discard-pending-deltas!)
                 (retry-events! event-sink base pre-verdict step-no)
-                (recur (inc step-no) state (conj planner-messages* (nudge/nudge-message pre-verdict))
+                (recur (inc step-no) state (conj planner-visible-messages (nudge/nudge-message pre-verdict))
                        trace final-messages usage* doom-loop-state
                        (nudge/record-retry nudge-state pre-verdict)))
 
@@ -432,7 +432,7 @@
                                                                          :receipts receipts})
                         (recur (inc step-no)
                                (merge state (:state executed))
-                               (conj planner-messages* (nudge/nudge-message post-verdict))
+                               (conj planner-visible-messages (nudge/nudge-message post-verdict))
                                trace*
                                final-messages
                                usage*
@@ -476,7 +476,7 @@
                                                     final-messages* trace* usage*)
                                 (recur (inc step-no)
                                        (merge state (:state executed))
-                                       (into planner-messages* protocol-messages)
+                                       (into planner-visible-messages protocol-messages)
                                        trace*
                                        final-messages*
                                        usage*

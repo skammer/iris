@@ -3,6 +3,7 @@
   (:require
    [agent.magi.core :as magi]
    [agent.memory.core :as memory]
+   [agent.memory.vault :as vault]
    [agent.persistence.sqlite :as sqlite]
    [agent.util :as util]
    [clojure.string :as str])
@@ -11,6 +12,12 @@
 
 (def review-event-type :memory.vault.magi_evaluated)
 (def update-review-event-type :memory.vault.update_magi_evaluated)
+
+(def ^:private review-body-chars 5000)
+(def ^:private review-update-body-chars 2000)
+(def ^:private review-evidence-chars 1600)
+(def ^:private review-diff-chars 3500)
+(def ^:private review-origin-sample 4)
 
 (defn- normalize-keyword [value]
   (cond
@@ -71,28 +78,60 @@
                         :entity-id (:id update)
                         :limit 1})))
 
+(defn- bounded [value limit]
+  (util/truncate (or value "") limit #(str " [truncated " % " chars]")))
+
+(defn- compact-origins [origins]
+  {:count (count origins)
+   :types (->> origins
+               (map #(bounded (or (:type %) "unknown") 80))
+               frequencies
+               (sort-by (comp - val))
+               (take 8)
+               (into {}))
+   :sample (mapv #(select-keys % [:type :session-id :session_id
+                                  :message-id :message_id :message-id-start :message_id_start
+                                  :message-id-end :message_id_end :message-count :message_count
+                                  :event-id :event_id :event-id-start :event_id_start
+                                  :event-id-end :event_id_end :event-count :event_count
+                                  :request-id :request_id :vault-path :vault_path])
+                 (take review-origin-sample origins))})
+
+(defn- evidence-excerpt [content]
+  (let [marker "## Evidence"
+        idx (str/index-of (or content "") marker)]
+    (when idx
+      (bounded (subs content idx) review-evidence-chars))))
+
+(defn- compact-note [note content]
+  (let [values (vault/note-change-values content)]
+    {:id (:id note)
+     :path (bounded (:path note) 1000)
+     :type (bounded (:type note) 80)
+     :title (bounded (:title note) 300)
+     :description (bounded (:description note) 800)
+     :tags (mapv #(bounded % 100) (take 12 (:tags note)))
+     :scope (:iris-scope note)
+     :confidence (:iris-confidence note)
+     :content-hash (:body-hash note)
+     :revision (:revision note)
+     :body (bounded (:body values) review-body-chars)
+     :evidence (evidence-excerpt content)
+     :origins (compact-origins (:origins note))}))
+
 (defn- request-for [note content]
   {:kind :yes-no
    :domain :memory-promotion
    :expected-response :permit
+   :file-review? true
    :question "Should Iris promote this candidate Vault Note to approved memory?"
-   :context {:note-id (:id note)
-             :path (:path note)
-             :type (:type note)
-             :title (:title note)
-             :description (:description note)
-             :tags (:tags note)
-             :scope (:iris-scope note)
-             :confidence (:iris-confidence note)
-             :origins (:origins note)
-             :content-hash (:body-hash note)
-             :revision (:revision note)
-             :markdown content}})
+   :context {:note (compact-note note content)}})
 
 (defn- update-request-for [update current-content]
   {:kind :yes-no
    :domain :memory-promotion
    :expected-response :permit
+   :file-review? true
    :question "Should Iris apply this proposed change to approved memory?"
    :context {:operation :update
              :proposal-id (:id update)
@@ -100,11 +139,18 @@
              :target-path (:target-path update)
              :base-revision (:base-revision update)
              :proposed-revision (:proposed-revision update)
-             :changes (:changes update)
-             :diff (:diff update)
-             :evidence (:evidence update)
-             :current-markdown current-content
-             :proposed-markdown (:proposed-content update)}})
+             :change-fields (->> (:changes update)
+                                 keys
+                                 (map #(if (keyword? %) (name %) (str %)))
+                                 sort
+                                 (take 12)
+                                 vec)
+             :diff (bounded (:diff update) review-diff-chars)
+             :evidence (bounded (pr-str (:evidence update)) review-evidence-chars)
+             :current-body (bounded (:body (vault/note-change-values current-content))
+                                    review-update-body-chars)
+             :proposed-body (bounded (:body (vault/note-change-values (:proposed-content update)))
+                                     review-update-body-chars)}})
 
 (defn- emit! [system event]
   (if-let [event-sink (:event-sink system)]

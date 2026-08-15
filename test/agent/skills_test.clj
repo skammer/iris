@@ -24,6 +24,21 @@
     (.delete skill-dir)
     (.delete root)))
 
+(deftest loads-folded-frontmatter-description-test
+  (let [root (temp-dir)
+        skill-dir (io/file root "searcharvester-fallback")]
+    (.mkdirs skill-dir)
+    (spit (io/file skill-dir "SKILL.md")
+          (str "---\nname: searcharvester-fallback\ndescription: >\n"
+               "  Fallback web search via Searcharvester.\n"
+               "  Use when primary search fails.\n---\n# Search\n"))
+    (let [skill (first (skills/load-skills-from-dir (.getAbsolutePath root) :test))]
+      (is (= "Fallback web search via Searcharvester. Use when primary search fails."
+             (:description skill))))
+    (io/delete-file (io/file skill-dir "SKILL.md") true)
+    (.delete skill-dir)
+    (.delete root)))
+
 (deftest slash-skill-parser-skips-fences-and-quotes-test
   (is (= ["review" "code"]
          (skills/parse-invoked-skill-names

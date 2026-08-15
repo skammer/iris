@@ -3,6 +3,7 @@
    [agent.llm.core :as llm-core]
    [agent.memory.core :as memory]
    [agent.memory.idle :as idle]
+   [agent.memory.user-profile :as user-profile]
    [agent.persistence.sqlite :as sqlite]
    [cheshire.core :as json]
    [clojure.java.io :as io]
@@ -91,6 +92,49 @@
         (io/delete-file root true)
         (io/delete-file db-path true)))))
 
+(deftest idle-extraction-updates-user-profile-from-same-window-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        user-file (io/file root "USER.md")
+        store (sqlite/create-store {:path db-path})
+        session (sqlite/create-session! store "idle-profile")
+        responses (atom [(json/generate-string {:notes []})
+                         (json/generate-string
+                          {:operations
+                           [{:operation "upsert"
+                             :old nil
+                             :value "Prefers concise answers in Russian."
+                             :confidence 0.96
+                             :evidence "Explicit request"}]})])
+        requests (atom [])
+        provider (->IdleProvider responses requests (atom false))
+        profile-service (user-profile/create-service
+                         {:config {:enabled true}
+                          :config-dir (.getAbsolutePath root)
+                          :provider provider
+                          :store store})
+        system (assoc (test-system store root provider {})
+                      :user-profile-service profile-service)]
+    (try
+      (spit user-file "# USER\nname: Test User\n")
+      (sqlite/append-message! store (:id session) "user"
+                              "Всегда отвечай мне кратко по-русски")
+      (let [result (idle/run-once! system)
+            candidate (first (:results result))
+            content (slurp user-file)]
+        (is (= 1 (:processed result)))
+        (is (true? (:user-profile-updated? candidate)))
+        (is (= 2 (count @requests)))
+        (is (str/includes? content "Prefers concise answers in Russian."))
+        (is (= 1 (count (sqlite/list-events
+                         store
+                         {:event-type :memory.user_profile.updated :limit 10})))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file user-file true)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
 (deftest idle-extraction-writes-event-provenance-test
   (let [db-path (temp-db-path)
         root (temp-dir)
@@ -125,7 +169,8 @@
         (is (= 1 (:note-count result)))
         (is (= 1 (sqlite/count-vault-notes store)))
         (is (str/includes? content "idle-extraction"))
-        (is (str/includes? content "event_id:"))
+        (is (str/includes? content "event_id_start:"))
+        (is (str/includes? content "event_count: 1"))
         (is (str/includes? user-content "tool-execution-end"))
         (is (not (str/includes? user-content "secret"))))
       (finally

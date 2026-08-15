@@ -4,6 +4,7 @@
    [agent.tools.common.skills :as skills-tool]
    [agent.tools.core :as tools]
    [clojure.java.io :as io]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]))
 
 (defn- temp-dir []
@@ -76,5 +77,32 @@
                                        {:permissions #{}})]
         (is (= 200 (:count result)))
         (is (true? (:truncated? result))))
+      (finally
+        (delete-tree! root)))))
+
+(deftest skills-read-tool-loads-exact-skill-body-test
+  (let [root (temp-dir)
+        registry (skills/create-registry {:dirs [(.getAbsolutePath root)]})
+        tool-registry (-> (tools/create-registry)
+                          (tools/register-tool (skills-tool/create-skills-list-tool registry))
+                          (tools/register-tool (skills-tool/create-skills-read-tool registry)))]
+    (try
+      (write-skill! root "tavily-search" "Search with Tavily" "Run `~/tavily.sh`." )
+      (let [result (tools/execute-tool tool-registry
+                                       :skills_read
+                                       {:name "tavily-search"}
+                                       {:permissions #{}})]
+        (is (str/includes? result "# Skill /tavily-search"))
+        (is (str/includes? result "Run `~/tavily.sh`.")))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"skill not found"
+                            (tools/execute-tool tool-registry
+                                                :skills_read
+                                                {:name "missing"}
+                                                {:permissions #{}})))
+      (let [description (tools/describe (tools/get-tool tool-registry :skills_read))]
+        (is (= :read (:operation description)))
+        (is (true? (:parallel-safe? description)))
+        (is (= #{} (:required-permissions description))))
       (finally
         (delete-tree! root)))))

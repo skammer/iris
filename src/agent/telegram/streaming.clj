@@ -17,6 +17,7 @@
   (:require
    [agent.telegram.api :as tg-api]
    [agent.telegram.rich :as rich]
+   [agent.telegram.tool-summary :as tool-summary]
    [agent.tools.display :as tool-display]
    [agent.util :as util]
    [clojure.string :as str]))
@@ -375,10 +376,17 @@
                            (reset! running-calls [])
                            (when scheduler ((:reset! scheduler)))
                            (when (seq batch)
-                             (let [rich-summary
-                                   (tool-display/telegram-rich-batch-summary system batch)
+                             (let [title-fn (or (:tool-summary-title-fn opts)
+                                                #(tool-summary/generate-title
+                                                  system
+                                                  (:session-id opts)
+                                                  (:user-request opts)
+                                                  %))
+                                   title (title-fn batch)
+                                   rich-summary
+                                   (tool-display/telegram-rich-batch-summary system title batch)
                                    plain-summary
-                                   (tool-display/telegram-plain-batch-summary system batch)]
+                                   (tool-display/telegram-plain-batch-summary system title batch)]
                                (if @rich-ok?
                                  (safe-telegram! system chat-id :tool-call-summary
                                                  #(try

@@ -78,11 +78,19 @@
          "  confidence: " (yaml-value (or confidence 0.7)) "\n"
          "  origins:\n"
          (apply str
-                (for [{:keys [type session-id message-id event-id request-id vault-path]} origins]
+                (for [{:keys [type session-id message-id event-id request-id vault-path
+                              message-id-start message-id-end message-count
+                              event-id-start event-id-end event-count]} origins]
                   (str "  - type: " (yaml-value type) "\n"
                        (when session-id (str "    session_id: " (yaml-value session-id) "\n"))
                        (when message-id (str "    message_id: " (yaml-value message-id) "\n"))
                        (when event-id (str "    event_id: " (yaml-value event-id) "\n"))
+                       (when message-id-start (str "    message_id_start: " (yaml-value message-id-start) "\n"))
+                       (when message-id-end (str "    message_id_end: " (yaml-value message-id-end) "\n"))
+                       (when message-count (str "    message_count: " (yaml-value message-count) "\n"))
+                       (when event-id-start (str "    event_id_start: " (yaml-value event-id-start) "\n"))
+                       (when event-id-end (str "    event_id_end: " (yaml-value event-id-end) "\n"))
+                       (when event-count (str "    event_count: " (yaml-value event-count) "\n"))
                        (when vault-path (str "    vault_path: " (yaml-value vault-path) "\n"))
                        (when request-id (str "    request_id: " (yaml-value request-id) "\n")))))
          "---\n\n"
@@ -728,12 +736,24 @@
                       message-id (or (:message-id origin) (:message_id origin))
                       event-id (or (:event-id origin) (:event_id origin))
                       request-id (or (:request-id origin) (:request_id origin))
-                      vault-path (or (:vault-path origin) (:vault_path origin))]
+                      vault-path (or (:vault-path origin) (:vault_path origin))
+                      message-id-start (or (:message-id-start origin) (:message_id_start origin))
+                      message-id-end (or (:message-id-end origin) (:message_id_end origin))
+                      message-count (or (:message-count origin) (:message_count origin))
+                      event-id-start (or (:event-id-start origin) (:event_id_start origin))
+                      event-id-end (or (:event-id-end origin) (:event_id_end origin))
+                      event-count (or (:event-count origin) (:event_count origin))]
                   (remove nil?
                           [(str "  - type: " (yaml-value (:type origin)))
                            (when session-id (str "    session_id: " (yaml-value session-id)))
                            (when message-id (str "    message_id: " (yaml-value message-id)))
                            (when event-id (str "    event_id: " (yaml-value event-id)))
+                           (when message-id-start (str "    message_id_start: " (yaml-value message-id-start)))
+                           (when message-id-end (str "    message_id_end: " (yaml-value message-id-end)))
+                           (when message-count (str "    message_count: " (yaml-value message-count)))
+                           (when event-id-start (str "    event_id_start: " (yaml-value event-id-start)))
+                           (when event-id-end (str "    event_id_end: " (yaml-value event-id-end)))
+                           (when event-count (str "    event_count: " (yaml-value event-count)))
                            (when request-id (str "    request_id: " (yaml-value request-id)))
                            (when vault-path (str "    vault_path: " (yaml-value vault-path)))])))
               origins)))))

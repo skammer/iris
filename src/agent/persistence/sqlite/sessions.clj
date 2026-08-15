@@ -386,7 +386,8 @@
 
 (defn search-messages
   ([store query] (search-messages store query {}))
-  ([store query {:keys [limit session-id] :or {limit 20}}]
+  ([store query {:keys [limit session-id include-tool-results?]
+                 :or {limit 20 include-tool-results? true}}]
    (let [fts-query (common/fts5-query query)]
      (common/with-connection
        store
@@ -396,9 +397,11 @@
 	                                   (if fts-query
 	                                     (search-messages-fts-sqlvec {:query fts-query
 	                                                                   :session_id session-id
+	                                                                   :include_tool_results (if include-tool-results? 1 0)
 	                                                                   :limit (common/bounded-limit limit 20 100)})
 	                                     (search-messages-like-sqlvec {:needle (str "%" (or query "") "%")
 	                                                                    :session_id session-id
+	                                                                    :include_tool_results (if include-tool-results? 1 0)
 	                                                                    :limit (common/bounded-limit limit 20 100)}))
 	                                   identity)))))))
 

@@ -69,6 +69,33 @@
                "# Answer detail\n\nDetailed answers.\n"))
     file))
 
+(defn- write-large-candidate! [root]
+  (let [file (io/file root "inbox/large-candidate.md")
+        origins (apply str
+                       (for [idx (range 180)]
+                         (str "  - type: message\n"
+                              "    message_id: " idx "\n")))]
+    (.mkdirs (.getParentFile file))
+    (spit file
+          (str "---\n"
+               "id: mem_magi_large\n"
+               "type: ProjectNote\n"
+               "title: Large candidate\n"
+               "description: Candidate with legacy verbose provenance.\n"
+               "iris:\n"
+               "  scope: project\n"
+               "  status: candidate\n"
+               "  confidence: 0.9\n"
+               "  origins:\n"
+               origins
+               "---\n\n"
+               "# Large candidate\n\n"
+               (apply str (repeat 10000 "b"))
+               "\n\n## Evidence\n\n"
+               (apply str (repeat 80000 "e"))
+               "MAGI-CANDIDATE-END\n"))
+    file))
+
 (defn- magi-service [mode decision requests]
   (let [agent-response (if (= decision :no) "no" "yes")]
     (magi/create-service
@@ -146,6 +173,48 @@
         (sqlite/close-store! store)
         (io/delete-file root true)
         (io/delete-file db-path true)))))
+
+(deftest large-candidate-review-sends-bounded-context-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        store (sqlite/create-store {:path db-path})
+        file (write-large-candidate! root)
+        requests (atom [])
+        system (test-system store root :manual :yes requests)]
+    (try
+      (review/review-note! system (.getCanonicalPath file)
+                           {:apply? false :source :advice})
+      (let [payload (json/parse-string
+                     (get-in (first @requests) [:messages 1 :content]) true)
+            context (:context payload)]
+        (is (nil? (:truncated context)))
+        (is (<= (count (json/generate-string context)) 12000))
+        (is (= 180 (get-in context [:note :origins :count])))
+        (is (= 4 (count (get-in context [:note :origins :sample]))))
+        (is (not (str/includes? (json/generate-string context)
+                                "MAGI-CANDIDATE-END"))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
+(deftest large-update-review-request-is-bounded-test
+  (let [large (apply str (repeat 50000 "x"))
+        request (#'review/update-request-for
+                 {:id "upd_large"
+                  :target-id "mem_large"
+                  :target-path "/tmp/large.md"
+                  :base-revision 1
+                  :proposed-revision 2
+                  :changes {:body large :description large}
+                  :diff large
+                  :evidence {:user large}
+                  :proposed-content (str "# Proposed\n\n" large)}
+                 (str "# Current\n\n" large))
+        context (:context request)]
+    (is (<= (count (json/generate-string context)) 12000))
+    (is (= ["body" "description"] (:change-fields context)))
+    (is (nil? (:changes context)))))
 
 (deftest magi-approved-update-applies-diff-test
   (let [db-path (temp-db-path)

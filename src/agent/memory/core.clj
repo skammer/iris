@@ -23,8 +23,10 @@
 (def max-session-extract-limit 200)
 (def session-extract-message-chars 1200)
 (def session-extract-transcript-chars 20000)
-(def default-existing-note-context-limit 20)
-(def existing-note-context-chars 1600)
+(def default-existing-note-context-limit 8)
+(def existing-note-context-chars 1200)
+(def extraction-evidence-user-chars 4000)
+(def extraction-evidence-assistant-chars 1000)
 (def ^:private allowed-vault-statuses #{"candidate" "approved" "auto_session" "rejected" "superseded"})
 (def ^:private allowed-vault-scopes #{"global" "session" "agent" "project"})
 (def ^:private allowed-vault-move-roots #{"inbox" "preferences" "decisions" "projects"
@@ -780,7 +782,9 @@
                                                      :enum ["global" "session" "agent" "project"]
                                                      :description "Scope the candidate note would belong to after review."}
                                              :confidence {:type "number"
-                                                          :description "Confidence from 0.0 to 1.0 that this is durable supported memory."}}
+                                                          :description "Confidence from 0.0 to 1.0 that this is durable supported memory."}
+                                             :evidence {:type "string"
+                                                        :description "Short decisive evidence for this note. Cite relevant message or event ids; never copy the full transcript."}}
                                 :required ["operation" "type" "title" "description" "body"]}}}
    :required ["notes"]})
 
@@ -798,7 +802,8 @@
          (mapv (fn [note]
                  (-> note
                      (select-keys [:operation :target_id :expected_revision
-                                   :type :title :description :body :tags :scope :confidence])
+                                   :type :title :description :body :tags :scope :confidence
+                                   :evidence])
                      (set/rename-keys {:target_id :target-id
                                        :expected_revision :expected-revision})
                      (update :type #(or % "Reference"))
@@ -843,22 +848,27 @@
                    (output-options extractor)))]
     (parse-note-response (:content response))))
 
-(defn- note-origin [opts origin-type id-key id]
-  (cond-> {:type origin-type}
-    (:session-id opts) (assoc :session-id (:session-id opts))
-    id (assoc id-key id)
-    (:source-request-id opts) (assoc :request-id (:source-request-id opts))))
-
 (defn- note-origins [opts]
-  (vec
-   (concat
-    [{:type (or (:source-type opts) "extraction")
-      :session-id (:session-id opts)
-      :request-id (:source-request-id opts)}]
-    (map #(note-origin opts "message" :message-id %)
-         (:source-message-ids opts))
-    (map #(note-origin opts "event" :event-id %)
-         (:source-event-ids opts)))))
+  (let [message-ids (vec (:source-message-ids opts))
+        event-ids (vec (:source-event-ids opts))]
+    [(cond-> {:type (or (:source-type opts) "extraction")}
+       (:session-id opts) (assoc :session-id (:session-id opts))
+       (:source-request-id opts) (assoc :request-id (:source-request-id opts))
+       (seq message-ids) (assoc :message-id-start (first message-ids)
+                                :message-id-end (last message-ids)
+                                :message-count (count message-ids))
+       (seq event-ids) (assoc :event-id-start (first event-ids)
+                              :event-id-end (last event-ids)
+                              :event-count (count event-ids)))]))
+
+(defn- bounded-evidence [value limit]
+  (util/truncate (or value "") limit #(str "\n\n[evidence truncated " % " chars]")))
+
+(defn- note-evidence [exchange note]
+  {:user (bounded-evidence (or (:evidence note) (:user-message exchange))
+                           extraction-evidence-user-chars)
+   :assistant (bounded-evidence (:assistant-message exchange)
+                                extraction-evidence-assistant-chars)})
 
 (defn- note-scope [memory-service note]
   (let [scope (or (:scope note)
@@ -946,8 +956,7 @@
 (defn- save-extracted-memory!
   [memory-service exchange opts note]
   (let [origins (note-origins opts)
-        evidence {:user (:user-message exchange)
-                  :assistant (:assistant-message exchange)}]
+        evidence (note-evidence exchange note)]
     (case (:operation note)
       "create"
       (vault/write-candidate-note!
@@ -1057,7 +1066,10 @@
     (if (empty? messages)
       (assoc (dissoc source :messages :transcript)
              :note-count 0
-             :paths [])
+             :created-count 0
+             :update-count 0
+             :paths []
+             :update-ids [])
       (let [saved (extract-and-save-notes!
                    memory-service
                    provider
@@ -1067,10 +1079,15 @@
                     :source-session-id session-id
                     :source-message-ids (mapv #(str (:id %)) messages)
                     :source-request-id request-id
-                    :model model})]
+                    :model model})
+            created (filter :path saved)
+            updates (remove :path saved)]
         (assoc (dissoc source :messages :transcript)
                :note-count (count saved)
-               :paths (mapv :path saved))))))
+               :created-count (count created)
+               :update-count (count updates)
+               :paths (mapv :path created)
+               :update-ids (mapv :id updates))))))
 
 (defn record-recall-latency!
   [memory-service latency-ms]

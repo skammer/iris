@@ -19,15 +19,27 @@
     (if (= "---" (first lines))
       (let [[frontmatter-lines rest-lines] (split-with #(not= "---" %) (rest lines))]
         (if (seq rest-lines)
-          [(reduce (fn [meta line]
-                     (if (str/blank? line)
-                       meta
-                       (let [[k v] (str/split line #":" 2)]
-                         (if (and k v)
-                           (assoc meta (keyword (str/trim k)) (str/trim v))
-                           meta))))
-                   {}
-                   frontmatter-lines)
+          [(loop [remaining frontmatter-lines
+                  meta {}]
+             (if-let [line (first remaining)]
+               (if (str/blank? line)
+                 (recur (rest remaining) meta)
+                 (let [[k v] (str/split line #":" 2)
+                       value (some-> v str/trim)]
+                   (if (and k (#{">" ">-" "|" "|-"} value))
+                     (let [[block tail] (split-with #(or (str/blank? %)
+                                                        (re-find #"^\s" %))
+                                                    (rest remaining))
+                           block-lines (map str/trim block)
+                           block-value (if (str/starts-with? value ">")
+                                         (str/join " " block-lines)
+                                         (str/join "\n" block-lines))]
+                       (recur tail (assoc meta (keyword (str/trim k)) block-value)))
+                     (recur (rest remaining)
+                            (if (and k v)
+                              (assoc meta (keyword (str/trim k)) value)
+                              meta)))))
+               meta))
            (str/trim (str/join "\n" (rest rest-lines)))]
           [nil content]))
       [nil content])))

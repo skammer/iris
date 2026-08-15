@@ -8,6 +8,7 @@
    [agent.chat.history :as chat-history]
    [agent.channels.core :as channels]
    [agent.defaults :as defaults]
+   [agent.llm.messages :as llm-messages]
    [agent.persistence.sqlite :as sqlite]
    [agent.telegram.api :as tg-api]
    [agent.telegram.approvals :as tg-approvals]
@@ -243,6 +244,15 @@
           (telegram-operation-failed! system chat-id :rich-send e)
           (legacy! chat-id text))))))
 
+(defn- activity-user-request [messages]
+  (or (->> messages
+           reverse
+           (filter chat-history/user-message?)
+           (map llm-messages/content-text)
+           (remove #(str/starts-with? % "Approved tool result."))
+           first)
+      (chat-history/latest-user-prompt messages)))
+
 (defn- run-turn!
   "Shared chat-turn runner: typing indicator, draft streaming controls,
    tool-call summaries, approval cards, and final reply delivery."
@@ -255,7 +265,14 @@
         stop-typing! (tg-streaming/start-typing-indicator! safe-telegram! system config opts chat-id)
         stream-controls (tg-streaming/build-controls safe-telegram! system config opts chat chat-id)
         tool-call-controls (tg-streaming/build-tool-call-controls
-                            safe-telegram! system config opts chat-id stream-controls)
+                            safe-telegram!
+                            system
+                            config
+                            (assoc opts
+                                   :session-id session-id
+                                   :user-request (activity-user-request messages))
+                            chat-id
+                            stream-controls)
         result (try
                  (run-chat-events! system config opts chat-id session-id messages
                                    stream-controls tool-call-controls)

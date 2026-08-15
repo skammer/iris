@@ -2,6 +2,7 @@
   (:require
    [agent.memory.core :as memory]
    [agent.memory.recall :as recall]
+   [agent.memory.user-profile :as user-profile]
    [agent.persistence.sqlite :as sqlite]
    [agent.tools.core :as tools]
    [agent.util :as util]
@@ -215,7 +216,7 @@
    {:description
     (tools/create-tool-description
      :scratchpad_read
-     "Read global or session scratchpad working memory. Returns full text and revision."
+     "Read working memory before complex work or resuming a task. Returns full text and revision."
      :category :memory
      :input-schema [:map {:closed true}
                     [:scope {:optional true} [:maybe scratchpad-scope-schema]]]
@@ -259,7 +260,7 @@
    {:description
     (tools/create-tool-description
      :scratchpad_replace
-     "Exact replace in scratchpad working memory using expected revision."
+     "Store compact synthesized findings or partial deliverables in working memory using exact replace and expected revision."
      :category :memory
      :input-schema [:map {:closed true}
                     [:old-text :string]
@@ -336,19 +337,28 @@
          :session-id (:session-id context)
          :evidence (update-evidence context reason)})))}))
 
-(defn- extract-session-text [{:keys [session-id total-message-count included-message-count note-count paths]}]
+(defn- extract-session-text
+  [{:keys [session-id total-message-count included-message-count note-count
+           created-count update-count paths update-ids user-profile]}]
   (str "Memory extraction complete for session " session-id
        ". Messages scanned: " included-message-count "/" total-message-count
-       ". Candidate notes: " note-count
+       ". Changes proposed: " note-count
+       " (new: " created-count ", updates: " update-count ")"
        (when (seq paths)
-         (str "\n" (str/join "\n" (map #(str "- " %) paths))))))
+         (str "\nNew notes:\n" (str/join "\n" (map #(str "- " %) paths))))
+       (when (seq update-ids)
+         (str "\nUpdate proposals:\n"
+              (str/join "\n" (map #(str "- " %) update-ids))))
+       (when user-profile
+         (str "\nUser profile: " (name (:status user-profile))
+              " (facts: " (:fact-count user-profile) ")"))))
 
-(defn create-memory-extract-session-tool [memory-service provider]
+(defn create-memory-extract-session-tool [memory-service provider user-profile-service]
   (tools/create-tool
    {:description
     (tools/create-tool-description
      :memory_extract_session
-     "Explicitly extract durable candidate memory notes from a completed session transcript."
+     "Run a bounded Dreaming pass over a completed session. Extracts memory, updates the learned USER.md profile when warranted, and returns both outcomes."
      :category :memory
      :input-schema [:map {:closed true}
                     [:session-id {:optional true} [:maybe :string]]
@@ -361,25 +371,33 @@
     :execute-fn
     (fn [{:keys [session-id limit request-id model]} context]
       (ensure-permission! context :memory-write)
-      (extract-session-text
-       (memory/extract-session-and-save-notes!
-        memory-service
-        provider
-         {:session-id (or session-id (:session-id context))
-          :limit (extract-session-limit limit)
-          :request-id (or request-id (:request-id context))
-         :model model})))}))
+      (let [session-id* (or session-id (:session-id context))
+            limit* (extract-session-limit limit)
+            extraction (memory/extract-session-and-save-notes!
+                        memory-service
+                        provider
+                        {:session-id session-id*
+                         :limit limit*
+                         :request-id (or request-id (:request-id context))
+                         :model model})
+            profile-result (when (user-profile/enabled? user-profile-service)
+                             (user-profile/learn-session!
+                              user-profile-service session-id* limit*))]
+        (extract-session-text (assoc extraction :user-profile profile-result))))}))
 
 (defn create-memory-tools
   ([memory-service] (create-memory-tools memory-service nil))
-  ([memory-service provider]
+  ([memory-service provider] (create-memory-tools memory-service provider nil))
+  ([memory-service provider user-profile-service]
    (cond-> [(create-memory-recall-tool memory-service)
             (create-vault-search-tool memory-service)
             (create-scratchpad-read-tool memory-service)
             (create-scratchpad-search-tool memory-service)
             (create-scratchpad-replace-tool memory-service)
             (create-memory-propose-update-tool memory-service)]
-     provider (conj (create-memory-extract-session-tool memory-service provider)))))
+     provider (conj (create-memory-extract-session-tool memory-service
+                                                        provider
+                                                        user-profile-service)))))
 
 (defn- message-search-text [query rows]
   (if (empty? rows)
@@ -395,7 +413,7 @@
    {:description
     (tools/create-tool-description
      :message_search
-     "Search persisted chat messages and return only relevant text chunks."
+     "Search persisted user and assistant chat text. Excludes tool payloads to prevent recursive search pollution."
      :category :memory
      :input-schema [:map {:closed true}
                     [:query :string]
@@ -413,6 +431,7 @@
                           (or session-id (:session-id context)))
             rows (sqlite/search-messages (:store memory-service)
                                          query
-                                         (cond-> {:limit (memory-tool-limit memory-service limit)}
+                                         (cond-> {:limit (memory-tool-limit memory-service limit)
+                                                  :include-tool-results? false}
                                            session-id* (assoc :session-id session-id*)))]
         (message-search-text query rows)))}))

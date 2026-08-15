@@ -143,6 +143,7 @@ select id, session_id, role, content, created_at
 from messages
 where content like :needle
   and (:session_id is null or session_id = :session_id)
+  and (:include_tool_results = 1 or role <> 'tool')
 order by id desc
 limit :limit
 
@@ -153,6 +154,7 @@ from messages_fts
 join messages m on m.id = messages_fts.rowid
 where messages_fts match :query
   and (:session_id is null or m.session_id = :session_id)
+  and (:include_tool_results = 1 or m.role <> 'tool')
 order by retrieval_score asc, m.id desc
 limit :limit
 

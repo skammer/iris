@@ -154,6 +154,18 @@
     (is (= :error (:decision result)))
     (is (= :error (get-in result [:agents :balthasar :response])))))
 
+(deftest unsupported-filter-explains-context-budget-test
+  (let [svc (service {:filter {:kind "unsupported"
+                               :domain "memory-promotion"
+                               :risk "low"
+                               :question ""
+                               :expected_response "opine"
+                               :context {}}})
+        result (magi/decide svc {:question "Review?"
+                                 :context {:blob (apply str (repeat 20000 "x"))}})]
+    (is (= :info (:decision result)))
+    (is (= "input context exceeded MAGI budget" (:reason result)))))
+
 (deftest provider-selection-falls-back-to-active-model-test
   (let [svc (magi/create-service config/default-config
                                  {:default-provider (provider {:kind "info"

@@ -2,6 +2,7 @@
   (:require
    [agent.llm.core :as llm-core]
    [agent.memory.core :as memory]
+   [agent.memory.user-profile :as user-profile]
    [agent.persistence.sqlite :as sqlite]
    [agent.tools.common.memory :as memory-tool]
    [agent.tools.core :as tools]
@@ -106,6 +107,8 @@
 (deftest memory-extract-session-tool-writes-candidate-notes-test
   (let [path (temp-db-path)
         root (temp-dir "iris-memory-extract-tool")
+        profile-root (temp-dir "iris-memory-extract-profile")
+        user-file (io/file profile-root "USER.md")
         store (sqlite/create-store {:path path})
         session (sqlite/create-session! store "memory-extract")
         service (memory/create-memory-service
@@ -123,14 +126,29 @@
                                     :body "Memory extraction runs from an explicit session command, not every chat turn."
                                     :tags ["memory"]
                                     :scope "session"
-                                    :confidence 0.92}]})])
+                                    :confidence 0.92}]})
+                         (json/generate-string
+                          {:operations
+                           [{:operation "upsert"
+                             :old nil
+                             :value "Prefers explicit memory consolidation."
+                             :confidence 0.95
+                             :evidence "Explicit user request"}]})])
         requests (atom [])
         provider (->NoteProvider responses requests)
+        profile-service (user-profile/create-service
+                         {:config {:enabled true}
+                          :config-dir (.getAbsolutePath profile-root)
+                          :provider provider
+                          :store store})
         registry* (reduce tools/register-tool
                           (tools/create-registry)
-                          (conj (memory-tool/create-memory-tools service provider)
+                          (conj (memory-tool/create-memory-tools service
+                                                                provider
+                                                                profile-service)
                                 (memory-tool/create-message-search-tool service)))]
     (try
+      (spit user-file "# USER\nname: Test User\n")
       (let [user (sqlite/append-message! store (:id session) "user" "Do memory only on explicit request")
             assistant (sqlite/append-message! store (:id session) "assistant" "Noted")
             result (tools/execute-tool registry*
@@ -139,16 +157,21 @@
                                        {:permissions #{:memory-write}
                                         :session-id (:id session)
                                         :request-id "req-memory"})]
-        (is (str/includes? result "Candidate notes: 1"))
-        (is (= 1 (count @requests)))
+        (is (str/includes? result "Changes proposed: 1 (new: 1, updates: 0)"))
+        (is (str/includes? result "User profile: updated (facts: 1)"))
+        (is (= 2 (count @requests)))
         (is (= 1 (sqlite/count-vault-notes store)))
+        (is (str/includes? (slurp user-file) "Prefers explicit memory consolidation."))
         (let [note (first (sqlite/list-vault-notes store))
               content (slurp (:path note))]
           (is (str/includes? content "Manual memory extraction"))
-          (is (str/includes? content (str "message_id: \"" (:id user) "\"")))
-          (is (str/includes? content (str "message_id: \"" (:id assistant) "\"")))))
+          (is (str/includes? content (str "message_id_start: \"" (:id user) "\"")))
+          (is (str/includes? content (str "message_id_end: \"" (:id assistant) "\"")))
+          (is (str/includes? content "message_count: 2"))))
       (finally
         (sqlite/close-store! store)
+        (io/delete-file user-file true)
+        (io/delete-file profile-root true)
         (io/delete-file root true)
         (io/delete-file path true)))))
 
@@ -333,6 +356,8 @@
                               (str "alpha "
                                    (apply str (repeat 1200 "x"))
                                    " Kimi chunk marker omega"))
+      (sqlite/append-message! store (:id session) "tool"
+                              "{\"tool-name\":\"message_search\",\"result\":\"Kimi recursive payload\"}")
       (let [result (tools/execute-tool registry*
                                        :message_search
                                        {:query "Kimi"
@@ -341,6 +366,7 @@
                                         :session-id (:id session)})]
         (is (str/includes? result "Message chunks for: Kimi"))
         (is (str/includes? result "Kimi chunk marker"))
+        (is (not (str/includes? result "recursive payload")))
         (is (not (str/includes? result "message #")))
         (is (not (str/includes? result "session-id"))))
       (finally

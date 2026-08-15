@@ -4600,7 +4600,7 @@ button.row--link:focus-visible {
 .ui-table th { color: var(--text-secondary); font: 500 9px/1.2 "IoskeleyMono", monospace; letter-spacing: 0.08em; text-transform: uppercase; }
 .ui-table tbody tr:hover { background: var(--surface-raised); }
 
-.cron-workspace { display: grid; gap: 16px; min-width: 0; }
+.cron-workspace { display: grid; align-content: start; grid-auto-rows: max-content; gap: 16px; min-width: 0; min-height: 0; overflow-y: auto; }
 .cron-summary .overview-metrics { margin-top: 12px; }
 .cron-tabs { display: flex; gap: 4px; min-width: 0; padding: 4px; border: 1px solid var(--border); background: var(--surface-raised); }
 .cron-tab { flex: 1; min-width: 0; border: 0; color: var(--text-secondary); }

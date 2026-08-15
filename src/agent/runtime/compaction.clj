@@ -61,10 +61,12 @@
         (reverse entries)))
 
 (defn- prepare-compaction
-  ([entries] (prepare-compaction entries {}))
-  ([entries thresholds]
+  ([entries] (prepare-compaction entries {} nil))
+  ([entries thresholds] (prepare-compaction entries thresholds nil))
+  ([entries thresholds prior-summary]
    (let [thresholds* (merge default-thresholds thresholds)
-         tokens-before (total-tokens entries)
+         tokens-before (+ (total-tokens entries)
+                          (tokens/estimate (or prior-summary "")))
          limit (- (:max-context-tokens thresholds*)
                   (:reserve-output-tokens thresholds*))]
      (when (> tokens-before limit)
@@ -80,7 +82,7 @@
           :kept kept
           :first-kept-entry-id first-kept
           :tokens-before tokens-before
-          :previous-summary (previous-summary cut)
+          :previous-summary (or prior-summary (previous-summary cut))
           :oversized-single-turn? oversized?
           :thresholds thresholds*})))))
 
@@ -100,7 +102,8 @@
     (str "Compacted " (count (:summary-input plan)) " entries; "
          "tokens before " (:tokens-before plan) "."
          (when-let [prev (:previous-summary plan)]
-           (str " Previous: " (subs prev 0 (min 180 (count prev)))))
+           (str "\nPrevious compacted context:\n"
+                (subs prev 0 (min 2000 (count prev)))))
          (when (seq lines)
            (str "\n" (str/join "\n" (take 12 lines)))))))
 
@@ -131,11 +134,22 @@
 (defn compact-session!
   ([store session-id] (compact-session! store session-id {}))
   ([store session-id thresholds]
-   (if-let [plan (prepare-compaction (sqlite/branch-path store session-id) thresholds)]
-     (assoc (store-compaction! store session-id plan)
-            :compacted? true
-            :plan (dissoc plan :summary-input :kept))
-     {:compacted? false})))
+   (let [path (sqlite/branch-path store session-id)
+         prior (last (filter #(= :compaction (:type %)) path))
+         first-kept-id (get-in prior [:payload :first-kept-entry-id])
+         active (if first-kept-id
+                  (let [entries (vec (drop-while #(not= first-kept-id (:id %)) path))]
+                    (if (seq entries) entries path))
+                  path)
+         active* (vec (remove #(= :compaction (:type %)) active))
+         prior-summary (get-in prior [:payload :summary])]
+     (if-let [plan (prepare-compaction active* thresholds prior-summary)]
+       (if (= first-kept-id (:first-kept-entry-id plan))
+         {:compacted? false :reason :no-progress}
+         (assoc (store-compaction! store session-id plan)
+                :compacted? true
+                :plan (dissoc plan :summary-input :kept)))
+       {:compacted? false}))))
 
 (defn- common-ancestor-id [old-path new-path]
   (loop [old old-path

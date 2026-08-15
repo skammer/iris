@@ -37,6 +37,7 @@
    :memory #{:memory_recall :vault_search
              :scratchpad_read :scratchpad_search :scratchpad_replace
              :memory_propose_update :memory_extract_session :message_search}
+   :skills #{:skills_list :skills_read}
    :todo #{:todo_write :todo_get :todo_list :todo_search}})
 
 (defn- expand-tool-name [tool]
@@ -150,7 +151,8 @@
    {:cfg <:tools config> :event-sink :store :telemetry :memory-service
     :skills-registry :channel-adapters-cfg :system-control :observer :trace}"
   [{:keys [cfg event-sink store memory-service skills-registry channel-adapters-cfg cron-service
-           system-control observer trace magi-service note-llm-provider llm-provider]
+           system-control observer trace magi-service note-llm-provider llm-provider
+           user-profile-service]
     telemetry-collector :telemetry}]
    (let [http-cfg (get cfg :http)
          fs-cfg (get cfg :fs)
@@ -223,14 +225,18 @@
                          []))))
 
        skills-registry
-       (tools/register-tool (skills-tool/create-skills-list-tool skills-registry))
+       (as-> registry*
+             (-> registry*
+                 (tools/register-tool (skills-tool/create-skills-list-tool skills-registry))
+                 (tools/register-tool (skills-tool/create-skills-read-tool skills-registry))))
 
        memory-service
        (as-> registry*
              (reduce tools/register-tool
                      registry*
                      (conj (memory-tool/create-memory-tools memory-service
-                                                            (or note-llm-provider llm-provider))
+                                                            (or note-llm-provider llm-provider)
+                                                            user-profile-service)
                            (memory-tool/create-message-search-tool memory-service))))
 
        (and store (not= false (:enabled todo-cfg)))

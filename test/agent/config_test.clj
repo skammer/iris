@@ -164,6 +164,13 @@
               :format :json-schema}
              (get-in cfg [:memory :notes :extractor])))
       (is (= {:enabled true
+              :min-confidence 0.9
+              :max-facts 24
+              :max-operations 5
+              :max-transcript-chars 20000
+              :max-user-md-chars 8000}
+             (get-in cfg [:memory :user-profile])))
+      (is (= {:enabled true
               :idle-timeout-minutes 45
               :poll-interval-seconds 60
               :failure-cooldown-minutes 15

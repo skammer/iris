@@ -298,6 +298,12 @@
                          :rebuild-mode :replace}
             :quality {:low-confidence-threshold 0.6
                       :stale-days 180}
+            :user-profile {:enabled true
+                           :min-confidence 0.9
+                           :max-facts 24
+                           :max-operations 5
+                           :max-transcript-chars 20000
+                           :max-user-md-chars 8000}
             :notes {:extractor {:enabled true
                                 :provider nil
                                 :model nil
@@ -1049,6 +1055,18 @@
           :context-files markdown-file-names
           :contexts contexts
           :context (str/join "\n" (map contexts markdown-file-names))}})
+
+(defn refresh-contexts
+  "Reload Markdown context files into an already loaded runtime config."
+  [cfg]
+  (let [global-dir (io/file (get-in cfg [:iris :config-dir]))
+        local-dir (io/file (get-in cfg [:iris :local-config-dir]))
+        contexts (load-context-files global-dir local-dir)]
+    (-> cfg
+        (assoc-in [:iris :contexts] contexts)
+        (assoc-in [:iris :context-files] markdown-file-names)
+        (assoc-in [:iris :context]
+                  (str/join "\n" (map contexts markdown-file-names))))))
 
 (defn- finalize-data-paths
   [cfg global-dir]

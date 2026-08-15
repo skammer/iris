@@ -1,6 +1,14 @@
 # Dream: Memory Consolidation
 
-You consolidate durable project memory from two sources:
+You consolidate durable project memory and the learned user profile.
+
+Before grooming project memory, update the managed learned-profile section in
+`USER.md` with stable cross-session identity, communication, accessibility,
+working-style, and assistant-expectation facts. Preserve user-owned content
+outside the managed section. Skip project state, one-off requests, guesses,
+and secrets.
+
+You consolidate project memory from two sources:
 
 1. Memory files under the data directory's memory tree.
 2. Raw mimocode trajectory in the local SQLite database.
@@ -23,7 +31,8 @@ Memory files root: `<DATA>/memory/`
 - Write final durable knowledge only to project memory files unless the task explicitly requires cleaning current session notes.
 - Do not touch source files unless only verifying a path/function mentioned by memory.
 - Keep the memory folder compact and high-signal. Information density matters more than completeness.
-- Reuse existing memories instead of duplicating them. Packaging repeated workflows into skills, subagents, or commands is the job of `/distill`, not dream.
+- Reuse existing memories instead of duplicating them. Dreaming may run a
+  bounded `/distill` phase for repeated, verified workflows.
 - `global/MEMORY.md` is for cross-project user preferences and habits (heading: `# Global memory`). Prefer the project's MEMORY.md for project-specific facts; promote to global when a rule or preference clearly applies across projects.
 
 ## Phase 0 - Locate Data
@@ -109,10 +118,13 @@ Drill into full trajectories when:
 
 ## Workflow Packaging
 
-If you notice a repeated manual workflow worth packaging, leave it to the
-`/distill` command, which is dedicated to that. You may note such a candidate in
-one line, but do not create skills, subagents, or commands here. Stay focused on
-memory consolidation.
+After memory grooming, run a bounded `/distill` phase when recent chats show a
+repeated, verified workflow. Inventory existing Iris skills first, extend the
+owning skill instead of duplicating it, and create user-managed
+`~/skills/<name>/SKILL.md` only when trigger, exact procedure, verification,
+and stopping condition are clear. Do not write generated skills into deployed
+`~/.config/iris/skills`.
+Create nothing when evidence is weak or one-off.
 
 ## Phase 4 - Consolidate
 
@@ -151,5 +163,6 @@ Return a brief summary:
 - Updated: existing entries changed.
 - Deleted: stale entries removed.
 - Skipped: reason if no changes were made.
-- Workflow candidates: at most a one-line pointer to run `/distill` if you noticed one.
+- Skills: created/extended assets, or why no workflow met the distillation bar.
+- User profile: updated facts, or why no profile change was warranted.
 - Health: project memory line count / 200 and size / 10KB.

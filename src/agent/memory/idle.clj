@@ -3,6 +3,7 @@
   (:require
    [agent.chat :as chat]
    [agent.memory.core :as memory]
+   [agent.memory.user-profile :as user-profile]
    [agent.persistence.sqlite :as sqlite]
    [agent.util :as util]
    [cheshire.core :as json]
@@ -196,10 +197,11 @@
         now (util/now-str)]
     (when (seq messages)
       (try
-        (let [saved (memory/extract-and-save-notes!
+        (let [transcript* (transcript messages events)
+              saved (memory/extract-and-save-notes!
                      (:memory-service system)
                      (provider system)
-                     {:user-message (transcript messages events)
+                     {:user-message transcript*
                       :assistant-message "Idle end-of-session memory extraction."}
                      {:session-id session-id
                       :source-type "idle-extraction"
@@ -209,7 +211,12 @@
                       :extractor {:prompt "note-extraction-idle"}
                       :min-confidence (:min-confidence cfg)
                       :dedupe? true
-                      :throw? true})]
+                      :throw? true})
+              profile-result (when (user-profile/enabled? (:user-profile-service system))
+                               (user-profile/learn-from-transcript!
+                                (:user-profile-service system)
+                                {:session-id session-id
+                                 :transcript transcript*}))]
           (mark-success! store session-id messages through-event-id saved now)
           (log-event! store {:event-type :memory.idle_extraction.completed
                              :entity-type :session
@@ -218,12 +225,15 @@
                              :payload {:message-count (count messages)
                                        :event-count (count events)
                                        :note-count (count saved)
+                                       :user-profile-updated? (true? (:updated? profile-result))
                                        :last-message-id (:id (last messages))
                                        :last-event-id through-event-id}})
-          {:session-id session-id
-           :message-count (count messages)
-           :event-count (count events)
-           :note-count (count saved)})
+          (cond-> {:session-id session-id
+                   :message-count (count messages)
+                   :event-count (count events)
+                   :note-count (count saved)}
+            profile-result
+            (assoc :user-profile-updated? (true? (:updated? profile-result)))))
         (catch Exception e
           (mark-failure! store session-id e now cfg)
           (log-event! store {:event-type :memory.idle_extraction.failed

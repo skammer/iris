@@ -63,7 +63,7 @@
    {:description
     (tools/create-tool-description
      :todo_write
-     "Replace a session-scoped todo list."
+     "Create or replace session task state. Use before multi-step work and update at milestones; keep one item in progress."
      :category :memory
      :input-schema [:map {:closed true}
                     [:thread-id {:optional true} [:maybe :string]]

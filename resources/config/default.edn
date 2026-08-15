@@ -292,6 +292,12 @@
                        :rebuild-mode :replace}
           :quality {:low-confidence-threshold 0.6
                     :stale-days 180}
+          :user-profile {:enabled true
+                         :min-confidence 0.9
+                         :max-facts 24
+                         :max-operations 5
+                         :max-transcript-chars 20000
+                         :max-user-md-chars 8000}
           :notes {:extractor {:enabled true
                               :provider nil
                               :model nil

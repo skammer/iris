@@ -136,7 +136,7 @@
       (pr-str input))))
 
 (defn- rich-tool-block
-  [system idx {:keys [tool-name input status]}]
+  [system idx {:keys [tool-name input status reason error-type]}]
   (let [cfg (channel-config system :telegram tool-name)
         args-cap (:args-preview-chars cfg 1200)
         title (str "<b>" (inc idx) ". "
@@ -144,31 +144,39 @@
                    "</b>"
                    (when-let [status* (not-empty (label status))]
                      (str " · " (escape-html status*))))
-        input* (-> (pretty-input input)
+        details (cond-> {:input (or input {})}
+                  reason (assoc :error reason)
+                  error-type (assoc :error-type error-type))
+        input* (-> (pretty-input details)
                    (truncate args-cap)
                    escape-html)]
     (str title "\n<pre>" input* "</pre>")))
 
 (defn telegram-rich-batch-summary
   "One Rich Markdown summary for consecutive Telegram tool calls."
-  [system receipts]
-  (let [receipts* (vec receipts)
-        n (count receipts*)]
-    (when (pos? n)
-      (str "<details><summary>Called " n " "
-           (if (= 1 n) "tool" "tools")
-           "</summary>\n<blockquote>\n"
-           (str/join "\n<hr>\n"
-                     (map-indexed #(rich-tool-block system %1 %2) receipts*))
-           "\n</blockquote>\n</details>"))))
+  ([system receipts]
+   (telegram-rich-batch-summary system nil receipts))
+  ([system title receipts]
+   (let [receipts* (vec receipts)
+         n (count receipts*)
+         fallback (str "Called " n " " (if (= 1 n) "tool" "tools"))]
+     (when (pos? n)
+       (str "<details><summary>" (escape-html (or (not-empty title) fallback))
+            "</summary>\n<blockquote>\n"
+            (str/join "\n<hr>\n"
+                      (map-indexed #(rich-tool-block system %1 %2) receipts*))
+            "\n</blockquote>\n</details>")))))
 
 (defn telegram-plain-batch-summary
   "Legacy fallback: aggregate consecutive calls without Rich Markdown tags."
-  [system receipts]
-  (let [receipts* (vec receipts)
-        n (count receipts*)]
-    (when (pos? n)
-      (str "Called " n " " (if (= 1 n) "tool" "tools")
-           "\n\n"
-           (str/join "\n\n"
-                     (map #(telegram-summary system %) receipts*))))))
+  ([system receipts]
+   (telegram-plain-batch-summary system nil receipts))
+  ([system title receipts]
+   (let [receipts* (vec receipts)
+         n (count receipts*)]
+     (when (pos? n)
+       (str (or (not-empty title)
+                (str "Called " n " " (if (= 1 n) "tool" "tools")))
+            "\n\n"
+            (str/join "\n\n"
+                      (map #(telegram-summary system %) receipts*)))))))

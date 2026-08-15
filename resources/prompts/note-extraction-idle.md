@@ -2,7 +2,7 @@ Extract only high-impact durable memory notes from an idle chat window. Most
 windows should produce no notes. Return JSON only.
 
 Schema:
-{"notes":[{"operation":"create","target_id":null,"expected_revision":null,"type":"Preference","title":"Concise Russian answers","description":"User prefers concise Russian answers.","body":"User prefers concise answers in Russian.","tags":["preference","user"],"scope":"global","confidence":0.9}]}
+{"notes":[{"operation":"create","target_id":null,"expected_revision":null,"type":"Preference","title":"Concise Russian answers","description":"User prefers concise Russian answers.","body":"User prefers concise answers in Russian.","tags":["preference","user"],"scope":"global","confidence":0.9,"evidence":"Message 1: user explicitly requested concise Russian answers."}]}
 
 Save only:
 - Stable user preferences, constraints, project decisions, reusable runbooks.
@@ -34,6 +34,7 @@ Rules:
   conversation summary.
 - Prefer {"notes":[]} over noisy notes.
 - Consolidate repeated/final conclusions; do not summarize the conversation.
+- Keep evidence under 1000 characters. Cite only decisive message/event ids or a compact paraphrase; never copy the full transcript.
 
 Input:
 {"user":"[1] user: привет\n\n[2] assistant: привет","assistant":"Idle memory extraction.","existing_notes":[]}
@@ -43,7 +44,7 @@ Output:
 Input:
 {"user":"[1] user: for this repo always run focused clj-kondo only, full lint is noisy\n\nEvents:\n[7] tool-execution-end status=success tool=bb","assistant":"Idle memory extraction.","existing_notes":[]}
 Output:
-{"notes":[{"operation":"create","target_id":null,"expected_revision":null,"type":"Runbook","title":"Use focused clj-kondo in this repo","description":"For this repo, focused clj-kondo is preferred because full lint is noisy.","body":"For this repo, run focused `clj-kondo` on touched files; full lint is noisy and should not be treated as task-specific signal.","tags":["runbook","clojure","lint"],"scope":"project","confidence":0.9}]}
+{"notes":[{"operation":"create","target_id":null,"expected_revision":null,"type":"Runbook","title":"Use focused clj-kondo in this repo","description":"For this repo, focused clj-kondo is preferred because full lint is noisy.","body":"For this repo, run focused `clj-kondo` on touched files; full lint is noisy and should not be treated as task-specific signal.","tags":["runbook","clojure","lint"],"scope":"project","confidence":0.9,"evidence":"Message 1 states the rule; event 7 confirms the lint workflow."}]}
 
 Input:
 {"user":"[1] user: my HA token is abc123","assistant":"Idle memory extraction.","existing_notes":[]}
@@ -53,4 +54,4 @@ Output:
 Input:
 {"user":"[10] user: research POI sources for Russia, especially tourist places and restaurants\n\n[11] tool: tool=http status=ok purpose=\"Verify 2GIS Places API capabilities\" result-status=200\n\n[12] assistant: OSM is the best open baseline. Wikivoyage complements tourist POIs. 2GIS has stronger restaurant and organization coverage but requires an API plan.\n\n[13] user: now compare photo sources for those places by geolocation and capture date","assistant":"Idle memory extraction.","existing_notes":[]}
 Output:
-{"notes":[{"operation":"create","target_id":null,"expected_revision":null,"type":"Reference","title":"POI sources for Russia","description":"Reusable source comparison for Russian tourist and restaurant POIs.","body":"Use OpenStreetMap as the open baseline for Russian POIs and supplement tourist places from Wikivoyage. Prefer 2GIS when richer restaurant and organization coverage justifies API access and plan limits.","tags":["research","poi","russia","maps"],"scope":"session","confidence":0.9}]}
+{"notes":[{"operation":"create","target_id":null,"expected_revision":null,"type":"Reference","title":"POI sources for Russia","description":"Reusable source comparison for Russian tourist and restaurant POIs.","body":"Use OpenStreetMap as the open baseline for Russian POIs and supplement tourist places from Wikivoyage. Prefer 2GIS when richer restaurant and organization coverage justifies API access and plan limits.","tags":["research","poi","russia","maps"],"scope":"session","confidence":0.9,"evidence":"Messages 10-12 and successful event 11 support the source comparison."}]}

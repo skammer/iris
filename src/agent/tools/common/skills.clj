@@ -41,3 +41,32 @@
     (fn []
       {:healthy true
        :details {:count (count (skills/skill-catalog skills-registry))}})}))
+
+(defn create-skills-read-tool [skills-registry]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :skills_read
+     "Load one skill's full instructions by exact name after discovering it with skills_list."
+     :category :system
+     :input-schema [:map {:closed true}
+                    [:name :string]]
+     :operation :read
+     :routing-categories #{:read :search :plan :write :run :web}
+     :parallel-safe? true
+     :source :builtin)
+    :execute-fn
+    (fn [{skill-name :name} _context]
+      (if-let [{:keys [name description body]}
+               (get (skills/skill-map skills-registry) skill-name)]
+        (str "# Skill /" name "\n\n"
+             description "\n\n"
+             body)
+        (throw (tools/validation-error
+                "skill not found"
+                {:name skill-name
+                 :available (mapv :name (skills/skill-catalog skills-registry))}))))
+    :health-fn
+    (fn []
+      {:healthy true
+       :details {:count (count (skills/skill-catalog skills-registry))}})}))

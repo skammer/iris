@@ -165,6 +165,10 @@
                       blocks)]
     (assoc message :content blocks*)))
 
+(defn- compacted-tool-result? [message]
+  (str/includes? (llm-messages/content-text message)
+                 "[compacted tool result omitted;"))
+
 (defn- truncate-old-tool-results [messages protected cfg]
   (reduce-kv (fn [acc idx message]
                (if (and (tool-result-message? message)
@@ -181,6 +185,28 @@
                  acc))
              {:messages (vec messages) :decisions []}
              (vec messages)))
+
+(defn- compact-excess-tool-results [messages protected cfg]
+  (let [limit (get-in cfg [:budgets :pending-tool-result])]
+    (if (or (nil? limit)
+            (<= (tool-result-token-count messages) limit))
+      {:messages (vec messages) :decisions []}
+      (loop [messages* (vec messages)
+             candidates (filterv (fn [idx]
+                                   (and (tool-result-message? (nth messages idx))
+                                        (not (contains? protected idx))
+                                        (not (compacted-tool-result? (nth messages idx)))))
+                                 (range (count messages)))
+             decisions []]
+        (if (or (empty? candidates)
+                (<= (tool-result-token-count messages*) limit))
+          {:messages messages* :decisions decisions}
+          (let [idx (first candidates)]
+            (recur (assoc messages* idx
+                          (compact-tool-result-message (nth messages* idx) 0 true))
+                   (subvec candidates 1)
+                   (conj decisions {:action :compact-tool-result-budget
+                                    :index idx}))))))))
 
 (defn- compact-old-tool-results [messages protected]
   (reduce-kv (fn [acc idx message]
@@ -350,17 +376,16 @@
                           :tokens tokens-before
                           :threshold destructive-at}))
         protected (protected-indices messages*)
-        truncated (if (>= tokens-before destructive-at)
-                    (truncate-old-tool-results messages* protected cfg)
-                    {:messages messages* :decisions []})
-        tokens-after-truncate (total-context-tokens {:messages (:messages truncated)
-                                                     :system-prompt system-prompt
-                                                     :tools tools
-                                                     :reserve-output-tokens (:reserve-output-tokens cfg)})
+        truncated (truncate-old-tool-results messages* protected cfg)
+        budgeted-tools (compact-excess-tool-results (:messages truncated) protected cfg)
+        tokens-after-budget (total-context-tokens {:messages (:messages budgeted-tools)
+                                                    :system-prompt system-prompt
+                                                    :tools tools
+                                                    :reserve-output-tokens (:reserve-output-tokens cfg)})
         compacted-tools (if (and (>= tokens-before destructive-at)
-                                 (> tokens-after-truncate destructive-at))
-                          (compact-old-tool-results (:messages truncated) protected)
-                          {:messages (:messages truncated) :decisions []})
+                                 (> tokens-after-budget destructive-at))
+                          (compact-old-tool-results (:messages budgeted-tools) protected)
+                          {:messages (:messages budgeted-tools) :decisions []})
         tokens-after-tools (total-context-tokens {:messages (:messages compacted-tools)
                                                   :system-prompt system-prompt
                                                   :tools tools
@@ -372,9 +397,11 @@
                                                        :tokens-before tokens-before)
                                                 cfg
                                                 (vec (concat (:decisions truncated)
+                                                             (:decisions budgeted-tools)
                                                              (:decisions compacted-tools))))
                         {:messages (:messages compacted-tools)
                          :decisions (vec (concat (:decisions truncated)
+                                                 (:decisions budgeted-tools)
                                                  (:decisions compacted-tools)))
                          :compaction nil})
         tokens-after (total-context-tokens {:messages (:messages prefix-packed)
