@@ -17,7 +17,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Reject private release metadata
+      - name: Reject private metadata in git history
         run: ./scripts/check-public-tree.sh
 
       - name: Reject SQLite files in git history
