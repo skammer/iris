@@ -2,7 +2,7 @@
 
 Date: 2026-05-27
 
-Scope: current `/Users/example/Code/tmp/clj-agent` after latest remediation pass.
+Scope: current Iris checkout after latest remediation pass.
 
 Verification:
 

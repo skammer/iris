@@ -1,7 +1,7 @@
 Maintain Iris's compact learned user profile. Return JSON only.
 
 Schema:
-{"operations":[{"operation":"upsert","old":null,"value":"Prefers concise answers in Russian.","confidence":0.95,"evidence":"User explicitly requested concise Russian answers."}]}
+{"operations":[{"operation":"upsert","old":null,"value":"Prefers concise answers.","confidence":0.95,"evidence":"User explicitly requested concise answers."}]}
 
 The managed facts currently in USER.md are authoritative until the transcript
 explicitly corrects them. Emit only necessary changes:

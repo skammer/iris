@@ -28,7 +28,7 @@ Open **Cron** in Iris:
 
 1. Enter a unique name and non-empty prompt.
 2. Choose `Cron`, `Once`, or `Every`.
-3. Set an IANA timezone such as `UTC`.
+3. Set an IANA timezone such as `Europe/Berlin`.
 4. Keep the default model and `cron-observe` tool profile unless the task needs
    broader capabilities.
 5. Choose notification behavior.
@@ -45,7 +45,7 @@ From Chat or Telegram, describe the complete job. Mutating `cronjob` calls are
 approval-sensitive, so Iris may ask for confirmation before saving it.
 
 ```text
-Создай cron job «Morning climate» на 08:00 по будням, timezone UTC.
+Create a cron job named “Morning climate” for 08:00 on weekdays, timezone Europe/Berlin.
 Prompt: /ha-report Проверь климат и состояние растений. Сохрани полный отчёт,
 но ничего не отправляй в Telegram. Используй cron-observe.
 ```
@@ -71,7 +71,7 @@ Create a weekday report using a slash skill:
 iris cron create \
   --name morning-climate \
   --cron "0 8 * * 1-5" \
-  --timezone UTC \
+  --timezone Europe/Berlin \
   --tool-profile cron-observe \
   --prompt "/ha-report Проверь климат и растения. Сохрани полный отчёт локально."
 ```
@@ -82,7 +82,7 @@ Create a conditional Telegram monitor:
 iris cron create \
   --name suspicious-logs \
   --every 15m \
-  --timezone UTC \
+  --timezone Europe/Berlin \
   --tool-profile cron-observe \
   --notify agent \
   --target telegram:123456789 \
@@ -95,7 +95,7 @@ Ask the agent to run a script:
 iris cron create \
   --name backup-check \
   --cron "30 7 * * *" \
-  --timezone UTC \
+  --timezone Europe/Berlin \
   --tool-profile cron-automation \
   --notify always \
   --target telegram:123456789 \
@@ -145,11 +145,11 @@ as `MSK` or `PST`.
 CLI schedule examples:
 
 ```bash
---cron "0 9 * * *" --timezone UTC
---at "2026-08-10T06:00:00Z" --timezone UTC
---at "in 15m" --timezone UTC
---every 2h --timezone UTC
---every 1d --anchor-at "2026-08-08T06:00:00Z" --timezone UTC
+--cron "0 9 * * *" --timezone Europe/Berlin
+--at "2026-08-10T06:00:00Z" --timezone Europe/Berlin
+--at "in 15m" --timezone Europe/Berlin
+--every 2h --timezone Europe/Berlin
+--every 1d --anchor-at "2026-08-08T06:00:00Z" --timezone Europe/Berlin
 ```
 
 Notes:
@@ -248,7 +248,7 @@ explicitly when a job must never send outbound messages:
 iris cron create \
   --name local-health-check \
   --every 1h \
-  --timezone UTC \
+  --timezone Europe/Berlin \
   --notify never \
   --target telegram:123456789 \
   --notify-on-error false \
@@ -273,7 +273,7 @@ curl -fsS http://127.0.0.1:8689/v1/cron/jobs \
     "name": "daily-health",
     "prompt": "Проверь /health через http tool и сохрани краткий результат.",
     "schedule": {"kind": "cron", "expression": "0 8 * * *"},
-    "timezone": "UTC",
+    "timezone": "Europe/Berlin",
     "tool_profile": "cron-observe",
     "notification": {"policy": "never"}
   }'
@@ -353,7 +353,7 @@ session remains the detailed audit trail.
        :max-concurrency 2
        :run-timeout-seconds 1800
        :misfire-grace-seconds 3600
-       :timezone "UTC"
+       :timezone "Europe/Berlin"
        :provider nil
        :model nil
        :tool-profile :cron-observe

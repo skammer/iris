@@ -148,7 +148,7 @@
                                                                 profile-service)
                                 (memory-tool/create-message-search-tool service)))]
     (try
-      (spit user-file "# USER\nname: Test User\n")
+      (spit user-file "# USER\nname: Example User\n")
       (let [user (sqlite/append-message! store (:id session) "user" "Do memory only on explicit request")
             assistant (sqlite/append-message! store (:id session) "assistant" "Noted")
             result (tools/execute-tool registry*
@@ -225,16 +225,16 @@
                  "  status: approved\n"
                  "---\n\n"
                  "# Deploy\n\n"
-                 "Use agent.example.invalid health check.\n"))
+                 "Use the deployment health check.\n"))
       (memory/reindex-vault! service)
       (let [result (tools/execute-tool registry*
                                        :vault_search
-                                       {:query "tailscale"
+                                       {:query "deployment"
                                         :limit 5}
                                        {:permissions #{:memory-read}})]
-        (is (str/includes? result "Vault results for: tailscale"))
+        (is (str/includes? result "Vault results for: deployment"))
         (is (str/includes? result "mem_ops"))
-        (is (str/includes? result "agent.example.invalid")))
+        (is (str/includes? result "deployment health check")))
       (finally
         (io/delete-file path true)
         (io/delete-file root true)))))

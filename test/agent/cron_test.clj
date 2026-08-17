@@ -100,9 +100,9 @@
 
 (deftest typed-schedule-next-fire-test
   (testing "five-field cron and timezone"
-    (is (= ["2026-08-10T06:00:00Z" "2026-08-11T06:00:00Z"]
+    (is (= ["2026-08-10T07:00:00Z" "2026-08-11T07:00:00Z"]
            (schedule/next-fires {:kind :cron :expression "0 9 * * 1-5"}
-                                "UTC" (Instant/parse "2026-08-07T06:00:00Z") 2))))
+                                "Europe/Berlin" (Instant/parse "2026-08-07T07:00:00Z") 2))))
   (testing "anchored interval never drifts"
     (is (= "2026-08-07T04:00:00Z"
            (str (schedule/next-fire {:kind :interval :every-seconds 7200

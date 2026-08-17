@@ -66,4 +66,4 @@ All notable project changes are recorded here. New entries go at the top.
 
 ### Deployment
 
-- Deployed each verified UI iteration to `agent.example.invalid` with health, LLM, schema, and JAR-hash checks.
+- Deployed each verified UI iteration with health, LLM, schema, and JAR-hash checks.

@@ -413,8 +413,8 @@
   (with-isolated-config [root {}]
     (let [file (java.io.File/createTempFile "iris-config-" ".edn")]
       (spit file
-            "{:llm {:active-provider :neuraldeep
-                    :providers {:neuraldeep {:type :openai-compatible
+            "{:llm {:active-provider :example-provider
+                    :providers {:example-provider {:type :openai-compatible
                                              :base-url \"https://api.example.test/v1\"
                                              :api-key \"test-key\"
                                              :model \"qwen3.6-35b-a3b\"
@@ -423,7 +423,7 @@
                                                                       :max-nudges 3}}}}}}
               :chat {:active-profile :small-local
                      :profiles {:default {:small-model? false :max-nudges 0}
-                                :small-local {:provider :neuraldeep
+                                :small-local {:provider :example-provider
                                               :model \"qwen3.6-35b-a3b\"
                                               :small-model? false
                                               :max-nudges 1}}}}")

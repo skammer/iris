@@ -14,4 +14,9 @@ data
 .codex
 AGENTS.md
 export/*
+!export/homeassistant-wasm-skill/
+!export/homeassistant-wasm-skill/**
+.DS_Store
+__pycache__/
+*.pyc
 redesign-inspiration/

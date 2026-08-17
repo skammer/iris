@@ -32,9 +32,11 @@ Bundle extensions are semantic zip formats:
 
 ```bash
 rustup target add wasm32-wasip1
-cargo build --release --target wasm32-wasip1
-cp target/wasm32-wasip1/release/homeassistant-wasm-skill.wasm module.wasm
+./build.sh
 ```
+
+The build strips debug information, remaps local source roots, and rejects a
+bundle that still contains paths from the build machine.
 
 ## Tool ABI
 

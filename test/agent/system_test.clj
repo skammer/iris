@@ -40,15 +40,15 @@
 
 (deftest create-llm-provider-keeps-openai-compatible-request-defaults
   (let [provider (llm-service/create-llm-provider
-                  {:active-provider :neuraldeep
-                   :providers {:neuraldeep {:type :openai-compatible
-                                            :model "qwen3.6-35b-a3b"
-                                            :base-url "https://api.example.invalid/v1"
-                                            :api-key "nd-key"
+                  {:active-provider :example-provider
+                   :providers {:example-provider {:type :openai-compatible
+                                            :model "example-model"
+                                            :base-url "https://api.example.test/v1"
+                                            :api-key "test-key"
                                             :max-tokens 6384
                                             :extra-body {:chat_template_kwargs
                                                          {:enable_thinking false}}}}})]
-    (is (= "qwen3.6-35b-a3b" (:default-model provider)))
+    (is (= "example-model" (:default-model provider)))
     (is (= 6384 (get-in provider [:config :max-tokens])))
     (is (= {:chat_template_kwargs {:enable_thinking false}}
            (get-in provider [:config :extra-body])))))

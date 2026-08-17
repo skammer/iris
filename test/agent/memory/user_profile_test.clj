@@ -29,7 +29,7 @@
                      {:operations
                       [{:operation "upsert"
                         :old nil
-                        :value "Prefers concise answers in Russian."
+                        :value "Prefers concise answers."
                         :confidence 0.97
                         :evidence "Explicit request"}
                        {:operation "upsert"
@@ -45,8 +45,8 @@
                     (json/generate-string
                      {:operations
                       [{:operation "upsert"
-                        :old "Prefers concise answers in Russian."
-                        :value "Prefers very concise answers in Russian."
+                        :old "Prefers concise answers."
+                        :value "Prefers very concise answers."
                         :confidence 0.95
                         :evidence "Explicit correction"}]})])
         requests (atom [])
@@ -59,31 +59,31 @@
                   :provider provider
                   :on-update #(swap! refreshed inc)})]
     (try
-      (spit file "# USER\nname: Test User\ntimezone: UTC\n")
+      (spit file "# USER\nname: Example User\ntimezone: UTC\n")
       (let [result (user-profile/learn-from-transcript!
                     service
                     {:session-id "session-1"
-                     :transcript "User explicitly requested concise Russian answers."})
+                     :transcript "User explicitly requested concise answers."})
             content (slurp file)
             request (first @requests)
             input (json/parse-string (get-in request [:messages 1 :content]) true)]
         (is (= :updated (:status result)))
         (is (= 1 (:fact-count result)))
-        (is (str/includes? content "name: Test User"))
+        (is (str/includes? content "name: Example User"))
         (is (str/includes? content "<!-- iris:user-profile:start -->"))
-        (is (str/includes? content "Prefers concise answers in Russian."))
+        (is (str/includes? content "Prefers concise answers."))
         (is (not (str/includes? content "sk-secret")))
         (is (not (str/includes? content "long essays")))
         (is (= "profile-model" (:model request)))
-        (is (str/includes? (:transcript input) "concise Russian")))
+        (is (str/includes? (:transcript input) "concise answers")))
       (let [result (user-profile/learn-from-transcript!
                     service
                     {:session-id "session-2"
                      :transcript "User explicitly asked for even shorter replies."})
             content (slurp file)]
         (is (true? (:updated? result)))
-        (is (str/includes? content "Prefers very concise answers in Russian."))
-        (is (not (str/includes? content "Prefers concise answers in Russian.")))
+        (is (str/includes? content "Prefers very concise answers."))
+        (is (not (str/includes? content "Prefers concise answers.")))
         (is (= 2 @refreshed)))
       (finally
         (io/delete-file file true)
@@ -106,11 +106,11 @@
                   :config-dir (.getAbsolutePath root)
                   :provider provider})]
     (try
-      (spit file "# USER\nname: Test User\n")
+      (spit file "# USER\nname: Example User\n")
       (is (= :unchanged
              (:status (user-profile/learn-from-transcript!
                        service {:session-id "session" :transcript "Nothing new"}))))
-      (is (= "# USER\nname: Test User\n" (slurp file)))
+      (is (= "# USER\nname: Example User\n" (slurp file)))
       (finally
         (io/delete-file file true)
         (io/delete-file root true)))))

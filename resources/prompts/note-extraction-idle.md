@@ -2,7 +2,7 @@ Extract only high-impact durable memory notes from an idle chat window. Most
 windows should produce no notes. Return JSON only.
 
 Schema:
-{"notes":[{"operation":"create","target_id":null,"expected_revision":null,"type":"Preference","title":"Concise Russian answers","description":"User prefers concise Russian answers.","body":"User prefers concise answers in Russian.","tags":["preference","user"],"scope":"global","confidence":0.9,"evidence":"Message 1: user explicitly requested concise Russian answers."}]}
+{"notes":[{"operation":"create","target_id":null,"expected_revision":null,"type":"Preference","title":"Concise answers","description":"User prefers concise answers.","body":"User prefers concise answers.","tags":["preference","user"],"scope":"global","confidence":0.9,"evidence":"Message 1: user explicitly requested concise answers."}]}
 
 Save only:
 - Stable user preferences, constraints, project decisions, reusable runbooks.

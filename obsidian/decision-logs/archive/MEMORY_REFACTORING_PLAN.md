@@ -229,8 +229,8 @@ Canonical note shape:
 ---
 id: mem_...
 type: Preference
-title: Concise Russian answers
-description: User prefers concise answers in Russian.
+title: Concise answers
+description: User prefers concise answers.
 tags: [memory, preference, user]
 timestamp: 2026-06-13T12:00:00Z
 iris:
@@ -243,13 +243,13 @@ iris:
       message_id: msg_...
 ---
 
-# Concise Russian answers
+# Concise answers
 
-User prefers concise answers in Russian.
+User prefers concise answers.
 
 ## Evidence
 
-> "отвечай кратко по-русски"
+> "answer concisely"
 
 # Citations
 ```

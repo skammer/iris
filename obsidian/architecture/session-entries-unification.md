@@ -32,7 +32,7 @@ Implement `append-message!` in terms of `append-entry!`'s `:message` branch (the
 
 ## Risks & mitigations
 
-- **Live deployed DB (agent.example.invalid)** gets rewritten on next deploy → take a file-level backup of `~/.config/iris/data/agent.db` (+ `-wal`/`-shm`) before shipping; the backfill-verify-abort step protects against partial writes.
+- **Live deployed DB** gets rewritten on next deploy → take a file-level backup of `~/.config/iris/data/agent.db` (+ `-wal`/`-shm`) before shipping; the backfill-verify-abort step protects against partial writes.
 - Pre-entries-era sessions may lack entries entirely → covered by the backfill in step 1.
 - FTS message search behavior must not change → the projection keeps the FTS table fed; add a characterization test for `search-messages` before starting.
 

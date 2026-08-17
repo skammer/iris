@@ -645,7 +645,7 @@
                              :headers {"Content-Type" "text/event-stream"}
                              :body (byte-stream
                                     (str "data: {\"choices\":[{\"delta\":{\"content\":\"<tool_call>\\n<function=memory>\\n\"}}]}\n\n"
-                                         "data: {\"choices\":[{\"delta\":{\"content\":\"<parameter=query>\\nTest User\\n</parameter>\\n\"}}]}\n\n"
+                                         "data: {\"choices\":[{\"delta\":{\"content\":\"<parameter=query>\\nпример\\n</parameter>\\n\"}}]}\n\n"
                                          "data: {\"choices\":[{\"delta\":{\"content\":\"<parameter=action>\\nsearch\\n</parameter>\\n\"}}]}\n\n"
                                          "data: {\"choices\":[{\"delta\":{\"content\":\"</function>\\n</tool_call>\"}}]}\n\n"
                                          "data: [DONE]\n\n"))})]
@@ -653,7 +653,7 @@
           chunks (atom [])
           response (llm-core/invoke
                     llm
-                    {:messages [{:role "user" :content "вспомни Test Userа"}]
+                    {:messages [{:role "user" :content "найди пример"}]
                      :tools [{:type "function"
                               :function {:name "memory"
                                          :description "Memory"
@@ -663,7 +663,7 @@
       (is (empty? @chunks))
       (is (= "" (:content response)))
       (is (= "memory" (:name tc)))
-      (is (= {:query "Test User" :action "search"} (:arguments tc))))))
+      (is (= {:query "пример" :action "search"} (:arguments tc))))))
 
 (deftest structured-output-invoke-streams-by-default-test
   (let [body* (atom nil)

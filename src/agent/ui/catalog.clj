@@ -296,7 +296,7 @@
        (section "feedback" "09 / PATTERNS" "Feedback & overlays" "Status, warning and errors appear near their cause; overlays preserve escape routes."
         [:article.ui-showcase
          [:h3 "Inline feedback"]
-         [:div.ui-alert.ui-alert--success [:strong "Deployment complete"] [:p "iris.jar is healthy on agent.example.invalid."]]
+         [:div.ui-alert.ui-alert--success [:strong "Deployment complete"] [:p "iris.jar passed its health check."]]
          [:div.ui-alert.ui-alert--warning [:strong "Approval required"] [:p "Filesystem write awaits operator decision."]]
          [:div.ui-alert.ui-alert--danger [:strong "Provider unavailable"] [:p "Request failed after 3 attempts."]]]
         [:article.ui-showcase

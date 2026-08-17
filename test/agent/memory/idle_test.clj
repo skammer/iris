@@ -103,7 +103,7 @@
                           {:operations
                            [{:operation "upsert"
                              :old nil
-                             :value "Prefers concise answers in Russian."
+                             :value "Prefers concise answers."
                              :confidence 0.96
                              :evidence "Explicit request"}]})])
         requests (atom [])
@@ -116,16 +116,16 @@
         system (assoc (test-system store root provider {})
                       :user-profile-service profile-service)]
     (try
-      (spit user-file "# USER\nname: Test User\n")
+      (spit user-file "# USER\nname: Example User\n")
       (sqlite/append-message! store (:id session) "user"
-                              "Всегда отвечай мне кратко по-русски")
+                              "Always answer concisely")
       (let [result (idle/run-once! system)
             candidate (first (:results result))
             content (slurp user-file)]
         (is (= 1 (:processed result)))
         (is (true? (:user-profile-updated? candidate)))
         (is (= 2 (count @requests)))
-        (is (str/includes? content "Prefers concise answers in Russian."))
+        (is (str/includes? content "Prefers concise answers."))
         (is (= 1 (count (sqlite/list-events
                          store
                          {:event-type :memory.user_profile.updated :limit 10})))))

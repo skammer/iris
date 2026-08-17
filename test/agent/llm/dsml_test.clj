@@ -8,7 +8,7 @@
   (str "<｜DSML｜tool_calls>  "
        "<｜DSML｜invoke name=\"fs\">  "
        "<｜DSML｜parameter name=\"action\" string=\"true\">list</｜DSML｜parameter>  "
-       "<｜DSML｜parameter name=\"path\" string=\"true\">/Users/example</｜DSML｜parameter>  "
+       "<｜DSML｜parameter name=\"path\" string=\"true\">/workspace/example</｜DSML｜parameter>  "
        "</｜DSML｜invoke>  "
        "</｜DSML｜tool_calls>"))
 
@@ -16,7 +16,7 @@
   (str "<｜｜DSML｜｜tool_calls>  "
        "<｜｜DSML｜｜invoke name=\"fs\">  "
        "<｜｜DSML｜｜parameter name=\"action\" string=\"true\">list</｜｜DSML｜｜parameter>  "
-       "<｜｜DSML｜｜parameter name=\"path\" string=\"true\">/Users/example</｜｜DSML｜｜parameter>  "
+       "<｜｜DSML｜｜parameter name=\"path\" string=\"true\">/workspace/example</｜｜DSML｜｜parameter>  "
        "</｜｜DSML｜｜invoke>  "
        "</｜｜DSML｜｜tool_calls>"))
 
@@ -30,7 +30,7 @@
       (is (= "function" (:type tc)))
       (is (string? (:id tc)))
       (is (= "fs" (-> tc :function :name)))
-      (is (= {"action" "list" "path" "/Users/example"}
+      (is (= {"action" "list" "path" "/workspace/example"}
              (json/parse-string (-> tc :function :arguments)))))))
 
 (deftest recovers-doubled-delimiter-invoke
@@ -40,7 +40,7 @@
     (is (= "" content))
     (is (= 1 (count tool-calls)))
     (is (= "fs" (-> tool-calls first :function :name)))
-    (is (= {"action" "list" "path" "/Users/example"}
+    (is (= {"action" "list" "path" "/workspace/example"}
            (json/parse-string (-> tool-calls first :function :arguments))))))
 
 (deftest forced-stream-guard-suppresses-doubled-delimiter-without-tools
@@ -54,7 +54,7 @@
   (let [content (str "<tool_call>\n"
                      "<function=memory>\n"
                      "<parameter=query>\n"
-                     "Test User\n"
+                     "пример\n"
                      "</parameter>\n"
                      "<parameter=action>\n"
                      "search\n"
@@ -68,7 +68,7 @@
     (is (= 1 (count tool-calls)))
     (let [tc (first tool-calls)]
       (is (= "memory" (-> tc :function :name)))
-      (is (= {"query" "Test User" "action" "search"}
+      (is (= {"query" "пример" "action" "search"}
              (json/parse-string (-> tc :function :arguments)))))))
 
 (deftest recovers-kimi-memory-tool-call-tags

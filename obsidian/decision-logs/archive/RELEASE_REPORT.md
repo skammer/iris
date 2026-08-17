@@ -24,7 +24,7 @@ Key caveats:
 | Uberjar | Pass: `target/iris.jar`, 88M |
 | Shell syntax | Pass: `build.sh`, `scripts/deploy-jar.sh`, `scripts/iris-isolated.sh`, `scripts/iris-isolated-rebuild.sh` |
 | Full clj-kondo | **Fail:** 92 errors, 60 warnings |
-| Docker daemon | **Unavailable:** socket missing at `/Users/example/.docker/run/docker.sock` |
+| Docker daemon | **Unavailable:** local Docker socket missing |
 
 ## Assessment
 

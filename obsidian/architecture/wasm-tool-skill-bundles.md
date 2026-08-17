@@ -299,7 +299,7 @@ For Home Assistant development:
 {:wasm-bundles
  {:dev-roots ["export/homeassistant-wasm-skill"]
   :settings {"iris.homeassistant"
-             {:ha_host "http://192.0.2.10:8123"
+             {:ha_host "http://homeassistant.local:8123"
               :ha_api_key "..."}}
   :enabled []}}
 ```
