@@ -119,7 +119,10 @@
     (locking (:manager-lock service)
       (service/ensure-running! service)
       (if (get-in @(:session-runtimes service) [session-id :active])
-        (let [queued-message (history/persist-queued-user-turn! system session-id (:messages opts) request-id)
+        (let [queued-message (or (when (false? (:persist-user? opts))
+                                   (:user-message opts))
+                                 (history/persist-queued-user-turn!
+                                  system session-id (:messages opts) request-id))
               item {:opts opts
                     :request-id request-id
                     :cancelled? cancelled?

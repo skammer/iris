@@ -7,6 +7,7 @@
    [agent.magi.core :as magi]
    [agent.mcp.core :as mcp]
    [agent.runtime.trace :as runtime-trace]
+   [agent.restart-handoff :as restart-handoff]
    [agent.telemetry :as telemetry]
    [agent.telemetry.observer :as telemetry-observer]
    [agent.tools.approvals :as tool-approvals]
@@ -36,7 +37,7 @@
   {:fs #{:fs_read :fs_write :fs_create :fs_replace :fs_list :fs_delete :fs_mkdir}
    :memory #{:memory_recall :vault_search
              :scratchpad_read :scratchpad_search :scratchpad_replace
-             :memory_propose_update :memory_extract_session :message_search}
+             :memory_propose_update :memory_extract_session :message_search :message_get}
    :skills #{:skills_list :skills_read}
    :todo #{:todo_write :todo_get :todo_list :todo_search}})
 
@@ -85,26 +86,67 @@
                                      (:vault-roots memory-service))))]
     (assoc fs-cfg* :roots roots)))
 
+(defn- schedule-handoff-from-context!
+  [system message context]
+  (restart-handoff/schedule!
+   system
+   {:session-id (:session-id context)
+    :message message
+    :permission-profile (or (:permission-profile context) :chat)}))
+
+(defn- handoff-tool
+  [system-control]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :system_handoff
+     "Persist a message that will automatically start the next turn in this session after Iris restarts. Call this in a completed tool step before restarting the process. A later call replaces this session's pending handoff."
+     :category :system
+     :required-permissions #{:system-reload}
+     :input-schema [:map
+                    [:message [:string {:min 1 :max restart-handoff/max-message-chars}]]]
+     :operation :act)
+    :execute-fn
+    (fn [{:keys [message]} context]
+      (let [system (or (some-> (:system-ref system-control) deref)
+                       (:system context))
+            handoff (schedule-handoff-from-context! system message context)]
+        {:status :scheduled
+         :handoff-id (:id handoff)
+         :session-id (:session-id handoff)}))
+    :health-fn
+    (fn [] {:healthy true})}))
+
 (defn- reload-tool
   [system-control]
   (tools/create-tool
    {:description
     (tools/create-tool-description
      :system_reload
-     "Reload Iris runtime configuration from disk. Soft reload applies hot-safe runtime config; full reload schedules a process-local rebuild."
+     "Reload Iris runtime configuration from disk. Soft reload applies hot-safe runtime config. Full reload schedules a process-local rebuild; resume_message atomically schedules the next automatic turn before that rebuild."
      :category :system
      :required-permissions #{:system-reload}
      :input-schema [:map
-                    [:mode {:optional true} [:enum "soft" "full"]]]
+                    [:mode {:optional true} [:enum "soft" "full"]]
+                    [:resume_message {:optional true}
+                     [:maybe [:string {:min 1 :max restart-handoff/max-message-chars}]]]]
      :operation :act)
     :execute-fn
-    (fn [input context]
+    (fn [{:keys [mode resume_message]} context]
       (let [system (or (some-> (:system-ref system-control) deref)
-                       (:system context))]
-        ((:reload! system-control)
-         system
-         {:mode (keyword (or (:mode input) "soft"))
-          :source (or (:user context) "tool")})))
+                       (:system context))
+            mode* (keyword (or mode "soft"))]
+        (when (and resume_message (not= :full mode*))
+          (throw (ex-info "resume_message requires mode=full"
+                          {:type :validation-failed})))
+        (let [handoff (when resume_message
+                        (schedule-handoff-from-context! system resume_message context))
+              result ((:reload! system-control)
+                      system
+                      {:mode mode*
+                       :source (or (:user context) "tool")})]
+          (cond-> result
+            handoff (assoc :handoff-id (:id handoff))))))
     :health-fn
     (fn [] {:healthy true})}))
 
@@ -237,7 +279,8 @@
                      (conj (memory-tool/create-memory-tools memory-service
                                                             (or note-llm-provider llm-provider)
                                                             user-profile-service)
-                           (memory-tool/create-message-search-tool memory-service))))
+                           (memory-tool/create-message-search-tool memory-service)
+                           (memory-tool/create-message-get-tool memory-service))))
 
        (and store (not= false (:enabled todo-cfg)))
        (as-> registry*
@@ -258,7 +301,8 @@
            (tools/register-tool (telegram-tool/create-ask-tool telegram-cfg)))
 
        system-control
-       (tools/register-tool (reload-tool system-control))
+       (-> (tools/register-tool (handoff-tool system-control))
+           (tools/register-tool (reload-tool system-control)))
 
        (and magi-service (magi/tool-enabled? magi-service))
        (tools/register-tool (magi-tool/create-magi-tool magi-service))

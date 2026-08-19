@@ -10,7 +10,7 @@
    (java.nio.charset StandardCharsets)
    (java.security MessageDigest)))
 
-(def latest-schema-version 10)
+(def latest-schema-version 11)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -64,6 +64,11 @@
     :id "010-cron-jobs"
     :name "cron-jobs"
     :up-resource "agent/persistence/sqlite/migrations/010-cron-jobs.up.sql"
+    :irreversible? true}
+   {:version 11
+    :id "011-restart-handoffs"
+    :name "restart-handoffs"
+    :up-resource "agent/persistence/sqlite/migrations/011-restart-handoffs.up.sql"
     :irreversible? true}])
 
 (defn descriptor-by-version [version]

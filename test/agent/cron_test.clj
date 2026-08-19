@@ -74,6 +74,40 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest cron-stats-renders-week-gantt-and-month-calendar-test
+  (let [{:keys [path store]} (temp-store)
+        system (test-system store)]
+    (try
+      (doseq [job [{:name "Daily report"
+                    :schedule {:kind :cron :expression "0 9 * * *"}
+                    :next-run-at "2026-08-10T09:00:00Z"}
+                   {:name "Monthly archive"
+                    :schedule {:kind :cron :expression "0 7 1 * *"}
+                    :next-run-at "2026-09-01T07:00:00Z"}]]
+        (cron-store/create-job!
+         store
+         (merge job {:prompt "Run" :timezone "UTC" :status :active
+                     :notification {:policy :never} :created-by "test"})))
+      (let [week-html (ui-cron/fragment system {:tab :stats :view :week
+                                                 :date "2026-08-10" :limit 20})
+            calendar-html (ui-cron/fragment system {:tab :stats :view :calendar
+                                                     :date "2026-08-10" :limit 20})]
+        (is (str/includes? week-html "cron-gantt"))
+        (is (= 7 (count (re-seq #"cron-gantt__day-heading" week-html))))
+        (is (str/includes? week-html "Mon 10"))
+        (is (str/includes? week-html "Sun 16"))
+        (is (str/includes? week-html "Daily report"))
+        (is (str/includes? week-html "left: 37.5000%"))
+        (is (str/includes? calendar-html "cron-calendar"))
+        (is (str/includes? calendar-html "August 2026"))
+        (is (str/includes? calendar-html "Monthly archive"))
+        (is (str/includes? calendar-html "07:00"))
+        (is (str/includes? calendar-html "view=calendar&amp;date=2026-07-10"))
+        (is (str/includes? calendar-html "view=calendar&amp;date=2026-09-10")))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest cron-ui-run-action-claims-manual-run-test
   (let [{:keys [path store]} (temp-store)
         system (test-system store)

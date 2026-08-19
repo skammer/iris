@@ -29,7 +29,8 @@
   (reduce tools/register-tool
           (tools/create-registry)
           (conj (memory-tool/create-memory-tools service)
-                (memory-tool/create-message-search-tool service))))
+                (memory-tool/create-message-search-tool service)
+                (memory-tool/create-message-get-tool service))))
 
 (defrecord NoteProvider [responses requests]
   llm-core/ILLMProvider
@@ -364,11 +365,62 @@
                                         :limit 3}
                                        {:permissions #{:memory-read}
                                         :session-id (:id session)})]
-        (is (str/includes? result "Message chunks for: Kimi"))
+        (is (str/includes? result "Message results for: Kimi"))
         (is (str/includes? result "Kimi chunk marker"))
         (is (not (str/includes? result "recursive payload")))
-        (is (not (str/includes? result "message #")))
-        (is (not (str/includes? result "session-id"))))
+        (is (str/includes? result "message #"))
+        (is (str/includes? result (str "session=" (:id session))))
+        (is (str/includes? result "kind=chat role=assistant created-at=")))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest message-search-time-range-and-message-get-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        chat-session (sqlite/create-session! store "Telegram: skammer")
+        cron-session (sqlite/create-session! store "daily" {:kind :cron})
+        service (memory-service store)
+        registry* (registry service)
+        full-content (str "Exact line one\nExact line two\n" (apply str (repeat 1200 "z")))]
+    (try
+      (let [target (sqlite/append-message! store (:id chat-session) "user" full-content)
+            _ (sqlite/append-message! store (:id cron-session) "assistant" "cron marker")
+            search-result (tools/execute-tool
+                           registry*
+                           :message_search
+                           {:query ""
+                            :since (:created-at target)
+                            :until "2100-01-01T00:00:00Z"
+                            :all-sessions? true
+                            :limit 100}
+                           {:permissions #{:memory-read}
+                            :session-id (:id cron-session)})
+            scoped-get (tools/execute-tool
+                        registry*
+                        :message_get
+                        {:id (:id target)}
+                        {:permissions #{:memory-read}
+                         :session-id (:id cron-session)})
+            full-get (tools/execute-tool
+                      registry*
+                      :message_get
+                      {:id (:id target) :all-sessions? true}
+                      {:permissions #{:memory-read}
+                       :session-id (:id cron-session)})]
+        (is (str/includes? search-result (str "message #" (:id target))))
+        (is (str/includes? search-result "title=\"Telegram: skammer\""))
+        (is (str/includes? search-result "kind=chat role=user created-at="))
+        (is (= "Message not found" scoped-get))
+        (is (str/ends-with? full-get full-content))
+        (is (not (str/includes? full-get "[truncated")))
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo
+             #"since must be an ISO-8601 UTC instant"
+             (tools/execute-tool registry*
+                                 :message_search
+                                 {:query "" :since "yesterday" :all-sessions? true}
+                                 {:permissions #{:memory-read}
+                                  :session-id (:id cron-session)}))))
       (finally
         (io/delete-file path true)))))
 

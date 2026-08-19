@@ -16,6 +16,7 @@
    [agent.memory.idle :as memory-idle]
    [agent.memory.magi-review :as memory-magi-review]
    [agent.persistence.sqlite :as sqlite]
+   [agent.restart-handoff :as restart-handoff]
    [agent.system.components :as components]
    [agent.system.health :as system-health]
    [agent.util :as util]))
@@ -324,4 +325,5 @@
       (memory-idle/start! (:memory-idle-service system*))
       (memory-magi-review/start! (:memory-magi-review-service system*))
       (cron/start! (:cron-service system*))
+      (restart-handoff/dispatch-pending! system*)
       system*)))

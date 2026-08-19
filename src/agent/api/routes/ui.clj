@@ -60,7 +60,9 @@
 (def ^:private cron-query
   [:map
    [:limit {:optional true} :string]
-   [:tab {:optional true} :string]])
+   [:tab {:optional true} :string]
+   [:view {:optional true} :string]
+   [:date {:optional true} :string]])
 
 (def ^:private session-id-query
   [:map

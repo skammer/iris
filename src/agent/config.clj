@@ -171,7 +171,7 @@
                          :chat [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec :magi-evaluate :homeassistant :wasm-execute :cron-read :cron-manage]}
            :profiles {:cron-observe {:permissions [:filesystem-read :http-request :memory-read :homeassistant]
                                      :allowed-tools [:fs_read :fs_list :fs_search :http :memory_recall
-                                                     :vault_search :message_search :homeassistant]
+                                                     :vault_search :message_search :message_get :homeassistant]
                                      :allowed-actions {:http [:get :head]
                                                        :homeassistant [:get_state :get_states :list_states :search_states :list_services]}}
                       :cron-automation {:permissions [:filesystem-read :filesystem-write :http-request :shell-exec]

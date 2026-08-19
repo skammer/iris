@@ -116,14 +116,21 @@
   (responses/html-response 200 (ui/dashboard-fragment system)))
 
 (defn cron [system request]
-  (let [limit (request-ui-limit request 20 100)
-        tab (some-> request :parameters :query :tab keyword)]
-    (responses/html-response 200 (ui/cron-fragment system {:limit limit :tab tab}))))
+  (let [query (-> request :parameters :query)
+        limit (request-ui-limit request 20 100)
+        tab (some-> (:tab query) keyword)
+        view (some-> (:view query) keyword)]
+    (responses/html-response 200 (ui/cron-fragment system {:limit limit
+                                                            :tab tab
+                                                            :view view
+                                                            :date (:date query)}))))
 
 (defn cron-status [system request]
-  (let [limit (request-ui-limit request 20 100)
-        tab (or (some-> request :parameters :query :tab keyword) :jobs)]
-    (responses/html-response 200 (ui-cron/status-fragment system limit tab))))
+  (let [query (-> request :parameters :query)
+        limit (request-ui-limit request 20 100)
+        tab (or (some-> (:tab query) keyword) :jobs)
+        view (or (some-> (:view query) keyword) :week)]
+    (responses/html-response 200 (ui-cron/status-fragment system limit tab view (:date query)))))
 
 (defn cron-job-detail [system _request job-id]
   (responses/html-response

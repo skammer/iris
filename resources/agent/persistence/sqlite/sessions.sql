@@ -139,24 +139,42 @@ where type = 'message'
 limit 1
 
 -- :name search-messages-like :? :*
-select id, session_id, role, content, created_at
-from messages
-where content like :needle
-  and (:session_id is null or session_id = :session_id)
-  and (:include_tool_results = 1 or role <> 'tool')
-order by id desc
+select m.id, m.session_id, m.role, m.content, m.created_at,
+       s.kind as session_kind, s.title as session_title
+from messages m
+join sessions s on s.id = m.session_id
+where m.content like :needle
+  and (:session_id is null or m.session_id = :session_id)
+  and (:since is null or m.created_at >= :since)
+  and (:until is null or m.created_at < :until)
+  and (:include_tool_results = 1 or m.role <> 'tool')
+order by m.created_at desc, m.id desc
 limit :limit
 
 -- :name search-messages-fts :? :*
 select m.id, m.session_id, m.role, m.content, m.created_at,
+       s.kind as session_kind, s.title as session_title,
        bm25(messages_fts) as retrieval_score
 from messages_fts
 join messages m on m.id = messages_fts.rowid
+join sessions s on s.id = m.session_id
 where messages_fts match :query
   and (:session_id is null or m.session_id = :session_id)
+  and (:since is null or m.created_at >= :since)
+  and (:until is null or m.created_at < :until)
   and (:include_tool_results = 1 or m.role <> 'tool')
 order by retrieval_score asc, m.id desc
 limit :limit
+
+-- :name get-search-message-by-id :? :1
+select m.id, m.session_id, m.role, m.content, m.created_at,
+       s.kind as session_kind, s.title as session_title
+from messages m
+join sessions s on s.id = m.session_id
+where m.id = :id
+  and (:session_id is null or m.session_id = :session_id)
+  and m.role <> 'tool'
+limit 1
 
 -- :name last-insert-row-id :? :1
 select last_insert_rowid() as id

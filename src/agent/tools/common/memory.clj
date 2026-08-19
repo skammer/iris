@@ -6,11 +6,14 @@
    [agent.persistence.sqlite :as sqlite]
    [agent.tools.core :as tools]
    [agent.util :as util]
-   [clojure.string :as str]))
+   [clojure.string :as str])
+  (:import
+   [java.time Instant]))
 
 (def ^:private max-line-chars 600)
 (def ^:private max-vault-chars 8000)
 (def ^:private max-message-chars 800)
+(def ^:private max-message-search-limit 100)
 (def ^:private max-extract-session-limit 200)
 
 (def ^:private scope-schema
@@ -24,10 +27,29 @@
   (when-not (contains? (:permissions context) permission)
     (throw (tools/permission-error #{permission} (:permissions context)))))
 
+(defn- parse-instant! [field value]
+  (when value
+    (try
+      (Instant/parse value)
+      (catch Exception _
+        (throw (tools/validation-error
+                (str (name field) " must be an ISO-8601 UTC instant")
+                {field value}))))))
+
 (defn- validate-message-search-input [input]
-  (when (str/blank? (or (:query input) ""))
-    (throw (tools/validation-error "query must be a non-blank string" {:query (:query input)})))
-  input)
+  (let [query (:query input)
+        since (parse-instant! :since (:since input))
+        until (parse-instant! :until (:until input))]
+    (when (and (str/blank? (or query "")) (nil? since) (nil? until))
+      (throw (tools/validation-error
+              "query may be blank only when since or until is provided"
+              {:query query :since (:since input) :until (:until input)})))
+    (when (and since until (not (.isBefore since until)))
+      (throw (tools/validation-error "since must be before until"
+                                     {:since (:since input) :until (:until input)})))
+    (cond-> input
+      since (assoc :since (str since))
+      until (assoc :until (str until)))))
 
 (defn- truncate-text [value max-chars]
   (util/truncate value max-chars #(str " [truncated " % " chars]")))
@@ -51,6 +73,9 @@
 (defn- memory-tool-limit [memory-service requested]
   (min (positive-int requested (or (:search-default-limit memory-service) 10))
        (or (:search-max-limit memory-service) 50)))
+
+(defn- message-search-limit [requested]
+  (min (positive-int requested 20) max-message-search-limit))
 
 (defn- first-match-index [query text]
   (let [query* (str/lower-case (str/trim (or query "")))
@@ -399,39 +424,82 @@
                                                         provider
                                                         user-profile-service)))))
 
+(defn- message-header [{:keys [id session-id session-kind session-title role created-at]}]
+  (str "message #" id
+       " session=" session-id
+       " kind=" (name session-kind)
+       " role=" role
+       " created-at=" created-at
+       (when-not (str/blank? session-title)
+         (str " title=" (pr-str session-title)))))
+
 (defn- message-search-text [query rows]
   (if (empty? rows)
-    (str "No message chunks for: " query)
-    (str "Message chunks for: " query "\n"
+    (str "No messages found" (when-not (str/blank? query) (str " for: " query)))
+    (str "Message results" (when-not (str/blank? query) (str " for: " query)) "\n"
          (str/join "\n"
                    (map (fn [row]
-                          (str "- " (focused-chunk query (:content row) max-message-chars)))
+                          (str "- " (message-header row) "\n  "
+                               (focused-chunk query (:content row) max-message-chars)))
                         rows)))))
+
+(defn- message-get-text [message]
+  (if-not message
+    "Message not found"
+    (str (message-header message) "\ncontent:\n" (:content message))))
 
 (defn create-message-search-tool [memory-service]
   (tools/create-tool
    {:description
     (tools/create-tool-description
      :message_search
-     "Search persisted user and assistant chat text. Excludes tool payloads to prevent recursive search pollution."
+     "Search persisted user and assistant chat text. since is inclusive; until is exclusive. Both accept ISO-8601 UTC instants. Blank query lists messages in the time range. Results include message/session metadata and trimmed content. Excludes tool payloads."
      :category :memory
      :input-schema [:map {:closed true}
-                    [:query :string]
+                    [:query {:optional true} [:maybe :string]]
                     [:limit {:optional true} [:maybe :int]]
                     [:session-id {:optional true} [:maybe :string]]
-                    [:all-sessions? {:optional true} [:maybe :boolean]]]
+                    [:all-sessions? {:optional true} [:maybe :boolean]]
+                    [:since {:optional true} [:maybe :string]]
+                    [:until {:optional true} [:maybe :string]]]
      :operation :read
      :parallel-safe? true
      :source :builtin)
     :validate-fn validate-message-search-input
     :execute-fn
-    (fn [{:keys [query limit session-id all-sessions?]} context]
+    (fn [{:keys [query limit session-id all-sessions? since until]} context]
       (ensure-permission! context :memory-read)
       (let [session-id* (when-not all-sessions?
                           (or session-id (:session-id context)))
             rows (sqlite/search-messages (:store memory-service)
                                          query
-                                         (cond-> {:limit (memory-tool-limit memory-service limit)
-                                                  :include-tool-results? false}
+                                         (cond-> {:limit (message-search-limit limit)
+                                                  :include-tool-results? false
+                                                  :since since
+                                                  :until until}
                                            session-id* (assoc :session-id session-id*)))]
         (message-search-text query rows)))}))
+
+(defn create-message-get-tool [memory-service]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :message_get
+     "Get complete persisted user or assistant message content by message_search result ID. Content is not trimmed by this tool. Excludes tool payloads. Cross-session access requires all-sessions?=true."
+     :category :memory
+     :input-schema [:map {:closed true}
+                    [:id :int]
+                    [:session-id {:optional true} [:maybe :string]]
+                    [:all-sessions? {:optional true} [:maybe :boolean]]]
+     :operation :read
+     :parallel-safe? true
+     :source :builtin)
+    :execute-fn
+    (fn [{:keys [id session-id all-sessions?]} context]
+      (ensure-permission! context :memory-read)
+      (let [session-id* (when-not all-sessions?
+                          (or session-id (:session-id context)))]
+        (message-get-text
+         (sqlite/get-search-message (:store memory-service) id
+                                    (cond-> {}
+                                      session-id* (assoc :session-id session-id*))))))}))

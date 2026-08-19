@@ -25,6 +25,7 @@ Tool-use policy for Iris agents.
 - `cron-observe` and `cron-automation` are built-in profiles. Verify live behavior with `cronjob preview`; do not copy defaults into user config merely because a different running JAR cannot see them.
 - Prefer a minimal root config plus focused include files. Do not copy built-in defaults into every fragment.
 - Run `iris config validate` before every reload/restart. Continue only after exit code 0 and `:status :valid`.
+- Before restarting the Iris process, call `system_handoff` in a separate completed tool step with the exact verification/work message for the next turn. For `system_reload` with `mode=full`, pass `resume_message` instead; Iris persists it before scheduling the reload.
 
 ## Cron
 
@@ -43,7 +44,8 @@ Tool-use policy for Iris agents.
 - `memory_recall`: broad recall across relevant memory surfaces.
 - `vault_search`: indexed durable vault notes and chunks.
 - `memory_propose_update`: propose a revision-guarded diff to approved memory; MAGI decides before it affects recall.
-- `message_search`: persisted user/assistant chat history; tool payloads are excluded.
+- `message_search`: persisted user/assistant chat history; supports `since`/`until`, cross-session search, message/session metadata, and trimmed previews. Blank query requires a time bound. Tool payloads excluded.
+- `message_get`: complete user/assistant message by search result ID. Use `all-sessions?: true` for cross-session IDs. Runtime may cap exceptionally large tool output.
 - `memory_extract_session`: bounded Dreaming pass; extracts durable candidate notes and updates Iris's managed USER.md profile section when high-confidence cross-session facts changed.
 - `skills_list`: discover skills by name and description.
 - `skills_read`: load one discovered skill's full instructions for autonomous use. User `/skill` invocation still injects it directly.

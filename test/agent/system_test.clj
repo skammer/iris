@@ -8,13 +8,17 @@
    [agent.llm.registry :as llm-registry]
    [agent.llm.service :as llm-service]
    [agent.memory.core :as memory]
+   [agent.memory.idle :as memory-idle]
+   [agent.memory.magi-review :as memory-magi-review]
    [agent.persistence.sqlite :as sqlite]
+   [agent.restart-handoff :as restart-handoff]
    [agent.skills :as skills]
    [agent.system :as system]
    [agent.system.components :as components]
    [agent.system.health :as system-health]
    [agent.telegram :as telegram]
    [agent.tools.service :as tool-service]
+   [agent.cron.service :as cron]
    [clojure.java.io :as io]
    [clojure.test :refer [deftest is]]))
 
@@ -66,7 +70,8 @@
 	                            :scratchpad_read :scratchpad_search
 	                            :scratchpad_replace
 	                            :memory_extract_session
-	                            :message_search :skills_list :skills_read :shell :system_reload
+	                            :message_search :message_get :skills_list :skills_read :shell
+	                            :system_handoff :system_reload
 	                            :todo_write :todo_get :todo_list :todo_search]))
     (is (= ["Telegram"] (mapv :display-name adapters)))
     (is (every? (set (mapv :name (skills/list-skills (:skills-registry system))))
@@ -201,6 +206,77 @@
                             (system/reload! system* {:mode :full :source "test"})))
       (is (= :failed (:status @reload-state)))
       (is (= "invalid provider config" (:message @reload-state))))))
+
+(deftest api-start-dispatches-pending-restart-handoffs-test
+  (let [system-ref (atom nil)
+        dispatched (promise)
+        system* {:config (assoc config/default-config :api {:host "127.0.0.1" :port 0})
+                 :system-ref system-ref
+                 :health-registry (health/create-registry)
+                 :telegram-service nil
+                 :memory-idle-service ::memory-idle
+                 :memory-magi-review-service ::memory-review
+                 :cron-service ::cron}]
+    (with-redefs [api/start-server! (fn [& _] ::api)
+                  memory-idle/start! (constantly nil)
+                  memory-magi-review/start! (constantly nil)
+                  cron/start! (constantly nil)
+                  restart-handoff/dispatch-pending! (fn [started-system]
+                                                      (deliver dispatched started-system)
+                                                      0)]
+      (let [started (system/start-api! system*)]
+        (is (= ::api (:api-server started)))
+        (is (= started @system-ref))
+        (is (= started (deref dispatched 1000 ::timeout)))))))
+
+(deftest system-handoff-tool-persists-current-session-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        session (sqlite/create-session! store "tool handoff")
+        reload-calls (atom [])
+        system-ref (atom nil)
+        control {:system-ref system-ref
+                 :reload! (fn [_ opts]
+                            (swap! reload-calls conj opts)
+                            {:status :scheduled :mode (:mode opts)})}
+        registry (tool-service/create-tool-registry
+                  {:cfg (:tools config/default-config)
+                   :event-sink (constantly nil)
+                   :store store
+                   :system-control control})
+        system* {:store store
+                 :tool-registry registry
+                 :config {:tools (assoc (:tools config/default-config) :yolo? true)}}
+        context {:session-id (:id session)
+                 :permission-profile :admin
+                 :permissions #{:system-reload}
+                 :yolo? true}]
+    (reset! system-ref system*)
+    (try
+      (let [scheduled (tool-service/execute-tool system* :system_handoff
+                                                 {:message "restart externally"}
+                                                 context)]
+        (is (= :scheduled (:status scheduled)))
+        (is (= "restart externally"
+               (:message (sqlite/get-session-restart-handoff store (:id session))))))
+      (let [reloaded (tool-service/execute-tool system* :system_reload
+                                                {:mode "full"
+                                                 :resume_message "verify new runtime"}
+                                                context)]
+        (is (= :scheduled (:status reloaded)))
+        (is (string? (:handoff-id reloaded)))
+        (is (= "verify new runtime"
+               (:message (sqlite/get-session-restart-handoff store (:id session)))))
+        (is (= [{:mode :full :source "system"}] @reload-calls)))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"requires mode=full"
+                            (tool-service/execute-tool system* :system_reload
+                                                       {:mode "soft"
+                                                        :resume_message "later"}
+                                                       context)))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
 
 (deftest tool-policy-blocks-and-yolo-skips-approval-only
   (let [path (temp-db-path)

@@ -4602,6 +4602,41 @@ button.row--link:focus-visible {
 
 .cron-workspace { display: grid; align-content: start; grid-auto-rows: max-content; gap: 16px; min-width: 0; min-height: 0; overflow-y: auto; }
 .cron-summary .overview-metrics { margin-top: 12px; }
+.cron-stats { display: grid; gap: 16px; }
+.cron-schedule-panel { min-width: 0; }
+.cron-schedule-head { align-items: end; gap: 16px; }
+.cron-schedule-head small { display: block; margin-top: 5px; color: var(--text-secondary); font-size: 10px; }
+.cron-schedule-controls, .cron-schedule-nav { display: flex; align-items: center; gap: 6px; }
+.cron-schedule-controls { justify-content: flex-end; flex-wrap: wrap; }
+.cron-schedule-nav .btn-small { min-width: 32px; min-height: 30px; padding: 5px 9px; }
+.cron-gantt-wrap, .cron-calendar-wrap { margin-top: 14px; overflow-x: auto; border: 1px solid var(--border); }
+.cron-gantt { display: grid; grid-template-columns: minmax(180px, 1.35fr) repeat(var(--cron-gantt-days), minmax(92px, 1fr)); min-width: 900px; background: var(--surface); }
+.cron-gantt__corner, .cron-gantt__day-heading { min-height: 38px; padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--surface-raised); color: var(--text-secondary); font: 500 9px/1.2 "IoskeleyMono", monospace; letter-spacing: .06em; text-transform: uppercase; }
+.cron-gantt__day-heading { border-left: 1px solid var(--border); text-align: center; }
+.cron-gantt__day-heading.is-today { color: var(--primary); box-shadow: inset 0 -2px 0 var(--primary); }
+.cron-gantt__job { min-width: 0; min-height: 54px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.cron-gantt__job strong, .cron-gantt__job span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cron-gantt__job strong { color: var(--text-display); font-size: 11px; }
+.cron-gantt__job span { margin-top: 4px; color: var(--text-secondary); font-size: 9px; }
+.cron-gantt__day { position: relative; min-height: 54px; border-left: 1px solid var(--border); border-bottom: 1px solid var(--border); background-image: linear-gradient(90deg, transparent 49.5%, color-mix(in srgb, var(--border) 45%, transparent) 50%, transparent 50.5%); }
+.cron-gantt__marker { position: absolute; top: 14px; width: 3px; height: 26px; border-radius: 2px; background: var(--primary); transform: translateX(-1px); }
+.cron-gantt__count { position: absolute; right: 5px; bottom: 4px; padding: 2px 4px; background: var(--surface-raised); color: var(--text-secondary); font-size: 8px; }
+.cron-gantt__job.is-paused, .cron-gantt__job.is-completed, .cron-gantt__day.is-paused, .cron-gantt__day.is-completed { opacity: .52; }
+.cron-gantt__day.is-paused .cron-gantt__marker, .cron-gantt__day.is-completed .cron-gantt__marker { background: var(--text-secondary); }
+.cron-schedule-empty { grid-column: 1 / -1; padding: 24px; color: var(--text-secondary); text-align: center; }
+.cron-calendar { display: grid; grid-template-columns: repeat(7, minmax(118px, 1fr)); min-width: 840px; background: var(--surface); }
+.cron-calendar__weekday { padding: 9px 10px; border-bottom: 1px solid var(--border); border-left: 1px solid var(--border); background: var(--surface-raised); color: var(--text-secondary); font: 500 9px/1.2 "IoskeleyMono", monospace; letter-spacing: .08em; text-align: center; text-transform: uppercase; }
+.cron-calendar__weekday:first-child { border-left: 0; }
+.cron-calendar__day { min-height: 128px; padding: 8px; border-left: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.cron-calendar__day:nth-child(7n + 8) { border-left: 0; }
+.cron-calendar__day > time { display: grid; width: 22px; height: 22px; place-items: center; margin-left: auto; color: var(--text-secondary); font-size: 9px; }
+.cron-calendar__day.is-today > time { border-radius: 50%; background: var(--primary); color: var(--surface); }
+.cron-calendar__day--outside { background: var(--surface-raised); opacity: .55; }
+.cron-calendar__events { display: grid; gap: 4px; max-height: 104px; margin-top: 4px; overflow-y: auto; }
+.cron-calendar__event { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px; align-items: center; min-height: 22px; padding: 3px 5px; background: color-mix(in srgb, var(--primary) 8%, var(--surface-raised)); box-shadow: inset 2px 0 var(--primary); font-size: 8px; }
+.cron-calendar__event-time { color: var(--primary); font-weight: 600; white-space: nowrap; }
+.cron-calendar__event-name { overflow: hidden; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; }
+.cron-calendar__event.is-paused, .cron-calendar__event.is-completed { box-shadow: inset 2px 0 var(--text-secondary); opacity: .55; }
 .cron-tabs { display: flex; gap: 4px; min-width: 0; padding: 4px; border: 1px solid var(--border); background: var(--surface-raised); }
 .cron-tab { flex: 1; min-width: 0; border: 0; color: var(--text-secondary); }
 .cron-tab:hover { background: var(--surface); }
@@ -4635,7 +4670,7 @@ button.row--link:focus-visible {
 .status-badge--paused, .status-badge--completed, .status-badge--skipped, .status-badge--abandoned { color: var(--text-secondary); }
 .status-badge--claimed { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); }
 .status-badge--failed, .status-badge--deleted, .status-badge--cancelled { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
-@media (max-width: 900px) { .cron-form-grid { grid-template-columns: 1fr; } .cron-prompt { grid-column: auto; } }
+@media (max-width: 900px) { .cron-form-grid { grid-template-columns: 1fr; } .cron-prompt { grid-column: auto; } .cron-schedule-head { align-items: start; } .cron-schedule-controls { justify-content: flex-start; } }
 .ui-avatar { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; background: var(--text-display); color: var(--surface); font-size: 9px; }
 
 .ui-pagination {

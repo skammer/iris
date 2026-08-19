@@ -98,6 +98,43 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest sqlite-restart-handoff-survives-reopen-and-reuses-message-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        session (sqlite/create-session! store "restart handoff")
+        first-handoff (sqlite/schedule-restart-handoff!
+                       store
+                       {:session-id (:id session)
+                        :message "obsolete"
+                        :permission-profile :chat})
+        replacement (sqlite/schedule-restart-handoff!
+                     store
+                     {:session-id (:id session)
+                      :message "verify after restart"
+                      :permission-profile :admin})]
+    (is (not= (:id first-handoff) (:id replacement)))
+    (is (= (:id replacement)
+           (:id (sqlite/get-session-restart-handoff store (:id session)))))
+    (sqlite/close-store! store)
+    (let [reopened (sqlite/create-store {:path path})]
+      (try
+        (let [[claimed] (sqlite/claim-restart-handoffs! reopened)
+              first-message (sqlite/ensure-restart-handoff-message! reopened claimed)
+              same-message (sqlite/ensure-restart-handoff-message! reopened claimed)]
+          (is (= "verify after restart" (:message claimed)))
+          (is (= :admin (:permission-profile claimed)))
+          (is (= :running (:status claimed)))
+          (is (= 1 (:attempts claimed)))
+          (is (= (:id first-message) (:id same-message)))
+          (is (= 1 (sqlite/count-messages reopened (:id session))))
+          (is (= :succeeded
+                 (:status (sqlite/finish-restart-handoff!
+                           reopened (:id claimed) :succeeded nil))))
+          (is (empty? (sqlite/claim-restart-handoffs! reopened))))
+        (finally
+          (sqlite/close-store! reopened)
+          (io/delete-file path true))))))
+
 (deftest sqlite-session-active-mode-flow-test
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})
@@ -268,6 +305,36 @@
              (mapv :content (sqlite/search-messages store "alpha beta"))))
       (is (= ["memory.marker"]
              (mapv :event-type (sqlite/search-events store "gamma delta"))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest sqlite-message-search-filters-time-and-gets-full-message-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        chat-session (sqlite/create-session! store "chat-title")
+        cron-session (sqlite/create-session! store "cron-title" {:kind :cron})]
+    (try
+      (let [first-message (sqlite/append-message! store (:id chat-session) "user" "first full message")
+            second-message (sqlite/append-message! store (:id cron-session) "assistant" "second full message")
+            tool-message (sqlite/append-message! store (:id chat-session) "tool" "private tool payload")
+            rows (sqlite/search-messages store ""
+                                         {:since (:created-at first-message)
+                                          :until (:created-at second-message)
+                                          :include-tool-results? false
+                                          :limit 100})]
+        (is (= [(:id first-message)] (mapv :id rows)))
+        (is (= {:session-id (:id chat-session)
+                :session-kind :chat
+                :session-title "chat-title"
+                :role "user"
+                :content "first full message"}
+               (select-keys (first rows)
+                            [:session-id :session-kind :session-title :role :content])))
+        (is (= "first full message"
+               (:content (sqlite/get-search-message store (:id first-message)))))
+        (is (nil? (sqlite/get-search-message store (:id first-message)
+                                             {:session-id (:id cron-session)})))
+        (is (nil? (sqlite/get-search-message store (:id tool-message)))))
       (finally
         (io/delete-file path true)))))
 

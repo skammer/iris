@@ -34,6 +34,7 @@
    [agent.persistence.sqlite-test]
    [agent.planner-test]
    [agent.release-smoke-test]
+   [agent.restart-handoff-test]
    [agent.runtime.compaction-test]
    [agent.runtime.context-pack-test]
    [agent.runtime.loop-test]
@@ -99,6 +100,7 @@
     agent.persistence.sqlite-test
     agent.planner-test
     agent.release-smoke-test
+    agent.restart-handoff-test
     agent.runtime.compaction-test
     agent.runtime.context-pack-test
     agent.runtime.loop-test

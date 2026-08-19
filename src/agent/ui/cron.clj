@@ -1,8 +1,14 @@
 (ns agent.ui.cron
   "Server-rendered Cron workspace."
   (:require
+   [agent.cron.schedule :as schedule]
    [agent.cron.service :as cron]
-   [agent.ui.render :as render]))
+   [agent.ui.render :as render])
+  (:import
+   (java.time DayOfWeek LocalDate YearMonth ZonedDateTime)
+   (java.time.format DateTimeFormatter)
+   (java.time.temporal TemporalAdjusters)
+   (java.util Locale)))
 
 (defn- schedule-label [{:keys [kind expression at every-seconds]}]
   (case (some-> kind keyword)
@@ -18,6 +24,180 @@
       "local only")))
 
 (def ^:private tabs [[:stats "Stats"] [:jobs "Jobs"] [:runs "Runs"] [:new "New job"]])
+
+(def ^:private day-label-formatter
+  (DateTimeFormatter/ofPattern "EEE dd" Locale/ENGLISH))
+(def ^:private month-label-formatter
+  (DateTimeFormatter/ofPattern "MMMM yyyy" Locale/ENGLISH))
+(def ^:private time-label-formatter (DateTimeFormatter/ofPattern "HH:mm"))
+(def ^:private max-exact-daily-occurrences 24)
+(def ^:private max-visible-gantt-markers 10)
+
+(defn- display-zone [system]
+  (schedule/timezone! (get-in system [:config :cron :timezone] "UTC")))
+
+(defn- parse-anchor-date [value zone]
+  (try
+    (if value (LocalDate/parse value) (LocalDate/now zone))
+    (catch Exception _ (LocalDate/now zone))))
+
+(defn- start-of-week [date]
+  (.with date (TemporalAdjusters/previousOrSame DayOfWeek/MONDAY)))
+
+(defn- day-window [date zone]
+  (let [start (.toInstant (.atStartOfDay date zone))]
+    [start (.toInstant (.atStartOfDay (.plusDays date 1) zone))]))
+
+(defn- day-occurrences [job date zone]
+  (let [[start end] (day-window date zone)]
+    (loop [cursor (.minusNanos start 1)
+           occurrences []]
+      (if-let [fire (schedule/next-fire (:schedule job) (:timezone job) cursor)]
+        (if (.isBefore fire end)
+          (if (>= (count occurrences) max-exact-daily-occurrences)
+            {:occurrences occurrences :overflow? true}
+            (recur fire (conj occurrences (ZonedDateTime/ofInstant fire zone))))
+          {:occurrences occurrences :overflow? false})
+        {:occurrences occurrences :overflow? false}))))
+
+(defn- occurrence-count [{:keys [occurrences overflow?]}]
+  (str (count occurrences) (when overflow? "+")))
+
+(defn- occurrence-label [{:keys [occurrences overflow?] :as summary}]
+  (cond
+    overflow? (str (occurrence-count summary) "×")
+    (= 1 (count occurrences)) (.format time-label-formatter (first occurrences))
+    :else (str (count occurrences) "×")))
+
+(defn- gantt-marker [job occurrence]
+  (let [second-of-day (.toSecondOfDay (.toLocalTime occurrence))
+        left (* 100.0 (/ second-of-day 86400.0))]
+    [:i.cron-gantt__marker
+     {:style (String/format Locale/ROOT "left: %.4f%%" (object-array [left]))
+      :title (str (:name job) " · " (.format time-label-formatter occurrence)
+                  " · " (:timezone job))}]))
+
+(defn- stats-url [view date limit]
+  (str "/ui/cron?tab=stats&view=" (name view) "&date=" date "&limit=" limit))
+
+(defn- schedule-view-controls [view anchor limit zone]
+  (let [month? (= :calendar view)
+        previous (if month? (.minusMonths anchor 1) (.minusWeeks anchor 1))
+        next (if month? (.plusMonths anchor 1) (.plusWeeks anchor 1))]
+    [:div.cron-schedule-controls
+     [:div.ui-segmented {:role "group" :aria-label "Schedule view"}
+      (for [[candidate label] [[:week "Gantt"] [:calendar "Calendar"]]]
+        [:button {:type "button"
+                  :class (when (= candidate view) "active")
+                  :aria-pressed (= candidate view)
+                  "data-on:click" (str "@get('" (stats-url candidate anchor limit) "')")}
+         label])]
+     [:div.cron-schedule-nav
+      [:button.btn-small {:type "button"
+                          :aria-label (if month? "Previous month" "Previous week")
+                          "data-on:click" (str "@get('" (stats-url view previous limit) "')")}
+       "←"]
+      [:button.btn-small {:type "button"
+                          "data-on:click" (str "@get('" (stats-url view (LocalDate/now zone) limit) "')")}
+       "Today"]
+      [:button.btn-small {:type "button"
+                          :aria-label (if month? "Next month" "Next week")
+                          "data-on:click" (str "@get('" (stats-url view next limit) "')")}
+       "→"]]]))
+
+(defn- gantt-view [jobs anchor zone]
+  (let [week-start (start-of-week anchor)
+        days (mapv #(.plusDays week-start %) (range 7))
+        today (LocalDate/now zone)
+        header (into
+                [:div.cron-gantt {:style "--cron-gantt-days: 7"}
+                 [:div.cron-gantt__corner "Job"]]
+                (map (fn [date]
+                       [:div.cron-gantt__day-heading
+                        {:class (when (= date today) "is-today")}
+                        [:strong (.format day-label-formatter date)]])
+                     days))
+        rows (if (seq jobs)
+               (mapcat
+                (fn [job]
+                  (into
+                   [[:div.cron-gantt__job
+                     {:class (str "is-" (name (:status job))) :title (:name job)}
+                     [:strong (:name job)]
+                     [:span (schedule-label (:schedule job))]]]
+                   (map
+                    (fn [date]
+                      (let [summary (day-occurrences job date zone)
+                            occurrences (:occurrences summary)]
+                        [:div.cron-gantt__day
+                         {:class (str "is-" (name (:status job)))
+                          :aria-label (str (:name job) ", " date ", "
+                                           (occurrence-count summary) " scheduled runs")}
+                         (for [occurrence (take max-visible-gantt-markers occurrences)]
+                           (gantt-marker job occurrence))
+                         (when (> (+ (count occurrences) (if (:overflow? summary) 1 0))
+                                  max-visible-gantt-markers)
+                           [:span.cron-gantt__count
+                            (str (occurrence-count summary) "×")])]))
+                    days)))
+                jobs)
+               [[:div.cron-schedule-empty "No schedules."]])]
+    [:div.cron-gantt-wrap
+     (into header rows)]))
+
+(defn- calendar-entry [job summary]
+  [:div.cron-calendar__event
+   {:class (str "is-" (name (:status job)))
+    :title (str (:name job) " · " (schedule-label (:schedule job)) " · " (:timezone job))}
+   [:span.cron-calendar__event-time (occurrence-label summary)]
+   [:span.cron-calendar__event-name (:name job)]])
+
+(defn- calendar-view [jobs anchor zone]
+  (let [month (YearMonth/from anchor)
+        first-day (.atDay month 1)
+        leading (dec (.getValue (.getDayOfWeek first-day)))
+        day-count (.lengthOfMonth month)
+        total (+ leading day-count)
+        cell-count (* 7 (long (Math/ceil (/ total 7.0))))
+        dates (vec (concat (repeat leading nil)
+                           (map #(.atDay month %) (range 1 (inc day-count)))
+                           (repeat (- cell-count total) nil)))
+        today (LocalDate/now zone)]
+    [:div.cron-calendar-wrap
+     [:div.cron-calendar
+      (for [label ["Mon" "Tue" "Wed" "Thu" "Fri" "Sat" "Sun"]]
+        [:div.cron-calendar__weekday label])
+      (for [date dates]
+        (if-not date
+          [:div.cron-calendar__day.cron-calendar__day--outside]
+          (let [events (keep (fn [job]
+                               (let [summary (day-occurrences job date zone)]
+                                 (when (or (seq (:occurrences summary)) (:overflow? summary))
+                                   [job summary])))
+                             jobs)]
+            [:div.cron-calendar__day {:class (when (= date today) "is-today")}
+             [:time {:datetime (str date)} (.getDayOfMonth date)]
+             [:div.cron-calendar__events
+              (for [[job summary] events]
+                (calendar-entry job summary))]])))]]))
+
+(defn- schedule-panel [system jobs view anchor limit]
+  (let [zone (display-zone system)
+        view* (if (= :calendar view) :calendar :week)
+        anchor* (parse-anchor-date anchor zone)
+        week-start (start-of-week anchor*)
+        title (if (= :calendar view*)
+                (.format month-label-formatter (YearMonth/from anchor*))
+                (str (.format day-label-formatter week-start) " — "
+                     (.format day-label-formatter (.plusDays week-start 6))))]
+    [:section.panel.cron-schedule-panel
+     [:div.panel-head.cron-schedule-head
+      [:div [:span.overview-kicker "Schedules"] [:h2 title]
+       [:small (str "Displayed in " zone)]]
+      (schedule-view-controls view* anchor* limit zone)]
+     (if (= :calendar view*)
+       (calendar-view jobs anchor* zone)
+       (gantt-view jobs anchor* zone))]))
 
 (defn- tab-link [tab label active-tab limit]
   [:button.cron-tab
@@ -263,17 +443,27 @@
       [:button {:type "submit"} "Create job"]]
      [:div#cron-preview.cron-preview "Preview schedule before saving."]]))
 
-(defn- summary-node [health limit tab]
+(defn- summary-node
+  ([health limit tab] (summary-node health limit tab :week nil))
+  ([health limit tab view anchor]
   [:section#cron-summary.panel.cron-summary
    {"data-on-interval__duration.15s" (str "@get('/ui/cron/status?tab=" (name tab)
-                                               "&limit=" limit "')")}
+                                               "&limit=" limit
+                                               (when (= :stats tab)
+                                                 (str "&view=" (name (or view :week))
+                                                      (when anchor (str "&date=" anchor))))
+                                               "')")}
    [:div.panel-head
     [:div [:span.overview-kicker "Scheduler"] [:h2 "Cron jobs"]]
     [:div.panel-head__form
      [:span.status-badge {:class (if (:running health) "status-badge--active" "status-badge--paused")}
       (if (:running health) "running" "stopped")]
      [:button {:type "button"
-               "data-on:click" (str "@get('/ui/cron?tab=" (name tab) "&limit=" limit "')")}
+               "data-on:click" (str "@get('/ui/cron?tab=" (name tab) "&limit=" limit
+                                    (when (= :stats tab)
+                                      (str "&view=" (name (or view :week))
+                                           (when anchor (str "&date=" anchor))))
+                                    "')")}
       "Refresh"]]]
    [:div.overview-metrics
     (for [[label value] [["Active jobs" (:active-jobs health)]
@@ -281,26 +471,32 @@
                          ["Failures / 24h" (:recent-failures health)]
                          ["Workers" (:worker-count health)]]]
       [:div.overview-metric [:span.label label] [:strong (str (or value 0))]])]
-   (when-let [error (:last-error health)] [:p.value--warn error])])
+   (when-let [error (:last-error health)] [:p.value--warn error])]))
 
-(defn status-fragment [system limit tab]
-  (render/render (summary-node (cron/health-check (:cron-service system)) limit tab)))
+(defn status-fragment
+  ([system limit tab] (status-fragment system limit tab :week nil))
+  ([system limit tab view anchor]
+   (render/render (summary-node (cron/health-check (:cron-service system))
+                                limit tab view anchor))))
 
 (defn fragment
   ([system] (fragment system {:limit 20 :tab :jobs}))
-  ([system {:keys [limit tab] :or {limit 20 tab :jobs}}]
+  ([system {:keys [limit tab view date] :or {limit 20 tab :jobs view :week}}]
    (let [service (:cron-service system)
          tab* (if (contains? (set (map first tabs)) tab) tab :jobs)
+         view* (if (= :calendar view) :calendar :week)
          health (when (= :stats tab*) (cron/health-check service))
-         jobs (when (contains? #{:jobs :runs} tab*)
-                (cron/list-jobs service {:limit limit}))
+         jobs (when (contains? #{:stats :jobs :runs} tab*)
+                (cron/list-jobs service {:limit (if (= :stats tab*) 200 limit)}))
          runs (when (= :runs tab*) (cron/list-runs service nil limit))]
      (render/render
       [:section#cron-workspace.cron-workspace
       [:nav.cron-tabs {:role "tablist" :aria-label "Cron sections"}
        (for [[tab label] tabs] (tab-link tab label tab* limit))]
       (case tab*
-        :stats (summary-node health limit tab*)
+        :stats [:div.cron-stats
+                (summary-node health limit tab* view* date)
+                (schedule-panel system jobs view* date limit)]
         :runs [:section.panel.cron-tab-panel
                [:div.panel-head
                 [:div [:span.overview-kicker "Audit"] [:h2 "Recent runs"]]

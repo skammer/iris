@@ -5,6 +5,7 @@
   (:require
    [agent.persistence.sqlite.common :as common]
    [agent.persistence.sqlite.events :as events]
+   [agent.persistence.sqlite.handoffs :as handoffs]
    [agent.persistence.sqlite.memory :as memory]
    [agent.persistence.sqlite.migrations :as migrations]
    [agent.persistence.sqlite.sessions :as sessions]
@@ -156,6 +157,10 @@
   ([store query] (sessions/search-messages store query))
   ([store query opts] (sessions/search-messages store query opts)))
 
+(defn get-search-message
+  ([store message-id] (sessions/get-search-message store message-id))
+  ([store message-id opts] (sessions/get-search-message store message-id opts)))
+
 (defn log-completion! [store completion]
   (sessions/log-completion! store completion))
 
@@ -183,6 +188,24 @@
 
 (defn cancel-session-tasks! [store session-id]
   (tasks/cancel-session-tasks! store session-id))
+
+(defn schedule-restart-handoff! [store handoff]
+  (handoffs/schedule! store handoff))
+
+(defn get-restart-handoff [store handoff-id]
+  (handoffs/get-handoff store handoff-id))
+
+(defn get-session-restart-handoff [store session-id]
+  (handoffs/get-session-handoff store session-id))
+
+(defn claim-restart-handoffs! [store]
+  (handoffs/claim-resumable! store))
+
+(defn ensure-restart-handoff-message! [store handoff]
+  (handoffs/ensure-message! store handoff))
+
+(defn finish-restart-handoff! [store handoff-id status error]
+  (handoffs/finish! store handoff-id status error))
 
 (defn get-channel-session-mapping [store source external-chat-id]
   (sessions/get-channel-session-mapping store source external-chat-id))

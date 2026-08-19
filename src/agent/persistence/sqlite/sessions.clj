@@ -377,16 +377,18 @@
             (upsert-leaf! conn (:session-id entry) (:id entry) (common/now-str))))))))
 
 (defn- row->search-message
-  [{:keys [id session_id role content created_at]}]
+  [{:keys [id session_id role content created_at session_kind session_title]}]
   {:id id
    :session-id session_id
+   :session-kind (keyword (or session_kind "chat"))
+   :session-title session_title
    :role role
    :content content
    :created-at created_at})
 
 (defn search-messages
   ([store query] (search-messages store query {}))
-  ([store query {:keys [limit session-id include-tool-results?]
+  ([store query {:keys [limit session-id include-tool-results? since until]
                  :or {limit 20 include-tool-results? true}}]
    (let [fts-query (common/fts5-query query)]
      (common/with-connection
@@ -397,13 +399,30 @@
 	                                   (if fts-query
 	                                     (search-messages-fts-sqlvec {:query fts-query
 	                                                                   :session_id session-id
+	                                                                   :since since
+	                                                                   :until until
 	                                                                   :include_tool_results (if include-tool-results? 1 0)
 	                                                                   :limit (common/bounded-limit limit 20 100)})
 	                                     (search-messages-like-sqlvec {:needle (str "%" (or query "") "%")
 	                                                                    :session_id session-id
+	                                                                    :since since
+	                                                                    :until until
 	                                                                    :include_tool_results (if include-tool-results? 1 0)
 	                                                                    :limit (common/bounded-limit limit 20 100)}))
 	                                   identity)))))))
+
+(defn get-search-message
+  ([store message-id] (get-search-message store message-id {}))
+  ([store message-id {:keys [session-id]}]
+   (common/with-connection
+     store
+     (fn [conn]
+       (some-> (common/select-one conn
+                                  (get-search-message-by-id-sqlvec
+                                   {:id message-id
+                                    :session_id session-id})
+                                  identity)
+               row->search-message)))))
 
 (defn log-completion! [store {:keys [session-id provider model prompt response]}]
   (let [completion {:session_id session-id
