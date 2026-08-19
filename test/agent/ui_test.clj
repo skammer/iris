@@ -227,6 +227,53 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest sessions-sidebar-switches-between-chat-and-ephemeral-sessions
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [chat-session (sqlite/create-session! store "Persistent chat")
+            cron-session (sqlite/create-session! store "Ephemeral cron" {:kind :cron})
+            chat-html (ui/sessions-fragment {:store store} (:id chat-session))
+            cron-html (ui/sessions-fragment {:store store} (:id cron-session))]
+        (testing "persistent view"
+          (is (str/includes? chat-html "Persistent chat"))
+          (is (not (str/includes? chat-html "Ephemeral cron")))
+          (is (str/includes? chat-html ">Chats</span>"))
+          (is (str/includes? chat-html ">Ephemeral</span>")))
+        (testing "ephemeral view"
+          (is (str/includes? cron-html "Ephemeral cron"))
+          (is (not (str/includes? cron-html "Persistent chat")))
+          (is (str/includes? cron-html "session-kind-tab--active"))
+          (is (str/includes? cron-html
+                             (str "/ui/session-detail?session_id=" (:id chat-session))))
+          (is (str/includes? cron-html
+                             (str "/ui/sessions?session_id=" (:id cron-session))))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest ephemeral-session-deep-link-does-not-fall-back-to-chat
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (sqlite/create-session! store "Wrong persistent chat")
+      (let [cron-session (sqlite/create-session! store "Cron transcript" {:kind :cron})]
+        (sqlite/append-message! store (:id cron-session) "assistant" "Cron output")
+        (let [html (ui/session-detail-fragment {:store store} (:id cron-session))
+              route-html (ui/route-fragment {:store store}
+                                             {:tab :chat :session-id (:id cron-session)})]
+          (is (str/includes? html "Cron transcript"))
+          (is (str/includes? html "Cron output"))
+          (is (not (str/includes? html "Wrong persistent chat")))
+          (is (str/includes? route-html "Ephemeral"))
+          (is (str/includes? route-html "Cron transcript"))
+          (is (str/includes? route-html "Cron output"))
+          (is (= (str "/chat/" (:id cron-session))
+                 (ui/session-route-path {:store store} (:id cron-session))))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest session-message-content-renders-markdown-and-sanitizes-html
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})]

@@ -736,6 +736,48 @@ textarea {
   margin: 0;
 }
 
+.session-sidebar-heading {
+  display: grid;
+  gap: 8px;
+}
+
+.session-kind-tabs {
+  display: flex;
+  gap: 3px;
+  min-width: 0;
+  padding: 3px;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+
+.session-kind-tab {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  min-width: 0;
+  padding: 6px 7px;
+  border: 0;
+  color: var(--text-secondary);
+  font-size: 9px;
+}
+
+.session-kind-tab:hover {
+  background: var(--surface);
+}
+
+.session-kind-tab.session-kind-tab--active {
+  background: var(--surface);
+  color: var(--text-display);
+  box-shadow: var(--shadow-sm);
+}
+
+.session-kind-tab__count {
+  color: var(--text-disabled);
+  font-size: 8px;
+}
+
 .create-session-form {
   gap: 6px;
 }
@@ -2058,6 +2100,14 @@ textarea {
 
   #sessions-panel.sessions-sidebar {
     padding: 8px;
+  }
+
+  .session-kind-tabs {
+    display: grid;
+  }
+
+  .session-kind-tab__count {
+    display: none;
   }
 
   .compact-form-row {

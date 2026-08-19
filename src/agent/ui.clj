@@ -353,8 +353,14 @@
 (defn sessions-fragment
   ([system] (sessions-fragment system nil))
   ([system active-session-id]
-   (let [sessions (sqlite/list-sessions (:store system))
-         active-id (or (not-empty active-session-id)
+   (let [store (:store system)
+         selected-session (some->> active-session-id not-empty
+                                   (sqlite/get-session store))
+         active-kind (if (= :cron (:kind selected-session)) :cron :chat)
+         sessions-by-kind {:chat (sqlite/list-sessions store {:kind :chat})
+                           :cron (sqlite/list-sessions store {:kind :cron})}
+         sessions (get sessions-by-kind active-kind)
+         active-id (or (:id selected-session)
                        (some-> sessions first :id))]
      (ui-render/render
       [:aside#sessions-panel.panel.sessions-sidebar
@@ -374,7 +380,24 @@
          [:button {:type "submit"
                    "data-attr:disabled" "$createSessionLoading"}
           "New"]]]
-       [:h2 "Sessions"]
+       [:div.session-sidebar-heading
+        [:h2 "Sessions"]
+        [:div.session-kind-tabs {:role "tablist" :aria-label "Session type"}
+         (for [[kind label] [[:chat "Chats"] [:cron "Ephemeral"]]
+               :let [target-id (some-> (get sessions-by-kind kind) first :id)
+                     active? (= kind active-kind)]]
+           [:button.session-kind-tab
+            {:type "button"
+             :role "tab"
+             :class (when active? "session-kind-tab--active")
+             :aria-selected active?
+             :disabled (nil? target-id)
+             "data-route" (when target-id
+                            (route-path {:tab :chat :session-id target-id}))
+             "data-on:click" (when target-id
+                               (str "@get('/ui/session-detail?session_id=" target-id "')"))}
+            [:span label]
+            [:span.session-kind-tab__count (count (get sessions-by-kind kind))]])]]
        (if (seq sessions)
          [:div.session-list
           (for [{:keys [id title created-at]} sessions
@@ -395,9 +418,9 @@
          [:div.empty "No sessions yet."])]))))
 
 (defn- session-target [system session-id]
-  (let [sessions (sqlite/list-sessions (:store system))]
-    (or (some #(when (= session-id (:id %)) %) sessions)
-        (first sessions))))
+  (let [store (:store system)]
+    (or (some->> session-id not-empty (sqlite/get-session store))
+        (first (sqlite/list-sessions store {:kind :chat})))))
 
 (defn session-route-path [system session-id]
   (if-let [session (session-target system session-id)]
