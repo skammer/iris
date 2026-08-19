@@ -238,8 +238,9 @@
         (testing "persistent view"
           (is (str/includes? chat-html "Persistent chat"))
           (is (not (str/includes? chat-html "Ephemeral cron")))
-          (is (str/includes? chat-html ">Chats</span>"))
-          (is (str/includes? chat-html ">Ephemeral</span>")))
+          (is (str/includes? chat-html ">Chats 1</span>"))
+          (is (str/includes? chat-html ">Ephemeral 1</span>"))
+          (is (str/includes? chat-html "aria-selected=\"true\"")))
         (testing "ephemeral view"
           (is (str/includes? cron-html "Ephemeral cron"))
           (is (not (str/includes? cron-html "Persistent chat")))

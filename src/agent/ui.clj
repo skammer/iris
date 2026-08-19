@@ -390,14 +390,13 @@
             {:type "button"
              :role "tab"
              :class (when active? "session-kind-tab--active")
-             :aria-selected active?
+             :aria-selected (if active? "true" "false")
              :disabled (nil? target-id)
              "data-route" (when target-id
                             (route-path {:tab :chat :session-id target-id}))
              "data-on:click" (when target-id
                                (str "@get('/ui/session-detail?session_id=" target-id "')"))}
-            [:span label]
-            [:span.session-kind-tab__count (count (get sessions-by-kind kind))]])]]
+            [:span (str label " " (count (get sessions-by-kind kind)))]])]]
        (if (seq sessions)
          [:div.session-list
           (for [{:keys [id title created-at]} sessions

@@ -767,15 +767,10 @@ textarea {
   background: var(--surface);
 }
 
-.session-kind-tab.session-kind-tab--active {
-  background: var(--surface);
-  color: var(--text-display);
-  box-shadow: var(--shadow-sm);
-}
-
-.session-kind-tab__count {
-  color: var(--text-disabled);
-  font-size: 8px;
+.session-kind-tabs .session-kind-tab[aria-selected="true"] {
+  background: var(--text-display);
+  color: var(--surface);
+  box-shadow: none;
 }
 
 .create-session-form {
@@ -2104,10 +2099,6 @@ textarea {
 
   .session-kind-tabs {
     display: grid;
-  }
-
-  .session-kind-tab__count {
-    display: none;
   }
 
   .compact-form-row {
