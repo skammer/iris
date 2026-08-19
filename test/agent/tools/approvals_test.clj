@@ -224,6 +224,17 @@
         (is (= "pending" (:id (first records))))
         (is (not-any? #(= "expired" (:id %)) records))))))
 
+(deftest effective-status-expires-only-unresolved-requests-test
+  (let [expired-at "2000-01-01T00:00:00Z"
+        pending {:status "pending" :expires-at expired-at}
+        approved {:status "approved" :expires-at expired-at :decided-at expired-at}
+        denied {:status "denied" :expires-at expired-at :decided-at expired-at}]
+    (is (= "expired" (approvals/effective-status pending)))
+    (is (= "approved" (approvals/effective-status approved)))
+    (is (= "denied" (approvals/effective-status denied)))
+    (is (false? (approvals/runnable? approved))
+        "expired grants stay non-runnable even though audit status remains approved")))
+
 (deftest expired-request-cannot-be-approved-test
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})]

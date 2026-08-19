@@ -46,7 +46,11 @@
              store
              {:name "daily" :prompt "Report" :schedule {:kind :cron :expression "0 9 * * *"}
               :timezone "UTC" :status :active :notification {:policy :never}
-              :next-run-at "2026-08-11T09:00:00Z" :created-by "test"})]
+              :next-run-at "2026-08-11T09:00:00Z" :created-by "test"})
+        run (cron-store/claim-manual! store job {:snapshot job})
+        _ (cron-store/finish-run! store (:id run) :succeeded
+                                  {:output "Full result"
+                                   :notification-status :not-requested})]
     (try
       (let [jobs-html (ui-cron/fragment system {:tab :jobs :limit 20})
             runs-html (ui-cron/fragment system {:tab :runs :limit 20})
@@ -60,6 +64,10 @@
         (is (not (str/includes? jobs-html "Scheduler")))
         (is (not (str/includes? jobs-html "Recent runs")))
         (is (str/includes? runs-html "Recent runs"))
+        (is (str/includes? runs-html "cron-run-result-row"))
+        (is (str/includes? runs-html "colspan=\"7\""))
+        (is (str/includes? runs-html "cron-audit-links"))
+        (is (not (str/includes? runs-html "<td><span class=\"status-badge status-badge--succeeded\">succeeded</span><details")))
         (is (not (str/includes? runs-html "Persistent schedules")))
         (is (str/includes? stats-html "Scheduler"))
         (is (str/includes? stats-html "Active jobs"))

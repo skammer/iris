@@ -116,8 +116,9 @@
   (boolean (expired? (:expires-at approval))))
 
 (defn effective-status
+  "Audit/display status. Expiry applies only while no decision exists."
   [approval]
-  (if (and (#{"pending" "approved"} (:status approval))
+  (if (and (= "pending" (:status approval))
            (request-expired? approval))
     "expired"
     (:status approval)))
@@ -128,7 +129,8 @@
 
 (defn runnable?
   [approval]
-  (= "approved" (effective-status approval)))
+  (and (= "approved" (:status approval))
+       (not (request-expired? approval))))
 
 (defn list-review-requests
   ([store] (list-review-requests store {}))

@@ -360,28 +360,43 @@
                [:th "Duration"] [:th "Notification"] [:th "Audit"]]]
       [:tbody
        (if (seq runs)
-         (for [run runs]
-           [:tr
-            [:td [:strong (subs (:id run) 0 8)] [:small (:scheduled-for run)]]
-            [:td (or (names (:job-id run)) (:job-id run))]
-             [:td (name (:trigger run))]
-             [:td [:span.status-badge {:class (str "status-badge--" (name (:status run)))} (name (:status run))]
-             (when (or (:error run) (:output run))
-               [:details {:id (str "cron-run-result-" (:id run))
-                          "data-preserve-attr" "open"}
-                [:summary {"data-on:click" (str "@get('/ui/cron/runs/" (:id run) "/detail')")}
-                 "Result"]
-                [:div {:id (str "cron-run-detail-" (:id run))} "Loading result…"]])]
-            [:td (or (duration-label run) "—")]
-            [:td (name (:notification-status run))]
-            [:td [:a {:href (str "/chat/" (:session-id run))} "Transcript"] " · "
-             [:a {:href "/logs" :title (:request-id run)} "Logs"]]])
+         (mapcat
+          (fn [run]
+            (let [result? (or (:error run) (:output run))]
+              (cond->
+               [[:tr.cron-run-row
+                 [:td [:strong (subs (:id run) 0 8)] [:small (:scheduled-for run)]]
+                 [:td (or (names (:job-id run)) (:job-id run))]
+                 [:td (name (:trigger run))]
+                 [:td [:span.status-badge
+                       {:class (str "status-badge--" (name (:status run)))}
+                       (name (:status run))]]
+                 [:td (or (duration-label run) "—")]
+                 [:td (name (:notification-status run))]
+                 [:td.cron-audit-links
+                  [:a {:href (str "/chat/" (:session-id run))} "Transcript"]
+                  [:span "·"]
+                  [:a {:href "/logs" :title (:request-id run)} "Logs"]]]]
+                result?
+                (conj
+                 [:tr.cron-run-result-row
+                  [:td {:colspan 7}
+                   [:details.cron-run-result
+                    {:id (str "cron-run-result-" (:id run))
+                     "data-preserve-attr" "open"}
+                    [:summary
+                     {"data-on:click" (str "@get('/ui/cron/runs/" (:id run) "/detail')")}
+                     "Result"]
+                    [:div.cron-run-result__content
+                     {:id (str "cron-run-detail-" (:id run))}
+                     "Loading result…"]]]]))))
+          runs)
          [:tr [:td {:colspan 7} "No runs yet."]])]]]))
 
 (defn run-detail-fragment [run]
   (render/render
    (if run
-     [:div {:id (str "cron-run-detail-" (:id run))}
+     [:div.cron-run-result__content {:id (str "cron-run-detail-" (:id run))}
       (if-let [text (or (:error run) (:output run))]
         [:pre (subs text 0 (min 12000 (count text)))]
         [:span "No output."])]

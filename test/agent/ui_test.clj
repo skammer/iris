@@ -153,8 +153,10 @@
         pending-id "303ea8ca-9665-4edd-bd97-b5c3cec87438"
         approvals [(assoc base :id pending-id :tool-name "fs_write" :status "pending")
                    (assoc base :id "approval-approved" :tool-name "shell" :status "approved"
+                          :expires-at "2000-01-01T00:00:00Z"
                           :actor "operator" :decision-reason "Reviewed" :decided-at "2026-07-12T10:02:00Z")
                    (assoc base :id "approval-denied" :tool-name "fs_delete" :status "denied"
+                          :expires-at "2000-01-01T00:00:00Z"
                           :actor "operator" :decision-reason "Unsafe path" :decided-at "2026-07-12T10:03:00Z")]
         html (ui/tool-approvals-fragment approvals)
         detail-html (ui/tool-approval-detail-fragment (first approvals))
