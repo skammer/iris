@@ -3,8 +3,10 @@
   (:require
    [agent.memory.core :as memory]
    [agent.memory.magi-review :as magi-review]
+   [agent.memory.vault :as vault]
    [agent.persistence.sqlite :as sqlite]
    [agent.ui.render :as ui-render]
+   [clojure.java.io :as io]
    [clojure.string :as str]))
 
 (defn- compact-bool [value]
@@ -421,70 +423,210 @@
       "Recall"]]]
    [:div#memory-search-results-panel.empty "No recall output."]])
 
+(def ^:private memory-tabs
+  [{:id :overview :label "Overview"}
+   {:id :approvals :label "Approvals"}
+   {:id :browser :label "Browser"}])
+
+(defn- normalize-memory-tab [tab]
+  (let [tab* (some-> tab name keyword)]
+    (if (some #(= tab* (:id %)) memory-tabs) tab* :overview)))
+
+(defn- memory-tab-bar [active-tab limit]
+  [:nav.memory-tabs {:role "tablist" :aria-label "Memory sections"}
+   (for [{:keys [id label]} memory-tabs]
+     [:button.memory-tab
+      {:type "button"
+       :role "tab"
+       :class (when (= id active-tab) "memory-tab--active")
+       :aria-selected (= id active-tab)
+       "data-on:click" (str "@get('/ui/memory?tab=" (name id)
+                            "&limit=" limit "')")}
+      label])])
+
+(defn- overview-tab [memory-service]
+  (let [health (memory/health-check memory-service)
+        quality (:quality health)
+        surfaces (memory/list-surfaces memory-service)
+        global-scratchpad (try
+                            (memory/read-scratchpad memory-service {:scope {:type :global}})
+                            (catch Exception e
+                              {:error (.getMessage e)}))]
+    [:div.memory-tab-panel.memory-tab-grid
+     [:div.memory-left-stack
+      [:section.panel.memory-overview
+       [:h2 "Memory"]
+       [:div.memory-stats
+        (memory-health-stat "notes" (get-in health [:vault :note-count] 0))
+        (memory-health-stat "limit" (str (get-in health [:search :default-limit])
+                                         "/"
+                                         (get-in health [:search :max-limit])))]
+       [:table.memory-table
+        [:thead
+         [:tr
+          [:th "surface"]
+          [:th "type"]
+          [:th "write"]
+          [:th "on"]
+          [:th "limit"]
+          [:th "paths"]]]
+        [:tbody
+         (for [surface surfaces]
+           (memory-surface-row surface))]]]
+
+      [:section.panel.memory-overview
+       [:h2 "Vault"]
+       [:div.memory-stats
+        (memory-health-stat "notes" (get-in health [:vault :note-count] 0))
+        (memory-health-stat "chunks" (get-in health [:vault :chunk-count] 0))]
+       [:button {:type "button"
+                 "data-on:click" "@post('/ui/memory/vault/reindex')"}
+        "Audit & Reindex"]]
+
+      (quality-panel quality)]
+
+     [:div.memory-right-stack
+      (retrieval-lab-panel)
+      (scratchpad-panel global-scratchpad)]]))
+
+(defn- approvals-tab [system limit reset-result]
+  (let [memory-service (:memory-service system)
+        notes (sqlite/list-vault-notes (:store memory-service) {:limit limit})
+        update-limit (min 20 limit)
+        updates (sqlite/list-memory-note-updates (:store memory-service)
+                                                 {:status "pending" :limit update-limit})]
+    [:div.memory-tab-panel.memory-approvals
+     [:section.panel.memory-overview
+      [:header.memory-section-header
+       [:div
+        [:span.eyebrow "REVIEW QUEUE"]
+        [:h2 "Memory Approvals"]]
+       [:span.count-badge (+ (count notes) (count updates))]]
+      (if (seq notes)
+        (vault-note-groups system notes)
+        [:div.empty-line "none"])]
+     (memory-update-list updates)
+     (when (or (= (count notes) limit) (= (count updates) update-limit))
+       [:button.chat-history-more
+        {:type "button"
+         "data-on:click" (str "@get('/ui/memory?tab=approvals&limit="
+                              (min 100 (+ limit 20)) "')")}
+        "Load 20 older"])
+     (memory-reset-result reset-result)]))
+
+(defn- relative-vault-path [memory-service path]
+  (or
+   (some (fn [root]
+           (try
+             (let [root-path (.toPath (.getCanonicalFile (io/file root)))
+                   note-path (.toPath (.getCanonicalFile (io/file path)))]
+               (when (.startsWith note-path root-path)
+                 (str (.relativize root-path note-path))))
+             (catch Exception _ nil)))
+         (:vault-roots memory-service))
+   (.getName (io/file path))))
+
+(defn- note-browser-path [memory-service note]
+  (let [path (relative-vault-path memory-service (:path note))]
+    (assoc note
+           :browser-path path
+           :browser-segments (vec (remove str/blank? (str/split path #"[/\\]+"))))))
+
+(declare memory-tree-nodes)
+
+(defn- memory-tree-file [note selected-id]
+  (let [selected? (= selected-id (:id note))]
+    [:button.memory-tree-file
+     {:type "button"
+      :class (when selected? "memory-tree-file--active")
+      :aria-current (when selected? "page")
+      :title (:browser-path note)
+      "data-on:click" (str "@get('/ui/memory?tab=browser&note_id="
+                           (ui-render/url-encode (:id note)) "')")}
+     [:span.memory-tree-file__name (or (last (:browser-segments note)) (:title note))]
+     [:span.memory-tree-file__status (or (:iris-status note) "unknown")]]))
+
+(defn- memory-tree-nodes [notes selected-id]
+  (for [[segment entries] (sort-by key (group-by #(first (:browser-segments %)) notes))]
+    (let [files (filter #(= 1 (count (:browser-segments %))) entries)
+          children (map #(update % :browser-segments subvec 1)
+                        (remove #(= 1 (count (:browser-segments %))) entries))]
+      (if (seq children)
+        [:details.memory-tree-folder {:open true}
+         [:summary
+          [:span.memory-tree-folder__icon "▾"]
+          [:span segment]
+          [:span.count-badge (count entries)]]
+         [:div.memory-tree-children
+          (for [file files]
+            (memory-tree-file file selected-id))
+          (memory-tree-nodes children selected-id)]]
+        (for [file files]
+          (memory-tree-file file selected-id))))))
+
+(defn- memory-file-preview [memory-service note]
+  (if-not note
+    [:div.memory-preview-empty
+     [:span.eyebrow "FILE PREVIEW"]
+     [:h2 "Select a memory file"]
+     [:p.meta "Choose a file in the tree to inspect its contents."]]
+    (try
+      (let [{:keys [content revision]} (memory/read-vault-file memory-service (:path note))
+            body (:body (vault/parse-note-content content (:path note)))]
+        [:article.memory-file-preview
+         [:header.memory-file-preview__header
+          [:div
+           [:span.eyebrow "FILE PREVIEW"]
+           [:h2 (or (:title note) (:browser-path note))]
+           [:p.meta.code (:browser-path note)]]
+          [:div.memory-note-badges
+           [:span.badge.memory-note-status (or (:iris-status note) "unknown")]
+           [:span.badge (str "scope " (or (:iris-scope note) "-"))]]]
+         [:div.memory-file-preview__content
+          (if (str/blank? body)
+            [:div.empty-line "empty"]
+            (ui-render/message-content body))]
+         [:details.memory-file-source
+          [:summary "Raw source"]
+          [:div.meta.code (str "revision " (subs revision 0 12))]
+          [:pre.code content]]])
+      (catch Exception e
+        [:div.memory-preview-empty
+         [:span.eyebrow "FILE PREVIEW"]
+         [:h2 "Unable to read file"]
+         [:pre.code (.getMessage e)]]))))
+
+(defn- browser-tab [memory-service selected-id]
+  (let [store (:store memory-service)
+        note-count (sqlite/count-vault-notes store)
+        notes (->> (sqlite/list-vault-notes store {:limit (max 1 note-count)})
+                   (mapv #(note-browser-path memory-service %)))
+        selected (or (some #(when (= selected-id (:id %)) %) notes)
+                     (first notes))]
+    [:div.memory-tab-panel.memory-browser
+     [:aside.memory-browser-sidebar
+      [:header.memory-browser-sidebar__header
+       [:div
+        [:span.eyebrow "VAULT"]
+        [:h2 "Memory Files"]]
+       [:span.count-badge note-count]]
+      (if (seq notes)
+        [:div.memory-tree
+         (memory-tree-nodes notes (:id selected))]
+        [:div.empty-line "No memory files."])]
+     [:section.memory-browser-preview
+      (memory-file-preview memory-service selected)]]))
+
 (defn memory-workspace-fragment
   ([system] (memory-workspace-fragment system nil {:limit 20}))
   ([system reset-result] (memory-workspace-fragment system reset-result {:limit 20}))
-	   ([system reset-result {:keys [limit] :or {limit 20}}]
-	    (let [memory-service (:memory-service system)
-	         health (memory/health-check memory-service)
-          quality (:quality health)
-	         surfaces (memory/list-surfaces memory-service)
-          notes (sqlite/list-vault-notes (:store memory-service) {:limit limit})
-          update-limit (min 20 limit)
-          updates (sqlite/list-memory-note-updates (:store memory-service)
-                                                   {:status "pending" :limit update-limit})
-          global-scratchpad (try
-                              (memory/read-scratchpad memory-service {:scope {:type :global}})
-                              (catch Exception e
-                                {:error (.getMessage e)}))]
+  ([system reset-result {:keys [limit tab note-id] :or {limit 20}}]
+   (let [memory-service (:memory-service system)
+         active-tab (normalize-memory-tab tab)]
      (ui-render/render
-      [:section#memory-workspace.workspace-grid.memory-workspace
-       [:div.memory-left-stack
-        [:section.panel.memory-overview
-         [:h2 "Memory"]
-         [:div.memory-stats
-          (memory-health-stat "notes" (get-in health [:vault :note-count] 0))
-          (memory-health-stat "limit" (str (get-in health [:search :default-limit])
-                                           "/"
-                                           (get-in health [:search :max-limit])))]
-         [:table.memory-table
-          [:thead
-           [:tr
-            [:th "surface"]
-            [:th "type"]
-            [:th "write"]
-            [:th "on"]
-            [:th "limit"]
-            [:th "paths"]]]
-          [:tbody
-           (for [surface surfaces]
-             (memory-surface-row surface))]]]
-
-        [:section.panel.memory-overview
-         [:h2 "Vault"]
-         [:div.memory-stats
-          (memory-health-stat "notes" (get-in health [:vault :note-count] 0))
-          (memory-health-stat "chunks" (get-in health [:vault :chunk-count] 0))]
-         [:button {:type "button"
-                   "data-on:click" "@post('/ui/memory/vault/reindex')"}
-          "Audit & Reindex"]]
-
-        (retrieval-lab-panel)
-
-        (quality-panel quality)
-
-        (scratchpad-panel global-scratchpad)]
-
-       [:div.memory-right-stack
-        [:section.panel.memory-overview
-         [:h2 "Vault Notes"]
-         (if (seq notes)
-           (vault-note-groups system notes)
-	           [:div.empty-line "none"])]
-        (memory-update-list updates)
-        (when (or (= (count notes) limit) (= (count updates) update-limit))
-          [:button.chat-history-more
-           {:type "button"
-            "data-on:click" (str "@get('/ui/memory?limit=" (min 100 (+ limit 20)) "')")}
-           "Load 20 older"])
-        (memory-reset-result reset-result)]]))))
+      [:section#memory-workspace.memory-workspace
+       (memory-tab-bar active-tab limit)
+       (case active-tab
+         :approvals (approvals-tab system limit reset-result)
+         :browser (browser-tab memory-service note-id)
+         (overview-tab memory-service))]))))

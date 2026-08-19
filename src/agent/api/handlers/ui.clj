@@ -549,10 +549,13 @@
             (recur))))))))
 
 (defn memory-workspace [system request]
-  (let [limit (request-ui-limit request 20 100)]
+  (let [limit (request-ui-limit request 20 100)
+        {:keys [tab note_id]} (-> request :parameters :query)]
     (responses/html-response
      200
-     (ui/memory-workspace-fragment system nil {:limit limit}))))
+     (ui/memory-workspace-fragment system nil {:limit limit
+                                               :tab tab
+                                               :note-id note_id}))))
 
 (defn memory-vault-detail [system _request note-id]
   (let [store (get-in system [:memory-service :store])
@@ -644,22 +647,27 @@
          :error (.getMessage e)
          :details (ex-data e)})))))
 
-(defn- memory-reset-response [system surface reset!]
-  (try
-    (responses/html-response
-     200
-     (ui/memory-workspace-fragment system
-                                   {:ok? true
-                                    :surface surface
-                                    :result (reset!)}))
-    (catch Exception e
+(defn- memory-reset-response
+  ([system surface reset!]
+   (memory-reset-response system surface reset! {}))
+  ([system surface reset! opts]
+   (try
+     (responses/html-response
+      200
+      (ui/memory-workspace-fragment system
+                                    {:ok? true
+                                     :surface surface
+                                     :result (reset!)}
+                                    opts))
+     (catch Exception e
       (responses/html-response
        200
        (ui/memory-workspace-fragment system
                                      {:ok? false
                                       :surface surface
                                       :error (.getMessage e)
-                                      :details (ex-data e)})))))
+                                      :details (ex-data e)}
+                                     opts))))))
 
 (defn memory-vault-reindex [system _request]
   (memory-reset-response system
@@ -678,7 +686,8 @@
                               (memory/update-vault-note-iris!
                                (:memory-service system)
                                (:path body)
-                               (select-keys body [:scope :status]))))))
+                               (select-keys body [:scope :status])))
+                           {:tab :approvals :limit 20})))
 
 (defn memory-vault-magi [system request]
   (let [{:keys [path action]} (h/read-form-body request)
@@ -689,7 +698,8 @@
                              system
                              path
                              {:apply? review?
-                              :source (if review? :manual :advice)}))))
+                              :source (if review? :manual :advice)})
+                           {:tab :approvals :limit 20})))
 
 (defn memory-vault-magi-update [system request]
   (let [{:keys [update_id action]} (h/read-form-body request)
@@ -700,7 +710,8 @@
                              system
                              update_id
                              {:apply? review?
-                              :source (if review? :manual :advice)}))))
+                              :source (if review? :manual :advice)})
+                           {:tab :approvals :limit 20})))
 
 (defn memory-vault-move [system request]
   (let [body (h/read-form-body request)]
@@ -709,7 +720,8 @@
                            #(memory/move-vault-note!
                              (:memory-service system)
                              (:path body)
-                             (:folder body)))))
+                             (:folder body))
+                           {:tab :approvals :limit 20})))
 
 (defn list-tool-approvals [system request]
   (let [limit (request-ui-limit request)]

@@ -507,48 +507,72 @@
                  "---\n\n"
                  "Approved note body\n"))
       (memory/reindex-vault! memory-service)
-      (let [html (ui/memory-workspace-fragment {:store store
-                                                :memory-service memory-service
-                                                :magi-service {:config {:enabled? true
-                                                                        :memory-promotion {:mode :manual
-                                                                                           :scopes #{:all}}}}})]
-        (is (str/includes? html "Memory Tool"))
-        (is (str/includes? html "/ui/memory/tool"))
-	        (is (not (str/includes? html "Reset facts")))
-	        (is (not (str/includes? html "/ui/memory/facts/reset")))
-	        (is (str/includes? html "Memory Recall"))
-	        (is (str/includes? html "Audit &amp; Reindex"))
-	        (is (str/includes? html "/ui/memory/vault/reindex"))
-	        (is (str/includes? html "/ui/memory/vault/move"))
-	        (is (str/includes? html "/ui/memory/vault/magi"))
-	        (is (str/includes? html ">Review</button>"))
-	        (is (str/includes? html ">Advice</button>"))
-	        (is (str/includes? html "vault-search"))
-        (is (not (str/includes? html "write-vault")))
-        (is (not (str/includes? html "read-vault")))
-        (is (str/includes? html "Scratchpad"))
-        (is (str/includes? html "scratchpad-read"))
-        (is (str/includes? html "scratchpad-replace"))
-        (is (str/includes? html "expected_revision"))
-        (is (str/includes? html "old_text"))
-        (is (str/includes? html "new_text"))
-	        (is (str/includes? html "workspace-grid memory-workspace"))
-        (is (str/includes? html "memory-left-stack"))
-        (is (str/includes? html "memory-right-stack"))
-        (is (str/includes? html ">Candidates</h3>"))
-        (is (str/includes? html ">Approved</h3>"))
-        (is (str/includes? html "memory-note-card"))
-        (is (str/includes? html "memory-note-actions"))
-        (is (str/includes? html "Source details"))
-        (is (str/includes? html "/ui/memory/vault/mem_ui/detail"))
-        (is (not (str/includes? html "memory-source-details")))
+      (let [system {:store store
+                    :memory-service memory-service
+                    :magi-service {:config {:enabled? true
+                                            :memory-promotion {:mode :manual
+                                                               :scopes #{:all}}}}}
+            overview-html (ui/memory-workspace-fragment system)
+            approvals-html (ui/memory-workspace-fragment system nil
+                                                          {:limit 20 :tab :approvals})
+            browser-html (ui/memory-workspace-fragment system nil
+                                                        {:limit 20
+                                                         :tab :browser
+                                                         :note-id "mem_ui_approved"})]
+        (testing "second-level navigation"
+          (doseq [label ["Overview" "Approvals" "Browser"]]
+            (is (str/includes? overview-html (str ">" label "</button>"))))
+          (is (str/includes? overview-html "role=\"tablist\""))
+          (is (str/includes? overview-html "memory-tab--active")))
+        (testing "overview"
+          (is (str/includes? overview-html "Memory Tool"))
+          (is (str/includes? overview-html "/ui/memory/tool"))
+          (is (not (str/includes? overview-html "Reset facts")))
+          (is (not (str/includes? overview-html "/ui/memory/facts/reset")))
+          (is (str/includes? overview-html "Memory Recall"))
+          (is (str/includes? overview-html "Audit &amp; Reindex"))
+          (is (str/includes? overview-html "/ui/memory/vault/reindex"))
+          (is (str/includes? overview-html "vault-search"))
+          (is (not (str/includes? overview-html "write-vault")))
+          (is (not (str/includes? overview-html "read-vault")))
+          (is (str/includes? overview-html "Scratchpad"))
+          (is (str/includes? overview-html "scratchpad-read"))
+          (is (str/includes? overview-html "scratchpad-replace"))
+          (is (str/includes? overview-html "expected_revision"))
+          (is (str/includes? overview-html "old_text"))
+          (is (str/includes? overview-html "new_text"))
+          (is (str/includes? overview-html "memory-tab-grid"))
+          (is (not (str/includes? overview-html "memory-note-card"))))
+        (testing "approvals"
+          (is (str/includes? approvals-html "Memory Approvals"))
+          (is (str/includes? approvals-html "/ui/memory/vault/move"))
+          (is (str/includes? approvals-html "/ui/memory/vault/magi"))
+          (is (str/includes? approvals-html ">Review</button>"))
+          (is (str/includes? approvals-html ">Advice</button>"))
+          (is (str/includes? approvals-html ">Candidates</h3>"))
+          (is (str/includes? approvals-html ">Approved</h3>"))
+          (is (str/includes? approvals-html "memory-note-card"))
+          (is (str/includes? approvals-html "memory-note-actions"))
+          (is (str/includes? approvals-html "Source details"))
+          (is (str/includes? approvals-html "/ui/memory/vault/mem_ui/detail"))
+          (is (not (str/includes? approvals-html "memory-source-details"))))
+        (testing "file browser"
+          (is (str/includes? browser-html "Memory Files"))
+          (is (str/includes? browser-html "inbox"))
+          (is (str/includes? browser-html "preferences"))
+          (is (str/includes? browser-html "note.md"))
+          (is (str/includes? browser-html "approved.md"))
+          (is (str/includes? browser-html "memory-tree-file--active"))
+          (is (str/includes? browser-html "Approved UI note"))
+          (is (str/includes? browser-html "Approved note body"))
+          (is (str/includes? browser-html "Raw source")))
         (let [detail-html (ui-memory/vault-note-detail-fragment
                            (sqlite/get-vault-note-by-id store "mem_ui_approved")
                            nil)]
           (is (str/includes? detail-html "memory-source-details"))
           (is (str/includes? detail-html "Stable interface preference")))
-        (is (not (str/includes? html "source json")))
-        (is (not (str/includes? html "memory-facts"))))
+        (is (not (str/includes? overview-html "source json")))
+        (is (not (str/includes? overview-html "memory-facts"))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file root true)

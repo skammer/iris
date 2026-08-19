@@ -57,6 +57,12 @@
 (def ^:private progressive-limit-query
   [:map [:limit {:optional true} :string]])
 
+(def ^:private memory-query
+  [:map
+   [:limit {:optional true} :string]
+   [:tab {:optional true} :string]
+   [:note_id {:optional true} :string]])
+
 (def ^:private cron-query
   [:map
    [:limit {:optional true} :string]
@@ -121,7 +127,7 @@
    ["/ui/magi/:event-id/detail" {:get {:handler/id :ui-magi-detail}}]
    ["/ui/events/live" {:get {:handler/id :ui-events-live}}]
    ["/ui/memory" {:get {:handler/id :ui-memory
-                          :parameters {:query progressive-limit-query}}}]
+                          :parameters {:query memory-query}}}]
    ["/ui/memory/vault/:note-id/detail" {:get {:handler/id :ui-memory-vault-detail}}]
    ["/ui/memory/updates/:update-id/detail" {:get {:handler/id :ui-memory-update-detail}}]
    ["/ui/memory/search" {:post {:handler/id :ui-memory-search
