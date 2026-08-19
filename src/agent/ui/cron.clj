@@ -248,13 +248,14 @@
            [:small (or (:last-run-at job) "never")]]
           [:td [:span (name (keyword (get-in job [:notification :policy] :never)))]
            [:small (target-label (:notification job))]]
-          [:td.cron-actions
-           (if (= :active (:status job))
-             (action-form job "pause" "Pause")
-             (action-form job "resume" "Resume"))
-           (edit-job-button job "Edit" "btn-small")
-           (action-form job "run" "Run now")
-           (action-form job "delete" "Delete")]])
+          [:td
+           [:div.cron-actions
+            (if (= :active (:status job))
+              (action-form job "pause" "Pause")
+              (action-form job "resume" "Resume"))
+            (edit-job-button job "Edit" "btn-small")
+            (action-form job "run" "Run now")
+            (action-form job "delete" "Delete")]]])
        [:tr [:td {:colspan 7} "No cron jobs."]])]]])
 
 (defn- configured-model-pairs [system]

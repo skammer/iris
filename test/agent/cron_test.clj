@@ -60,6 +60,8 @@
         (is (= 4 (count (re-seq #"role=\"tab\"" jobs-html))))
         (is (str/includes? jobs-html "Persistent schedules"))
         (is (str/includes? jobs-html "cron-job-link"))
+        (is (str/includes? jobs-html "<td><div class=\"cron-actions\">"))
+        (is (not (str/includes? jobs-html "<td class=\"cron-actions\">")))
         (is (str/includes? jobs-html "scrollIntoView"))
         (is (not (str/includes? jobs-html "Scheduler")))
         (is (not (str/includes? jobs-html "Recent runs")))
