@@ -365,7 +365,7 @@
           (fn [run]
             (let [result? (or (:error run) (:output run))]
               (cond->
-               [[:tr.cron-run-row
+               [[:tr.cron-run-row {:class (when result? "cron-run-row--has-result")}
                  [:td [:strong (subs (:id run) 0 8)] [:small (:scheduled-for run)]]
                  [:td (or (names (:job-id run)) (:job-id run))]
                  [:td (name (:trigger run))]

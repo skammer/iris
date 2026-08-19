@@ -66,6 +66,7 @@
         (is (not (str/includes? jobs-html "Scheduler")))
         (is (not (str/includes? jobs-html "Recent runs")))
         (is (str/includes? runs-html "Recent runs"))
+        (is (str/includes? runs-html "cron-run-row--has-result"))
         (is (str/includes? runs-html "cron-run-result-row"))
         (is (str/includes? runs-html "colspan=\"7\""))
         (is (str/includes? runs-html "cron-audit-links"))

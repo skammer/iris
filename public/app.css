@@ -4712,9 +4712,14 @@ button.row--link:focus-visible {
   text-underline-offset: 3px;
 }
 .cron-audit-links a:hover, .cron-audit-links a:focus-visible { color: var(--text-display); }
+.cron-run-row--has-result > td {
+  padding-bottom: 4px;
+  border-bottom: 0;
+}
 .cron-run-result-row > td {
   max-width: 0;
   padding: 0 12px 10px;
+  border-bottom-color: var(--border-visible);
   white-space: normal;
 }
 .cron-run-result summary {
