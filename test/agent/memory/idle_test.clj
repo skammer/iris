@@ -235,6 +235,24 @@
         (io/delete-file root true)
         (io/delete-file db-path true)))))
 
+(deftest idle-extraction-skips-ephemeral-sessions-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        store (sqlite/create-store {:path db-path})
+        session (sqlite/create-session! store "cron" {:kind :cron})
+        requests (atom [])
+        provider (->IdleProvider (atom [(json/generate-string {:notes []})]) requests (atom false))
+        system (test-system store root provider {})]
+    (try
+      (sqlite/append-message! store (:id session) "user" "cron transcript")
+      (is (= 0 (:processed (idle/run-once! system))))
+      (is (empty? @requests))
+      (is (nil? (sqlite/get-memory-extraction-state store (:id session))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
 (deftest idle-extraction-failure-does-not-advance-watermark-test
   (let [db-path (temp-db-path)
         root (temp-dir)

@@ -274,7 +274,7 @@
         (io/delete-file root true)
         (io/delete-file db-path true)))))
 
-(deftest auto-negative-verdict-keeps-candidate-and-dedupes-test
+(deftest auto-negative-verdict-rejects-candidate-test
   (let [db-path (temp-db-path)
         root (temp-dir)
         store (sqlite/create-store {:path db-path})
@@ -285,14 +285,14 @@
       (review/review-note! system (.getCanonicalPath file)
                            {:apply? false :source :advice})
       (is (= 1 (:processed (review/run-once! system))))
-      (is (= "candidate"
+      (is (= "rejected"
              (:iris-status (first (sqlite/list-vault-notes store {:limit 10})))))
       (is (= 0 (:processed (review/run-once! system))))
       (spit file (str/replace (slurp file)
                               "description: User prefers concise answers."
                               "description: User strongly prefers concise answers."))
       (memory/reindex-vault! (:memory-service system))
-      (is (= 1 (:processed (review/run-once! system))))
+      (is (= 0 (:processed (review/run-once! system))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file root true)

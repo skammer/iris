@@ -19,6 +19,19 @@ from agent_events
 where id = :id
 limit 1
 
+-- :name list-memory-events-window :? :*
+select id, event_type, entity_type, entity_id, request_id, payload, created_at
+from agent_events
+where entity_type = 'session'
+  and entity_id = :session_id
+  and id > :after_id
+  and id <= :through_id
+  and event_type in ('agent-start', 'agent-end', 'tool-execution-end',
+                     'guardrail-blocked', 'chat.operation.failed',
+                     'session.title.updated')
+order by id asc
+limit :limit
+
 -- :name search-events-like :? :*
 select id, event_type, entity_type, entity_id, request_id, payload, created_at
 from agent_events

@@ -178,13 +178,42 @@
         (is (str/includes? content "message_id_end: \"m80\""))
         (is (str/includes? content "message_count: 80"))
         (is (= 1 (count (re-seq #"(?m)^  - type:" content))))
-        (is (str/includes? content "[evidence truncated 6000 chars]"))
-        (is (< (count content) 6000))
+        (is (str/includes? content "[evidence truncated 9200 chars]"))
+        (is (< (count content) 2200))
         (is (= 1 (sqlite/count-vault-notes store)))
         (is (empty? (filter #(= :vault_chunk (:surface %)) recall-results))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
+(deftest vault-cleanup-backs-up-compacts-and-indexes-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        approved (io/file root "inbox" "approved.md")
+        rejected (io/file root "inbox" "rejected.md")
+        store (sqlite/create-store {:path db-path})
+        backup-root (io/file (.getParentFile root) "memory-backups")
+        service (test-service store {:vault {:paths [(.getAbsolutePath root)] :writable? true}})]
+    (try
+      (.mkdirs (.getParentFile approved))
+      (spit approved "---\nid: mem_clean\ntype: Preference\ntitle: Clean me\niris:\n  scope: global\n  status: approved\n---\n\n# Clean me\n\nDurable fact.\n\n## Evidence\n\nlegacy transcript dump\n")
+      (spit rejected "---\nid: mem_rejected\ntype: Reference\ntitle: Reject me\niris:\n  scope: global\n  status: rejected\n---\n\nRejected.\n")
+      (memory/reindex-vault! service)
+      (let [result (memory/cleanup-vault! service {:apply? true})
+            moved (io/file root "preferences" "approved.md")]
+        (is (true? (:applied result)))
+        (is (= 1 (count (:backup-paths result))))
+        (is (.isDirectory (io/file (first (:backup-paths result)))))
+        (is (.isFile moved))
+        (is (not (.exists rejected)))
+        (is (not (str/includes? (slurp moved) "legacy transcript dump")))
+        (is (.isFile (io/file root "index.md")))
+        (is (= 1 (sqlite/count-vault-notes store))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (when (.exists backup-root) (io/delete-file backup-root true))
         (io/delete-file db-path true)))))
 
 (deftest memory-extraction-defaults-to-json-schema-output-test
@@ -940,7 +969,7 @@
             vault-results (filter #(= :vault_chunk (:surface %)) (:results recalled))]
         (is (= 2 (:indexed-files report)))
         (is (= 2 (:note-count report)))
-        (is (= 3 (:chunk-count report)))
+        (is (= 2 (:chunk-count report)))
         (is (= 1 (count vault-results)))
         (is (= "mem_concise" (get-in (first vault-results) [:source :note-id])))
         (is (str/includes? (:text (first vault-results)) "terse Russian"))
@@ -1035,7 +1064,7 @@
       (spit index-note "# Vault Index\n\nReserved file may omit OKF type.\n")
       (let [report (memory/reindex-vault! service)
             duplicate (first (:duplicate-ids report))]
-        (is (= 3 (:indexed-files report)))
+        (is (= 2 (:indexed-files report)))
         (is (= "mem_dup" (:id duplicate)))
         (is (= 2 (count (:paths duplicate))))
         (is (= #{:broken-link} (set (map :type (:broken-links report)))))

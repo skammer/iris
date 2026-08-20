@@ -25,8 +25,8 @@
 (def session-extract-transcript-chars 20000)
 (def default-existing-note-context-limit 8)
 (def existing-note-context-chars 1200)
-(def extraction-evidence-user-chars 4000)
-(def extraction-evidence-assistant-chars 1000)
+(def extraction-evidence-user-chars 800)
+(def extraction-evidence-assistant-chars 0)
 (def ^:private allowed-vault-statuses #{"candidate" "approved" "auto_session" "rejected" "superseded"})
 (def ^:private allowed-vault-scopes #{"global" "session" "agent" "project"})
 (def ^:private allowed-vault-move-roots #{"inbox" "preferences" "decisions" "projects"
@@ -279,6 +279,7 @@
       (let [candidates (sqlite/list-vault-chunk-embedding-candidates
                         (:store memory-service)
                         {:session-id (:session-id opts)
+                         :project-id (:project-id opts)
                          :limit (embedding-candidate-limit memory-service (:limit opts))})]
         (if-let [embedding (and (seq candidates)
                                 (query-embedding memory-service query))]
@@ -542,6 +543,150 @@
                           :entity-id (:path result)
                           :payload result})
       result)))
+
+(defn- inbox-path? [path]
+  (= "inbox" (some-> path io/file .getParentFile .getName str/lower-case)))
+
+(defn- note-index-entry [root path]
+  (let [relative (str (.relativize (.toPath (io/file root)) (.toPath (io/file path))))
+        title (or (:title (vault/note-change-values (slurp path)))
+                  (.getName (io/file path)))]
+    (str "- [" title "](" (str/replace relative "\\" "/") ")")))
+
+(defn generate-vault-indexes!
+  "Regenerate root and first-level folder indexes from physical note paths."
+  [memory-service]
+  (doseq [root (:vault-roots memory-service)]
+    (let [files (->> (file-seq (io/file root))
+                     (filter #(.isFile %))
+                     (filter #(str/ends-with? (str/lower-case (.getName %)) ".md"))
+                     (remove #(= "index.md" (str/lower-case (.getName %))))
+                     (sort-by #(.getCanonicalPath %))
+                     vec)
+          groups (group-by #(or (some-> % .getParentFile .getName) ".") files)]
+      (spit (io/file root "index.md")
+            (str "# Memory index\n\n"
+                 (str/join "\n" (map #(note-index-entry root (.getCanonicalPath %)) files))
+                 "\n"))
+      (doseq [[folder folder-files] groups
+              :when (allowed-vault-move-roots folder)]
+        (spit (io/file root folder "index.md")
+              (str "# " (str/capitalize folder) "\n\n"
+                   (str/join "\n" (map #(note-index-entry (io/file root folder)
+                                                           (.getCanonicalPath %))
+                                         folder-files))
+                   "\n")))))
+  (reindex-vault! memory-service))
+
+(defn- copy-tree! [source target]
+  (doseq [file (file-seq (io/file source))]
+    (let [relative (.relativize (.toPath (io/file source)) (.toPath file))
+          destination (.resolve (.toPath (io/file target)) relative)]
+      (if (.isDirectory file)
+        (java.nio.file.Files/createDirectories
+         destination (make-array java.nio.file.attribute.FileAttribute 0))
+        (java.nio.file.Files/copy
+         (.toPath file) destination
+         (into-array java.nio.file.CopyOption
+                     [java.nio.file.StandardCopyOption/COPY_ATTRIBUTES]))))))
+
+(defn backup-vault! [memory-service]
+  (let [stamp (str/replace (util/now-str) #"[:.]" "-")]
+    (mapv (fn [root]
+            (let [root-file (io/file root)
+                  backup-root (io/file (.getParentFile root-file)
+                                       "memory-backups"
+                                       stamp
+                                       (.getName root-file))]
+              (copy-tree! root-file backup-root)
+              (.getCanonicalPath backup-root)))
+          (:vault-roots memory-service))))
+
+(defn cleanup-vault!
+  "Apply safe mechanical cleanup after an external backup: remove rejected
+   drafts, compact approved evidence/origins, move approved inbox notes, and
+   regenerate indexes. Exact-title duplicates are reported, never merged."
+  ([memory-service] (cleanup-vault! memory-service {}))
+  ([memory-service {:keys [apply?] :or {apply? false}}]
+   (when-not (:vault-writable? memory-service)
+     (throw (ex-info "Vault memory is read-only" {:type :vault-read-only})))
+   (let [notes (sqlite/list-vault-notes (:store memory-service) {:limit 10000})
+         rejected (filter #(= "rejected" (:iris-status %)) notes)
+         approved (filter #(= "approved" (:iris-status %)) notes)
+         inbox (filter #(inbox-path? (:path %)) approved)
+         duplicates (->> approved
+                         (group-by #(-> (or (:title %) "")
+                                        str/lower-case
+                                        (str/replace #"\s+" " ")
+                                        str/trim))
+                         (keep (fn [[title matches]]
+                                 (when (and (not (str/blank? title)) (< 1 (count matches)))
+                                   {:title title
+                                    :ids (mapv :id matches)
+                                    :paths (mapv :path matches)})))
+                         vec)
+         report {:rejected-count (count rejected)
+                 :approved-count (count approved)
+                 :approved-inbox-count (count inbox)
+                 :duplicate-groups duplicates}]
+     (if-not apply?
+       (assoc report :applied false)
+       (let [backup-paths (backup-vault! memory-service)]
+         (doseq [note rejected]
+           (java.nio.file.Files/deleteIfExists (.toPath (io/file (ensure-vault-path! memory-service (:path note))))))
+         (doseq [note approved
+                 :let [path (ensure-vault-path! memory-service (:path note))
+                       before (slurp path)
+                       compacted (vault/proposed-note-content before {} nil [])]
+                 :when (not= before compacted)]
+           (vault/replace-note-content! path (vault/content-revision before) compacted))
+         (doseq [note inbox
+                 :let [source (:path note)]
+                 :when (.isFile (io/file source))]
+           (let [folder (promotion-folder (:iris-scope note) (:type note))
+                 root (vault-root-for-path memory-service source)
+                 target (.getCanonicalPath (io/file root folder (.getName (io/file source))))]
+             (when (not= source target)
+               (vault/move-note! source target))))
+         (let [index-report (generate-vault-indexes! memory-service)
+               result (assoc report :applied true :backup-paths backup-paths :index index-report)]
+           (sqlite/log-event! (:store memory-service)
+                              {:event-type :memory.vault.cleaned
+                               :entity-type :system
+                               :entity-id "memory"
+                               :payload (dissoc result :index)})
+           result))))))
+
+(declare note-scope)
+
+(defn propose-vault-note-create!
+  "Create a review-only Vault Note candidate. Nothing becomes recallable until approval."
+  [memory-service note opts]
+  (when-not (:vault-writable? memory-service)
+    (throw (ex-info "Vault memory is read-only" {:type :vault-read-only})))
+  (doseq [field [:type :title :description :body]]
+    (when (str/blank? (or (get note field) ""))
+      (throw (ex-info "Memory create proposal is missing a required field"
+                      {:type :validation-failed :field field}))))
+  (let [result (vault/write-candidate-note!
+                memory-service
+                (merge note
+                       {:scope (note-scope memory-service note)
+                        :status "candidate"
+                        :origins (or (:origins opts)
+                                     [{:type (name (or (:source opts) :tool))
+                                       :session-id (:session-id opts)
+                                       :request-id (:request-id opts)}])
+                        :source-request-id (:request-id opts)
+                        :evidence (:evidence opts)}))]
+    (reindex-vault! memory-service)
+    (sqlite/log-event! (:store memory-service)
+                       {:event-type :memory.vault.create_proposed
+                        :entity-type :vault_note
+                        :entity-id (:id result)
+                        :request-id (:request-id opts)
+                        :payload result})
+    result))
 
 (def ^:private allowed-note-update-fields
   #{:type :title :description :body :tags :scope})
@@ -853,6 +998,7 @@
         event-ids (vec (:source-event-ids opts))]
     [(cond-> {:type (or (:source-type opts) "extraction")}
        (:session-id opts) (assoc :session-id (:session-id opts))
+       (:project-id opts) (assoc :project-id (:project-id opts))
        (:source-request-id opts) (assoc :request-id (:source-request-id opts))
        (seq message-ids) (assoc :message-id-start (first message-ids)
                                 :message-id-end (last message-ids)
@@ -867,8 +1013,9 @@
 (defn- note-evidence [exchange note]
   {:user (bounded-evidence (or (:evidence note) (:user-message exchange))
                            extraction-evidence-user-chars)
-   :assistant (bounded-evidence (:assistant-message exchange)
-                                extraction-evidence-assistant-chars)})
+   :assistant (when (pos? extraction-evidence-assistant-chars)
+                (bounded-evidence (:assistant-message exchange)
+                                  extraction-evidence-assistant-chars))})
 
 (defn- note-scope [memory-service note]
   (let [scope (or (:scope note)
@@ -955,17 +1102,21 @@
 
 (defn- save-extracted-memory!
   [memory-service exchange opts note]
-  (let [origins (note-origins opts)
+  (let [session (when-let [session-id (:session-id opts)]
+                  (sqlite/get-session (:store memory-service) session-id))
+        metadata (:metadata session)
+        project-id (or (:project-id metadata) (:project_id metadata) (:project metadata))
+        origins (note-origins (cond-> opts project-id (assoc :project-id (str project-id))))
         evidence (note-evidence exchange note)]
     (case (:operation note)
       "create"
-      (vault/write-candidate-note!
-       memory-service
-       (merge note
-              {:scope (note-scope memory-service note)
-               :origins origins
-               :source-request-id (:source-request-id opts)
-               :evidence evidence}))
+      (propose-vault-note-create!
+       memory-service note
+       {:source (or (:source-type opts) :extraction)
+        :session-id (:session-id opts)
+        :request-id (:source-request-id opts)
+        :origins origins
+        :evidence evidence})
 
       "update"
       (when (and (not (str/blank? (:target-id note)))
@@ -1021,12 +1172,13 @@
                                           :update-ids (mapv :id (remove :path saved))}}))
           saved)
         (catch Exception e
-          (sqlite/log-event! (:store memory-service)
-                             {:event-type :memory.notes.extraction_failed
-                              :entity-type :session
-                              :entity-id (:session-id opts)
-                              :request-id (:source-request-id opts)
-                              :payload {:message (.getMessage e)}})
+          (when-not (false? (:log-failure? opts))
+            (sqlite/log-event! (:store memory-service)
+                               {:event-type :memory.notes.extraction_failed
+                                :entity-type :session
+                                :entity-id (:session-id opts)
+                                :request-id (:source-request-id opts)
+                                :payload {:message (.getMessage e)}}))
           (when (:throw? opts)
             (throw e))
           [])))))

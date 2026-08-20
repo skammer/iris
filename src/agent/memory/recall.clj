@@ -100,6 +100,31 @@
                {:retrieval-score (:retrieval-score item)})
      :tags (:tags item)}))
 
+(def ^:private max-result-text-chars 1200)
+(def ^:private max-chunks-per-note 2)
+
+(defn- bounded-text [result]
+  (update result :text
+          (fn [value]
+            (let [value* (or value "")]
+              (if (> (count value*) max-result-text-chars)
+                (str (subs value* 0 max-result-text-chars) "\n[truncated]")
+                value*)))))
+
+(defn- diverse-top-results [results limit]
+  (second
+   (reduce (fn [[note-counts kept] result]
+             (let [note-id (when (= :vault_chunk (:surface result))
+                             (get-in result [:source :note-id]))
+                   allowed? (or (nil? note-id)
+                                (< (get note-counts note-id 0) max-chunks-per-note))]
+               (if (or (not allowed?) (>= (count kept) limit))
+                 [note-counts kept]
+                 [(cond-> note-counts note-id (update note-id (fnil inc 0)))
+                  (conj kept (bounded-text result))])))
+           [{} []]
+           (sort-by :score > results))))
+
 (defn recall
   "Return compact normalized recall records for chat/API/tool callers."
   ([memory-service query] (recall memory-service query {}))
@@ -107,12 +132,15 @@
    (let [started (System/nanoTime)
          search (memory/search-memory memory-service query opts)
          vault (memory/search-vault memory-service query opts)
-         results (vec (concat (map ranked->result (:ranked search))
-                              (map vault->result vault)))
+         limit (max 1 (long (or (:limit opts) 10)))
+         results (diverse-top-results
+                  (concat (map ranked->result (:ranked search))
+                          (map vault->result vault))
+                  limit)
          latency-ms (long (/ (- (System/nanoTime) started) 1000000))]
      (memory/record-recall-latency! memory-service latency-ms)
      {:query query
-      :limit (:limit opts)
+      :limit limit
       :latency-ms latency-ms
       :results results
       :surface-counts {:messages (count (:messages search))

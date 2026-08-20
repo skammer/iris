@@ -230,12 +230,16 @@
   ([store query {:keys [limit] :or {limit 20} :as opts}]
    (let [fts-query (common/fts5-query query)
          session-id (:session-id opts)
+         project-id (:project-id opts)
          params {:needle (when-not (str/blank? (or query ""))
                            (str "%" query "%"))
                  :query fts-query
                  :session_id session-id
                  :session_origin_needle (when session-id
                                           (str "%\"session_id\":\"" session-id "\"%"))
+                 :project_id project-id
+                 :project_origin_needle (when project-id
+                                          (str "%\"project_id\":\"" project-id "\"%"))
                  :limit (common/bounded-limit limit 20 100)}]
      (common/with-connection
        store
@@ -369,7 +373,7 @@
 
 (defn list-vault-chunk-embedding-candidates
   ([store] (list-vault-chunk-embedding-candidates store {}))
-  ([store {:keys [limit session-id] :or {limit 1000}}]
+  ([store {:keys [limit session-id project-id] :or {limit 1000}}]
    (common/with-connection
      store
      (fn [conn]
@@ -379,6 +383,9 @@
                                   {:session_id session-id
                                    :session_origin_needle (when session-id
                                                             (str "%\"session_id\":\"" session-id "\"%"))
+                                   :project_id project-id
+                                   :project_origin_needle (when project-id
+                                                            (str "%\"project_id\":\"" project-id "\"%"))
                                    :limit (common/bounded-limit limit 1000 10000)})
                                  identity))))))
 

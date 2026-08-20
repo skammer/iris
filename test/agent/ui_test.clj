@@ -598,7 +598,7 @@
           (is (str/includes? approvals-html ">Review</button>"))
           (is (str/includes? approvals-html ">Advice</button>"))
           (is (str/includes? approvals-html ">Candidates</h3>"))
-          (is (str/includes? approvals-html ">Approved</h3>"))
+          (is (not (str/includes? approvals-html ">Approved</h3>")))
           (is (str/includes? approvals-html "memory-note-card"))
           (is (str/includes? approvals-html "memory-note-actions"))
           (is (str/includes? approvals-html "Source details"))

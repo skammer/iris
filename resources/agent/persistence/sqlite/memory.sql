@@ -56,7 +56,10 @@ select c.chunk_id, c.path, c.heading, c.block_id, c.content_hash, c.text,
        n.content_hash as note_revision, n.updated_at
 from vault_chunks c
 join vault_note_index n on n.path = c.path
-where ((n.iris_status = 'approved' and n.iris_scope in ('global', 'project'))
+where ((n.iris_status = 'approved' and n.iris_scope = 'global')
+       or (n.iris_status = 'approved' and n.iris_scope = 'project'
+           and ((:project_id is not null and n.origins_json like :project_origin_needle)
+                or (:session_id is not null and n.origins_json like :session_origin_needle)))
        or (:session_id is not null
            and n.iris_scope = 'session'
            and n.iris_status in ('approved', 'auto_session')
@@ -81,7 +84,10 @@ from vault_chunks_fts
 join vault_chunks c on c.chunk_id = vault_chunks_fts.chunk_id
 join vault_note_index n on n.path = c.path
 where vault_chunks_fts match :query
-  and ((n.iris_status = 'approved' and n.iris_scope in ('global', 'project'))
+  and ((n.iris_status = 'approved' and n.iris_scope = 'global')
+       or (n.iris_status = 'approved' and n.iris_scope = 'project'
+           and ((:project_id is not null and n.origins_json like :project_origin_needle)
+                or (:session_id is not null and n.origins_json like :session_origin_needle)))
        or (:session_id is not null
            and n.iris_scope = 'session'
            and n.iris_status in ('approved', 'auto_session')
@@ -175,7 +181,10 @@ select c.chunk_id, c.path, c.heading, c.block_id, c.content_hash, c.text,
 from vault_chunk_embeddings e
 join vault_chunks c on c.chunk_id = e.chunk_id
 join vault_note_index n on n.path = c.path
-where ((n.iris_status = 'approved' and n.iris_scope in ('global', 'project'))
+where ((n.iris_status = 'approved' and n.iris_scope = 'global')
+       or (n.iris_status = 'approved' and n.iris_scope = 'project'
+           and ((:project_id is not null and n.origins_json like :project_origin_needle)
+                or (:session_id is not null and n.origins_json like :session_origin_needle)))
        or (:session_id is not null
            and n.iris_scope = 'session'
            and n.iris_status in ('approved', 'auto_session')
@@ -190,7 +199,9 @@ select m.session_id,
        max(m.created_at) as latest_message_created_at,
        sum(case when m.id > coalesce(s.last_processed_message_id, 0) then 1 else 0 end) as new_message_count
 from messages m
+join sessions chat_session on chat_session.id = m.session_id
 left join memory_extraction_state s on s.session_id = m.session_id
+where chat_session.kind = 'chat'
 group by m.session_id
 having max(m.created_at) <= :idle_before
    and sum(case when m.id > coalesce(s.last_processed_message_id, 0) then 1 else 0 end) > 0

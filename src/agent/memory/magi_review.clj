@@ -5,6 +5,7 @@
    [agent.memory.core :as memory]
    [agent.memory.vault :as vault]
    [agent.persistence.sqlite :as sqlite]
+   [agent.skills :as skills]
    [agent.util :as util]
    [clojure.string :as str])
   (:import
@@ -161,7 +162,27 @@
   (or (note-by-path system path)
       (throw (ex-info "Vault Note is no longer a candidate"
                       {:type :vault-note-not-candidate
-                       :path path}))))
+                      :path path}))))
+
+(defn apply-candidate!
+  "Approve a memory candidate. Skill candidates become active only here."
+  [system path scope]
+  (let [note (current-candidate! system path)]
+    (if (= "skill" (str/lower-case (or (:type note) "")))
+      (let [content (:content (memory/read-vault-file (:memory-service system) path))
+            skill-source (:body (vault/note-change-values content))
+            installed (skills/install-proposed-skill! (:skills-registry system) skill-source)]
+        (try
+          (let [promoted (memory/promote-vault-note! (:memory-service system) path {:scope scope})
+                _ (memory/update-vault-note-iris! (:memory-service system)
+                                                  (:path promoted) {:status :superseded})
+                archived (memory/move-vault-note! (:memory-service system)
+                                                  (:path promoted) "archive")]
+            (assoc archived :skill (select-keys installed [:name :description :path])))
+          (catch Exception e
+            (skills/uninstall-proposed-skill! (:skills-registry system) (:path installed))
+            (throw e))))
+      (memory/promote-vault-note! (:memory-service system) path {:scope scope}))))
 
 (defn review-note!
   [system path {:keys [apply? source] :or {apply? false source :advice}}]
@@ -183,11 +204,10 @@
                              (review-applies? system)
                              (= :yes decision))
           applied (when should-apply?
-                    (current-candidate! system path)
-                    (memory/promote-vault-note!
-                     (:memory-service system)
-                     path
-                     {:scope (:iris-scope note)}))
+                    (apply-candidate! system path (:iris-scope note)))
+          rejected (when (and apply? (= :no decision))
+                     (memory/update-vault-note-iris!
+                      (:memory-service system) path {:status :rejected}))
           payload {:source (name source)
                    :note (select-keys note [:id :path :type :title :description
                                             :tags :iris-scope :iris-confidence
@@ -202,7 +222,8 @@
                    :agents (:agents result)
                    :providers (:providers result)
                    :duration-ms duration-ms
-                   :applied (boolean applied)}]
+                   :applied (boolean applied)
+                   :status (cond applied "approved" rejected "rejected" :else "candidate")}]
       (emit! system {:event-type review-event-type
                      :entity-type :vault_note
                      :entity-id (or (:id note) (:path note))

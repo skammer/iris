@@ -22,14 +22,6 @@
    :min-confidence 0.85
    :include-events? true})
 
-(def ^:private selected-event-types
-  #{"agent-start"
-    "agent-end"
-    "tool-execution-end"
-    "guardrail-blocked"
-    "chat.operation.failed"
-    "session.title.updated"})
-
 (def ^:private user-message-max-chars 2400)
 (def ^:private assistant-message-max-chars 5000)
 (def ^:private other-message-max-chars 1200)
@@ -134,20 +126,20 @@
                     (util/truncate event-max-chars #(str " [truncated " % " chars]")))]
     (str "[event:" (:id event) "] " (:event-type event) " " payload)))
 
-(defn- selected-event? [event]
-  (contains? selected-event-types (:event-type event)))
-
 (defn- event-window [store session-id after-id through-id cfg]
   (if-not (:include-events? cfg)
-    []
-    (->> (sqlite/list-events store {:entity-type :session
-                                    :entity-id session-id
-                                    :after-id after-id
-                                    :limit (positive-long (:max-events cfg) 40 200)})
-         (filter #(<= (long (:id %)) (long through-id)))
-         (filter selected-event?)
-         (sort-by :id)
-         vec)))
+    {:events [] :watermark through-id}
+    (let [limit (positive-long (:max-events cfg) 40 200)
+          selected (sqlite/list-memory-events-window
+                    store {:session-id session-id
+                           :after-id after-id
+                           :through-id through-id
+                           :limit (inc limit)})
+          events (vec (take limit selected))]
+      {:events events
+       :watermark (if (> (count selected) limit)
+                    (:id (last events))
+                    through-id)})))
 
 (defn- transcript [messages events]
   (-> (str (str/join "\n\n" (map message-line messages))
@@ -193,7 +185,7 @@
                   {:after-id (:last-processed-message-id candidate)
                    :through-id (:latest-message-id candidate)
                    :limit (positive-long (:max-messages cfg) 80 200)})
-        events (event-window store session-id (:last-processed-event-id candidate) through-event-id cfg)
+        {:keys [events watermark]} (event-window store session-id (:last-processed-event-id candidate) through-event-id cfg)
         now (util/now-str)]
     (when (seq messages)
       (try
@@ -211,13 +203,14 @@
                       :extractor {:prompt "note-extraction-idle"}
                       :min-confidence (:min-confidence cfg)
                       :dedupe? true
+                      :log-failure? false
                       :throw? true})
               profile-result (when (user-profile/enabled? (:user-profile-service system))
                                (user-profile/learn-from-transcript!
                                 (:user-profile-service system)
                                 {:session-id session-id
                                  :transcript transcript*}))]
-          (mark-success! store session-id messages through-event-id saved now)
+          (mark-success! store session-id messages watermark saved now)
           (log-event! store {:event-type :memory.idle_extraction.completed
                              :entity-type :session
                              :entity-id session-id
@@ -227,7 +220,7 @@
                                        :note-count (count saved)
                                        :user-profile-updated? (true? (:updated? profile-result))
                                        :last-message-id (:id (last messages))
-                                       :last-event-id through-event-id}})
+                                       :last-event-id watermark}})
           (cond-> {:session-id session-id
                    :message-count (count messages)
                    :event-count (count events)

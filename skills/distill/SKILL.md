@@ -17,14 +17,15 @@ Workflow:
    runbooks, and Obsidian docs.
 2. Search recent session messages/events for repeated commands, failures, paths, and manual procedures.
 3. Confirm candidates against real traces, not memory-only summaries.
-4. Prefer extending an existing skill with `fs_replace` over creating a duplicate.
-5. For a new Iris skill, use `fs_mkdir` then `fs_create` for user-managed
-   `~/skills/<name>/SKILL.md`; include YAML `name` and `description`. Do not
-   create it under deployed `~/.config/iris/skills`.
+4. Prefer proposing an update to an existing skill over creating a duplicate.
+5. Never write directly into an active skills directory. Call
+   `memory_propose_create` with type `Skill`; body must be complete `SKILL.md`
+   source including YAML `name` and `description`. Registration happens only
+   after MAGI/user approval.
 6. Package only workflows observed at least twice, or one costly workflow with
    explicit user instruction and verified steps. Include trigger, exact steps,
    verification, and stopping condition.
-7. Call `skills_list` after edits to verify registry reload.
+7. After approval, call `skills_list` to verify registry reload.
 8. Keep output compact: created/changed asset, evidence, caveats.
 
 Upstream reference prompt: `resources/prompts/imported/mimo-code/distill.txt`.

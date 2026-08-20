@@ -18,6 +18,7 @@
        (filter #(.exists %))
        (mapcat file-seq)
        (filter markdown-file?)
+       (remove #(= "index.md" (str/lower-case (.getName %))))
        (sort-by #(.getCanonicalPath %))
        vec))
 
@@ -97,10 +98,11 @@
          "# " title "\n\n"
          body* "\n\n"
          "## Evidence\n\n"
-         "### User\n\n"
-         (quote-block (:user evidence)) "\n\n"
-         "### Assistant\n\n"
-         (quote-block (:assistant evidence)) "\n")))
+         "### Source\n\n"
+         (quote-block (:user evidence))
+         (when-not (str/blank? (:assistant evidence))
+           (str "\n\n### Assistant\n\n" (quote-block (:assistant evidence))))
+         "\n")))
 
 (defn content-revision [content]
   (security/sha256-hex (or content "")))
@@ -274,6 +276,9 @@
           (seq current) (conj {:heading current-heading
                                :text (str/trim (str/join "\n" current))}))))))
 
+(defn- durable-index-body [body]
+  (first (str/split (or body "") #"(?m)^## Evidence\s*$" 2)))
+
 (defn- nonblank-title [frontmatter file]
   (or (some-> (:title frontmatter) str str/trim not-empty)
       (some-> (.getName file) (str/replace #"\.md$" "") not-empty)))
@@ -315,7 +320,7 @@
         tags (vec (or (:tags frontmatter) (:tags scratchpad) []))
         metadata-text (str/join "\n" (remove str/blank? [title description
                                                          (str/join " " tags)]))
-        chunks (->> (chunks-by-heading body)
+        chunks (->> (chunks-by-heading (durable-index-body body))
                     (remove #(str/blank? (:text %)))
                     (mapv (fn [{:keys [heading text]}]
                             (let [text* (str/trim (str metadata-text "\n" text))
@@ -831,10 +836,6 @@
       (str/join "\n" (assoc lines 0 (str "# " title)))
       (str "# " title "\n\n" (or body "")))))
 
-(defn- evidence-section [body]
-  (when-let [idx (str/index-of (or body "") "\n## Evidence\n")]
-    (subs body idx)))
-
 (defn- durable-body [body]
   (let [without-evidence (if-let [idx (str/index-of (or body "") "\n## Evidence\n")]
                            (subs body 0 idx)
@@ -848,10 +849,11 @@
 (defn- update-evidence [evidence]
   (when (or (not (str/blank? (:user evidence)))
             (not (str/blank? (:assistant evidence))))
-    (str "\n\n### Update User\n\n"
+    (str "\n\n## Evidence\n\n"
+         "### Source\n\n"
          (quote-block (:user evidence))
-         "\n\n### Update Assistant\n\n"
-         (quote-block (:assistant evidence)))))
+         (when-not (str/blank? (:assistant evidence))
+           (str "\n\n### Assistant\n\n" (quote-block (:assistant evidence)))))))
 
 (defn proposed-note-content
   "Build a full approved note revision from partial structured changes while
@@ -869,14 +871,19 @@
         current-title (or (get-in parsed [:frontmatter :title]) "Memory note")
         title (or (:title changes) current-title)
         current-body (str/join "\n" body-lines)
-        preserved-evidence (evidence-section current-body)
         body-base (if (contains? changes :body)
-                    (str "# " title "\n\n" (str/trim (or (:body changes) ""))
-                         (or preserved-evidence "\n\n## Evidence\n"))
-                    (replace-note-heading current-body title))
+                    (str "# " title "\n\n" (str/trim (or (:body changes) "")))
+                    (replace-note-heading
+                     (if-let [idx (str/index-of current-body "\n## Evidence\n")]
+                       (subs current-body 0 idx)
+                       current-body)
+                     title))
         body (str (str/trimr body-base) (or (update-evidence evidence) "") "\n")
-        combined-origins (vec (concat (or (get-in parsed [:frontmatter :iris :origins]) [])
-                                      (or origins [])))
+        combined-origins (->> (concat (or (get-in parsed [:frontmatter :iris :origins]) [])
+                                      (or origins []))
+                              distinct
+                              (take-last 8)
+                              vec)
         frontmatter* (-> (update-top-level-frontmatter frontmatter-lines changes)
                          (upsert-iris-frontmatter {:scope (or (:scope changes)
                                                              (get-in parsed [:frontmatter :iris :scope])

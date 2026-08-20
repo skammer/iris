@@ -38,10 +38,10 @@ Workflow:
    - preserve concise evidence and origin ranges, never transcript dumps.
 5. Distill recent chats when a workflow is repeated and verified:
    - call `skills_list`, then read relevant `SKILL.md` files;
-   - extend an existing skill with `fs_replace` when it already owns the topic;
-   - otherwise create user-managed `~/skills/<name>/SKILL.md` using
-     `fs_mkdir` + `fs_create`; do not place generated skills in deployed
-     `~/.config/iris/skills`;
+   - propose an update when an existing skill already owns the topic;
+   - otherwise call `memory_propose_create` with type `Skill` and complete
+     `SKILL.md` source; never write into an active skills directory;
+   - register drafts only after MAGI/user approval;
    - require YAML `name` and `description`, narrow trigger, exact procedure,
      verification, and stopping condition;
    - create nothing when evidence is weak, one-off, sensitive, or duplicated.

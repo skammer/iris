@@ -61,6 +61,20 @@
       (some-> (common/select-one conn (get-event-sqlvec {:id id}) identity)
               row->event))))
 
+(defn list-memory-events-window
+  [store {:keys [session-id after-id through-id limit] :or {limit 40}}]
+  (common/with-connection
+    store
+    (fn [conn]
+      (mapv row->event
+            (common/select-many conn
+                                (list-memory-events-window-sqlvec
+                                 {:session_id session-id
+                                  :after_id (long (or after-id 0))
+                                  :through_id (long through-id)
+                                  :limit (common/bounded-limit limit 40 200)})
+                                identity)))))
+
 (defn search-events
   ([store query] (search-events store query {}))
   ([store query {:keys [limit entity-type entity-id] :or {limit 20}}]

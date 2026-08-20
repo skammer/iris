@@ -679,10 +679,8 @@
     (memory-reset-response system
                            "Vault note"
                            #(if (= "approved" (:status body))
-                              (memory/promote-vault-note!
-                               (:memory-service system)
-                               (:path body)
-                               (select-keys body [:scope]))
+                              (memory-magi-review/apply-candidate!
+                               system (:path body) (:scope body))
                               (memory/update-vault-note-iris!
                                (:memory-service system)
                                (:path body)

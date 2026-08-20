@@ -333,6 +333,39 @@
          "\n"
          (:diff update))))
 
+(defn create-memory-propose-create-tool [memory-service]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :memory_propose_create
+     "Draft a durable memory or Skill candidate for MAGI/user review. It is not indexed or activated before approval."
+     :category :memory
+     :input-schema [:map {:closed true}
+                    [:type :string]
+                    [:title :string]
+                    [:description :string]
+                    [:body :string]
+                    [:tags {:optional true} [:vector :string]]
+                    [:scope {:optional true} [:enum "global" "session" "agent" "project"]]
+                    [:confidence {:optional true} [:or :int :double]]
+                    [:reason :string]]
+     :operation :act
+     :approval-sensitive? false
+     :source :builtin)
+    :execute-fn
+    (fn [{:keys [reason] :as input} context]
+      (ensure-permission! context :memory-write)
+      (let [result (memory/propose-vault-note-create!
+                    memory-service
+                    (dissoc input :reason)
+                    {:source :tool
+                     :session-id (:session-id context)
+                     :request-id (:request-id context)
+                     :evidence {:user reason}})]
+        (str "Memory create proposal " (:id result)
+             " status=" (:status result)
+             " path=" (:path result))))}))
+
 (defn create-memory-propose-update-tool [memory-service]
   (tools/create-tool
    {:description
@@ -419,6 +452,7 @@
             (create-scratchpad-read-tool memory-service)
             (create-scratchpad-search-tool memory-service)
             (create-scratchpad-replace-tool memory-service)
+            (create-memory-propose-create-tool memory-service)
             (create-memory-propose-update-tool memory-service)]
      provider (conj (create-memory-extract-session-tool memory-service
                                                         provider

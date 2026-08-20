@@ -24,6 +24,20 @@
     (.delete skill-dir)
     (.delete root)))
 
+(deftest reviewed-skill-install-is-validated-and-visible-test
+  (let [root (temp-dir)
+        registry (skills/create-registry {:dirs [(.getAbsolutePath root)]})
+        content "---\nname: reviewed-skill\ndescription: Reviewed workflow\n---\n# Reviewed\n\nDo verified work.\n"
+        installed (skills/install-proposed-skill! registry content)]
+    (try
+      (is (= "reviewed-skill" (:name installed)))
+      (is (= ["reviewed-skill"] (mapv :name (skills/skill-catalog registry))))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"already exists"
+                            (skills/install-proposed-skill! registry content)))
+      (finally
+        (skills/uninstall-proposed-skill! registry (:path installed))
+        (.delete root)))))
+
 (deftest loads-folded-frontmatter-description-test
   (let [root (temp-dir)
         skill-dir (io/file root "searcharvester-fallback")]

@@ -3,6 +3,7 @@
   (:require
    [agent.chat.util :as util]
    [agent.memory.recall :as recall]
+   [agent.persistence.sqlite :as sqlite]
    [agent.prompts :as prompts]
    [cheshire.core :as json]
    [clojure.string :as str]))
@@ -21,24 +22,27 @@
   "Serializes recalled memory to JSON, capped at memory-max-chars to keep
    recall payloads bounded."
   [value]
-  (let [text (json/generate-string value)]
-    (if (> (count text) memory-max-chars)
-      (json/generate-string {:truncated true
-                             :max-chars memory-max-chars
-                             :preview (subs text 0 memory-max-chars)})
-      text)))
+  (loop [value* value]
+    (let [text (json/generate-string value*)]
+      (cond
+        (<= (count text) memory-max-chars) text
+        (seq (:results value*)) (recur (update value* :results pop))
+        :else (json/generate-string (assoc value* :truncated true :results []))))))
 
 (defn recall-memory [system session-id query request-id]
   (try
     (if-let [memory-service (:memory-service system)]
       (if-not (str/blank? (or query ""))
-        (recall/recall memory-service
-                       query
-                       {:limit memory-result-limit
-                        :session-id session-id
-                        :entity-type :session
-                        :entity-id session-id
-                        :scope {:type :session :id session-id}})
+        (let [metadata (:metadata (sqlite/get-session (:store system) session-id))
+              project-id (or (:project-id metadata) (:project_id metadata) (:project metadata))]
+          (recall/recall memory-service
+                         query
+                         (cond-> {:limit memory-result-limit
+                                  :session-id session-id
+                                  :entity-type :session
+                                  :entity-id session-id
+                                  :scope {:type :session :id session-id}}
+                           project-id (assoc :project-id (str project-id)))))
         empty-recall)
       empty-recall)
     (catch Exception e

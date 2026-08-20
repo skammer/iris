@@ -491,7 +491,8 @@
 
 (defn- approvals-tab [system limit reset-result]
   (let [memory-service (:memory-service system)
-        notes (sqlite/list-vault-notes (:store memory-service) {:limit limit})
+        notes (sqlite/list-vault-notes (:store memory-service)
+                                       {:status "candidate" :limit limit})
         update-limit (min 20 limit)
         updates (sqlite/list-memory-note-updates (:store memory-service)
                                                  {:status "pending" :limit update-limit})]

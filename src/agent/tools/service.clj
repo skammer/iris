@@ -37,7 +37,8 @@
   {:fs #{:fs_read :fs_write :fs_create :fs_replace :fs_list :fs_delete :fs_mkdir}
    :memory #{:memory_recall :vault_search
              :scratchpad_read :scratchpad_search :scratchpad_replace
-             :memory_propose_update :memory_extract_session :message_search :message_get}
+             :memory_propose_create :memory_propose_update :memory_extract_session
+             :message_search :message_get}
    :skills #{:skills_list :skills_read}
    :todo #{:todo_write :todo_get :todo_list :todo_search}})
 

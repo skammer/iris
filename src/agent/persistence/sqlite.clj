@@ -247,6 +247,9 @@
 (defn latest-event-id [store]
   (events/latest-event-id store))
 
+(defn list-memory-events-window [store opts]
+  (events/list-memory-events-window store opts))
+
 (defn search-events
   ([store query] (events/search-events store query))
   ([store query opts] (events/search-events store query opts)))

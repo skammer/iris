@@ -1263,9 +1263,11 @@
                                              :vault-chunks 0}}))
         json-text (subs content (count "Relevant memory JSON: "))
         parsed (json/parse-string json-text true)]
-    (is (true? (:truncated parsed)))
-    (is (= chat-memory/memory-max-chars (:max-chars parsed)))
-    (is (string? (:preview parsed)))))
+    (is (= "x" (:query parsed)))
+    (is (vector? (:results parsed)))
+    (is (< (count (:results parsed)) 1000))
+    (is (<= (count json-text) chat-memory/memory-max-chars))
+    (is (nil? (:preview parsed)))))
 
 (deftest chat-loop-streams-content-tokens-during-plan-step-test
   (let [path (temp-db-path)

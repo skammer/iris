@@ -129,6 +129,49 @@
    ;;                              :skills <list-skills result>}.
    :cache (atom nil)})
 
+(declare list-skills)
+
+(defn install-proposed-skill!
+  "Validate and atomically activate one reviewed SKILL.md draft. Never overwrites."
+  [registry content]
+  (let [[frontmatter body] (parse-frontmatter* content)
+        name (:name frontmatter)
+        description (:description frontmatter)
+        root (some-> (:dirs registry) last io/file)]
+    (when-not (and root (slash-command-name? name)
+                   (not (str/blank? description))
+                   (not (str/blank? body)))
+      (throw (ex-info "Invalid proposed SKILL.md"
+                      {:type :invalid-skill-proposal
+                       :name name
+                       :description-present? (not (str/blank? description))})))
+    (when (some #(= name (:name %)) (list-skills registry))
+      (throw (ex-info "Skill already exists; propose an update instead"
+                      {:type :skill-exists :name name})))
+    (let [dir (io/file root name)
+          file (io/file dir "SKILL.md")]
+      (when (.exists file)
+        (throw (ex-info "Skill target already exists"
+                        {:type :skill-exists :name name :path (.getAbsolutePath file)})))
+      (.mkdirs dir)
+      (spit file content)
+      (if-let [loaded (load-skill-file dir :filesystem)]
+        (do
+          (some-> (:cache registry) (reset! nil))
+          loaded)
+        (do
+          (io/delete-file file true)
+          (throw (ex-info "Proposed skill failed registry validation"
+                          {:type :invalid-skill-proposal :name name})))))))
+
+(defn uninstall-proposed-skill! [registry path]
+  (let [file (io/file path)
+        dir (.getParentFile file)]
+    (when (.isFile file) (io/delete-file file true))
+    (when (and dir (.isDirectory dir) (empty? (seq (.listFiles dir))))
+      (io/delete-file dir true))
+    (some-> (:cache registry) (reset! nil))))
+
 (defn- scan-skills [registry]
   (->> (:dirs registry)
        (mapcat #(load-skills-from-dir % :filesystem))
