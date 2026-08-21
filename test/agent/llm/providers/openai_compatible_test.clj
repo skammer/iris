@@ -745,9 +745,9 @@
 (deftest capabilities-use-model-metadata-test
   (let [llm (provider/create-openai-compatible-provider
              {:api-key "oa-key"
-              :config {:models {"plain" {}
-                                "vision" {:supports-vision true
-                                          :supports-audio true}}}})]
+              :models {"plain" {}
+                       "vision" {:supports-vision true
+                                 :supports-audio true}}})]
     (is (false? (:supports-vision (llm-core/get-capabilities llm "plain"))))
     (is (false? (:supports-audio (llm-core/get-capabilities llm "plain"))))
     (is (true? (:supports-tools (llm-core/get-capabilities llm "plain"))))

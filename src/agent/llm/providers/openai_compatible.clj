@@ -246,6 +246,7 @@
                                                    :top_p
                                                    :structured-output-format
                                                    :structured_output_format
+                                                   :models
                                                    :user
                                                    :extra-body])
                                      config)
