@@ -179,3 +179,13 @@
     (is (str/includes? section "### /iris-tools"))
     (is (str/includes? section "MAGI is for independent judgment"))
     (is (str/includes? section "scratchpad_replace"))))
+
+(deftest bundled-tavily-search-skill-test
+  (let [registry (skills/create-registry {:dirs ["skills"]})
+        names (set (map :name (skills/skill-catalog registry)))
+        section (skills/invoked-skills-section registry "/tavily-search")]
+    (is (contains? names "tavily-search"))
+    (is (str/includes? section "scripts/search.py"))
+    (is (str/includes? section "scripts/extract.py"))
+    (is (.isFile (io/file "skills/tavily-search/scripts/search.py")))
+    (is (.isFile (io/file "skills/tavily-search/scripts/extract.py")))))
