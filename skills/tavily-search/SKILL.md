@@ -6,8 +6,8 @@ description: Search the web with Tavily and extract clean Markdown from specific
 # Tavily Search and Extract
 
 Use `web_search` for current web research and `web_extract` to read a known page
-as clean Markdown. They route providers automatically. Do not fetch ordinary
-HTML with raw `http` when extraction is available.
+as clean Markdown. They try Tavily first and local Searcharvester second. Do not
+fetch ordinary HTML with raw `http` when extraction is available.
 
 The scripts below are operator fallbacks for direct Tavily access. Normal agent
 work should use the first-class tools.

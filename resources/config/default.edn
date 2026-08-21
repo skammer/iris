@@ -144,6 +144,7 @@
                  :max-redirects 3
                  :default-headers {"User-Agent" "iris/0.1"}}
          :web {:enabled true
+               :provider-order [:tavily :searchharvester]
                :timeout-ms 30000
                :max-response-bytes 1048576
                :extract-max-chars 7000

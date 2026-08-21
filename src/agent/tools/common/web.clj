@@ -1,7 +1,7 @@
 (ns agent.tools.common.web
-  "Provider-independent web search and clean page extraction. Routes local
-   Searcharvester first and falls back to Tavily without exposing provider
-   credentials to the model."
+  "Provider-independent web search and clean page extraction. Tries Tavily,
+   then local Searcharvester without exposing provider credentials or routing
+   controls to the model."
   (:require
    [agent.tools.common.http :as http-tool]
    [agent.tools.core :as tools]
@@ -14,6 +14,7 @@
 
 (def default-config
   {:enabled true
+   :provider-order [:tavily :searchharvester]
    :timeout-ms 30000
    :max-response-bytes 1048576
    :extract-max-chars 7000
@@ -59,9 +60,6 @@
         (nonblank (System/getenv "TAVILY_API_KEY"))
         (read-key-file (or (System/getenv "TAVILY_API_KEY_FILE")
                            (:api-key-file tavily))))))
-
-(defn- parse-provider [provider]
-  (keyword (str/lower-case (name (or provider :auto)))))
 
 (defn- parse-json-response! [config provider response]
   (let [status (long (or (:status response) 0))
@@ -176,24 +174,20 @@
 
     (throw (tools/validation-error "unsupported web provider" {:provider provider}))))
 
-(defn- route! [provider primary-fn fallback-fn]
-  (case provider
-    :auto
-    (try
-      (primary-fn)
-      (catch Exception primary-error
-        (try
-          (fallback-fn)
-          (catch Exception fallback-error
-            (throw (tools/tool-error
-                    :web-providers-failed
-                    "All configured web providers failed"
-                    {:primary-error (ex-message primary-error)
-                     :fallback-error (ex-message fallback-error)}))))))
-
-    :searchharvester (primary-fn)
-    :tavily (fallback-fn)
-    (throw (tools/validation-error "unsupported web provider" {:provider provider}))))
+(defn- route! [providers attempt-fn]
+  (letfn [(attempt [[provider & remaining] errors]
+            (when-not provider
+              (throw (tools/tool-error
+                      :web-providers-failed
+                      "All configured web providers failed"
+                      {:provider-errors errors})))
+            (try
+              (attempt-fn provider)
+              (catch Exception error
+                (attempt remaining
+                         (conj errors {:provider provider
+                                       :error (ex-message error)})))))]
+    (attempt providers [])))
 
 (defn normalize-url [url]
   (let [uri (URI. (str/trim url))
@@ -273,7 +267,7 @@
 
 (defn- cache-key [context input]
   [(:request-id context)
-   (select-keys input [:url :provider :size :query :chunks-per-source :max-chars])])
+   (select-keys input [:url :size :query :chunks-per-source :max-chars])])
 
 (defn- cache-get [cache key]
   (get-in @cache [:entries key]))
@@ -296,14 +290,13 @@
      {:description
       (tools/create-tool-description
        :web_search
-       "Search the public web. Uses Searcharvester first and Tavily as fallback; returns compact source snippets."
+       "Search the public web. Uses Tavily first and Searcharvester as fallback; returns compact source snippets."
        :category :web
        :timeout-ms (:timeout-ms config)
        :required-permissions #{:http-request}
        :input-schema [:map {:closed true}
                       [:query :string]
                       [:max-results {:optional true} [:int {:min 1 :max 20}]]
-                      [:provider {:optional true} [:enum "auto" "searchharvester" "tavily"]]
                       [:depth {:optional true} [:enum "basic" "advanced"]]
                       [:topic {:optional true} [:enum "general" "news" "finance"]]]
        :operation :read
@@ -315,18 +308,17 @@
         input)
       :health-fn
       (fn [] {:healthy true
-              :details {:providers {:searchharvester (true? (get-in config [:searchharvester :enabled]))
+              :details {:provider-order (:provider-order config)
+                        :providers {:searchharvester (true? (get-in config [:searchharvester :enabled]))
                                     :tavily (true? (get-in config [:tavily :enabled]))}}})
       :execute-fn
       (fn [input _context]
         (let [input* {:query (str/trim (:query input))
                       :max-results (long (or (:max-results input) 5))
-                      :provider (parse-provider (:provider input))
                       :depth (keyword (or (:depth input) "basic"))
                       :topic (keyword (or (:topic input) "general"))}]
-          (route! (:provider input*)
-                  #(search-with-provider! config :searchharvester input*)
-                  #(search-with-provider! config :tavily input*))))})))
+          (route! (:provider-order config)
+                  #(search-with-provider! config % input*))))})))
 
 (defn create-web-extract-tool [opts]
   (let [config (normalize-config opts)
@@ -335,13 +327,12 @@
      {:description
       (tools/create-tool-description
        :web_extract
-       "Extract clean Markdown from one public URL. Uses Searcharvester/Trafilatura first and Tavily advanced as fallback."
+       "Extract clean Markdown from one public URL. Uses Tavily advanced first and Searcharvester/Trafilatura as fallback."
        :category :web
        :timeout-ms (:timeout-ms config)
        :required-permissions #{:http-request}
        :input-schema [:map {:closed true}
                       [:url :string]
-                      [:provider {:optional true} [:enum "auto" "searchharvester" "tavily"]]
                       [:size {:optional true} [:enum "s" "m" "l"]]
                       [:query {:optional true} [:maybe :string]]
                       [:chunks-per-source {:optional true} [:int {:min 1 :max 5}]]
@@ -355,13 +346,13 @@
         (validate-extract-input config input))
       :health-fn
       (fn [] {:healthy true
-              :details {:providers {:searchharvester (true? (get-in config [:searchharvester :enabled]))
+              :details {:provider-order (:provider-order config)
+                        :providers {:searchharvester (true? (get-in config [:searchharvester :enabled]))
                                     :tavily (true? (get-in config [:tavily :enabled]))}
                         :cache-max-entries (:cache-max-entries config)}})
       :execute-fn
       (fn [input context]
         (let [input* {:url (:url input)
-                      :provider (parse-provider (:provider input))
                       :size (keyword (or (:size input) "m"))
                       :query (nonblank (:query input))
                       :chunks-per-source (long (or (:chunks-per-source input) 3))
@@ -369,9 +360,8 @@
               key (cache-key context input*)]
           (if-let [cached (cache-get cache key)]
             (assoc cached :cached true)
-            (let [result (route! (:provider input*)
-                                 #(extract-with-provider! config :searchharvester input*)
-                                 #(extract-with-provider! config :tavily input*))
+            (let [result (route! (:provider-order config)
+                                 #(extract-with-provider! config % input*))
                   result* (assoc result :cached false)]
               (cache-put! cache (:cache-max-entries config) key result*)))))})))
 

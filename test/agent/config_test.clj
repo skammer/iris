@@ -69,6 +69,8 @@
              (get-in cfg [:llm :providers :openai-compatible :models "gpt-4o-mini"])))
       (is (true? (get-in cfg [:tools :http :enabled])))
       (is (true? (get-in cfg [:tools :web :enabled])))
+      (is (= [:tavily :searchharvester]
+             (get-in cfg [:tools :web :provider-order])))
       (is (= "http://127.0.0.1:8000"
              (get-in cfg [:tools :web :searchharvester :base-url])))
       (is (= "https://api.tavily.com"
