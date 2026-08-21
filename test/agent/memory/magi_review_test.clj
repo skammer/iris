@@ -6,6 +6,7 @@
    [agent.memory.core :as memory]
    [agent.memory.magi-review :as review]
    [agent.persistence.sqlite :as sqlite]
+   [agent.skills :as skills]
    [cheshire.core :as json]
    [clojure.java.io :as io]
    [clojure.string :as str]
@@ -244,6 +245,42 @@
                   @requests)))
       (finally
         (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
+(deftest skill-update-proposal-stays-inactive-until-approved-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        skills-root (temp-dir)
+        store (sqlite/create-store {:path db-path})
+        requests (atom [])
+        registry (skills/create-registry {:dirs [(.getAbsolutePath skills-root)]})
+        before "---\nname: durable-workflow\ndescription: Old workflow\n---\n# Workflow\n\nOld steps.\n"
+        after "---\nname: durable-workflow\ndescription: New workflow\n---\n# Workflow\n\nNew steps.\n"
+        installed (skills/install-proposed-skill! registry before)
+        system (assoc (test-system store root :manual :yes requests)
+                      :skills-registry registry)]
+    (try
+      (let [proposal (memory/create-memory-proposal!
+                      (:memory-service system)
+                      {:operation :skill-update
+                       :target-id "durable-workflow"
+                       :target-path (:path installed)
+                       :base-revision (skills/content-revision before)
+                       :proposed-revision (skills/content-revision after)
+                       :changes {:skill-name "durable-workflow"}
+                       :proposed-content after
+                       :diff "skill diff"}
+                      {:source :test})]
+        (is (= before (slurp (:path installed))))
+        (is (= "applied" (:status (review/apply-proposal! system (:id proposal) "approved"))))
+        (is (= after (slurp (:path installed))))
+        (is (= "New workflow"
+               (:description (get (skills/skill-map registry) "durable-workflow")))))
+      (finally
+        (skills/uninstall-proposed-skill! registry (:path installed))
+        (sqlite/close-store! store)
+        (io/delete-file skills-root true)
         (io/delete-file root true)
         (io/delete-file db-path true)))))
 

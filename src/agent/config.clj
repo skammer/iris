@@ -175,9 +175,12 @@
                                      :allowed-actions {:http [:get :head]
                                                        :homeassistant [:get_state :get_states :list_states :search_states :list_services]}}
                       :cron-memory {:permissions [:memory-read :memory-write]
-                                    :allowed-tools [:memory_recall :vault_search :message_search :message_get
+                                    :allowed-tools [:memory_recall :vault_search :memory_find_similar
+                                                    :message_search :message_get
                                                     :memory_extract_session :memory_propose_create
-                                                    :memory_propose_update :skills_list :skills_read]}
+                                                    :memory_propose_update :memory_propose_move
+                                                    :memory_propose_delete :memory_propose_merge
+                                                    :skill_propose_update :skills_list :skills_read]}
                       :cron-automation {:permissions [:filesystem-read :filesystem-write :http-request :shell-exec]
                                         :allowed-tools [:fs_read :fs_list :fs_search :fs_write :http :shell]}}
            :policy {:allowlist []

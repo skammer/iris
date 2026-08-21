@@ -68,7 +68,8 @@
               :active_mode :active-mode
               :kind [:kind #(some-> % name)]
               :created_at :created-at}
-             {:metadata :metadata
+             {:project_id #(get-in % [:metadata :project-id])
+              :metadata :metadata
               :state [:state #(serialize % session-state-fields)]}))
 
 (defn message->response [message]

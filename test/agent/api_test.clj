@@ -452,6 +452,34 @@
         (api/stop-server! server)
         (io/delete-file path true)))))
 
+(deftest session-project-api-test
+  (let [path (temp-db-path)
+        port (free-port)
+        base-url (str "http://127.0.0.1:" port)
+        {:keys [server]} (started-test-system path port identity)]
+    (try
+      (let [create-response (http-post (str base-url "/v1/sessions")
+                                       {:title "project" :project_id "Alpha.One"})
+            created (json/parse-string (:body create-response) true)
+            session-id (:id created)
+            set-response (http-post (str base-url "/v1/sessions/" session-id "/project")
+                                    {:project_id "beta"})
+            set-body (json/parse-string (:body set-response) true)
+            clear-response (http-post (str base-url "/v1/sessions/" session-id "/project")
+                                      {:project_id nil})
+            clear-body (json/parse-string (:body clear-response) true)
+            invalid-response (http-post (str base-url "/v1/sessions/" session-id "/project")
+                                        {:project_id "bad project!"})]
+        (is (= 201 (:status create-response)))
+        (is (= "alpha.one" (:project_id created)))
+        (is (= "beta" (get-in set-body [:data :project_id])))
+        (is (= 200 (:status clear-response)))
+        (is (not (contains? (:data clear-body) :project_id)))
+        (is (= 400 (:status invalid-response))))
+      (finally
+        (api/stop-server! server)
+        (io/delete-file path true)))))
+
 (deftest chat-completions-accepts-rich-media-content-test
   (let [path (temp-db-path)
         port (free-port)

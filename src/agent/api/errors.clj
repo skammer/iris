@@ -53,6 +53,7 @@
    :invalid-memory-fact [400 "invalid_memory_fact"]
    :invalid-memory-fact-selector [400 "invalid_memory_fact_selector"]
    :invalid-memory-scope [400 "invalid_memory_scope"]
+   :invalid-project-id [400 "invalid_project_id"]
    :unknown-provider [404 "unknown_provider"]
    :entry-not-found [404 "entry_not_found"]
    :unknown-prompt-mode [400 "unknown_mode" unknown-prompt-mode-details]})

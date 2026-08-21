@@ -10,7 +10,7 @@
    (java.nio.charset StandardCharsets)
    (java.security MessageDigest)))
 
-(def latest-schema-version 11)
+(def latest-schema-version 12)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -69,6 +69,11 @@
     :id "011-restart-handoffs"
     :name "restart-handoffs"
     :up-resource "agent/persistence/sqlite/migrations/011-restart-handoffs.up.sql"
+    :irreversible? true}
+   {:version 12
+    :id "012-memory-proposal-operations"
+    :name "memory-proposal-operations"
+    :up-resource "agent/persistence/sqlite/migrations/012-memory-proposal-operations.up.sql"
     :irreversible? true}])
 
 (defn descriptor-by-version [version]

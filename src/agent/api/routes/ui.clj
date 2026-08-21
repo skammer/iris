@@ -3,7 +3,14 @@
    [agent.api.schemas :as schemas]))
 
 (def ^:private ui-create-session-form
-  [:map [:title {:optional true} :string]])
+  [:map
+   [:title {:optional true} :string]
+   [:project_id {:optional true} :string]])
+
+(def ^:private ui-session-project-form
+  [:map
+   [:session_id schemas/NonBlankString]
+   [:project_id {:optional true} :string]])
 
 (def ^:private ui-memory-search-form
   [:map [:query schemas/NonBlankString]])
@@ -25,11 +32,6 @@
    [:status {:optional true} :string]
    [:scope {:optional true} :string]])
 
-(def ^:private ui-memory-vault-move-form
-  [:map
-   [:path schemas/NonBlankString]
-   [:folder schemas/NonBlankString]])
-
 (def ^:private ui-memory-vault-magi-form
   [:map
    [:path schemas/NonBlankString]
@@ -39,6 +41,11 @@
   [:map
    [:update_id schemas/NonBlankString]
    [:action [:enum "review" "advice"]]])
+
+(def ^:private ui-memory-proposal-decision-form
+  [:map
+   [:proposal_id schemas/NonBlankString]
+   [:decision [:enum "apply" "reject"]]])
 
 (def ^:private ui-tool-approval-decision-form
   [:map
@@ -109,6 +116,8 @@
                            :parameters {:form ui-create-session-form}}}]
    ["/ui/session-detail" {:get {:handler/id :ui-session-detail
                                 :parameters {:query session-id-query}}}]
+   ["/ui/session/project" {:post {:handler/id :ui-session-project
+                                  :parameters {:form ui-session-project-form}}}]
    ["/ui/session-messages" {:get {:handler/id :ui-session-messages
                                   :parameters {:query session-messages-query}}}]
    ["/ui/session/live" {:get {:handler/id :ui-session-live
@@ -141,8 +150,9 @@
    ["/ui/memory/vault/magi-update"
     {:post {:handler/id :ui-memory-vault-magi-update
             :parameters {:form ui-memory-update-magi-form}}}]
-   ["/ui/memory/vault/move" {:post {:handler/id :ui-memory-vault-move
-                                    :parameters {:form ui-memory-vault-move-form}}}]
+   ["/ui/memory/proposals/decision"
+    {:post {:handler/id :ui-memory-proposal-decision
+            :parameters {:form ui-memory-proposal-decision-form}}}]
    ["/ui/memory/vault/reindex" {:post {:handler/id :ui-memory-vault-reindex}}]
    ["/ui/system/reload" {:post {:handler/id :ui-system-reload}}]
    ["/ui/tool-approvals" {:get {:handler/id :ui-tool-approvals

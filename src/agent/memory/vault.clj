@@ -79,11 +79,12 @@
          "  confidence: " (yaml-value (or confidence 0.7)) "\n"
          "  origins:\n"
          (apply str
-                (for [{:keys [type session-id message-id event-id request-id vault-path
+                (for [{:keys [type session-id project-id message-id event-id request-id vault-path
                               message-id-start message-id-end message-count
                               event-id-start event-id-end event-count]} origins]
                   (str "  - type: " (yaml-value type) "\n"
                        (when session-id (str "    session_id: " (yaml-value session-id) "\n"))
+                       (when project-id (str "    project_id: " (yaml-value project-id) "\n"))
                        (when message-id (str "    message_id: " (yaml-value message-id) "\n"))
                        (when event-id (str "    event_id: " (yaml-value event-id) "\n"))
                        (when message-id-start (str "    message_id_start: " (yaml-value message-id-start) "\n"))
@@ -322,14 +323,17 @@
                                                          (str/join " " tags)]))
         chunks (->> (chunks-by-heading (durable-index-body body))
                     (remove #(str/blank? (:text %)))
-                    (mapv (fn [{:keys [heading text]}]
+                    (map-indexed (fn [ordinal {:keys [heading text]}]
                             (let [text* (str/trim (str metadata-text "\n" text))
                                   content-hash (security/sha256-hex text*)]
-                              {:chunk-id (str "vault_chunk_" (subs (security/sha256-hex (str path "\n" content-hash)) 0 32))
+                              {:chunk-id (str "vault_chunk_" (subs (security/sha256-hex
+                                                                    (str path "\n" ordinal "\n" content-hash))
+                                                                   0 32))
                                :heading heading
                                :block-id (block-id text)
                                :content-hash content-hash
-                               :text text*}))))]
+                               :text text*})))
+                    vec)]
     {:path path
      :id (or (some-> (:id frontmatter) str)
              (:id scratchpad))
@@ -738,6 +742,7 @@
       ["  origins:"]
       (mapcat (fn [origin]
                 (let [session-id (or (:session-id origin) (:session_id origin))
+                      project-id (or (:project-id origin) (:project_id origin))
                       message-id (or (:message-id origin) (:message_id origin))
                       event-id (or (:event-id origin) (:event_id origin))
                       request-id (or (:request-id origin) (:request_id origin))
@@ -751,6 +756,7 @@
                   (remove nil?
                           [(str "  - type: " (yaml-value (:type origin)))
                            (when session-id (str "    session_id: " (yaml-value session-id)))
+                           (when project-id (str "    project_id: " (yaml-value project-id)))
                            (when message-id (str "    message_id: " (yaml-value message-id)))
                            (when event-id (str "    event_id: " (yaml-value event-id)))
                            (when message-id-start (str "    message_id_start: " (yaml-value message-id-start)))
@@ -830,21 +836,24 @@
           (vec lines)
           [:type :title :description :tags]))
 
-(defn- replace-note-heading [body title]
-  (let [lines (vec (str/split-lines (or body "")))]
+(defn- strip-leading-note-headings [body]
+  (loop [lines (drop-while str/blank? (str/split-lines (or body "")))]
     (if (and (seq lines) (str/starts-with? (first lines) "# "))
-      (str/join "\n" (assoc lines 0 (str "# " title)))
-      (str "# " title "\n\n" (or body "")))))
+      (recur (drop-while str/blank? (rest lines)))
+      (str/trim (str/join "\n" lines)))))
+
+(defn- replace-note-heading [body title]
+  (let [body* (strip-leading-note-headings body)]
+    (str "# " title
+         (when-not (str/blank? body*)
+           (str "\n\n" body*)))))
 
 (defn- durable-body [body]
   (let [without-evidence (if-let [idx (str/index-of (or body "") "\n## Evidence\n")]
                            (subs body 0 idx)
                            (or body ""))
-        lines (vec (str/split-lines (str/trim without-evidence)))
-        lines* (if (and (seq lines) (str/starts-with? (first lines) "# "))
-                 (subvec lines 1)
-                 lines)]
-    (str/trim (str/join "\n" lines*))))
+        body* (strip-leading-note-headings without-evidence)]
+    body*))
 
 (defn- update-evidence [evidence]
   (when (or (not (str/blank? (:user evidence)))

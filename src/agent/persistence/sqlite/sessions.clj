@@ -163,6 +163,17 @@
                          :title title}))))
   (get-session store session-id))
 
+(defn update-session-metadata!
+  [store session-id metadata]
+  (common/with-connection
+    store
+    (fn [conn]
+      (common/execute! conn
+                       (update-session-metadata-sqlvec
+                        {:id session-id
+                         :metadata_json (common/json-string (or metadata {}))}))))
+  (get-session store session-id))
+
 (defn session-exists? [store session-id]
   (common/with-connection
     store
@@ -388,7 +399,7 @@
 
 (defn search-messages
   ([store query] (search-messages store query {}))
-  ([store query {:keys [limit session-id include-tool-results? since until]
+  ([store query {:keys [limit session-id session-kind include-tool-results? since until]
                  :or {limit 20 include-tool-results? true}}]
    (let [fts-query (common/fts5-query query)]
      (common/with-connection
@@ -399,12 +410,14 @@
 	                                   (if fts-query
 	                                     (search-messages-fts-sqlvec {:query fts-query
 	                                                                   :session_id session-id
+	                                                                   :session_kind (some-> session-kind name)
 	                                                                   :since since
 	                                                                   :until until
 	                                                                   :include_tool_results (if include-tool-results? 1 0)
 	                                                                   :limit (common/bounded-limit limit 20 100)})
 	                                     (search-messages-like-sqlvec {:needle (str "%" (or query "") "%")
 	                                                                    :session_id session-id
+	                                                                    :session_kind (some-> session-kind name)
 	                                                                    :since since
 	                                                                    :until until
 	                                                                    :include_tool_results (if include-tool-results? 1 0)

@@ -150,6 +150,22 @@
       (finally
         (io/delete-file path true)))))
 
+(deftest sqlite-session-metadata-update-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        session (sqlite/create-session! store "project" {:metadata {:project-id "alpha"
+                                                                     :keep true}})]
+    (try
+      (is (= {:project-id "alpha" :keep true} (:metadata session)))
+      (is (= {:project-id "beta" :keep true}
+             (:metadata (sqlite/update-session-metadata!
+                         store (:id session) {:project-id "beta" :keep true}))))
+      (is (= "beta" (get-in (sqlite/get-session store (:id session))
+                             [:metadata :project-id])))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest sqlite-session-title-update-only-when-blank-test
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path})
@@ -320,6 +336,7 @@
             rows (sqlite/search-messages store ""
                                          {:since (:created-at first-message)
                                           :until (:created-at second-message)
+                                          :session-kind :chat
                                           :include-tool-results? false
                                           :limit 100})]
         (is (= [(:id first-message)] (mapv :id rows)))

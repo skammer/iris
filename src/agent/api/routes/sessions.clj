@@ -3,7 +3,12 @@
    [agent.api.schemas :as schemas]))
 
 (def ^:private create-session-body
-  [:map [:title {:optional true} :string]])
+  [:map
+   [:title {:optional true} :string]
+   [:project_id {:optional true} [:maybe :string]]])
+
+(def ^:private set-session-project-body
+  [:map [:project_id [:maybe :string]]])
 
 (def ^:private append-entry-body
   [:map
@@ -29,6 +34,8 @@
    ["/v1/sessions/:session-id" {:get {:handler/id :get-session}}]
    ["/v1/sessions/:session-id/mode" {:post {:handler/id :set-session-mode
                                             :parameters {:body set-session-mode-body}}}]
+   ["/v1/sessions/:session-id/project" {:post {:handler/id :set-session-project
+                                               :parameters {:body set-session-project-body}}}]
    ["/v1/sessions/:session-id/messages" {:get {:handler/id :list-session-messages}}]
    ["/v1/sessions/:session-id/entries" {:get {:handler/id :list-session-entries}
                                         :post {:handler/id :append-session-entry

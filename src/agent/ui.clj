@@ -361,7 +361,11 @@
                            :cron (sqlite/list-sessions store {:kind :cron})}
          sessions (get sessions-by-kind active-kind)
          active-id (or (:id selected-session)
-                       (some-> sessions first :id))]
+                       (some-> sessions first :id))
+         project-ids (->> (sqlite/list-sessions store {:kind :chat})
+                          (keep #(get-in % [:metadata :project-id]))
+                          distinct
+                          sort)]
      (ui-render/render
       [:aside#sessions-panel.panel.sessions-sidebar
        {"data-on-interval__duration.15s"
@@ -377,9 +381,19 @@
          "data-on:datastar-fetch" "evt.detail.el === el && evt.detail.type === 'finished' && el.reset()"
          "data-indicator" "createSessionLoading"}
         [:div.compact-form-row
+         [:input {:type "text"
+                  :name "project_id"
+                  :list "session-project-ids"
+                  :placeholder "Project (optional)"
+                  :maxlength "64"
+                  :pattern "[a-z0-9][a-z0-9._-]{0,63}"
+                  :autocomplete "off"}]
          [:button {:type "submit"
                    "data-attr:disabled" "$createSessionLoading"}
-          "New"]]]
+          "New"]]
+        [:datalist#session-project-ids
+         (for [project-id project-ids]
+           [:option {:value project-id}])]]
        [:div.session-sidebar-heading
         [:h2 "Sessions"]
         [:div.session-kind-tabs {:role "tablist" :aria-label "Session type"}
@@ -399,7 +413,7 @@
             [:span (str label " " (count (get sessions-by-kind kind)))]])]]
        (if (seq sessions)
          [:div.session-list
-          (for [{:keys [id title created-at]} sessions
+          (for [{:keys [id title created-at metadata]} sessions
                 :let [state (chat/session-state system id)]]
             [:button.session-link
              {:type "button"
@@ -409,7 +423,9 @@
              "data-on:click" (str "@get('/ui/session-detail?session_id=" id "')")}
              [:strong (or title "Untitled session")]
              [:div.session-meta
-              (str created-at
+              (str (when-let [project-id (:project-id metadata)]
+                     (str "project " project-id " | "))
+                   created-at
                    (when (:loop-active? state) " | loop")
                    (when (:working? state) " | working")
                    (when (pos? (:queued-count state))
@@ -452,6 +468,19 @@
           [:div.chat-titlebar
            [:h2 (or (:title session) "Untitled session")]
            [:span.meta.code (:id session)]
+           [:form.session-project-form
+            {"data-on:submit" "@post('/ui/session/project', {contentType: 'form', selector: 'form.session-project-form'})"}
+            [:input {:type "hidden" :name "session_id" :value (:id session)}]
+            [:input {:type "text"
+                     :name "project_id"
+                     :value (or (get-in session [:metadata :project-id]) "")
+                     :list "session-project-ids"
+                     :placeholder "No project"
+                     :maxlength "64"
+                     :pattern "[a-z0-9][a-z0-9._-]{0,63}"
+                     :autocomplete "off"
+                     :aria-label "Project ID"}]
+            [:button {:type "submit"} "Set"]]
            [:span.meta (str (or (:active-provider state) "-")
                             "/"
                             (or (:active-model state) "-")

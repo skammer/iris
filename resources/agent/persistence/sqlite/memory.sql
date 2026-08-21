@@ -58,8 +58,8 @@ from vault_chunks c
 join vault_note_index n on n.path = c.path
 where ((n.iris_status = 'approved' and n.iris_scope = 'global')
        or (n.iris_status = 'approved' and n.iris_scope = 'project'
-           and ((:project_id is not null and n.origins_json like :project_origin_needle)
-                or (:session_id is not null and n.origins_json like :session_origin_needle)))
+           and :project_id is not null
+           and n.origins_json like :project_origin_needle)
        or (:session_id is not null
            and n.iris_scope = 'session'
            and n.iris_status in ('approved', 'auto_session')
@@ -86,8 +86,8 @@ join vault_note_index n on n.path = c.path
 where vault_chunks_fts match :query
   and ((n.iris_status = 'approved' and n.iris_scope = 'global')
        or (n.iris_status = 'approved' and n.iris_scope = 'project'
-           and ((:project_id is not null and n.origins_json like :project_origin_needle)
-                or (:session_id is not null and n.origins_json like :session_origin_needle)))
+           and :project_id is not null
+           and n.origins_json like :project_origin_needle)
        or (:session_id is not null
            and n.iris_scope = 'session'
            and n.iris_status in ('approved', 'auto_session')
@@ -113,28 +113,33 @@ where id = :id
 
 -- :name insert-memory-note-update :! :n
 insert into memory_note_updates
-(id, target_id, target_path, base_revision, proposed_revision,
+(id, operation, target_id, target_path, secondary_target_id,
+ secondary_target_path, base_revision, secondary_base_revision, proposed_revision,
  changes_json, proposed_content, diff, evidence_json, source, status,
  decision, decision_reason, created_at, updated_at, decided_at)
 values
-(:id, :target_id, :target_path, :base_revision, :proposed_revision,
+(:id, :operation, :target_id, :target_path, :secondary_target_id,
+ :secondary_target_path, :base_revision, :secondary_base_revision, :proposed_revision,
  :changes_json, :proposed_content, :diff, :evidence_json, :source, :status,
  :decision, :decision_reason, :created_at, :updated_at, :decided_at)
 
 -- :name get-memory-note-update :? :1
-select id, target_id, target_path, base_revision, proposed_revision,
+select id, operation, target_id, target_path, secondary_target_id,
+       secondary_target_path, base_revision, secondary_base_revision, proposed_revision,
        changes_json, proposed_content, diff, evidence_json, source, status,
        decision, decision_reason, created_at, updated_at, decided_at
 from memory_note_updates
 where id = :id
 
 -- :name list-memory-note-updates :? :*
-select id, target_id, target_path, base_revision, proposed_revision,
+select id, operation, target_id, target_path, secondary_target_id,
+       secondary_target_path, base_revision, secondary_base_revision, proposed_revision,
        changes_json, proposed_content, diff, evidence_json, source, status,
        decision, decision_reason, created_at, updated_at, decided_at
 from memory_note_updates
 where (:status is null or status = :status)
   and (:target_id is null or target_id = :target_id)
+  and (:operation is null or operation = :operation)
 order by created_at asc
 limit :limit
 
@@ -183,8 +188,8 @@ join vault_chunks c on c.chunk_id = e.chunk_id
 join vault_note_index n on n.path = c.path
 where ((n.iris_status = 'approved' and n.iris_scope = 'global')
        or (n.iris_status = 'approved' and n.iris_scope = 'project'
-           and ((:project_id is not null and n.origins_json like :project_origin_needle)
-                or (:session_id is not null and n.origins_json like :session_origin_needle)))
+           and :project_id is not null
+           and n.origins_json like :project_origin_needle)
        or (:session_id is not null
            and n.iris_scope = 'session'
            and n.iris_status in ('approved', 'auto_session')

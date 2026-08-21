@@ -4,7 +4,11 @@
    UI, and prompt construction."
   (:require
    [clojure.java.io :as io]
-   [clojure.string :as str]))
+   [clojure.string :as str])
+  (:import
+   (java.nio.charset StandardCharsets)
+   (java.nio.file Files StandardCopyOption)
+   (java.security MessageDigest)))
 
 (def default-page-size 50)
 (def max-page-size 200)
@@ -129,22 +133,36 @@
    ;;                              :skills <list-skills result>}.
    :cache (atom nil)})
 
-(declare list-skills)
+(declare list-skills skill-map)
 
-(defn install-proposed-skill!
-  "Validate and atomically activate one reviewed SKILL.md draft. Never overwrites."
-  [registry content]
+(defn content-revision [content]
+  (let [digest (.digest (MessageDigest/getInstance "SHA-256")
+                        (.getBytes (str content) StandardCharsets/UTF_8))]
+    (apply str (map #(format "%02x" (bit-and (int %) 0xff)) digest))))
+
+(defn validate-proposed-skill! [content]
   (let [[frontmatter body] (parse-frontmatter* content)
         name (:name frontmatter)
-        description (:description frontmatter)
-        root (some-> (:dirs registry) last io/file)]
-    (when-not (and root (slash-command-name? name)
+        description (:description frontmatter)]
+    (when-not (and (slash-command-name? name)
                    (not (str/blank? description))
                    (not (str/blank? body)))
       (throw (ex-info "Invalid proposed SKILL.md"
                       {:type :invalid-skill-proposal
                        :name name
                        :description-present? (not (str/blank? description))})))
+    {:name name :description description :body body}))
+
+(defn install-proposed-skill!
+  "Validate and atomically activate one reviewed SKILL.md draft. Never overwrites."
+  [registry content]
+  (let [{:keys [name]} (validate-proposed-skill! content)
+        root (some-> (:dirs registry) last io/file)]
+    (when-not root
+      (throw (ex-info "Invalid proposed SKILL.md"
+                      {:type :invalid-skill-proposal
+                       :name name
+                       :description-present? true})))
     (when (some #(= name (:name %)) (list-skills registry))
       (throw (ex-info "Skill already exists; propose an update instead"
                       {:type :skill-exists :name name})))
@@ -163,6 +181,52 @@
           (io/delete-file file true)
           (throw (ex-info "Proposed skill failed registry validation"
                           {:type :invalid-skill-proposal :name name})))))))
+
+(defn update-proposed-skill!
+  "Atomically replace one existing skill after explicit proposal approval."
+  [registry skill-name expected-revision content]
+  (let [{proposed-name :name} (validate-proposed-skill! content)
+        skill (get (skill-map registry) skill-name)]
+    (when-not skill
+      (throw (ex-info "Skill not found" {:type :not-found :skill-name skill-name})))
+    (when-not (= skill-name proposed-name)
+      (throw (ex-info "Skill update cannot rename a skill"
+                      {:type :skill-rename-not-supported
+                       :skill-name skill-name
+                       :proposed-name proposed-name})))
+    (let [path (io/file (:path skill))
+          before (slurp path)
+          actual-revision (content-revision before)]
+      (when-not (= expected-revision actual-revision)
+        (throw (ex-info "Skill changed after proposal creation"
+                        {:type :stale-skill-revision
+                         :skill-name skill-name
+                         :expected-revision expected-revision
+                         :actual-revision actual-revision})))
+      (let [temp (Files/createTempFile (.toPath (.getParentFile path))
+                                       ".skill-update-"
+                                       ".md"
+                                       (make-array java.nio.file.attribute.FileAttribute 0))]
+        (try
+          (spit (.toFile temp) content)
+          (Files/move temp
+                      (.toPath path)
+                      (into-array java.nio.file.CopyOption
+                                  [StandardCopyOption/ATOMIC_MOVE
+                                   StandardCopyOption/REPLACE_EXISTING]))
+          (some-> (:cache registry) (reset! nil))
+          (let [updated (get (skill-map registry) skill-name)]
+            (when-not updated
+              (throw (ex-info "Updated skill failed registry validation"
+                              {:type :invalid-skill-proposal :skill-name skill-name})))
+            updated)
+          (catch Exception e
+            (when (.exists path)
+              (spit path before)
+              (some-> (:cache registry) (reset! nil)))
+            (throw e))
+          (finally
+            (Files/deleteIfExists temp)))))))
 
 (defn uninstall-proposed-skill! [registry path]
   (let [file (io/file path)

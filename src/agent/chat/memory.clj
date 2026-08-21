@@ -34,7 +34,7 @@
     (if-let [memory-service (:memory-service system)]
       (if-not (str/blank? (or query ""))
         (let [metadata (:metadata (sqlite/get-session (:store system) session-id))
-              project-id (or (:project-id metadata) (:project_id metadata) (:project metadata))]
+              project-id (:project-id metadata)]
           (recall/recall memory-service
                          query
                          (cond-> {:limit memory-result-limit

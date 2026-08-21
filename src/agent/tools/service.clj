@@ -35,9 +35,11 @@
 
 (def ^:private tool-family-aliases
   {:fs #{:fs_read :fs_write :fs_create :fs_replace :fs_list :fs_delete :fs_mkdir}
-   :memory #{:memory_recall :vault_search
+   :memory #{:memory_recall :vault_search :memory_find_similar
              :scratchpad_read :scratchpad_search :scratchpad_replace
-             :memory_propose_create :memory_propose_update :memory_extract_session
+             :memory_propose_create :memory_propose_update
+             :memory_propose_move :memory_propose_delete :memory_propose_merge
+             :skill_propose_update :memory_extract_session
              :message_search :message_get}
    :skills #{:skills_list :skills_read}
    :todo #{:todo_write :todo_get :todo_list :todo_search}})
@@ -279,7 +281,8 @@
                      registry*
                      (conj (memory-tool/create-memory-tools memory-service
                                                             (or note-llm-provider llm-provider)
-                                                            user-profile-service)
+                                                            user-profile-service
+                                                            skills-registry)
                            (memory-tool/create-message-search-tool memory-service)
                            (memory-tool/create-message-get-tool memory-service))))
 

@@ -93,6 +93,7 @@
                                        {:name "tavily-search"}
                                        {:permissions #{}})]
         (is (str/includes? result "# Skill /tavily-search"))
+        (is (str/includes? result "Revision: "))
         (is (str/includes? result "Run `~/tavily.sh`.")))
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"skill not found"

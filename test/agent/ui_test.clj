@@ -204,7 +204,26 @@
         (is (str/includes? html "evt.detail.el === el")
             "datastar-fetch fires on document for every fetch; detail.el is the only correct initiator guard")
         (is (str/includes? html "el.reset()"))
+        (is (str/includes? html "name=\"project_id\""))
+        (is (str/includes? html "Project (optional)"))
         (is (not (str/includes? html "new session title"))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest session-project-is-visible-and-editable-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [session (sqlite/create-session! store "project chat"
+                                            {:metadata {:project-id "alpha"}})
+            sidebar (ui/sessions-fragment {:store store} (:id session))
+            detail (ui/session-detail-fragment {:store store} (:id session))]
+        (is (str/includes? sidebar "project alpha |"))
+        (is (str/includes? sidebar "value=\"alpha\""))
+        (is (str/includes? detail "/ui/session/project"))
+        (is (str/includes? detail "name=\"project_id\""))
+        (is (str/includes? detail "value=\"alpha\"")))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
@@ -555,6 +574,9 @@
                  "---\n\n"
                  "Approved note body\n"))
       (memory/reindex-vault! memory-service)
+      (let [revision (:revision (sqlite/get-vault-note-by-id store "mem_ui_approved"))]
+        (memory/propose-vault-note-delete! memory-service "mem_ui_approved" revision
+                                           {:source :test}))
       (let [system {:store store
                     :memory-service memory-service
                     :magi-service {:config {:enabled? true
@@ -593,7 +615,7 @@
           (is (not (str/includes? overview-html "memory-note-card"))))
         (testing "approvals"
           (is (str/includes? approvals-html "Memory Approvals"))
-          (is (str/includes? approvals-html "/ui/memory/vault/move"))
+          (is (not (str/includes? approvals-html "/ui/memory/vault/move")))
           (is (str/includes? approvals-html "/ui/memory/vault/magi"))
           (is (str/includes? approvals-html ">Review</button>"))
           (is (str/includes? approvals-html ">Advice</button>"))
@@ -603,6 +625,11 @@
           (is (str/includes? approvals-html "memory-note-actions"))
           (is (str/includes? approvals-html "Source details"))
           (is (str/includes? approvals-html "/ui/memory/vault/mem_ui/detail"))
+          (is (str/includes? approvals-html "Operation Proposals"))
+          (is (str/includes? approvals-html "note delete"))
+          (is (str/includes? approvals-html "/ui/memory/proposals/decision"))
+          (is (str/includes? approvals-html ">Apply</button>"))
+          (is (str/includes? approvals-html ">Reject</button>"))
           (is (not (str/includes? approvals-html "memory-source-details"))))
         (testing "file browser"
           (is (str/includes? browser-html "Memory Files"))

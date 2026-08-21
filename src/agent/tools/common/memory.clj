@@ -4,6 +4,7 @@
    [agent.memory.recall :as recall]
    [agent.memory.user-profile :as user-profile]
    [agent.persistence.sqlite :as sqlite]
+   [agent.skills :as skills]
    [agent.tools.core :as tools]
    [agent.util :as util]
    [clojure.string :as str])
@@ -19,8 +20,8 @@
 (def ^:private scope-schema
   [:map {:closed true}
    [:type [:or
-           [:enum :global :session :agent]
-           [:enum "global" "session" "agent"]]]
+           [:enum :global :session :agent :project]
+           [:enum "global" "session" "agent" "project"]]]
    [:id {:optional true} [:maybe :string]]])
 
 (defn- ensure-permission! [context permission]
@@ -76,6 +77,12 @@
 
 (defn- message-search-limit [requested]
   (min (positive-int requested 20) max-message-search-limit))
+
+(defn- session-project-id [memory-service context]
+  (some->> (:session-id context)
+           (sqlite/get-session (:store memory-service))
+           :metadata
+           :project-id))
 
 (defn- first-match-index [query text]
   (let [query* (str/lower-case (str/trim (or query "")))
@@ -153,6 +160,25 @@
                       (truncate-text text max-line-chars)))
                results)))))
 
+(defn- similar-notes-text [candidates]
+  (if (empty? candidates)
+    "No similar approved memory notes found."
+    (str "Similar approved memory notes; lexical score is candidate generation only. Verify semantic equivalence before proposing a merge.\n"
+         (str/join
+          "\n"
+          (map (fn [{:keys [score score-breakdown scope scope-owner left right]}]
+                 (str "- score=" (format "%.3f" (double score))
+                      " scope=" scope
+                      (when scope-owner (str "/" scope-owner))
+                      " why=" (pr-str score-breakdown)
+                      "\n  left=" (:id left) " revision=" (:revision left)
+                      " title=" (pr-str (:title left))
+                      " body=" (pr-str (truncate-text (:body left) max-line-chars))
+                      "\n  right=" (:id right) " revision=" (:revision right)
+                      " title=" (pr-str (:title right))
+                      " body=" (pr-str (truncate-text (:body right) max-line-chars))))
+               candidates)))))
+
 (def ^:private scratchpad-scope-schema
   [:map {:closed true}
    [:type [:or [:enum :global :session] [:enum "global" "session"]]]
@@ -205,13 +231,15 @@
       (ensure-permission! context :memory-read)
       (if (str/blank? (or query ""))
         (recall-results-text query nil)
-        (let [results (:results
+        (let [project-id (session-project-id memory-service context)
+              results (:results
                        (recall/recall
                         memory-service
                         query
                         (cond-> {:limit (memory-tool-limit memory-service limit)}
                           scope (assoc :scope scope)
                           (:session-id context) (assoc :session-id (:session-id context))
+                          project-id (assoc :project-id project-id)
                           (:agent-id context) (assoc :agent-id (:agent-id context)))))]
           (recall-results-text query results))))}))
 
@@ -231,10 +259,35 @@
     :execute-fn
     (fn [{:keys [query limit]} context]
       (ensure-permission! context :memory-read)
-      (vault-search-text query
-                         (memory/search-vault memory-service query
-                                              (cond-> {:limit (memory-tool-limit memory-service limit)}
-                                                (:session-id context) (assoc :session-id (:session-id context))))))}))
+      (let [project-id (session-project-id memory-service context)]
+        (vault-search-text query
+                           (memory/search-vault memory-service query
+                                                (cond-> {:limit (memory-tool-limit memory-service limit)}
+                                                  (:session-id context) (assoc :session-id (:session-id context))
+                                                  project-id (assoc :project-id project-id))))))}))
+
+(defn create-memory-find-similar-tool [memory-service]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :memory_find_similar
+     "Find same-scope approved memory notes that may describe the same durable subject. Scores only shortlist candidates; inspect both notes before proposing merge."
+     :category :memory
+     :input-schema [:map {:closed true}
+                    [:threshold {:optional true} [:maybe [:or :int :double]]]
+                    [:limit {:optional true} [:maybe :int]]]
+     :operation :read
+     :parallel-safe? true
+     :source :builtin)
+    :execute-fn
+    (fn [{:keys [threshold limit]} context]
+      (ensure-permission! context :memory-read)
+      (similar-notes-text
+       (memory/similar-vault-notes
+        memory-service
+        (cond-> {}
+          threshold (assoc :threshold threshold)
+          limit (assoc :limit limit)))))}))
 
 (defn create-scratchpad-read-tool [memory-service]
   (tools/create-tool
@@ -325,13 +378,22 @@
   (if (:noop update)
     (str "Memory update is a no-op for " (:target-id update)
          " revision=" (:base-revision update))
-    (str "Memory update proposal " (:id update)
+    (str "Memory proposal " (:id update)
+         " operation=" (:operation update)
          " status=" (:status update)
          " target=" (:target-id update)
          " base=" (:base-revision update)
          " proposed=" (:proposed-revision update)
          "\n"
          (:diff update))))
+
+(defn- proposal-opts [memory-service context reason]
+  (cond-> {:source :tool
+           :request-id (:request-id context)
+           :session-id (:session-id context)
+           :evidence (update-evidence context reason)}
+    (session-project-id memory-service context)
+    (assoc :project-id (session-project-id memory-service context))))
 
 (defn create-memory-propose-create-tool [memory-service]
   (tools/create-tool
@@ -358,10 +420,7 @@
       (let [result (memory/propose-vault-note-create!
                     memory-service
                     (dissoc input :reason)
-                    {:source :tool
-                     :session-id (:session-id context)
-                     :request-id (:request-id context)
-                     :evidence {:user reason}})]
+                    (proposal-opts memory-service context reason))]
         (str "Memory create proposal " (:id result)
              " status=" (:status result)
              " path=" (:path result))))}))
@@ -389,11 +448,114 @@
         memory-service
         note-id
         expected-revision
-        changes
-        {:source :tool
-         :request-id (:request-id context)
-         :session-id (:session-id context)
-         :evidence (update-evidence context reason)})))}))
+       changes
+        (proposal-opts memory-service context reason))))}))
+
+(defn create-memory-propose-move-tool [memory-service]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :memory_propose_move
+     "Propose moving an approved memory note. Files stay unchanged until approval."
+     :category :memory
+     :input-schema [:map {:closed true}
+                    [:note-id :string]
+                    [:expected-revision :string]
+                    [:folder [:enum "inbox" "preferences" "decisions" "projects" "runbooks"
+                              "sessions" "references" "archive"]]
+                    [:reason :string]]
+     :operation :act :approval-sensitive? false :source :builtin)
+    :execute-fn
+    (fn [{:keys [note-id expected-revision folder reason]} context]
+      (ensure-permission! context :memory-write)
+      (memory-update-text
+       (memory/propose-vault-note-move! memory-service note-id expected-revision folder
+                                        (proposal-opts memory-service context reason))))}))
+
+(defn create-memory-propose-delete-tool [memory-service]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :memory_propose_delete
+     "Propose deleting an approved memory note. Files stay unchanged until approval."
+     :category :memory
+     :input-schema [:map {:closed true}
+                    [:note-id :string]
+                    [:expected-revision :string]
+                    [:reason :string]]
+     :operation :act :approval-sensitive? false :source :builtin)
+    :execute-fn
+    (fn [{:keys [note-id expected-revision reason]} context]
+      (ensure-permission! context :memory-write)
+      (memory-update-text
+       (memory/propose-vault-note-delete! memory-service note-id expected-revision
+                                          (proposal-opts memory-service context reason))))}))
+
+(defn create-memory-propose-merge-tool [memory-service]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :memory_propose_merge
+     "Propose merging two approved notes into target and deleting source after approval. Provide exact merged target fields."
+     :category :memory
+     :input-schema [:map {:closed true}
+                    [:target-id :string]
+                    [:source-id :string]
+                    [:expected-target-revision :string]
+                    [:expected-source-revision :string]
+                    [:changes memory-update-changes-schema]
+                    [:reason :string]]
+     :operation :act :approval-sensitive? false :source :builtin)
+    :execute-fn
+    (fn [{:keys [target-id source-id expected-target-revision expected-source-revision changes reason]} context]
+      (ensure-permission! context :memory-write)
+      (memory-update-text
+       (memory/propose-vault-note-merge!
+        memory-service target-id source-id expected-target-revision expected-source-revision changes
+        (proposal-opts memory-service context reason))))}))
+
+(defn create-skill-propose-update-tool [memory-service skills-registry]
+  (tools/create-tool
+   {:description
+    (tools/create-tool-description
+     :skill_propose_update
+     "Propose replacing an existing SKILL.md. Skill stays unchanged until approval."
+     :category :memory
+     :input-schema [:map {:closed true}
+                    [:skill-name :string]
+                    [:expected-revision :string]
+                    [:content :string]
+                    [:reason :string]]
+     :operation :act :approval-sensitive? false :source :builtin)
+    :execute-fn
+    (fn [{:keys [skill-name expected-revision content reason]} context]
+      (ensure-permission! context :memory-write)
+      (let [skill (get (skills/skill-map skills-registry) skill-name)
+            _ (when-not skill
+                (throw (ex-info "Skill not found" {:type :not-found :skill-name skill-name})))
+            _ (skills/validate-proposed-skill! content)
+            before (slurp (:path skill))
+            actual-revision (skills/content-revision before)]
+        (when-not (= expected-revision actual-revision)
+          (throw (ex-info "Skill revision changed"
+                          {:type :stale-skill-revision
+                           :skill-name skill-name
+                           :expected-revision expected-revision
+                           :actual-revision actual-revision})))
+        (memory-update-text
+         (memory/create-memory-proposal!
+          memory-service
+          {:operation :skill-update
+           :target-id skill-name
+           :target-path (:path skill)
+           :base-revision actual-revision
+           :proposed-revision (skills/content-revision content)
+           :changes {:skill-name skill-name}
+           :proposed-content content
+           :diff (str "SKILL UPDATE " skill-name "\n"
+                      "--- current\n" before "\n"
+                      "+++ proposed\n" content)}
+          (proposal-opts memory-service context reason)))))}))
 
 (defn- extract-session-text
   [{:keys [session-id total-message-count included-message-count note-count
@@ -447,13 +609,20 @@
   ([memory-service] (create-memory-tools memory-service nil))
   ([memory-service provider] (create-memory-tools memory-service provider nil))
   ([memory-service provider user-profile-service]
+   (create-memory-tools memory-service provider user-profile-service nil))
+  ([memory-service provider user-profile-service skills-registry]
    (cond-> [(create-memory-recall-tool memory-service)
             (create-vault-search-tool memory-service)
+            (create-memory-find-similar-tool memory-service)
             (create-scratchpad-read-tool memory-service)
             (create-scratchpad-search-tool memory-service)
             (create-scratchpad-replace-tool memory-service)
             (create-memory-propose-create-tool memory-service)
-            (create-memory-propose-update-tool memory-service)]
+            (create-memory-propose-update-tool memory-service)
+            (create-memory-propose-move-tool memory-service)
+            (create-memory-propose-delete-tool memory-service)
+            (create-memory-propose-merge-tool memory-service)]
+     skills-registry (conj (create-skill-propose-update-tool memory-service skills-registry))
      provider (conj (create-memory-extract-session-tool memory-service
                                                         provider
                                                         user-profile-service)))))
@@ -487,13 +656,14 @@
    {:description
     (tools/create-tool-description
      :message_search
-     "Search persisted user and assistant chat text. since is inclusive; until is exclusive. Both accept ISO-8601 UTC instants. Blank query lists messages in the time range. Results include message/session metadata and trimmed content. Excludes tool payloads."
+     "Search persisted user and assistant text. Search defaults to the current session; set all-sessions=true for cross-session search. Cron runs default to all sessions. Use session-kind=chat to exclude cron transcripts. since is inclusive; until is exclusive. Blank query lists messages in the time range. Results include message/session metadata and trimmed content. Excludes tool payloads."
      :category :memory
      :input-schema [:map {:closed true}
                     [:query {:optional true} [:maybe :string]]
                     [:limit {:optional true} [:maybe :int]]
                     [:session-id {:optional true} [:maybe :string]]
-                    [:all-sessions? {:optional true} [:maybe :boolean]]
+                    [:all-sessions {:optional true} [:maybe :boolean]]
+                    [:session-kind {:optional true} [:maybe [:enum :chat :cron "chat" "cron"]]]
                     [:since {:optional true} [:maybe :string]]
                     [:until {:optional true} [:maybe :string]]]
      :operation :read
@@ -501,14 +671,17 @@
      :source :builtin)
     :validate-fn validate-message-search-input
     :execute-fn
-    (fn [{:keys [query limit session-id all-sessions? since until]} context]
+    (fn [{:keys [query limit session-id all-sessions session-kind since until]} context]
       (ensure-permission! context :memory-read)
-      (let [session-id* (when-not all-sessions?
+      (let [cross-session? (or all-sessions
+                               (and (:cron-run-id context) (nil? session-id)))
+            session-id* (when-not cross-session?
                           (or session-id (:session-id context)))
             rows (sqlite/search-messages (:store memory-service)
                                          query
                                          (cond-> {:limit (message-search-limit limit)
                                                   :include-tool-results? false
+                                                  :session-kind session-kind
                                                   :since since
                                                   :until until}
                                            session-id* (assoc :session-id session-id*)))]
@@ -519,19 +692,21 @@
    {:description
     (tools/create-tool-description
      :message_get
-     "Get complete persisted user or assistant message content by message_search result ID. Content is not trimmed by this tool. Excludes tool payloads. Cross-session access requires all-sessions?=true."
+     "Get complete persisted user or assistant message content by message_search result ID. Content is not trimmed by this tool. Excludes tool payloads. Set all-sessions=true for cross-session IDs; cron runs default to all sessions."
      :category :memory
      :input-schema [:map {:closed true}
                     [:id :int]
                     [:session-id {:optional true} [:maybe :string]]
-                    [:all-sessions? {:optional true} [:maybe :boolean]]]
+                    [:all-sessions {:optional true} [:maybe :boolean]]]
      :operation :read
      :parallel-safe? true
      :source :builtin)
     :execute-fn
-    (fn [{:keys [id session-id all-sessions?]} context]
+    (fn [{:keys [id session-id all-sessions]} context]
       (ensure-permission! context :memory-read)
-      (let [session-id* (when-not all-sessions?
+      (let [cross-session? (or all-sessions
+                               (and (:cron-run-id context) (nil? session-id)))
+            session-id* (when-not cross-session?
                           (or session-id (:session-id context)))]
         (message-get-text
          (sqlite/get-search-message (:store memory-service) id

@@ -43,9 +43,14 @@ Tool-use policy for Iris agents.
 - `scratchpad_*`: mutable working memory for complex tasks. Read at task start, then record compact synthesized facts, source links, failed approaches, and partial deliverables. Reuse it instead of depending on raw tool history. `scratchpad_replace` needs current revision and exact old text.
 - `memory_recall`: broad recall across relevant memory surfaces.
 - `vault_search`: indexed durable vault notes and chunks.
+- `memory_find_similar`: lexical shortlist of same-owner approved notes for semantic merge review; score never authorizes a merge.
 - `memory_propose_update`: propose a revision-guarded diff to approved memory; MAGI decides before it affects recall.
-- `message_search`: persisted user/assistant chat history; supports `since`/`until`, cross-session search, message/session metadata, and trimmed previews. Blank query requires a time bound. Tool payloads excluded.
-- `message_get`: complete user/assistant message by search result ID. Use `all-sessions?: true` for cross-session IDs. Runtime may cap exceptionally large tool output.
+- `memory_propose_move`: propose moving an approved note; no file mutation before approval.
+- `memory_propose_delete`: propose deleting an approved note; no file mutation before approval.
+- `memory_propose_merge`: propose exact merged target content plus source deletion; no mutation before approval.
+- `skill_propose_update`: propose full replacement of an existing `SKILL.md`; skill stays active at old revision until approval.
+- `message_search`: persisted user/assistant history; supports `since`/`until`, `session-kind`, cross-session search via `all-sessions: true`, message/session metadata, and trimmed previews. Cron runs search all sessions by default. Blank query requires a time bound. Tool payloads excluded.
+- `message_get`: complete user/assistant message by search result ID. Use `all-sessions: true` for cross-session IDs; cron runs are cross-session by default. Runtime may cap exceptionally large tool output.
 - `memory_extract_session`: bounded Dreaming pass; extracts durable candidate notes and updates Iris's managed USER.md profile section when high-confidence cross-session facts changed.
 - `skills_list`: discover skills by name and description.
 - `skills_read`: load one discovered skill's full instructions for autonomous use. User `/skill` invocation still injects it directly.

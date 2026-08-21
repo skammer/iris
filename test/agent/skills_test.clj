@@ -38,6 +38,23 @@
         (skills/uninstall-proposed-skill! registry (:path installed))
         (.delete root)))))
 
+(deftest reviewed-skill-update-is-revision-checked-and-atomic-test
+  (let [root (temp-dir)
+        registry (skills/create-registry {:dirs [(.getAbsolutePath root)]})
+        before "---\nname: reviewed-skill\ndescription: Old workflow\n---\n# Reviewed\n\nOld steps.\n"
+        after "---\nname: reviewed-skill\ndescription: New workflow\n---\n# Reviewed\n\nNew steps.\n"
+        installed (skills/install-proposed-skill! registry before)]
+    (try
+      (let [revision (skills/content-revision before)
+            updated (skills/update-proposed-skill! registry "reviewed-skill" revision after)]
+        (is (= "New workflow" (:description updated)))
+        (is (= after (slurp (:path updated))))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"changed after proposal"
+                              (skills/update-proposed-skill! registry "reviewed-skill" revision before))))
+      (finally
+        (skills/uninstall-proposed-skill! registry (:path installed))
+        (.delete root)))))
+
 (deftest loads-folded-frontmatter-description-test
   (let [root (temp-dir)
         skill-dir (io/file root "searcharvester-fallback")]

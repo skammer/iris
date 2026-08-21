@@ -247,8 +247,8 @@
                                                  (-> request :parameters :query :session_id))))
 
 (defn create-session [system request]
-  (h/read-form-body request)
-  (let [session (session-service/create-session! system nil)]
+  (let [{:keys [project_id]} (h/read-form-body request)
+        session (session-service/create-session! system nil {:project-id project_id})]
 	    (streaming/once-response
 	     request
          {:metrics (:sse-metrics system)}
@@ -259,6 +259,19 @@
              (ui/session-detail-fragment system (:id session))
              (ui/dashboard-fragment system)
              (ui/router-state-fragment (ui/session-route-path system (:id session)))))))))
+
+(defn session-project [system request]
+  (let [{:keys [session_id project_id]} (h/read-form-body request)]
+    (h/ensure-session-exists! system session_id)
+    (session-service/set-project! system session_id project_id)
+    (streaming/once-response
+     request
+     {:metrics (:sse-metrics system)}
+     (fn [ctx]
+       (streaming/send-datastar-patch!
+        ctx
+        (str (ui/sessions-fragment system session_id)
+             (ui/session-detail-fragment system session_id)))))))
 
 (defn session-detail [system request]
   (let [session-id (-> request :parameters :query :session_id)]
@@ -711,15 +724,16 @@
                               :source (if review? :manual :advice)})
                            {:tab :approvals :limit 20})))
 
-(defn memory-vault-move [system request]
-  (let [body (h/read-form-body request)]
-    (memory-reset-response system
-                           "Vault note"
-                           #(memory/move-vault-note!
-                             (:memory-service system)
-                             (:path body)
-                             (:folder body))
-                           {:tab :approvals :limit 20})))
+(defn memory-proposal-decision [system request]
+  (let [{:keys [proposal_id decision]} (h/read-form-body request)]
+    (memory-reset-response
+     system
+     "Memory proposal"
+     #(case decision
+        "apply" (memory-magi-review/apply-proposal! system proposal_id "Operator approved")
+        "reject" (memory/decide-memory-note-update!
+                  (:memory-service system) proposal_id :rejected :no "Operator rejected"))
+     {:tab :approvals :limit 20})))
 
 (defn list-tool-approvals [system request]
   (let [limit (request-ui-limit request)]

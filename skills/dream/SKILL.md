@@ -31,20 +31,36 @@ Workflow:
      section.
 4. Groom existing memory:
    - search before reading or changing notes;
-   - merge duplicates into the strongest approved note;
+   - call `memory_find_similar` to shortlist same-scope candidates, then inspect
+     both notes and decide whether they express the same durable subject;
+   - never merge solely because the lexical score is high; reject related but
+     distinct facts, conflicting scopes, and notes owned by different projects;
+   - never simulate merge/delete by adding `DUPLICATE`, `superseded`, or other
+     lifecycle markers to note bodies;
    - use `memory_propose_update` for corrections or material extensions;
-   - prune stale candidate notes only after verifying they are duplicated,
+   - use `memory_propose_merge`, `memory_propose_move`, or `memory_propose_delete`
+     for structural cleanup; never edit, move, or mark files directly;
+   - report stale candidates after verifying they are duplicated,
      contradicted, or transient;
    - preserve concise evidence and origin ranges, never transcript dumps.
 5. Distill recent chats when a workflow is repeated and verified:
    - call `skills_list`, then read relevant `SKILL.md` files;
    - propose an update when an existing skill already owns the topic;
+   - if skill already exists, call `skill_propose_update` with its exact current
+     revision and complete replacement `SKILL.md`;
    - otherwise call `memory_propose_create` with type `Skill` and complete
      `SKILL.md` source; never write into an active skills directory;
    - register drafts only after MAGI/user approval;
    - require YAML `name` and `description`, narrow trigger, exact procedure,
      verification, and stopping condition;
+   - reject drafts containing personal names, health details, secrets, private
+     hosts/remotes, machine-specific paths, or permission bypasses; parameterize
+     environment-specific values;
+   - reject drafts that bake in git push or other external side effects without
+     explicit per-run user confirmation;
    - create nothing when evidence is weak, one-off, sensitive, or duplicated.
+   - count retries, continuations, and session splits of one user task as one
+     observation, not independent repetition;
 6. Keep only durable facts: explicit preferences, decisions, repeated
    errors/fixes, stable paths, and runbooks. Skip secrets and weak guesses.
 7. Reindex and audit vault after memory edits. Call `skills_list` after skill

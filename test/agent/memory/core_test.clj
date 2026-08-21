@@ -201,14 +201,21 @@
       (spit rejected "---\nid: mem_rejected\ntype: Reference\ntitle: Reject me\niris:\n  scope: global\n  status: rejected\n---\n\nRejected.\n")
       (memory/reindex-vault! service)
       (let [result (memory/cleanup-vault! service {:apply? true})
-            moved (io/file root "preferences" "approved.md")]
+            moved (io/file root "preferences" "approved.md")
+            first-content (slurp moved)
+            second-result (memory/cleanup-vault! service {:apply? true})
+            second-content (slurp moved)]
         (is (true? (:applied result)))
+        (is (true? (:applied second-result)))
         (is (= 1 (count (:backup-paths result))))
         (is (.isDirectory (io/file (first (:backup-paths result)))))
         (is (.isFile moved))
         (is (not (.exists rejected)))
-        (is (not (str/includes? (slurp moved) "legacy transcript dump")))
+        (is (not (str/includes? second-content "legacy transcript dump")))
+        (is (= 1 (count (re-seq #"(?m)^# Clean me$" second-content))))
+        (is (= first-content second-content))
         (is (.isFile (io/file root "index.md")))
+        (is (true? (get-in second-result [:index :ok?])))
         (is (= 1 (sqlite/count-vault-notes store))))
       (finally
         (sqlite/close-store! store)
@@ -504,6 +511,89 @@
         (is (= ["mem_global"] (mapv :note-id without-session)))
         (is (= #{"mem_global" "mem_session_a" "mem_auto_session"} ids-with-session))
         (is (not (contains? ids-with-session "mem_session_b"))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
+(deftest project-vault-recall-crosses-project-chats-without-leaking-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        alpha (io/file root "projects/alpha.md")
+        beta (io/file root "projects/beta.md")
+        store (sqlite/create-store {:path db-path})
+        service (test-service store {:vault {:paths [(.getAbsolutePath root)]}})]
+    (try
+      (.mkdirs (.getParentFile alpha))
+      (doseq [[file id project marker]
+              [[alpha "mem_alpha" "alpha" "shared-project-marker alpha detail"]
+               [beta "mem_beta" "beta" "shared-project-marker beta detail"]]]
+        (spit file
+              (str "---\n"
+                   "id: " id "\n"
+                   "type: ProjectNote\n"
+                   "title: " project " project\n"
+                   "iris:\n"
+                   "  scope: project\n"
+                   "  status: approved\n"
+                   "  origins:\n"
+                   "  - type: message\n"
+                   "    session_id: creator-session\n"
+                   "    project_id: " project "\n"
+                   "---\n\n"
+                   marker "\n")))
+      (memory/reindex-vault! service)
+      (is (= ["mem_alpha"]
+             (mapv :note-id
+                   (memory/search-vault service "shared-project-marker"
+                                        {:session-id "other-alpha-chat"
+                                         :project-id "alpha"
+                                         :limit 10}))))
+      (is (= ["mem_beta"]
+             (mapv :note-id
+                   (memory/search-vault service "shared-project-marker"
+                                        {:session-id "creator-session"
+                                         :project-id "beta"
+                                         :limit 10})))
+          "creator session id must not bypass current project scope")
+      (is (empty? (memory/search-vault service "shared-project-marker"
+                                       {:session-id "creator-session" :limit 10})))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
+(deftest similar-vault-notes-shortlists-within-scope-owner-only-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        store (sqlite/create-store {:path db-path})
+        service (test-service store {:vault {:paths [(.getAbsolutePath root)]}})]
+    (try
+      (doseq [[id project suffix]
+              [["mem_a1" "alpha" "Use deploy checklist before release and verify health endpoint."]
+               ["mem_a2" "alpha" "Use deploy checklist before release, then verify health endpoint."]
+               ["mem_b1" "beta" "Use deploy checklist before release and verify health endpoint."]]
+              :let [file (io/file root "projects" (str id ".md"))]]
+        (.mkdirs (.getParentFile file))
+        (spit file
+              (str "---\n"
+                   "id: " id "\n"
+                   "type: Runbook\n"
+                   "title: Deployment checklist\n"
+                   "description: Safe project deployment procedure.\n"
+                   "iris:\n"
+                   "  scope: project\n"
+                   "  status: approved\n"
+                   "  origins:\n"
+                   "  - type: message\n"
+                   "    project_id: " project "\n"
+                   "---\n\n# Deployment checklist\n\n" suffix "\n")))
+      (memory/reindex-vault! service)
+      (let [pairs (memory/similar-vault-notes service {:threshold 0.4 :limit 10})]
+        (is (= 1 (count pairs)))
+        (is (= #{"mem_a1" "mem_a2"}
+               #{(get-in pairs [0 :left :id]) (get-in pairs [0 :right :id])}))
+        (is (= "alpha" (:scope-owner (first pairs)))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file root true)
@@ -881,6 +971,62 @@
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"Unsupported vault note target folder"
                             (memory/move-vault-note! service (.getAbsolutePath (io/file root "archive/move.md")) "../bad")))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file db-path true)))))
+
+(deftest reviewed-note-operation-proposals-do-not-mutate-before-apply-test
+  (let [db-path (temp-db-path)
+        root (temp-dir)
+        store (sqlite/create-store {:path db-path})
+        service (test-service store {:vault {:paths [(.getAbsolutePath root)]
+                                             :writable? true}})
+        write-note! (fn [id filename body]
+                      (let [file (io/file root "references" filename)]
+                        (.mkdirs (.getParentFile file))
+                        (spit file
+                              (str "---\nid: " id "\ntype: Reference\ntitle: " id
+                                   "\niris:\n  scope: global\n  status: approved\n---\n\n# " id
+                                   "\n\n" body "\n"))
+                        file))
+        move-file (write-note! "mem_move_proposal" "move.md" "move proposal marker")
+        delete-file (write-note! "mem_delete_proposal" "delete.md" "delete proposal marker")
+        merge-target (write-note! "mem_merge_target" "target.md" "old target")
+        merge-source (write-note! "mem_merge_source" "source.md" "source detail")]
+    (try
+      (memory/reindex-vault! service)
+      (let [revision (:revision (sqlite/get-vault-note-by-id store "mem_move_proposal"))
+            proposal (memory/propose-vault-note-move! service "mem_move_proposal" revision "archive"
+                                                      {:source :test})
+            moved-file (io/file root "archive/move.md")]
+        (is (= "note-move" (:operation proposal)))
+        (is (.exists move-file))
+        (is (false? (.exists moved-file)))
+        (is (= "applied" (:status (memory/apply-memory-note-proposal!
+                                    service (:id proposal) "approved"))))
+        (is (false? (.exists move-file)))
+        (is (.exists moved-file)))
+      (let [revision (:revision (sqlite/get-vault-note-by-id store "mem_delete_proposal"))
+            proposal (memory/propose-vault-note-delete! service "mem_delete_proposal" revision
+                                                        {:source :test})]
+        (is (.exists delete-file))
+        (memory/apply-memory-note-proposal! service (:id proposal) "approved")
+        (is (false? (.exists delete-file)))
+        (is (nil? (sqlite/get-vault-note-by-id store "mem_delete_proposal"))))
+      (let [target-revision (:revision (sqlite/get-vault-note-by-id store "mem_merge_target"))
+            source-revision (:revision (sqlite/get-vault-note-by-id store "mem_merge_source"))
+            proposal (memory/propose-vault-note-merge!
+                      service "mem_merge_target" "mem_merge_source"
+                      target-revision source-revision
+                      {:body "merged target with source detail"}
+                      {:source :test})]
+        (is (str/includes? (slurp merge-target) "old target"))
+        (is (.exists merge-source))
+        (memory/apply-memory-note-proposal! service (:id proposal) "approved")
+        (is (str/includes? (slurp merge-target) "merged target with source detail"))
+        (is (false? (.exists merge-source)))
+        (is (nil? (sqlite/get-vault-note-by-id store "mem_merge_source"))))
       (finally
         (sqlite/close-store! store)
         (io/delete-file root true)

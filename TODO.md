@@ -1,5 +1,17 @@
 # TODO
 
+## Memory rollout
+
+- [x] Run `Memory daily grooming` once on live data; inspect run status, transcript, proposals, note changes, evidence size, duplicates, and recall quality.
+- [x] Run `Memory weekly skill distillation` once on live data; inspect generated skill proposals and reject low-signal output.
+- [x] Tune `/dream` and `/distill` prompts/limits from observed failures; add regression tests for each fix.
+- [x] Add review/apply flow for existing skill updates.
+- [x] Add first-class reviewed note operations: merge, delete, move.
+- [x] Unify note and skill proposals in Memory review UI.
+- [x] Add explicit session `project-id` selection and UI; verify project-scoped recall across chats without cross-project leakage.
+- [x] Add same-owner similarity candidates and `/dream` semantic review before merge proposals; never merge from lexical score alone.
+- [ ] After 1–2 weeks, measure FTS recall/latency, duplicate rate, evidence size, proposal acceptance, and recall diversity; enable embeddings only if measurements justify it.
+
 ## Deferred Nudging Work
 
 - [ ] Context cards from skill/knowledge injection. Not part of P0. Accept when nudges can cite compact, typed cards instead of raw injected prompt text.

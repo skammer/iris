@@ -4,6 +4,7 @@
    [agent.chat.kernel-ops :as kernel-ops]
    [agent.chat.turn :as chat-turn]
    [agent.cron.schedule :as schedule]
+   [agent.cron.runner :as cron-runner]
    [agent.cron.service :as cron-service]
    [agent.cron.store :as cron-store]
    [agent.llm.registry :as llm-registry]
@@ -38,6 +39,16 @@
                 :tool-registry (tools/create-registry)}]
     (reset! system-ref system)
     system))
+
+(deftest cron-run-prompt-includes-reference-time-test
+  (is (= (str "Cron execution context:\n"
+              "- reference-time-utc: 2026-08-20T15:44:04Z\n"
+              "- timezone: Europe/Moscow\n"
+              "- trigger: manual\n\n"
+              "Task:\nSearch the last 48 hours")
+         (#'cron-runner/contextual-prompt
+          {:scheduled-for "2026-08-20T15:44:04Z" :trigger :manual}
+          {:timezone "Europe/Moscow" :prompt "Search the last 48 hours"}))))
 
 (deftest cron-ui-tabs-and-delivery-controls-test
   (let [{:keys [path store]} (temp-store)

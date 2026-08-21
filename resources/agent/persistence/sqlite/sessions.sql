@@ -29,6 +29,11 @@ set title = :title
 where id = :id
   and (title is null or trim(title) = '')
 
+-- :name update-session-metadata :! :n
+update sessions
+set metadata_json = :metadata_json
+where id = :id
+
 -- :name session-exists :? :1
 select 1 as present
 from sessions
@@ -145,6 +150,7 @@ from messages m
 join sessions s on s.id = m.session_id
 where m.content like :needle
   and (:session_id is null or m.session_id = :session_id)
+  and (:session_kind is null or s.kind = :session_kind)
   and (:since is null or m.created_at >= :since)
   and (:until is null or m.created_at < :until)
   and (:include_tool_results = 1 or m.role <> 'tool')
@@ -160,6 +166,7 @@ join messages m on m.id = messages_fts.rowid
 join sessions s on s.id = m.session_id
 where messages_fts match :query
   and (:session_id is null or m.session_id = :session_id)
+  and (:session_kind is null or s.kind = :session_kind)
   and (:since is null or m.created_at >= :since)
   and (:until is null or m.created_at < :until)
   and (:include_tool_results = 1 or m.role <> 'tool')

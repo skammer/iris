@@ -57,9 +57,10 @@
      :source :builtin)
     :execute-fn
     (fn [{skill-name :name} _context]
-      (if-let [{:keys [name description body]}
+      (if-let [{:keys [name description body path]}
                (get (skills/skill-map skills-registry) skill-name)]
         (str "# Skill /" name "\n\n"
+             "Revision: " (skills/content-revision (slurp path)) "\n\n"
              description "\n\n"
              body)
         (throw (tools/validation-error

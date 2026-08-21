@@ -25,6 +25,13 @@
            (when (seq approval-ids)
              (str "; approval IDs: " (str/join ", " approval-ids)))))))
 
+(defn- contextual-prompt [run snapshot]
+  (str "Cron execution context:\n"
+       "- reference-time-utc: " (:scheduled-for run) "\n"
+       "- timezone: " (:timezone snapshot) "\n"
+       "- trigger: " (name (:trigger run)) "\n\n"
+       "Task:\n" (:prompt snapshot)))
+
 (defn execute! [system run]
   (let [snapshot (:snapshot run)
         timeout-ms (* 1000 (long (get-in system [:config :cron :run-timeout-seconds] 1800)))
@@ -41,7 +48,7 @@
     (emit! system :cron.run.started run {:job-id (:job-id run) :session-id (:session-id run)})
     (let [task (future
                  (chat/run! system
-                   {:messages [{:role "user" :content (:prompt snapshot)}]
+                   {:messages [{:role "user" :content (contextual-prompt run snapshot)}]
                     :session-id (:session-id run)
                     :request-id (:request-id run)
                     :cancellation-token cancellation

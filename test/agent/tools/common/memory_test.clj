@@ -240,6 +240,40 @@
         (io/delete-file path true)
         (io/delete-file root true)))))
 
+(deftest project-memory-tools-use-session-project-and-persist-origin-test
+  (let [path (temp-db-path)
+        root (temp-dir "iris-project-memory-tool")
+        store (sqlite/create-store {:path path})
+        session (sqlite/create-session! store "alpha chat" {:metadata {:project-id "alpha"}})
+        service (memory/create-memory-service
+                 {:search {:default-limit 10}
+                  :vault {:paths [(.getAbsolutePath root)] :writable? true}
+                  :notes {:extractor {:enabled false}}}
+                 store)
+        registry* (registry service)]
+    (try
+      (let [result (tools/execute-tool
+                    registry*
+                    :memory_propose_create
+                    {:type "ProjectNote"
+                     :title "Alpha deployment"
+                     :description "Alpha deployment decision."
+                     :body "Use the alpha deployment checklist."
+                     :scope "project"
+                     :reason "Stable project decision."}
+                    {:permissions #{:memory-write}
+                     :session-id (:id session)
+                     :request-id "req-alpha"})
+            note (first (sqlite/list-vault-notes store))
+            content (slurp (:path note))]
+        (is (str/includes? result "Memory create proposal"))
+        (is (str/includes? content "project_id: \"alpha\""))
+        (is (= "alpha" (get-in note [:origins 0 :project_id]))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file root true)
+        (io/delete-file path true)))))
+
 (deftest memory-propose-update-tool-creates-pending-diff-test
   (let [path (temp-db-path)
         root (temp-dir "iris-memory-update-tool")
@@ -282,7 +316,8 @@
                      :magi-context {:user-request "Be concise."}})
             proposal (first (sqlite/list-memory-note-updates store {:status "pending"}))]
         (is (str/includes? search-result (str "revision=" revision)))
-        (is (str/includes? result "Memory update proposal"))
+        (is (str/includes? result "Memory proposal"))
+        (is (str/includes? result "operation=note-update"))
         (is (= "mem_tool_update" (:target-id proposal)))
         (is (= "Be concise." (get-in proposal [:evidence :user])))
         (is (str/includes? (slurp note-file) "Detailed answers.")))
@@ -391,7 +426,8 @@
                            {:query ""
                             :since (:created-at target)
                             :until "2100-01-01T00:00:00Z"
-                            :all-sessions? true
+                            :all-sessions true
+                            :session-kind :chat
                             :limit 100}
                            {:permissions #{:memory-read}
                             :session-id (:id cron-session)})
@@ -404,7 +440,7 @@
             full-get (tools/execute-tool
                       registry*
                       :message_get
-                      {:id (:id target) :all-sessions? true}
+                      {:id (:id target) :all-sessions true}
                       {:permissions #{:memory-read}
                        :session-id (:id cron-session)})]
         (is (str/includes? search-result (str "message #" (:id target))))
@@ -418,9 +454,34 @@
              #"since must be an ISO-8601 UTC instant"
              (tools/execute-tool registry*
                                  :message_search
-                                 {:query "" :since "yesterday" :all-sessions? true}
+                                 {:query "" :since "yesterday" :all-sessions true}
                                  {:permissions #{:memory-read}
                                   :session-id (:id cron-session)}))))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest cron-message-tools-default-to-cross-session-chat-search-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        chat-session (sqlite/create-session! store "chat")
+        cron-session (sqlite/create-session! store "cron" {:kind :cron})
+        service (memory-service store)
+        registry* (registry service)]
+    (try
+      (let [chat-message (sqlite/append-message! store (:id chat-session) "user" "cross-session marker")
+            _ (sqlite/append-message! store (:id cron-session) "assistant" "cross-session marker")
+            context {:permissions #{:memory-read}
+                     :session-id (:id cron-session)
+                     :cron-run-id "run-1"}
+            result (tools/execute-tool registry*
+                                       :message_search
+                                       {:query "cross-session marker"
+                                        :session-kind "chat"}
+                                       context)
+            full (tools/execute-tool registry* :message_get {:id (:id chat-message)} context)]
+        (is (str/includes? result (str "session=" (:id chat-session))))
+        (is (not (str/includes? result (str "session=" (:id cron-session)))))
+        (is (str/ends-with? full "cross-session marker")))
       (finally
         (io/delete-file path true)))))
 

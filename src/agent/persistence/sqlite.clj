@@ -98,6 +98,9 @@
 (defn set-session-title-if-blank! [store session-id title]
   (sessions/set-session-title-if-blank! store session-id title))
 
+(defn update-session-metadata! [store session-id metadata]
+  (sessions/update-session-metadata! store session-id metadata))
+
 (defn session-exists? [store session-id]
   (sessions/session-exists? store session-id))
 

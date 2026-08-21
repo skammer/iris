@@ -24,6 +24,8 @@
 (def session-extract-message-chars 1200)
 (def session-extract-transcript-chars 20000)
 (def default-existing-note-context-limit 8)
+(def default-similar-note-threshold 0.42)
+(def default-similar-note-limit 20)
 (def existing-note-context-chars 1200)
 (def extraction-evidence-user-chars 800)
 (def extraction-evidence-assistant-chars 0)
@@ -388,6 +390,78 @@
        :content content
        :revision (vault/content-revision content)})))
 
+(defn- origin-value [origin key]
+  (let [underscore-key (str/replace (name key) "-" "_")]
+    (or (get origin key)
+        (get origin (keyword underscore-key))
+        (get origin (name key))
+        (get origin underscore-key))))
+
+(defn- note-scope-owner [note]
+  (let [scope (:iris-scope note)
+        origins (:origins note)]
+    [scope
+     (case scope
+       "project" (some #(origin-value % :project-id) origins)
+       "session" (some #(origin-value % :session-id) origins)
+       "agent" (some #(origin-value % :agent-id) origins)
+       nil)]))
+
+(defn- comparable-note-scope? [left right]
+  (let [[left-scope left-owner] (note-scope-owner left)
+        [right-scope right-owner] (note-scope-owner right)]
+    (and (= left-scope right-scope)
+         (if (= "global" left-scope)
+           true
+           (and (some? left-owner) (= left-owner right-owner))))))
+
+(defn- similar-note-score [left right]
+  (let [title (jaccard (:title left) (:title right))
+        description (jaccard (:description left) (:description right))
+        body (jaccard (:body left) (:body right))
+        combined (jaccard (str (:title left) "\n" (:description left) "\n" (:body left))
+                          (str (:title right) "\n" (:description right) "\n" (:body right)))
+        score (+ (* 0.35 title) (* 0.15 description) (* 0.30 body) (* 0.20 combined))]
+    {:score score
+     :score-breakdown {:title title :description description :body body :combined combined}}))
+
+(defn similar-vault-notes
+  "Return lexical candidates for semantic merge review. Scope owners never cross."
+  ([memory-service] (similar-vault-notes memory-service {}))
+  ([memory-service {:keys [threshold limit]
+                    :or {threshold default-similar-note-threshold
+                         limit default-similar-note-limit}}]
+   (let [notes (->> (sqlite/list-vault-notes (:store memory-service)
+                                             {:status "approved" :limit 200})
+                    (mapv (fn [note]
+                            (let [content (:content (read-vault-file memory-service (:path note)))
+                                  values (vault/note-change-values content)]
+                              (merge note
+                                     (select-keys values [:type :title :description :body :tags :scope]))))))
+         pending-pairs (->> (sqlite/list-memory-note-updates (:store memory-service)
+                                                            {:status "pending" :operation :note-merge :limit 200})
+                            (map (fn [{:keys [target-id secondary-target-id]}]
+                                   #{target-id secondary-target-id}))
+                            set)]
+     (->> (for [left-index (range (count notes))
+                right-index (range (inc left-index) (count notes))
+                :let [left (nth notes left-index)
+                      right (nth notes right-index)
+                      pair #{(:id left) (:id right)}]
+                :when (and (comparable-note-scope? left right)
+                           (not (contains? pending-pairs pair)))
+                :let [{:keys [score score-breakdown]} (similar-note-score left right)]
+                :when (>= score (double threshold))]
+            {:score score
+             :score-breakdown score-breakdown
+             :scope (:iris-scope left)
+             :scope-owner (second (note-scope-owner left))
+             :left (select-keys left [:id :revision :type :title :description :body :tags])
+             :right (select-keys right [:id :revision :type :title :description :body :tags])})
+          (sort-by :score >)
+          (take (max 1 (min 100 (long limit))))
+          vec))))
+
 (defn- normalize-vault-iris-change [{:keys [scope status]}]
   (let [scope* (some-> scope name)
         status* (some-> status name)]
@@ -674,9 +748,10 @@
                        {:scope (note-scope memory-service note)
                         :status "candidate"
                         :origins (or (:origins opts)
-                                     [{:type (name (or (:source opts) :tool))
-                                       :session-id (:session-id opts)
-                                       :request-id (:request-id opts)}])
+                                     [(cond-> {:type (name (or (:source opts) :tool))}
+                                        (:session-id opts) (assoc :session-id (:session-id opts))
+                                        (:project-id opts) (assoc :project-id (:project-id opts))
+                                        (:request-id opts) (assoc :request-id (:request-id opts)))])
                         :source-request-id (:request-id opts)
                         :evidence (:evidence opts)}))]
     (reindex-vault! memory-service)
@@ -736,6 +811,139 @@
   ([memory-service opts]
    (sqlite/list-memory-note-updates (:store memory-service) opts)))
 
+(defn create-memory-proposal!
+  [memory-service proposal opts]
+  (locking (:update-lock memory-service)
+    (if-let [existing
+             (some (fn [candidate]
+                     (when (and (= (name (or (:operation proposal) :note-update))
+                                    (:operation candidate))
+                                (= (:proposed-revision proposal) (:proposed-revision candidate))
+                                (= (:secondary-target-id proposal) (:secondary-target-id candidate)))
+                       candidate))
+                   (sqlite/list-memory-note-updates
+                    (:store memory-service)
+                    {:status "pending"
+                     :target-id (:target-id proposal)
+                     :operation (:operation proposal)
+                     :limit 100}))]
+      (assoc existing :duplicate true)
+      (let [result (sqlite/create-memory-note-update!
+                    (:store memory-service)
+                    (merge {:id (str "memprop_" (java.util.UUID/randomUUID))
+                            :source (or (:source opts) :tool)
+                            :status :pending
+                            :evidence (:evidence opts)}
+                           proposal))]
+        (sqlite/log-event! (:store memory-service)
+                           {:event-type :memory.vault.operation_proposed
+                            :entity-type :memory_proposal
+                            :entity-id (:id result)
+                            :request-id (:request-id opts)
+                            :payload (dissoc result :proposed-content)})
+        result))))
+
+(defn- approved-note-state! [memory-service note-id expected-revision]
+  (let [note (or (indexed-note-by-id memory-service note-id)
+                 (throw (ex-info "Vault Note not found"
+                                 {:type :not-found :note-id note-id})))
+        _ (when-not (= "approved" (:iris-status note))
+            (throw (ex-info "Only approved Vault Notes support operation proposals"
+                            {:type :vault-note-not-approved
+                             :note-id note-id
+                             :status (:iris-status note)})))
+        path (ensure-vault-path! memory-service (:path note))
+        content (slurp path)
+        revision (vault/content-revision content)]
+    (when-not (= expected-revision revision)
+      (throw (ex-info "Vault Note revision changed"
+                      {:type :stale-vault-note-revision
+                       :note-id note-id
+                       :expected-revision expected-revision
+                       :actual-revision revision})))
+    {:note note :path path :content content :revision revision}))
+
+(defn propose-vault-note-move!
+  [memory-service note-id expected-revision folder opts]
+  (when-not (:vault-writable? memory-service)
+    (throw (ex-info "Vault memory is read-only" {:type :vault-read-only})))
+  (let [{:keys [path content revision]} (approved-note-state! memory-service note-id expected-revision)
+        root (vault-root-for-path memory-service path)
+        folder* (safe-vault-folder folder)
+        target-path (.getCanonicalPath (io/file root folder* (.getName (io/file path))))]
+    (ensure-vault-path! memory-service target-path)
+    (when (.exists (io/file target-path))
+      (throw (ex-info "Vault Note target already exists"
+                      {:type :vault-note-target-exists
+                       :note-id note-id
+                       :target-path target-path})))
+    (when (= path target-path)
+      (throw (ex-info "Vault Note already resides in target folder"
+                      {:type :validation-failed :note-id note-id :folder folder})))
+    (create-memory-proposal!
+     memory-service
+     {:operation :note-move
+      :target-id note-id
+      :target-path path
+      :base-revision revision
+      :proposed-revision (vault/content-revision (str "move\n" revision "\n" target-path))
+      :changes {:folder folder* :target-path target-path}
+      :proposed-content content
+      :diff (str "MOVE\n- " path "\n+ " target-path)}
+     opts)))
+
+(defn propose-vault-note-delete!
+  [memory-service note-id expected-revision opts]
+  (when-not (:vault-writable? memory-service)
+    (throw (ex-info "Vault memory is read-only" {:type :vault-read-only})))
+  (let [{:keys [path content revision]} (approved-note-state! memory-service note-id expected-revision)]
+    (create-memory-proposal!
+     memory-service
+     {:operation :note-delete
+      :target-id note-id
+      :target-path path
+      :base-revision revision
+      :proposed-revision (vault/content-revision (str "delete\n" revision))
+      :changes {}
+      :proposed-content content
+      :diff (str "DELETE\n- " path "\n- entire approved note")}
+     opts)))
+
+(defn propose-vault-note-merge!
+  [memory-service target-id source-id expected-target-revision expected-source-revision changes opts]
+  (when (= target-id source-id)
+    (throw (ex-info "Merge source and target must differ"
+                    {:type :validation-failed :target-id target-id :source-id source-id})))
+  (let [target (approved-note-state! memory-service target-id expected-target-revision)
+        source (approved-note-state! memory-service source-id expected-source-revision)
+        changes* (normalize-note-update-changes changes)
+        before-values (vault/note-change-values (:content target))
+        proposed-content (vault/proposed-note-content
+                          (:content target)
+                          changes*
+                          (:evidence opts)
+                          (or (:origins opts)
+                              [{:type (name (or (:source opts) :tool))
+                                :session-id (:session-id opts)
+                                :request-id (:request-id opts)
+                                :vault-path (:path source)}]))
+        after-values (vault/note-change-values proposed-content)]
+    (create-memory-proposal!
+     memory-service
+     {:operation :note-merge
+      :target-id target-id
+      :target-path (:path target)
+      :secondary-target-id source-id
+      :secondary-target-path (:path source)
+      :base-revision (:revision target)
+      :secondary-base-revision (:revision source)
+      :proposed-revision (vault/content-revision proposed-content)
+      :changes changes*
+      :proposed-content proposed-content
+      :diff (str (note-update-diff before-values after-values changes*)
+                 "\n\nDELETE MERGED SOURCE\n- " (:path source))}
+     opts)))
+
 (defn propose-vault-note-update!
   [memory-service note-id expected-revision changes opts]
   (when-not (:vault-writable? memory-service)
@@ -779,29 +987,21 @@
         (if-let [existing (some #(when (= proposed-revision (:proposed-revision %)) %)
                                 (sqlite/list-memory-note-updates
                                  (:store memory-service)
-                                 {:status "pending" :target-id note-id :limit 100}))]
+                                 {:status "pending" :target-id note-id
+                                  :operation :note-update :limit 100}))]
           (assoc existing :duplicate true)
-          (let [after-values (vault/note-change-values proposed-content)
-              update (sqlite/create-memory-note-update!
-                        (:store memory-service)
-                        {:id (str "memupd_" (java.util.UUID/randomUUID))
-                         :target-id note-id
-                         :target-path path
-                         :base-revision base-revision
-                         :proposed-revision proposed-revision
-                         :changes changes*
-                         :proposed-content proposed-content
-                         :diff (note-update-diff before-values after-values changes*)
-                         :evidence (:evidence opts)
-                         :source (or (:source opts) :tool)
-                         :status :pending})]
-            (sqlite/log-event! (:store memory-service)
-                               {:event-type :memory.vault.update_proposed
-                                :entity-type :memory_note_update
-                                :entity-id (:id update)
-                                :request-id (:request-id opts)
-                                :payload (dissoc update :proposed-content)})
-            update)))))))
+          (let [after-values (vault/note-change-values proposed-content)]
+            (create-memory-proposal!
+             memory-service
+             {:operation :note-update
+              :target-id note-id
+              :target-path path
+              :base-revision base-revision
+              :proposed-revision proposed-revision
+              :changes changes*
+              :proposed-content proposed-content
+              :diff (note-update-diff before-values after-values changes*)}
+             opts))))))))
 
 (defn decide-memory-note-update!
   [memory-service update-id status decision reason]
@@ -825,6 +1025,11 @@
                         {:type :memory-update-not-pending
                          :update-id update-id
                          :status (:status update)})))
+      (when-not (= "note-update" (:operation update))
+        (throw (ex-info "Proposal is not a note update"
+                        {:type :invalid-memory-proposal-operation
+                         :update-id update-id
+                         :operation (:operation update)})))
       (let [path (ensure-vault-path! memory-service (:target-path update))
             before (slurp path)
             actual-revision (vault/content-revision before)]
@@ -864,6 +1069,92 @@
                 (vault/replace-note-content! path (:proposed-revision update) before)
                 (reindex-vault! memory-service))
               (throw e))))))))
+
+(defn- proposal-current-content! [memory-service proposal path-key revision-key]
+  (let [path (ensure-vault-path! memory-service (get proposal path-key))
+        content (slurp path)
+        revision (vault/content-revision content)]
+    (when-not (= (get proposal revision-key) revision)
+      (throw (ex-info "Memory proposal target changed after proposal creation"
+                      {:type :stale-memory-proposal
+                       :proposal-id (:id proposal)
+                       :path path
+                       :expected-revision (get proposal revision-key)
+                       :actual-revision revision})))
+    {:path path :content content :revision revision}))
+
+(defn apply-memory-note-proposal!
+  [memory-service proposal-id reason]
+  (let [proposal (or (get-memory-note-update memory-service proposal-id)
+                     (throw (ex-info "Memory proposal not found"
+                                     {:type :not-found :proposal-id proposal-id})))]
+    (when-not (= "pending" (:status proposal))
+      (throw (ex-info "Memory proposal is not pending"
+                      {:type :memory-proposal-not-pending
+                       :proposal-id proposal-id
+                       :status (:status proposal)})))
+    (case (:operation proposal)
+      "note-update" (apply-memory-note-update! memory-service proposal-id reason)
+
+      "note-move"
+      (locking (:update-lock memory-service)
+        (let [{:keys [path]} (proposal-current-content! memory-service proposal
+                                                        :target-path :base-revision)
+              target-path (ensure-vault-path! memory-service (get-in proposal [:changes :target-path]))]
+          (try
+            (vault/move-note! path target-path)
+            (let [index-result (reindex-vault! memory-service)]
+              (when-not (:ok? index-result)
+                (throw (ex-info "Vault reindex failed after move" {:report index-result})))
+              (decide-memory-note-update! memory-service proposal-id :applied :yes reason))
+            (catch Exception e
+              (when (and (.isFile (io/file target-path)) (not (.exists (io/file path))))
+                (vault/move-note! target-path path)
+                (reindex-vault! memory-service))
+              (throw e)))))
+
+      "note-delete"
+      (locking (:update-lock memory-service)
+        (let [{:keys [path content]} (proposal-current-content! memory-service proposal
+                                                                :target-path :base-revision)]
+          (try
+            (java.nio.file.Files/delete (.toPath (io/file path)))
+            (let [index-result (reindex-vault! memory-service)]
+              (when-not (:ok? index-result)
+                (throw (ex-info "Vault reindex failed after delete" {:report index-result})))
+              (decide-memory-note-update! memory-service proposal-id :applied :yes reason))
+            (catch Exception e
+              (when-not (.exists (io/file path))
+                (spit path content)
+                (reindex-vault! memory-service))
+              (throw e)))))
+
+      "note-merge"
+      (locking (:update-lock memory-service)
+        (let [target (proposal-current-content! memory-service proposal
+                                                :target-path :base-revision)
+              source (proposal-current-content! memory-service proposal
+                                                :secondary-target-path :secondary-base-revision)]
+          (try
+            (vault/replace-note-content! (:path target) (:revision target)
+                                         (:proposed-content proposal))
+            (java.nio.file.Files/delete (.toPath (io/file (:path source))))
+            (let [index-result (reindex-vault! memory-service)]
+              (when-not (:ok? index-result)
+                (throw (ex-info "Vault reindex failed after merge" {:report index-result})))
+              (decide-memory-note-update! memory-service proposal-id :applied :yes reason))
+            (catch Exception e
+              (when (.exists (io/file (:path target)))
+                (spit (:path target) (:content target)))
+              (when-not (.exists (io/file (:path source)))
+                (spit (:path source) (:content source)))
+              (reindex-vault! memory-service)
+              (throw e)))))
+
+      (throw (ex-info "Unsupported memory proposal operation"
+                      {:type :invalid-memory-proposal-operation
+                       :proposal-id proposal-id
+                       :operation (:operation proposal)})))))
 
 (defn- effective-scratchpad-scope [scope opts]
   (scratchpad/normalize-scope
@@ -1105,7 +1396,7 @@
   (let [session (when-let [session-id (:session-id opts)]
                   (sqlite/get-session (:store memory-service) session-id))
         metadata (:metadata session)
-        project-id (or (:project-id metadata) (:project_id metadata) (:project metadata))
+        project-id (:project-id metadata)
         origins (note-origins (cond-> opts project-id (assoc :project-id (str project-id))))
         evidence (note-evidence exchange note)]
     (case (:operation note)

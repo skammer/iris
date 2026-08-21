@@ -914,6 +914,22 @@ textarea {
   white-space: nowrap;
 }
 
+.session-project-form {
+  display: flex;
+  flex: 0 1 250px;
+  gap: 6px;
+  min-width: 150px;
+}
+
+.session-project-form input {
+  min-width: 0;
+  padding: 7px 9px;
+}
+
+.session-project-form button {
+  padding: 7px 10px;
+}
+
 #session-messages-panel {
   flex: 1 1 auto;
   height: auto;
@@ -2133,6 +2149,14 @@ textarea {
 
   .chat-titlebar .meta {
     display: none;
+  }
+
+  .chat-titlebar {
+    flex-wrap: wrap;
+  }
+
+  .session-project-form {
+    flex: 1 1 100%;
   }
 
   .memory-form-grid,

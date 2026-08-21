@@ -126,21 +126,6 @@
                                     "{contentType: 'form', selector: '#" form-id "'})")}
       label]]))
 
-(def ^:private vault-note-folders
-  ["inbox" "preferences" "decisions" "projects" "runbooks" "sessions" "references" "archive"])
-
-(defn- vault-note-move-form [idx path]
-  (let [form-id (str "vault-note-move-" idx)]
-    [:form.inline-form {:id form-id}
-     [:input {:type "hidden" :name "path" :value path}]
-     [:select {:name "folder" :aria-label "Destination folder"}
-      (for [folder vault-note-folders]
-        [:option {:value folder} folder])]
-     [:button {:type "button"
-               "data-on:click" (str "@post('/ui/memory/vault/move', "
-                                    "{contentType: 'form', selector: '#" form-id "'})")}
-      "Move"]]))
-
 (declare source-value)
 
 (defn- source-key [value]
@@ -204,10 +189,7 @@
                   (vault-note-magi-action idx path "advice" "Advice" nil)])])
       [:div.memory-note-action-group
        [:span "Manual"]
-       (remove nil? review-actions)]
-      [:div.memory-note-action-group
-       [:span "File"]
-       (vault-note-move-form idx path)]]]))
+       (remove nil? review-actions)]]]))
 
 (defn- magi-verdict [review]
   (when-let [payload (:payload review)]
@@ -280,7 +262,7 @@
                          (get by-status status)
                          (+ (count candidates) (count approved) (* 100 offset))))]))
 
-(defn- memory-update-action [idx update-id action label class-name]
+(defn- memory-proposal-magi-action [idx update-id action label class-name]
   (let [form-id (str "memory-update-magi-" idx "-" action)]
     [:form.inline-form {:id form-id}
      [:input {:type "hidden" :name "update_id" :value update-id}]
@@ -291,35 +273,63 @@
                                     "{contentType: 'form', selector: '#" form-id "'})")}
       label]]))
 
-(defn- memory-update-list [updates]
-  (when (seq updates)
+(defn- memory-proposal-decision-action [idx proposal-id decision label class-name]
+  (let [form-id (str "memory-proposal-decision-" idx "-" decision)]
+    [:form.inline-form {:id form-id}
+     [:input {:type "hidden" :name "proposal_id" :value proposal-id}]
+     [:input {:type "hidden" :name "decision" :value decision}]
+     [:button {:type "button"
+               :class class-name
+               "data-on:click" (str "@post('/ui/memory/proposals/decision', "
+                                    "{contentType: 'form', selector: '#" form-id "'})")}
+      label]]))
+
+(defn- memory-proposal-list [system proposals]
+  (when (seq proposals)
     [:section.panel.memory-overview
-     [:h2 "Pending Memory Updates"]
+     [:h2 "Operation Proposals"]
      [:div.memory-note-list
       (map-indexed
-       (fn [idx update]
+       (fn [idx proposal]
          [:article.memory-note-card
           [:header.memory-note-card__header
-           [:h4 (str (:target-id update) " update")]
-           [:span.badge.memory-note-status (:status update)]]
-          [:details {:id (str "memory-update-" (:id update))
+           [:div
+            [:h4 (:target-id proposal)]
+            [:span.memory-note-type (str/replace (:operation proposal) "-" " ")]]
+           [:span.badge.memory-note-status (:status proposal)]]
+          (when (:secondary-target-id proposal)
+            [:p.memory-note-description (str "source: " (:secondary-target-id proposal))])
+          [:details {:id (str "memory-update-" (:id proposal))
                      "data-preserve-attr" "open"}
            [:summary
-            {"data-on:click" (str "@get('/ui/memory/updates/" (:id update) "/detail')")}
+            {"data-on:click" (str "@get('/ui/memory/updates/" (:id proposal) "/detail')")}
             "View diff"]
-           [:div {:id (str "memory-update-detail-" (:id update))} "Loading diff…"]]
+           [:div {:id (str "memory-update-detail-" (:id proposal))} "Loading diff…"]]
           [:footer.memory-note-actions
            [:div.memory-note-actions__controls
-            (memory-update-action idx (:id update) "review" "Review"
-                                  "memory-action--magi")
-            (memory-update-action idx (:id update) "advice" "Advice" nil)]]])
-       updates)]]))
+            [:div.memory-note-action-group
+             [:span "Manual"]
+             (memory-proposal-decision-action idx (:id proposal) "apply" "Apply"
+                                              "memory-action--primary")
+             (memory-proposal-decision-action idx (:id proposal) "reject" "Reject"
+                                              "memory-action--danger")]
+            (when (magi-review/enabled? system)
+              [:div.memory-note-action-group
+               [:span "MAGI"]
+               (memory-proposal-magi-action idx (:id proposal) "review" "Review"
+                                            "memory-action--magi")
+               (memory-proposal-magi-action idx (:id proposal) "advice" "Advice" nil)])]]])
+       proposals)]]))
 
 (defn memory-update-detail-fragment [update]
   (ui-render/render
    (if update
      [:div {:id (str "memory-update-detail-" (:id update))}
-      [:pre.code (:diff update)]]
+      [:pre.code (:diff update)]
+      (when-not (#{"note-move" "note-delete"} (:operation update))
+        [:details.memory-file-source
+         [:summary "Proposed content"]
+         [:pre.code (:proposed-content update)]])]
      [:div#memory-update-detail-missing "Memory update not found."])))
 
 (defn- review-row [kind note]
@@ -506,7 +516,7 @@
       (if (seq notes)
         (vault-note-groups system notes)
         [:div.empty-line "none"])]
-     (memory-update-list updates)
+     (memory-proposal-list system updates)
      (when (or (= (count notes) limit) (= (count updates) update-limit))
        [:button.chat-history-more
         {:type "button"

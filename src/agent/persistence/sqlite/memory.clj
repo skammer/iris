@@ -119,13 +119,18 @@
    :updated-at updated_at})
 
 (defn- row->memory-note-update
-  [{:keys [id target_id target_path base_revision proposed_revision changes_json
+  [{:keys [id operation target_id target_path secondary_target_id secondary_target_path
+           base_revision secondary_base_revision proposed_revision changes_json
            proposed_content diff evidence_json source status decision decision_reason
            created_at updated_at decided_at]}]
   {:id id
+   :operation (or operation "note-update")
    :target-id target_id
    :target-path target_path
+   :secondary-target-id secondary_target_id
+   :secondary-target-path secondary_target_path
    :base-revision base_revision
+   :secondary-base-revision secondary_base_revision
    :proposed-revision proposed_revision
    :changes (or (common/parse-json-string changes_json) {})
    :proposed-content proposed_content
@@ -274,9 +279,13 @@
   [store update]
   (let [now (or (:created-at update) (common/now-str))
         row {:id (:id update)
+             :operation (common/normalize-name (or (:operation update) :note-update))
              :target_id (:target-id update)
              :target_path (:target-path update)
+             :secondary_target_id (:secondary-target-id update)
+             :secondary_target_path (:secondary-target-path update)
              :base_revision (:base-revision update)
+             :secondary_base_revision (:secondary-base-revision update)
              :proposed_revision (:proposed-revision update)
              :changes_json (common/json-string (or (:changes update) {}))
              :proposed_content (:proposed-content update)
@@ -302,7 +311,7 @@
 
 (defn list-memory-note-updates
   ([store] (list-memory-note-updates store {}))
-  ([store {:keys [status target-id limit] :or {limit 100}}]
+  ([store {:keys [status target-id operation limit] :or {limit 100}}]
    (common/with-connection
      store
      #(mapv row->memory-note-update
@@ -310,6 +319,7 @@
                                 (list-memory-note-updates-sqlvec
                                  {:status (common/normalize-name status)
                                   :target_id target-id
+                                  :operation (common/normalize-name operation)
                                   :limit (common/bounded-limit limit 100 1000)})
                                 identity)))))
 

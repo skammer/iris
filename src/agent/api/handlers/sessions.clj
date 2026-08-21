@@ -11,8 +11,8 @@
                                :active-mode (:active-mode session))))
 
 (defn create [system request]
-  (let [{:keys [title]} (h/read-json-body request)
-        session (session-service/create-session! system title)]
+  (let [{:keys [title project_id]} (h/read-json-body request)
+        session (session-service/create-session! system title {:project-id project_id})]
     (responses/json-response 201 (ser/session->response session))))
 
 (defn list-sessions [system request]
@@ -38,6 +38,15 @@
      {:data (ser/session->response
              (with-state system
                (session-service/set-mode! system session-id mode)))})))
+
+(defn set-project [system request session-id]
+  (h/ensure-session-exists! system session-id)
+  (let [project-id (:project_id (h/read-json-body request))]
+    (responses/json-response
+     200
+     {:data (ser/session->response
+             (with-state system
+               (session-service/set-project! system session-id project-id)))})))
 
 (defn list-messages [system _request session-id]
   (h/ensure-session-exists! system session-id)

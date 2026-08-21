@@ -133,8 +133,8 @@
    :domain :memory-promotion
    :expected-response :permit
    :file-review? true
-   :question "Should Iris apply this proposed change to approved memory?"
-   :context {:operation :update
+   :question "Should Iris apply this reviewed memory or skill operation?"
+   :context {:operation (:operation update)
              :proposal-id (:id update)
              :target-id (:target-id update)
              :target-path (:target-path update)
@@ -152,6 +152,34 @@
                                     review-update-body-chars)
              :proposed-body (bounded (:body (vault/note-change-values (:proposed-content update)))
                                      review-update-body-chars)}})
+
+(defn- proposal-content [system proposal]
+  (if (= "skill-update" (:operation proposal))
+    (slurp (:target-path proposal))
+    (:content (memory/read-vault-file (:memory-service system) (:target-path proposal)))))
+
+(defn apply-proposal! [system proposal-id reason]
+  (let [proposal (or (memory/get-memory-note-update (:memory-service system) proposal-id)
+                     (throw (ex-info "Memory proposal not found"
+                                     {:type :not-found :proposal-id proposal-id})))]
+    (if (= "skill-update" (:operation proposal))
+      (let [before (slurp (:target-path proposal))
+            _ (skills/update-proposed-skill!
+               (:skills-registry system)
+               (:target-id proposal)
+               (:base-revision proposal)
+               (:proposed-content proposal))]
+        (try
+          (memory/decide-memory-note-update! (:memory-service system)
+                                             proposal-id :applied :yes reason)
+          (catch Exception e
+            (skills/update-proposed-skill!
+             (:skills-registry system)
+             (:target-id proposal)
+             (:proposed-revision proposal)
+             before)
+            (throw e))))
+      (memory/apply-memory-note-proposal! (:memory-service system) proposal-id reason))))
 
 (defn- emit! [system event]
   (if-let [event-sink (:event-sink system)]
@@ -245,13 +273,11 @@
                        :update-id update-id
                        :status (:status update)})))
     (let [target (sqlite/get-vault-note-by-id (:store system) (:target-id update))
-          scope (or (get-in update [:changes :scope]) (:iris-scope target))]
+          scope (or (get-in update [:changes :scope]) (:iris-scope target) "global")]
       (when-not (scope-allowed? system scope)
         (throw (ex-info "Vault Note scope is outside MAGI promotion scope"
                         {:type :magi-memory-scope-disabled :scope scope})))
-      (let [content (:content (memory/read-vault-file
-                               (:memory-service system)
-                               (:target-path update)))
+      (let [content (proposal-content system update)
             request (update-request-for update content)
             start (System/nanoTime)
             result (magi/decide (:magi-service system) request)
@@ -261,8 +287,7 @@
                                (review-applies? system)
                                (= :yes decision))
             applied (when should-apply?
-                      (memory/apply-memory-note-update!
-                       (:memory-service system) update-id (:reason result)))
+                      (apply-proposal! system update-id (:reason result)))
             rejected (when (and apply? (= :no decision))
                        (memory/decide-memory-note-update!
                         (:memory-service system) update-id :rejected :no (:reason result)))
