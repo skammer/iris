@@ -1,7 +1,6 @@
 (ns agent.tools.common.web
-  "Provider-independent web search and clean page extraction. Tries Tavily,
-   then local Searcharvester without exposing provider credentials or routing
-   controls to the model."
+  "Provider-independent web search and clean page extraction backed by Tavily
+   without exposing provider credentials or routing controls to the model."
   (:require
    [agent.tools.common.http :as http-tool]
    [agent.tools.core :as tools]
@@ -14,13 +13,10 @@
 
 (def default-config
   {:enabled true
-   :provider-order [:tavily :searchharvester]
    :timeout-ms 30000
    :max-response-bytes 1048576
    :extract-max-chars 7000
    :cache-max-entries 256
-   :searchharvester {:enabled true
-                     :base-url "http://127.0.0.1:8000"}
    :tavily {:enabled true
             :base-url "https://api.tavily.com"
             :api-key nil
@@ -30,8 +26,6 @@
   (let [opts* (or opts {})]
     (-> default-config
         (merge opts*)
-        (assoc :searchharvester (merge (:searchharvester default-config)
-                                       (:searchharvester opts*)))
         (assoc :tavily (merge (:tavily default-config)
                               (:tavily opts*))))))
 
@@ -100,17 +94,6 @@
 (defn- provider-url [config provider endpoint]
   (str (str/replace (get-in config [provider :base-url]) #"/$" "") endpoint))
 
-(defn- searchharvester-request! [config endpoint payload]
-  (when-not (true? (get-in config [:searchharvester :enabled]))
-    (throw (tools/tool-error :provider-unavailable
-                             "Searcharvester provider is disabled"
-                             {:provider :searchharvester})))
-  (post-json! config
-              :searchharvester
-              (provider-url config :searchharvester endpoint)
-              payload
-              {}))
-
 (defn- tavily-request! [config endpoint payload]
   (when-not (true? (get-in config [:tavily :enabled]))
     (throw (tools/tool-error :provider-unavailable
@@ -138,56 +121,24 @@
        (filterv #(and (nonblank (:url %))
                       (or (nonblank (:title %)) (nonblank (:content %)))))))
 
-(defn- search-with-provider! [config provider {:keys [query max-results depth topic]}]
-  (case provider
-    :searchharvester
-    (let [response (searchharvester-request! config "/search"
-                                              {:query query
-                                               :max_results max-results})
-          results (normalize-search-results (:results response))]
-      (when (empty? results)
-        (throw (tools/tool-error :empty-web-results
-                                 "Searcharvester returned no search results"
-                                 {:provider provider :query query})))
-      {:provider "searchharvester"
-       :query (or (:query response) query)
-       :results results})
-
-    :tavily
-    (let [response (tavily-request! config "/search"
-                                     {:query query
-                                      :max_results max-results
-                                      :search_depth (name depth)
-                                      :topic (name topic)
-                                      :include_images false
-                                      :include_answer false})
-          results (normalize-search-results (:results response))]
-      (when (empty? results)
-        (throw (tools/tool-error :empty-web-results
-                                 "Tavily returned no search results"
-                                 {:provider provider :query query})))
-      (cond-> {:provider "tavily"
-               :query (or (:query response) query)
-               :results results}
-        (:response_time response) (assoc :response-time (:response_time response))
-        (:request_id response) (assoc :request-id (:request_id response))))
-
-    (throw (tools/validation-error "unsupported web provider" {:provider provider}))))
-
-(defn- route! [providers attempt-fn]
-  (letfn [(attempt [[provider & remaining] errors]
-            (when-not provider
-              (throw (tools/tool-error
-                      :web-providers-failed
-                      "All configured web providers failed"
-                      {:provider-errors errors})))
-            (try
-              (attempt-fn provider)
-              (catch Exception error
-                (attempt remaining
-                         (conj errors {:provider provider
-                                       :error (ex-message error)})))))]
-    (attempt providers [])))
+(defn- search! [config {:keys [query max-results depth topic]}]
+  (let [response (tavily-request! config "/search"
+                                   {:query query
+                                    :max_results max-results
+                                    :search_depth (name depth)
+                                    :topic (name topic)
+                                    :include_images false
+                                    :include_answer false})
+        results (normalize-search-results (:results response))]
+    (when (empty? results)
+      (throw (tools/tool-error :empty-web-results
+                               "Tavily returned no search results"
+                               {:provider :tavily :query query})))
+    (cond-> {:provider "tavily"
+             :query (or (:query response) query)
+             :results results}
+      (:response_time response) (assoc :response-time (:response_time response))
+      (:request_id response) (assoc :request-id (:request_id response)))))
 
 (defn normalize-url [url]
   (let [uri (URI. (str/trim url))
@@ -235,39 +186,30 @@
             :title (:title result)}
            (bounded-content content max-chars))))
 
-(defn- extract-with-provider!
-  [config provider {:keys [url size query chunks-per-source max-chars]}]
-  (case provider
-    :searchharvester
-    (let [response (searchharvester-request! config "/extract"
-                                              {:url url :size (name size)})]
-      (normalized-extract-result provider response max-chars))
-
-    :tavily
-    (let [payload (cond-> {:urls [url]
-                           :extract_depth "advanced"
-                           :format "markdown"
-                           :include_images false
-                           :timeout (/ (:timeout-ms config) 1000.0)}
-                    query (assoc :query query
-                                 :chunks_per_source chunks-per-source))
-          response (tavily-request! config "/extract" payload)
-          result (first (:results response))]
-      (when-not result
-        (throw (tools/tool-error :empty-web-content
-                                 "Tavily returned no extracted result"
-                                 {:provider provider
-                                  :url url
-                                  :failed-results (:failed_results response)})))
-      (cond-> (normalized-extract-result provider result max-chars)
-        (:response_time response) (assoc :response-time (:response_time response))
-        (:request_id response) (assoc :request-id (:request_id response))))
-
-    (throw (tools/validation-error "unsupported web provider" {:provider provider}))))
+(defn- extract!
+  [config {:keys [url query chunks-per-source max-chars]}]
+  (let [payload (cond-> {:urls [url]
+                         :extract_depth "advanced"
+                         :format "markdown"
+                         :include_images false
+                         :timeout (/ (:timeout-ms config) 1000.0)}
+                  query (assoc :query query
+                               :chunks_per_source chunks-per-source))
+        response (tavily-request! config "/extract" payload)
+        result (first (:results response))]
+    (when-not result
+      (throw (tools/tool-error :empty-web-content
+                               "Tavily returned no extracted result"
+                               {:provider :tavily
+                                :url url
+                                :failed-results (:failed_results response)})))
+    (cond-> (normalized-extract-result :tavily result max-chars)
+      (:response_time response) (assoc :response-time (:response_time response))
+      (:request_id response) (assoc :request-id (:request_id response)))))
 
 (defn- cache-key [context input]
   [(:request-id context)
-   (select-keys input [:url :size :query :chunks-per-source :max-chars])])
+   (select-keys input [:url :query :chunks-per-source :max-chars])])
 
 (defn- cache-get [cache key]
   (get-in @cache [:entries key]))
@@ -290,7 +232,7 @@
      {:description
       (tools/create-tool-description
        :web_search
-       "Search the public web. Uses Tavily first and Searcharvester as fallback; returns compact source snippets."
+       "Search the public web with Tavily; returns compact source snippets."
        :category :web
        :timeout-ms (:timeout-ms config)
        :required-permissions #{:http-request}
@@ -308,17 +250,15 @@
         input)
       :health-fn
       (fn [] {:healthy true
-              :details {:provider-order (:provider-order config)
-                        :providers {:searchharvester (true? (get-in config [:searchharvester :enabled]))
-                                    :tavily (true? (get-in config [:tavily :enabled]))}}})
+              :details {:provider :tavily
+                        :enabled (true? (get-in config [:tavily :enabled]))}})
       :execute-fn
       (fn [input _context]
         (let [input* {:query (str/trim (:query input))
                       :max-results (long (or (:max-results input) 5))
                       :depth (keyword (or (:depth input) "basic"))
                       :topic (keyword (or (:topic input) "general"))}]
-          (route! (:provider-order config)
-                  #(search-with-provider! config % input*))))})))
+          (search! config input*)))})))
 
 (defn create-web-extract-tool [opts]
   (let [config (normalize-config opts)
@@ -327,13 +267,12 @@
      {:description
       (tools/create-tool-description
        :web_extract
-       "Extract clean Markdown from one public URL. Uses Tavily advanced first and Searcharvester/Trafilatura as fallback."
+       "Extract clean Markdown from one public URL with Tavily advanced extraction."
        :category :web
        :timeout-ms (:timeout-ms config)
        :required-permissions #{:http-request}
        :input-schema [:map {:closed true}
                       [:url :string]
-                      [:size {:optional true} [:enum "s" "m" "l"]]
                       [:query {:optional true} [:maybe :string]]
                       [:chunks-per-source {:optional true} [:int {:min 1 :max 5}]]
                       [:max-chars {:optional true} [:int {:min 1 :max 25000}]]]
@@ -346,22 +285,19 @@
         (validate-extract-input config input))
       :health-fn
       (fn [] {:healthy true
-              :details {:provider-order (:provider-order config)
-                        :providers {:searchharvester (true? (get-in config [:searchharvester :enabled]))
-                                    :tavily (true? (get-in config [:tavily :enabled]))}
+              :details {:provider :tavily
+                        :enabled (true? (get-in config [:tavily :enabled]))
                         :cache-max-entries (:cache-max-entries config)}})
       :execute-fn
       (fn [input context]
         (let [input* {:url (:url input)
-                      :size (keyword (or (:size input) "m"))
                       :query (nonblank (:query input))
                       :chunks-per-source (long (or (:chunks-per-source input) 3))
                       :max-chars (long (or (:max-chars input) (:extract-max-chars config)))}
               key (cache-key context input*)]
           (if-let [cached (cache-get cache key)]
             (assoc cached :cached true)
-            (let [result (route! (:provider-order config)
-                                 #(extract-with-provider! config % input*))
+            (let [result (extract! config input*)
                   result* (assoc result :cached false)]
               (cache-put! cache (:cache-max-entries config) key result*)))))})))
 

@@ -4,7 +4,6 @@
    [agent.tools.core :as tools]
    [cheshire.core :as json]
    [clj-http.client :as client]
-   [clojure.string :as str]
    [clojure.test :refer [deftest is]])
   (:import
    [java.net InetAddress]))
@@ -22,7 +21,7 @@
    :request-id "request-1"
    :session-id "session-1"})
 
-(deftest web-search-uses-tavily-first
+(deftest web-search-uses-tavily
   (let [requests (atom [])]
     (with-redefs [client/post (fn [url opts]
                                (swap! requests conj [url (json/parse-string (:body opts) true)])
@@ -47,40 +46,16 @@
                   :include_answer false}]]
                @requests))))))
 
-(deftest web-search-falls-back-to-searchharvester
-  (let [requests (atom [])]
-    (with-redefs [client/post (fn [url opts]
-                               (swap! requests conj [url opts])
-                               (if (str/includes? url "api.tavily.com")
-                                 {:status 503 :body "unavailable"}
-                                 {:status 200
-                                  :body (json/generate-string
-                                         {:query "ladybug"
-                                          :results [{:title "LadybugDB"
-                                                     :url "https://ladybugdb.com"
-                                                     :content "Graph database"
-                                                     :score 0.9}]})}))]
-      (let [result (tools/execute-tool (registry {:tavily {:api-key "test-key"}})
-                                       :web_search
-                                       {:query "ladybug" :depth "advanced"}
-                                       context)
-            [searchharvester-url searchharvester-opts] (second @requests)
-            searchharvester-body (json/parse-string (:body searchharvester-opts) true)]
-        (is (= "searchharvester" (:provider result)))
-        (is (= 2 (count @requests)))
-        (is (= "http://127.0.0.1:8000/search" searchharvester-url))
-        (is (= {:query "ladybug" :max_results 5} searchharvester-body))))))
-
 (deftest web-extract-normalizes-url-and-caches-per-request
   (let [calls (atom 0)]
     (with-redefs [client/post (fn [_url _opts]
                                (swap! calls inc)
                                {:status 200
                                 :body (json/generate-string
-                                       {:url "https://example.com/docs"
-                                        :title "Docs"
-                                        :content "# Documentation"})})]
-      (let [registry* (registry {:provider-order [:searchharvester]})
+                                       {:results [{:url "https://example.com/docs"
+                                                   :title "Docs"
+                                                   :raw_content "# Documentation"}]})})]
+      (let [registry* (registry {:tavily {:api-key "test-key"}})
             first-result (tools/execute-tool registry*
                                              :web_extract
                                              {:url "https://EXAMPLE.com:443/docs/"}
@@ -99,7 +74,7 @@
         (is (true? (:cached cached-result)))
         (is (false? (:cached next-run-result)))))))
 
-(deftest web-extract-uses-tavily-advanced-first
+(deftest web-extract-uses-tavily-advanced
   (let [requests (atom [])]
     (with-redefs [client/post (fn [url opts]
                                (swap! requests conj [url opts])
@@ -124,36 +99,13 @@
         (is (= "markdown" (:format tavily-body)))
         (is (= 2 (:chunks_per_source tavily-body)))))))
 
-(deftest web-extract-falls-back-to-searchharvester
-  (let [requests (atom [])]
-    (with-redefs [client/post (fn [url opts]
-                               (swap! requests conj [url opts])
-                               (if (str/includes? url "api.tavily.com")
-                                 {:status 503 :body "unavailable"}
-                                 {:status 200
-                                  :body (json/generate-string
-                                         {:url "https://example.com/article"
-                                          :title "Article"
-                                          :content "# Local Markdown"})}))]
-      (let [result (tools/execute-tool (registry {:tavily {:api-key "test-key"}})
-                                       :web_extract
-                                       {:url "https://example.com/article" :size "s"}
-                                       context)
-            [searchharvester-url searchharvester-opts] (second @requests)
-            searchharvester-body (json/parse-string (:body searchharvester-opts) true)]
-        (is (= "searchharvester" (:provider result)))
-        (is (= 2 (count @requests)))
-        (is (= "http://127.0.0.1:8000/extract" searchharvester-url))
-        (is (= {:url "https://example.com/article" :size "s"}
-               searchharvester-body))))))
-
 (deftest web-extract-bounds-content
   (with-redefs [client/post (fn [_url _opts]
                              {:status 200
                               :body (json/generate-string
-                                     {:url "https://example.com"
-                                      :content "abcdefghij"})})]
-    (let [result (tools/execute-tool (registry {:provider-order [:searchharvester]})
+                                     {:results [{:url "https://example.com"
+                                                 :raw_content "abcdefghij"}]})})]
+    (let [result (tools/execute-tool (registry {:tavily {:api-key "test-key"}})
                                      :web_extract
                                      {:url "https://example.com" :max-chars 4}
                                      context)]

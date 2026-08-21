@@ -18,8 +18,8 @@ Tool-use policy for Iris agents.
 
 ## Web
 
-- `web_search`: provider-independent public web search. Default routing is Tavily, then local Searcharvester fallback.
-- `web_extract`: clean Markdown from one public URL. Default routing is Tavily advanced, then Searcharvester/Trafilatura fallback. Repeated normalized URLs in one run reuse cached extraction.
+- `web_search`: public web search through Tavily.
+- `web_extract`: clean Markdown from one public URL through Tavily advanced extraction. Repeated normalized URLs in one run reuse cached extraction.
 - Use raw `http` only for JSON APIs, RSS, raw source files, and explicit text endpoints such as `llms.txt`. Do not fetch ordinary HTML with `http` when `web_extract` is available.
 - Use `query` with `web_extract` when a long page should return only question-relevant chunks.
 
