@@ -22,6 +22,7 @@
    [agent.tools.common.telegram :as telegram-tool]
    [agent.tools.common.todo :as todo-tool]
    [agent.tools.common.wasm :as wasm-tool]
+   [agent.tools.common.web :as web-tool]
    [agent.tools.core :as tools]
    [agent.wasm.bundles :as wasm-bundles]
    [clojure.set :as set]
@@ -42,6 +43,7 @@
              :skill_propose_update :memory_extract_session
              :message_search :message_get}
    :skills #{:skills_list :skills_read}
+   :web #{:web_search :web_extract}
    :todo #{:todo_write :todo_get :todo_list :todo_search}})
 
 (defn- expand-tool-name [tool]
@@ -200,6 +202,7 @@
            user-profile-service]
     telemetry-collector :telemetry}]
    (let [http-cfg (get cfg :http)
+         web-cfg (get cfg :web)
          fs-cfg (get cfg :fs)
          homeassistant-cfg (get cfg :homeassistant)
          wasm-cfg (get cfg :wasm)
@@ -246,6 +249,10 @@
      (cond-> registry
        (not= false (:enabled http-cfg))
        (tools/register-tool (http-tool/create-http-tool http-cfg))
+
+       (not= false (:enabled web-cfg))
+       (as-> registry*
+             (reduce tools/register-tool registry* (web-tool/create-web-tools web-cfg)))
 
        (not= false (:enabled fs-cfg))
        (as-> registry*

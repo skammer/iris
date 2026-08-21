@@ -163,6 +163,17 @@
                   :allow-private? false
                   :max-redirects 3
                   :default-headers {"User-Agent" "iris/0.1"}}
+           :web {:enabled true
+                 :timeout-ms 30000
+                 :max-response-bytes 1048576
+                 :extract-max-chars 7000
+                 :cache-max-entries 256
+                 :searchharvester {:enabled true
+                                   :base-url "http://127.0.0.1:8000"}
+                 :tavily {:enabled true
+                          :base-url "https://api.tavily.com"
+                          :api-key nil
+                          :api-key-file "~/.config/iris/secrets/tavily-api-key"}}
            :yolo? false
            :max-parallelism 6
            :permissions {:api [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute :cron-read :cron-manage]

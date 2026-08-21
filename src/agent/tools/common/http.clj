@@ -86,6 +86,16 @@
 (defn- default-resolve-host [host]
   (vec (InetAddress/getAllByName host)))
 
+(def ^:private default-config
+  {:default-headers {"User-Agent" "iris/0.1"}
+   :timeout-ms 30000
+   :max-timeout-ms 30000
+   :max-response-bytes 1048576
+   :allow-private? false
+   :max-redirects 3
+   :parallel-safe-read-methods? false
+   :resolve-host-fn default-resolve-host})
+
 (defn- response-location [response]
   (or (get-in response [:headers "Location"])
       (get-in response [:headers "location"])))
@@ -115,6 +125,14 @@
        :host host
        :addresses addresses})))
 
+(defn validate-public-url!
+  "Validate an HTTP(S) URL and reject private-address resolutions. Returns the
+   resolved target so other network tools can reuse the same security policy."
+  ([url]
+   (validate-public-url! {} url))
+  ([opts url]
+   (validate-url! (merge default-config opts {:allow-private? false}) url)))
+
 (defn- pinned-dns-resolver [host addresses]
   (let [host* (str/lower-case host)
         addresses* (into-array InetAddress addresses)]
@@ -137,20 +155,12 @@
 
 (defn create-http-tool
   [opts]
-  (let [config (merge {:default-headers {"User-Agent" "iris/0.1"}
-                       :timeout-ms 30000
-                       :max-timeout-ms 30000
-                       :max-response-bytes 1048576
-                       :allow-private? false
-                       :max-redirects 3
-                       :parallel-safe-read-methods? false
-                       :resolve-host-fn default-resolve-host}
-                      opts)]
+  (let [config (merge default-config opts)]
     (tools/create-tool
      {:description
       (tools/create-tool-description
        :http
-       "HTTP client tool"
+       "Raw HTTP client for JSON APIs, RSS, raw files, and explicit text endpoints. Use web_search/web_extract for web research and HTML pages."
        :category :api
        :timeout-ms (:timeout-ms config)
        :required-permissions #{:http-request}

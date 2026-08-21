@@ -68,6 +68,11 @@
               :supports-vision true}
              (get-in cfg [:llm :providers :openai-compatible :models "gpt-4o-mini"])))
       (is (true? (get-in cfg [:tools :http :enabled])))
+      (is (true? (get-in cfg [:tools :web :enabled])))
+      (is (= "http://127.0.0.1:8000"
+             (get-in cfg [:tools :web :searchharvester :base-url])))
+      (is (= "https://api.tavily.com"
+             (get-in cfg [:tools :web :tavily :base-url])))
       (is (= defaults/chat-max-steps (get-in cfg [:chat :max-steps])))
       (is (= {:max-iterations 10
               :plan-file "LOOP_PLAN.md"

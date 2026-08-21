@@ -16,6 +16,13 @@ Tool-use policy for Iris agents.
 - Use `command` for shell syntax: `{"command":"find . -name '*.md' | head"}`. Iris runs it with `/bin/bash -lc`.
 - Never put either form inside an `arguments` field and never JSON-encode tool input yourself.
 
+## Web
+
+- `web_search`: provider-independent public web search. Default routing is local Searcharvester, then Tavily fallback.
+- `web_extract`: clean Markdown from one public URL. Default routing is Searcharvester/Trafilatura, then Tavily advanced fallback. Repeated normalized URLs in one run reuse cached extraction.
+- Use raw `http` only for JSON APIs, RSS, raw source files, and explicit text endpoints such as `llms.txt`. Do not fetch ordinary HTML with `http` when `web_extract` is available.
+- Use `query` with `web_extract` when a long page should return only question-relevant chunks.
+
 ## Configuration
 
 - Invoke `/iris-config` before inspecting or changing Iris configuration.

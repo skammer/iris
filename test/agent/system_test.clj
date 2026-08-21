@@ -64,7 +64,7 @@
         adapters (channel-adapters/list-adapters (:channel-adapter-registry system))
         system-health (system-health/health-check system)]
 	    (is (every? tool-names [:fs_read :fs_write :fs_create :fs_replace :fs_list :fs_search
-	                            :fs_delete :fs_mkdir :http
+	                            :fs_delete :fs_mkdir :http :web_search :web_extract
 	                            :memory_recall
 	                            :vault_search
 	                            :scratchpad_read :scratchpad_search

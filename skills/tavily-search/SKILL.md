@@ -5,9 +5,12 @@ description: Search the web with Tavily and extract clean Markdown from specific
 
 # Tavily Search and Extract
 
-Use Tavily for current web research. Use search to discover sources and extract
-to read a known page as clean Markdown. Do not fetch ordinary HTML with the raw
-`http` tool when extraction is available.
+Use `web_search` for current web research and `web_extract` to read a known page
+as clean Markdown. They route providers automatically. Do not fetch ordinary
+HTML with raw `http` when extraction is available.
+
+The scripts below are operator fallbacks for direct Tavily access. Normal agent
+work should use the first-class tools.
 
 ## Search
 
