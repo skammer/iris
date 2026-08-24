@@ -87,7 +87,8 @@
   (request! token "getUpdates"
             (cond-> {:timeout timeout
                      :limit limit
-                     :allowed_updates ["message" "callback_query"]}
+                     :allowed_updates ["message" "callback_query"
+                                       "stopped_message_generation"]}
               offset (assoc :offset offset))))
 
 (defn- text-payload
@@ -105,18 +106,37 @@
 
 (declare send-message!)
 
+(defn- input-rich-message
+  [markdown {:keys [media is-rtl? skip-entity-detection?]}]
+  (cond-> {:markdown markdown}
+    (seq media) (assoc :media media)
+    (some? is-rtl?) (assoc :is_rtl (boolean is-rtl?))
+    (some? skip-entity-detection?)
+    (assoc :skip_entity_detection (boolean skip-entity-detection?))))
+
 (defn- send-rich-chunks!
   [token chat-id markdown opts]
   (let [chunks (rich/final-chunks nil markdown)
-        reply-markup (:reply-markup opts)]
+        reply-markup (:reply-markup opts)
+        ephemeral-message-parameters (:ephemeral-message-parameters opts)]
+    (when (and (< 1 (count chunks))
+               (or ephemeral-message-parameters (seq (:media opts))))
+      (throw (ex-info "Rich messages with media or ephemeral parameters must fit in one chunk"
+                      {:type :telegram-rich-message-not-single-chunk
+                       :chunk-count (count chunks)})))
     (if (seq chunks)
       (mapv (fn [idx chunk]
               (request! token "sendRichMessage"
                         (without-link-preview
                          (cond-> {:chat_id chat-id
-                                  :rich_message {:markdown chunk}}
+                                  :rich_message (input-rich-message
+                                                 chunk
+                                                 (if (zero? idx) opts {}))}
                            (and (zero? idx) reply-markup)
-                           (assoc :reply_markup reply-markup)))))
+                           (assoc :reply_markup reply-markup)
+                           (and (zero? idx) ephemeral-message-parameters)
+                           (assoc :ephemeral_message_parameters
+                                  ephemeral-message-parameters)))))
             (range)
             chunks)
       [])))
@@ -177,34 +197,87 @@
                      :message_id message-id}
               (some? reply-markup) (assoc :reply_markup reply-markup))))
 
+(defn edit-rich-message!
+  [token chat-id message-id markdown]
+  (request! token "editMessageText"
+            (without-link-preview
+             {:chat_id chat-id
+              :message_id message-id
+              :rich_message {:markdown markdown}})))
+
 (defn send-rich-message!
-  "Sends a rich message (Bot API 10.1). `markdown` must already be sanitized
-   Rich Markdown within the 32768-char limit (see agent.telegram.rich)."
+  "Sends a rich message. Supports Bot API 10.3 embedded media references and
+   ephemeral-message parameters through opts."
   ([token chat-id markdown] (send-rich-message! token chat-id markdown nil))
-  ([token chat-id markdown {:keys [reply-markup]}]
-   (send-rich-chunks! token chat-id markdown {:reply-markup reply-markup})))
+  ([token chat-id markdown opts]
+   (send-rich-chunks! token chat-id markdown (or opts {}))))
 
 (defn send-rich-message-draft!
   "Streams a partial rich message as an ephemeral draft (private chats only).
    Re-sending with the same draft-id animates the update; the draft must be
    finalized with send-rich-message!."
-  [token chat-id draft-id markdown]
-  (request! token "sendRichMessageDraft"
-            (without-link-preview
-             {:chat_id chat-id
-              :draft_id draft-id
-              :rich_message {:markdown markdown}})))
+  ([token chat-id draft-id markdown]
+   (send-rich-message-draft! token chat-id draft-id markdown nil))
+  ([token chat-id draft-id markdown {:keys [can-stop? keep-on-stop?]}]
+   (request! token "sendRichMessageDraft"
+             (without-link-preview
+              (cond-> {:chat_id chat-id
+                       :draft_id draft-id
+                       :rich_message {:markdown markdown}}
+                (some? can-stop?) (assoc :can_stop (boolean can-stop?))
+                (some? keep-on-stop?) (assoc :keep_on_stop (boolean keep-on-stop?)))))))
 
 (defn send-message-draft!
-  [token chat-id draft-id text]
-  (let [s (str text)
-        clamped (if (> (count s) max-source-chars)
-                  (subs s 0 max-source-chars)
-                  s)
-        payload (text-payload clamped)]
-    (request! token "sendMessageDraft"
-              (without-link-preview
-               (merge {:chat_id chat-id :draft_id draft-id} payload)))))
+  ([token chat-id draft-id text]
+   (send-message-draft! token chat-id draft-id text nil))
+  ([token chat-id draft-id text {:keys [can-stop? keep-on-stop?]}]
+   (let [s (str text)
+         clamped (if (> (count s) max-source-chars)
+                   (subs s 0 max-source-chars)
+                   s)
+         payload (text-payload clamped)]
+     (request! token "sendMessageDraft"
+               (without-link-preview
+                (cond-> (merge {:chat_id chat-id :draft_id draft-id} payload)
+                  (some? can-stop?) (assoc :can_stop (boolean can-stop?))
+                  (some? keep-on-stop?) (assoc :keep_on_stop (boolean keep-on-stop?))))))))
+
+(defn edit-ephemeral-rich-message!
+  [token chat-id receiver-user-id ephemeral-message-id markdown]
+  (request! token "editEphemeralMessageText"
+            (without-link-preview
+             {:chat_id chat-id
+              :receiver_user_id receiver-user-id
+              :ephemeral_message_id ephemeral-message-id
+              :rich_message {:markdown markdown}})))
+
+(defn edit-ephemeral-message-media!
+  [token chat-id receiver-user-id ephemeral-message-id media]
+  (request! token "editEphemeralMessageMedia"
+            {:chat_id chat-id
+             :receiver_user_id receiver-user-id
+             :ephemeral_message_id ephemeral-message-id
+             :media media}))
+
+(defn edit-ephemeral-message-media-file!
+  [token chat-id receiver-user-id ephemeral-message-id media file]
+  (let [attachment-name "ephemeral_media"
+        media* (assoc media :media (str "attach://" attachment-name))]
+    (multipart-request!
+     token
+     "editEphemeralMessageMedia"
+     [{:name "chat_id" :content (str chat-id)}
+      {:name "receiver_user_id" :content (str receiver-user-id)}
+      {:name "ephemeral_message_id" :content (str ephemeral-message-id)}
+      {:name "media" :content (json/generate-string media*)}
+      {:name attachment-name :content (io/file file)}])))
+
+(defn delete-ephemeral-message!
+  [token chat-id receiver-user-id ephemeral-message-id]
+  (request! token "deleteEphemeralMessage"
+            {:chat_id chat-id
+             :receiver_user_id receiver-user-id
+             :ephemeral_message_id ephemeral-message-id}))
 
 (defn- attachment-payload
   [chat-id media-key media caption]

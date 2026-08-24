@@ -18,7 +18,16 @@
          (rich/sanitize-markdown "<details open><summary>t</summary>body</details>")))
   (is (= "<tg-spoiler>s</tg-spoiler>" (rich/sanitize-markdown "<tg-spoiler>s</tg-spoiler>")))
   (is (= "<tg-map lat=\"41.9\" long=\"12.5\" zoom=\"14\"/>"
-         (rich/sanitize-markdown "<tg-map lat=\"41.9\" long=\"12.5\" zoom=\"14\"/>"))))
+         (rich/sanitize-markdown "<tg-map lat=\"41.9\" long=\"12.5\" zoom=\"14\"/>")))
+  (is (= "<tg-button-row align=\"center\"><tg-button type=\"copy_text\" text=\"x\">Copy</tg-button></tg-button-row>"
+         (rich/sanitize-markdown
+          "<tg-button-row align=\"center\"><tg-button type=\"copy_text\" text=\"x\">Copy</tg-button></tg-button-row>")))
+  (is (= "<tg-document src=\"tg://document?id=report\"></tg-document>"
+         (rich/sanitize-markdown
+          "<tg-document src=\"tg://document?id=report\"></tg-document>")))
+  (is (= "<table bordered striped compact><tr><td>x</td></tr></table>"
+         (rich/sanitize-markdown
+          "<table bordered striped compact><tr><td>x</td></tr></table>"))))
 
 (deftest sanitize-skips-code-regions
   (is (= "```html\n<div>x</div>\n```"
@@ -178,7 +187,11 @@
   (is (= "<sub>2</sub>" (rich/rich-text->markdown {:type "subscript" :text "2"})))
   (is (= "||s||" (rich/rich-text->markdown {:type "spoiler" :text "s"})))
   (is (= "x" (rich/rich-text->markdown {:type "wat-future" :text "x"}))
-      "unknown node degrades to inner text"))
+      "unknown node degrades to inner text")
+  (is (= "[Open](https://example.com)"
+         (rich/rich-text->markdown
+          {:type "button"
+           :button {:text "Open" :url "https://example.com"}}))))
 
 (deftest block-conversion
   (is (= "hello" (rich/block->markdown {:type "paragraph" :text "hello"})))
@@ -189,7 +202,13 @@
   (is (= "$$E = mc^2$$"
          (rich/block->markdown {:type "mathematical_expression" :expression "E = mc^2"})))
   (is (= "[photo: a cat]"
-         (rich/block->markdown {:type "photo" :photo [] :caption {:text "a cat"}}))))
+         (rich/block->markdown {:type "photo" :photo [] :caption {:text "a cat"}})))
+  (is (= "[document: report.pdf]"
+         (rich/block->markdown {:type "document" :caption {:text "report.pdf"}})))
+  (is (= "Approve | Deny"
+         (rich/block->markdown {:type "buttons"
+                                :buttons [{:text "Approve" :callback_data "yes"}
+                                          {:text "Deny" :disabled {}}]}))))
 
 (deftest block-list-conversion
   (is (= "- one\n- two"
@@ -215,7 +234,11 @@
                                 :blocks [{:type "paragraph" :text "wisdom"}]
                                 :credit "Author"})))
   (is (= "> pulled"
-         (rich/block->markdown {:type "pullquote" :text "pulled"}))))
+         (rich/block->markdown {:type "pullquote" :text "pulled"})))
+  (is (= "> collapsed\n> — Author"
+         (rich/block->markdown {:type "expandable_blockquote"
+                                :text "collapsed"
+                                :credit "Author"}))))
 
 (deftest block-table-conversion
   (is (= "| H1 | H2 |\n| --- | --- |\n| a | b |"

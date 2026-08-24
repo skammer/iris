@@ -1,5 +1,5 @@
 (ns agent.telegram.rich
-  "Rich messages (Bot API 10.1).
+  "Rich messages (Bot API 10.3).
 
    Outbound: LLM markdown is already GFM-compatible Rich Markdown, so the
    conversion is sanitization rather than translation — unsupported HTML
@@ -37,7 +37,8 @@
     "ul" "ol" "li" "blockquote" "aside" "footer" "details" "summary"
     "table" "caption" "tr" "th" "td" "figure" "figcaption" "img" "video"
     "audio" "tg-spoiler" "tg-emoji" "tg-time" "tg-math" "tg-math-block"
-    "tg-reference" "tg-map" "tg-collage" "tg-slideshow" "tg-thinking"})
+    "tg-reference" "tg-map" "tg-collage" "tg-slideshow" "tg-thinking"
+    "tg-button" "tg-button-row" "tg-document"})
 
 ;; Tags that never take a closing counterpart.
 (def ^:private void-tags
@@ -325,6 +326,11 @@
         :anchor_link inner
         :reference inner
         :reference_link inner
+        :button (let [button (:button node)
+                      label (rich-text->markdown (:text button))]
+                  (if-let [url (:url button)]
+                    (str "[" label "](" url ")")
+                    label))
         inner))
     :else ""))
 
@@ -392,6 +398,8 @@
                (map list-item->markdown)
                (str/join "\n"))
     :blockquote (quote-lines (blocks->markdown (:blocks block)) (:credit block))
+    :expandable_blockquote (quote-lines (rich-text->markdown (:text block))
+                                        (:credit block))
     :pullquote (quote-lines (rich-text->markdown (:text block)) (:credit block))
     (:collage :slideshow) (str/join "\n\n"
                                     (remove nil?
@@ -404,9 +412,14 @@
               (get-in block [:location :longitude]) "]")
     :animation (media-placeholder "animation" block)
     :audio (media-placeholder "audio" block)
+    :document (media-placeholder "document" block)
     :photo (media-placeholder "photo" block)
     :video (media-placeholder "video" block)
     :voice_note (media-placeholder "voice note" block)
+    :buttons (->> (:buttons block)
+                  (map #(rich-text->markdown {:type :button :button %}))
+                  (remove str/blank?)
+                  (str/join " | "))
     (some-> (:text block) rich-text->markdown)))
 
 (defn blocks->markdown [blocks]

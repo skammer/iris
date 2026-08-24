@@ -111,7 +111,10 @@
         accumulator (atom "")
         thinking-accumulator (atom "")
         send-draft! (or (:send-message-draft-fn opts)
-                        (fn [cid did text] (tg-api/send-message-draft! token cid did text)))
+                        (fn [cid did text]
+                          (tg-api/send-message-draft!
+                           token cid did text
+                           {:can-stop? true :keep-on-stop? true})))
         send-msg! (or (:send-message-fn opts)
                       (fn [cid text] (tg-api/send-message! token cid text)))
         send-html! (or (:send-html-message-fn opts)
@@ -146,6 +149,7 @@
      :on-thinking-delta (fn [delta]
                           (swap! thinking-accumulator str delta))
      :finalize-thinking! finalize-thinking!
+     :draft-id draft-id
      :finalize! finalize!
      :stop! (:stop! scheduler)}))
 
@@ -165,11 +169,16 @@
         rich-ok? (atom true)
         send-rich-draft! (or (:send-rich-message-draft-fn opts)
                              (fn [cid did markdown]
-                               (tg-api/send-rich-message-draft! token cid did markdown)))
+                               (tg-api/send-rich-message-draft!
+                                token cid did markdown
+                                {:can-stop? true :keep-on-stop? true})))
         send-rich! (or (:send-rich-message-fn opts)
                        (fn [cid markdown] (tg-api/send-rich-message! token cid markdown)))
         send-draft! (or (:send-message-draft-fn opts)
-                        (fn [cid did text] (tg-api/send-message-draft! token cid did text)))
+                        (fn [cid did text]
+                          (tg-api/send-message-draft!
+                           token cid did text
+                           {:can-stop? true :keep-on-stop? true})))
         send-msg! (or (:send-message-fn opts)
                       (fn [cid text] (tg-api/send-message! token cid text)))
         send-html! (or (:send-html-message-fn opts)
@@ -328,7 +337,9 @@
             finalize-stream! (:finalize! stream-controls)
             send-rich-draft! (or (:send-rich-message-draft-fn opts)
                                  (fn [cid did markdown]
-                                   (tg-api/send-rich-message-draft! token cid did markdown)))
+                                   (tg-api/send-rich-message-draft!
+                                    token cid did markdown
+                                    {:can-stop? true :keep-on-stop? true})))
             send-rich! (or (:send-rich-message-fn opts)
                            (fn [cid markdown]
                              (tg-api/send-rich-message! token cid markdown)))

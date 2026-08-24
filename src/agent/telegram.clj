@@ -25,11 +25,14 @@
 
 (defn- update-message [update]
   (or (:message update)
-      (get-in update [:callback_query :message])))
+      (get-in update [:callback_query :message])
+      (when-let [chat (get-in update [:stopped_message_generation :chat])]
+        {:chat chat})))
 
 (defn- update-user-id [update]
   (or (some-> update :message :from :id)
-      (some-> update :callback_query :from :id)))
+      (some-> update :callback_query :from :id)
+      (some-> update :stopped_message_generation :chat :id)))
 
 (defn allowed?
   [config update]
@@ -46,11 +49,23 @@
 
 (defn- stop-chat!
   [system opts chat-id session-id]
+  (when-let [finalize! (:finalize! (get @(:active-tasks opts) chat-id))]
+    (finalize!))
   (chat/cancel-session! system session-id)
   (when-let [task (:future (get @(:active-tasks opts) chat-id))]
-    (future-cancel task)
-    (swap! (:active-tasks opts) dissoc chat-id))
+    (future-cancel task))
+  (swap! (:active-tasks opts) dissoc chat-id)
   {:content "Stopping."})
+
+(defn- deref-if-needed [value]
+  (if (instance? clojure.lang.IDeref value) @value value))
+
+(defn- active-generation
+  [opts chat-id draft-id]
+  (let [active (get @(:active-tasks opts) chat-id)]
+    (when (and active
+               (= draft-id (deref-if-needed (:draft-id active))))
+      active)))
 
 (defn- telegram-operation-failed!
   [system chat-id operation error]
@@ -264,6 +279,14 @@
                     (fn [cid text] (tg-api/send-message! token cid text))))
         stop-typing! (tg-streaming/start-typing-indicator! safe-telegram! system config opts chat-id)
         stream-controls (tg-streaming/build-controls safe-telegram! system config opts chat chat-id)
+        _ (when (and stream-controls (:active-tasks opts))
+            (swap! (:active-tasks opts)
+                   (fn [tasks]
+                     (if (contains? tasks chat-id)
+                       (update tasks chat-id assoc
+                               :draft-id (:draft-id stream-controls)
+                               :finalize! (:finalize! stream-controls))
+                       tasks))))
         tool-call-controls (tg-streaming/build-tool-call-controls
                             safe-telegram!
                             system
@@ -325,11 +348,29 @@
   (let [opts (cond-> opts
                (nil? (:active-tasks opts)) (assoc :active-tasks (atom {})))
         callback-query (:callback_query update)
+        stopped-generation (:stopped_message_generation update)
         message (:message update)
         chat (:chat message)
         chat-id (:id chat)
         text (:text message)]
     (cond
+	      stopped-generation
+	      (if-not (allowed? config update)
+	        :blocked
+	        (let [chat-id (get-in stopped-generation [:chat :id])
+	              draft-id (:draft_id stopped-generation)]
+	          (if-let [active (active-generation opts chat-id draft-id)]
+	            (do
+	              (stop-chat! system opts chat-id (:session-id active))
+	              (when-let [event-sink (:event-sink system)]
+	                (event-sink {:event-type :telegram.generation-stopped
+	                             :entity-type :telegram_chat
+	                             :entity-id (str chat-id)
+	                             :payload {:chat-id chat-id
+	                                       :draft-id draft-id}}))
+	              :processed)
+	            :ignored)))
+
 	      callback-query
 	      (if-not (allowed? config update)
 	        (do

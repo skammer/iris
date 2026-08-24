@@ -399,9 +399,49 @@
       (is (= [{:method "getUpdates"
                :body {:timeout 1
                       :limit 2
-                      :allowed_updates ["message" "callback_query"]
+                      :allowed_updates ["message" "callback_query"
+                                        "stopped_message_generation"]
                       :offset 10}}]
              @calls)))))
+
+(deftest telegram-native-stop-preserves-partial-and-cancels-matching-draft
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        finalized (atom 0)
+        events (atom [])
+        active-tasks (atom {100 {:session-id "session-1"
+                                 :draft-id (atom 42)
+                                 :finalize! #(swap! finalized inc)}})
+        system {:store store :event-sink #(swap! events conj %)}
+        config {:allowlist {:user-ids ["100"]}}
+        update {:update_id 1
+                :stopped_message_generation
+                {:chat {:id 100 :type "private"}
+                 :draft_id 42}}]
+    (try
+      (is (= :processed
+             (telegram/process-update! system config {:active-tasks active-tasks} update)))
+      (is (= 1 @finalized))
+      (is (nil? (get @active-tasks 100)))
+      (is (= :telegram.generation-stopped
+             (:event-type (last @events))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-native-stop-ignores-stale-draft
+  (let [active-tasks (atom {100 {:session-id "session-1"
+                                 :draft-id (atom 41)}})
+        update {:update_id 1
+                :stopped_message_generation
+                {:chat {:id 100 :type "private"}
+                 :draft_id 42}}]
+    (is (= :ignored
+           (telegram/process-update! {:event-sink (fn [_] nil)}
+                                     {:allowlist {:allow-all? true}}
+                                     {:active-tasks active-tasks}
+                                     update)))
+    (is (contains? @active-tasks 100))))
 
 (deftest telegram-approval-card-puts-details-in-expandable-quote
   (let [approval {:id "app-1"
@@ -414,6 +454,53 @@
     (is (str/includes? html "<blockquote expandable>details"))
     (is (str/includes? html "approval_id: app-1"))
     (is (str/includes? html "&lt;x&gt;"))))
+
+(deftest telegram-rich-approval-card-uses-native-buttons
+  (let [approval {:id "app-1"
+                  :tool-name "shell"
+                  :input {}}
+        pending (telegram-approvals/rich-card-html approval)
+        completed (telegram-approvals/rich-card-html approval :completed)]
+    (is (str/includes? pending "<tg-button-row align=\"left\">"))
+    (is (str/includes? pending "type=\"callback_data\" style=\"success\""))
+    (is (str/includes? pending "data=\"ta:run:app-1\""))
+    (is (str/includes? pending "style=\"danger\""))
+    (is (str/includes? completed "type=\"disabled\" style=\"success\""))))
+
+(deftest telegram-rich-approval-callback-disables-native-buttons
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        edits (atom [])
+        approval (tool-approvals/create-request!
+                  store
+                  {:tool-name :shell
+                   :input {:argv ["pwd"]}
+                   :requested-by "telegram-session"})
+        callback (assoc-in
+                  (callback-update-for 1 100 7 55
+                                       (str "ta:deny:" (:id approval)))
+                  [:callback_query :message :rich_message]
+                  {:blocks []})
+        system {:store store :event-sink (fn [_] nil)}
+        config {:bot-token "token"
+                :rich-messages? true
+                :allowlist {:allow-all? true}}
+        opts {:edit-rich-message-fn
+              (fn [chat-id message-id markdown]
+                (swap! edits conj {:chat-id chat-id
+                                   :message-id message-id
+                                   :markdown markdown}))
+              :answer-callback-query-fn (fn [& _] nil)
+              :send-message-fn (fn [& _] nil)}]
+    (try
+      (is (= :processed (telegram/process-update! system config opts callback)))
+      (is (= 1 (count @edits)))
+      (is (str/includes? (:markdown (first @edits))
+                         "type=\"disabled\" style=\"danger\""))
+      (is (str/includes? (:markdown (first @edits)) ">Denied</tg-button>"))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
 
 (deftest telegram-approval-callback-approves-and-runs-tool
   (let [path (temp-db-path)
@@ -1572,6 +1659,74 @@
                     :rich_message {:markdown "partial"}
                     :link_preview_options {:is_disabled true}}}]
            @calls))))
+
+(deftest telegram-bot-api-10-3-rich-ephemeral-and-stop-payloads
+  (let [calls (atom [])]
+    (with-redefs [telegram-api/request! (fn [_ method body]
+                                          (swap! calls conj {:method method :body body})
+                                          {:ephemeral_message_id 9})]
+      (telegram-api/send-rich-message!
+       "token" -100 "<tg-document src=\"tg://document?id=report\"></tg-document>"
+       {:media [{:id "report"
+                 :media {:type "document" :media "file-id"}}]
+        :ephemeral-message-parameters {:receiver_user_id 7
+                                       :callback_query_id "cb-1"
+                                       :replace_callback_query_message true}})
+      (telegram-api/send-message-draft!
+       "token" 100 42 "partial" {:can-stop? true :keep-on-stop? true})
+      (telegram-api/send-rich-message-draft!
+       "token" 100 42 "partial" {:can-stop? true :keep-on-stop? true})
+      (telegram-api/edit-ephemeral-rich-message! "token" -100 7 9 "done")
+      (telegram-api/edit-ephemeral-message-media!
+       "token" -100 7 9 {:type "document" :media "new-file-id"})
+      (telegram-api/delete-ephemeral-message! "token" -100 7 9))
+    (is (= [{:method "sendRichMessage"
+             :body {:chat_id -100
+                    :rich_message
+                    {:markdown "<tg-document src=\"tg://document?id=report\"></tg-document>"
+                     :media [{:id "report"
+                              :media {:type "document" :media "file-id"}}]}
+                    :ephemeral_message_parameters
+                    {:receiver_user_id 7
+                     :callback_query_id "cb-1"
+                     :replace_callback_query_message true}
+                    :link_preview_options {:is_disabled true}}}
+            {:method "sendMessageDraft"
+             :body {:chat_id 100 :draft_id 42
+                    :text "partial" :parse_mode "MarkdownV2"
+                    :can_stop true :keep_on_stop true
+                    :link_preview_options {:is_disabled true}}}
+            {:method "sendRichMessageDraft"
+             :body {:chat_id 100 :draft_id 42
+                    :rich_message {:markdown "partial"}
+                    :can_stop true :keep_on_stop true
+                    :link_preview_options {:is_disabled true}}}
+            {:method "editEphemeralMessageText"
+             :body {:chat_id -100 :receiver_user_id 7 :ephemeral_message_id 9
+                    :rich_message {:markdown "done"}
+                    :link_preview_options {:is_disabled true}}}
+            {:method "editEphemeralMessageMedia"
+             :body {:chat_id -100 :receiver_user_id 7 :ephemeral_message_id 9
+                    :media {:type "document" :media "new-file-id"}}}
+            {:method "deleteEphemeralMessage"
+             :body {:chat_id -100 :receiver_user_id 7 :ephemeral_message_id 9}}]
+           @calls))))
+
+(deftest telegram-ephemeral-media-supports-new-file-upload
+  (let [call (atom nil)]
+    (with-redefs [telegram-api/multipart-request!
+                  (fn [token method parts]
+                    (reset! call {:token token :method method :parts parts})
+                    true)]
+      (telegram-api/edit-ephemeral-message-media-file!
+       "token" -100 7 9 {:type "document"} "/tmp/report.pdf"))
+    (is (= "token" (:token @call)))
+    (is (= "editEphemeralMessageMedia" (:method @call)))
+    (is (= ["chat_id" "receiver_user_id" "ephemeral_message_id" "media"
+            "ephemeral_media"]
+           (mapv :name (:parts @call))))
+    (is (= "{\"type\":\"document\",\"media\":\"attach://ephemeral_media\"}"
+           (:content (nth (:parts @call) 3))))))
 
 (deftest telegram-rich-draft-failure-during-thinking-shows-placeholder
   ;; Regression: a rich-draft rejection mid-thinking used to leave the chat

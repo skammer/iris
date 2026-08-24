@@ -46,6 +46,33 @@
        (tool-display/escape-html-truncated (approval-details approval) 3000)
        "</blockquote>"))
 
+(defn- rich-buttons-html
+  [approval-id status]
+  (if status
+    (let [[label style] (case status
+                          :running ["Running" "primary"]
+                          :completed ["Completed" "success"]
+                          :denied ["Denied" "danger"]
+                          :failed ["Failed" "danger"])]
+      (str "<tg-button-row align=\"left\">"
+           "<tg-button type=\"disabled\" style=\"" style "\">"
+           label
+           "</tg-button></tg-button-row>"))
+    (str "<tg-button-row align=\"left\">"
+         "<tg-button type=\"callback_data\" style=\"success\" data=\""
+         (callback-data :run approval-id)
+         "\">Approve &amp; run</tg-button>"
+         "<tg-button type=\"callback_data\" style=\"danger\" data=\""
+         (callback-data :deny approval-id)
+         "\">Deny</tg-button>"
+         "</tg-button-row>")))
+
+(defn rich-card-html
+  ([approval] (rich-card-html approval nil))
+  ([approval status]
+   (str (card-html approval) "\n\n"
+        (rich-buttons-html (:id approval) status))))
+
 (defn keyboard [approval-id]
   {:inline_keyboard [[{:text "Approve & run"
                        :callback_data (callback-data :run approval-id)}
@@ -55,13 +82,25 @@
 (defn send-card!
   [safe-telegram! system config opts chat-id approval]
   (let [token (:bot-token config)
-        send! (or (:send-html-message-with-reply-markup-fn opts)
-                  (fn [cid text reply-markup]
-                    (tg-api/send-html-message-with-reply-markup! token cid text reply-markup)))]
+        rich? (true? (:rich-messages? config))
+        send-rich! (or (:send-rich-message-fn opts)
+                       (fn [cid markdown]
+                         (tg-api/send-rich-message! token cid markdown)))
+        send-legacy! (or (:send-html-message-with-reply-markup-fn opts)
+                         (fn [cid text reply-markup]
+                           (tg-api/send-html-message-with-reply-markup!
+                            token cid text reply-markup)))]
     (safe-telegram! system chat-id :approval-card
-                    #(send! chat-id
-                            (card-html approval)
-                            (keyboard (:id approval))))))
+                    #(if rich?
+                       (try
+                         (send-rich! chat-id (rich-card-html approval))
+                         (catch Exception _
+                           (send-legacy! chat-id
+                                         (card-html approval)
+                                         (keyboard (:id approval)))))
+                       (send-legacy! chat-id
+                                     (card-html approval)
+                                     (keyboard (:id approval)))))))
 
 (defn- actor [callback-query]
   (str "telegram:" (get-in callback-query [:from :id])))
@@ -142,6 +181,21 @@
     (safe-telegram! system chat-id :approval-keyboard-clear
                     #(edit! chat-id message-id nil))))
 
+(defn- settle-approval-card!
+  [safe-telegram! system config opts callback-query approval status]
+  (let [chat-id (get-in callback-query [:message :chat :id])
+        message-id (get-in callback-query [:message :message_id])]
+    (if (some? (get-in callback-query [:message :rich_message]))
+      (let [token (:bot-token config)
+            edit! (or (:edit-rich-message-fn opts)
+                      (fn [cid mid markdown]
+                        (tg-api/edit-rich-message! token cid mid markdown)))]
+        (safe-telegram! system chat-id :approval-rich-update
+                        #(edit! chat-id message-id
+                                (rich-card-html approval status))))
+      (when (contains? #{:running :denied} status)
+        (remove-callback-keyboard! safe-telegram! system config opts chat-id message-id)))))
+
 (defn answer-callback!
   [safe-telegram! system config opts callback-query text & [{:keys [alert?]}]]
   (let [token (:bot-token config)
@@ -159,14 +213,15 @@
 (defn process-callback!
   [safe-telegram! continue! system config opts callback-query {:keys [action approval-id]}]
   (let [chat-id (get-in callback-query [:message :chat :id])
-        message-id (get-in callback-query [:message :message_id])
         send! (or (:send-message-fn opts)
                   (fn [cid text] (tg-api/send-message! (:bot-token config) cid text)))
         actor* (actor callback-query)]
     (case action
       :deny
       (let [{:keys [already?]} (ensure-denied! (:store system) approval-id actor*)]
-        (remove-callback-keyboard! safe-telegram! system config opts chat-id message-id)
+        (settle-approval-card! safe-telegram! system config opts callback-query
+                               (tool-approvals/get-request (:store system) approval-id)
+                               :denied)
         (answer-callback! safe-telegram! system config opts callback-query
                           (if already? "Already denied." "Denied."))
         (when-not already?
@@ -176,14 +231,25 @@
       :run
       (do
         (ensure-approved-for-run! (:store system) approval-id actor*)
-        (remove-callback-keyboard! safe-telegram! system config opts chat-id message-id)
+        (settle-approval-card! safe-telegram! system config opts callback-query
+                               (tool-approvals/get-request (:store system) approval-id)
+                               :running)
         (answer-callback! safe-telegram! system config opts callback-query "Running.")
-        (let [{:keys [tool-name input result approval]} (execute-approved-tool! system chat-id approval-id actor*)]
-          (send! chat-id (approved-status-text tool-name))
-          (continue! (get-in callback-query [:message :chat])
-                     chat-id
-                     (:requested-by approval)
-                     tool-name
-                     input
-                     result))
+        (try
+          (let [{:keys [tool-name input result approval]}
+                (execute-approved-tool! system chat-id approval-id actor*)]
+            (settle-approval-card! safe-telegram! system config opts callback-query
+                                   approval :completed)
+            (send! chat-id (approved-status-text tool-name))
+            (continue! (get-in callback-query [:message :chat])
+                       chat-id
+                       (:requested-by approval)
+                       tool-name
+                       input
+                       result))
+          (catch Exception e
+            (settle-approval-card! safe-telegram! system config opts callback-query
+                                   (tool-approvals/get-request (:store system) approval-id)
+                                   :failed)
+            (throw e)))
         :processed))))
