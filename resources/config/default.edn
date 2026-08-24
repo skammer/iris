@@ -339,6 +339,10 @@
                                 :max-download-bytes 20971520
 	                                :document-roots ["."]
 	                                :max-document-bytes 20971520
+	                                :session-reset {:mode :none
+	                                                :idle-minutes 1440
+	                                                :at-hour 4
+	                                                :notify? true}
 	                                :allowlist {:allow-all? false
 	                                            :user-ids []
 	                                            :chat-ids []}}}

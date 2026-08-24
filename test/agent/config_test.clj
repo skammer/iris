@@ -208,6 +208,10 @@
               :max-download-bytes 20971520
               :document-roots ["."]
               :max-document-bytes 20971520
+              :session-reset {:mode :none
+                              :idle-minutes 1440
+                              :at-hour 4
+                              :notify? true}
               :allowlist {:allow-all? false
                           :user-ids []
                           :chat-ids []}}
@@ -243,6 +247,20 @@
   (with-isolated-config [_root {"AGENT_TELEGRAM_RICH_MESSAGES" "false"}]
     (let [cfg (config/load-config)]
       (is (false? (get-in cfg [:channel-adapters :telegram :rich-messages?]))))))
+
+(deftest telegram-session-reset-policy-validation-test
+  (with-isolated-config [root {}]
+    (let [global-dir (io/file root "home" ".config" "iris")
+          config-file (io/file global-dir "config.edn")]
+      (.mkdirs global-dir)
+      (spit config-file
+            (pr-str {:channel-adapters
+                     {:telegram {:session-reset {:mode :idle
+                                                 :idle-minutes 0}}}}))
+      (let [data (thrown-data #(config/load-config))]
+        (is (= :config-invalid (:type data)))
+        (is (= [:channel-adapters :telegram :session-reset :idle-minutes]
+               (-> data :errors first :path)))))))
 
 (deftest invalid-env-bool-fails-with-env-context-test
   (with-isolated-config [_root {"AGENT_TOOLS_YOLO" "maybe"}]

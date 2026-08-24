@@ -69,22 +69,25 @@
          vec)))
 
 (defn response
-  [system chat command-text]
-  (when (str/starts-with? command-text "/")
-    (let [mapping (telegram-sessions/ensure-session! (:store system) chat)
-          session-id (:session-id mapping)
-          {:keys [command rest]} (parse-args command-text)]
-      (case command
-        "/start" "Ready. Send message to chat."
-        "/help" "/start /help /stop /reset /memory /status /prompt [name|off] /loop [prompt|status|stop|run|plan] /skills [prefix] /photo <url> [caption] /file <url> [caption]"
-        "/reset" (do
-                   (telegram-sessions/reset-session! (:store system) chat)
-                   "Session reset.")
-        "/memory" (memory-status system session-id)
-        "/status" (status-text system session-id)
-        "/prompt" (prompt-command-response (:store system) session-id rest)
-        "/skills" (skills-command-response system rest)
-        nil))))
+  ([system chat command-text]
+   (response system chat command-text nil))
+  ([system chat command-text mapping]
+   (when (str/starts-with? command-text "/")
+     (let [mapping* (or mapping
+                        (telegram-sessions/ensure-session! (:store system) chat))
+           session-id (:session-id mapping*)
+           {:keys [command rest]} (parse-args command-text)]
+       (case command
+         "/start" "Ready. Send message to chat."
+         "/help" "/start /help /stop /reset /memory /status /prompt [name|off] /loop [prompt|status|stop|run|plan] /skills [prefix] /photo <url> [caption] /file <url> [caption]"
+         "/reset" (do
+                    (telegram-sessions/reset-session! (:store system) chat)
+                    "Session reset.")
+         "/memory" (memory-status system session-id)
+         "/status" (status-text system session-id)
+         "/prompt" (prompt-command-response (:store system) session-id rest)
+         "/skills" (skills-command-response system rest)
+         nil)))))
 
 (defn- split-caption [s]
   (let [parts (str/split s #"\s+" 2)

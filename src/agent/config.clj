@@ -345,6 +345,10 @@
                                   :max-download-bytes 20971520
 	                                  :document-roots ["."]
 	                                  :max-document-bytes 20971520
+	                                  :session-reset {:mode :none
+	                                                  :idle-minutes 1440
+	                                                  :at-hour 4
+	                                                  :notify? true}
 	                                  :allowlist {:allow-all? false
 	                                              :user-ids []
 	                                              :chat-ids []}}}
@@ -631,6 +635,29 @@
       {:path path
        :message (str (str/join "/" (map name path)) " must be positive")})))
 
+(defn- telegram-session-reset-config-errors [cfg]
+  (let [{:keys [mode idle-minutes at-hour]}
+        (get-in cfg [:channel-adapters :telegram :session-reset])
+        mode* (cond
+                (keyword? mode) mode
+                (string? mode) (keyword (str/lower-case mode))
+                :else mode)]
+    (vec
+     (concat
+      (when-not (contains? #{:none :idle :daily :both} mode*)
+        [{:path [:channel-adapters :telegram :session-reset :mode]
+          :message "Telegram session reset mode must be :none, :idle, :daily, or :both"}])
+      (when (and (#{:idle :both} mode*)
+                 (or (not (number? idle-minutes))
+                     (not (pos? (long idle-minutes)))))
+        [{:path [:channel-adapters :telegram :session-reset :idle-minutes]
+          :message "Telegram session reset idle-minutes must be positive"}])
+      (when (and (#{:daily :both} mode*)
+                 (or (not (integer? at-hour))
+                     (not (<= 0 (long at-hour) 23))))
+        [{:path [:channel-adapters :telegram :session-reset :at-hour]
+          :message "Telegram session reset at-hour must be between 0 and 23"}])))))
+
 (def ^:private legacy-llm-config-keys
   (set (concat [:provider :default-provider]
                legacy-llm-provider-option-keys
@@ -698,6 +725,9 @@
 
       true
       (into (cron-config-errors cfg))
+
+      true
+      (into (telegram-session-reset-config-errors cfg))
 
       true
       (into (keep #(positive-number-error cfg %)

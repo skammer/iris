@@ -500,38 +500,75 @@
     (row->channel-session mapping)))
 
 (defn ensure-channel-session!
-  [store {:keys [source external-chat-id title metadata]}]
+  [store {:keys [source external-chat-id title metadata now touch? rotation-reason-fn]}]
   (common/with-transaction
     store
     (fn [conn]
       (let [source* (common/normalize-name source)
             external-chat-id* (str external-chat-id)
-            now (common/now-str)
-            existing (common/select-one
-                      conn
-                      (get-channel-session-mapping-sqlvec
-                       {:source source*
-                        :external_chat_id external-chat-id*})
-                      identity)]
-        (if existing
-          (row->channel-session existing)
-          (let [session-id (common/uuid-str)
+            now* (or now (common/now-str))
+            lookup {:source source*
+                    :external_chat_id external-chat-id*}
+            existing-row (common/select-one conn
+                                            (get-channel-session-mapping-sqlvec lookup)
+                                            identity)
+            existing (some-> existing-row row->channel-session)
+            reset-reason (when (and existing rotation-reason-fn)
+                           (rotation-reason-fn existing))]
+        (cond
+          reset-reason
+          (let [previous-session-id (:session-id existing)
+                session-id (common/uuid-str)
                 session {:id session-id
                          :title title
-                         :created_at now}
+                         :created_at now*}
                 mapping {:source source*
                          :external_chat_id external-chat-id*
                          :session_id session-id
                          :metadata_json (common/json-string metadata)
-                         :created_at now
-                         :updated_at now}]
+                         :created_at now*
+                         :updated_at now*}]
+            (common/execute! conn (insert-session-ignore-sqlvec session))
+            (common/execute! conn (upsert-channel-session-mapping-sqlvec mapping))
+            (assoc (row->channel-session
+                    (common/select-one conn
+                                       (get-channel-session-mapping-sqlvec lookup)
+                                       identity))
+                   :reset-reason reset-reason
+                   :previous-session-id previous-session-id))
+
+          existing
+          (do
+            (when touch?
+              (common/execute! conn
+                               (touch-channel-session-mapping-sqlvec
+                                {:source source*
+                                 :external_chat_id external-chat-id*
+                                 :metadata_json (common/json-string metadata)
+                                 :updated_at now*})))
+            (if touch?
+              (row->channel-session
+               (common/select-one conn
+                                  (get-channel-session-mapping-sqlvec lookup)
+                                  identity))
+              existing))
+
+          :else
+          (let [session-id (common/uuid-str)
+                session {:id session-id
+                         :title title
+                         :created_at now*}
+                mapping {:source source*
+                         :external_chat_id external-chat-id*
+                         :session_id session-id
+                         :metadata_json (common/json-string metadata)
+                         :created_at now*
+                         :updated_at now*}]
             (common/execute! conn (insert-session-ignore-sqlvec session))
             (common/execute! conn (insert-channel-session-mapping-ignore-sqlvec mapping))
             (row->channel-session
              (common/select-one conn
-                                (get-channel-session-mapping-sqlvec
-                                 {:source source*
-                                  :external_chat_id external-chat-id*})
+                                (get-channel-session-mapping-sqlvec lookup)
                                 identity))))))))
 
 (defn reset-channel-session!

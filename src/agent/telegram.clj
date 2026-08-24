@@ -403,7 +403,10 @@
                                  :payload {:chat-id chat-id
                                            :user-id (get-in message [:from :id])}})
           :blocked)
-        (let [send! (or send-message-fn #(tg-api/send-message! (:bot-token config) %1 %2))]
+        (let [send! (or send-message-fn #(tg-api/send-message! (:bot-token config) %1 %2))
+              reset-policy (cond-> (:session-reset config)
+                             (get @(:active-tasks opts) chat-id) (assoc :mode :none))
+              mapping (tg-sessions/ensure-session! (:store system) chat reset-policy)]
           ((:event-sink system) {:event-type :channel.message.received
                                  :entity-type :channel
                                  :entity-id "telegram"
@@ -414,11 +417,24 @@
                                            :sender-id (some-> message :from :id str)
                                            :media-count (tg-media/count-media message)
                                            :thread-scope (str chat-id)}})
+          (when-let [reason (:reset-reason mapping)]
+            (when-let [event-sink (:event-sink system)]
+              (event-sink {:event-type :telegram.session.auto-reset
+                           :entity-type :telegram_chat
+                           :entity-id (str chat-id)
+                           :payload {:chat-id chat-id
+                                     :reason reason
+                                     :previous-session-id (:previous-session-id mapping)
+                                     :session-id (:session-id mapping)}}))
+            (when (not= false (:notify? reset-policy))
+              (send! chat-id (case reason
+                               :idle "Session reset after inactivity."
+                               :daily "Session reset at the daily boundary."
+                               "Session reset."))))
           (cond
             (and (not (str/blank? text))
                  (= "/stop" (-> text str/trim str/lower-case (str/split #"\s+") first)))
-            (let [mapping (tg-sessions/ensure-session! (:store system) chat)
-                  result (stop-chat! system opts chat-id (:session-id mapping))]
+            (let [result (stop-chat! system opts chat-id (:session-id mapping))]
               (send! chat-id (:content result))
               :processed)
 
@@ -428,11 +444,10 @@
 
             :else
             (let [builtin-reply (when-not (str/blank? text)
-                                  (tg-commands/response system chat text))]
+                                  (tg-commands/response system chat text mapping))]
               (if builtin-reply
                 (do (send! chat-id builtin-reply) :processed)
-                (let [mapping (tg-sessions/ensure-session! (:store system) chat)
-                      content (try
+                (let [content (try
                                 (tg-media/user-content! config opts message)
                                 (catch Exception e
                                   (send! chat-id (str "Media processing failed: " (.getMessage e)))

@@ -8,12 +8,15 @@
    [agent.telegram :as telegram]
    [agent.telegram.api :as telegram-api]
    [agent.telegram.approvals :as telegram-approvals]
+   [agent.telegram.sessions :as telegram-sessions]
    [agent.telegram.streaming :as telegram-streaming]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.service :as tool-service]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [clojure.test :refer [deftest is testing]]))
+   [clojure.test :refer [deftest is testing]])
+  (:import
+   (java.time Instant)))
 
 (defn temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-telegram-" ".db")))
@@ -140,6 +143,128 @@
              (:session-id (second @calls))))
       (is (not= (:session-id (first @calls))
                 (:session-id (nth @calls 2))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-session-reset-policy-rotates-after-idle
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        chat {:id 100 :type "private" :first_name "Test"}
+        policy {:mode :idle :idle-minutes 1440}
+        start (Instant/parse "2026-08-20T10:00:00Z")]
+    (try
+      (let [first-mapping (telegram-sessions/ensure-session! store chat policy start)
+            active-mapping (telegram-sessions/ensure-session!
+                            store chat policy (.plusSeconds start (* 23 60 60)))
+            reset-mapping (telegram-sessions/ensure-session!
+                           store chat policy (.plusSeconds start (* 48 60 60)))]
+        (is (= (:session-id first-mapping) (:session-id active-mapping)))
+        (is (not= (:session-id active-mapping) (:session-id reset-mapping)))
+        (is (= :idle (:reset-reason reset-mapping)))
+        (is (= (:session-id active-mapping) (:previous-session-id reset-mapping))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-session-reset-policy-default-keeps-session
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        chat {:id 100 :type "private" :first_name "Test"}
+        start (Instant/parse "2026-01-01T00:00:00Z")]
+    (try
+      (let [before (telegram-sessions/ensure-session! store chat nil start)
+            after (telegram-sessions/ensure-session!
+                   store chat nil (.plusSeconds start (* 365 24 60 60)))]
+        (is (= (:session-id before) (:session-id after)))
+        (is (nil? (:reset-reason after))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-session-reset-policy-rotates-at-daily-boundary
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        chat {:id 100 :type "private" :first_name "Test"}
+        policy {:mode :daily :at-hour 4}
+        start (Instant/parse "2026-08-20T00:00:00Z")]
+    (try
+      (let [before (telegram-sessions/ensure-session! store chat policy start)
+            after (telegram-sessions/ensure-session!
+                   store chat policy (.plusSeconds start (* 48 60 60)))]
+        (is (not= (:session-id before) (:session-id after)))
+        (is (= :daily (:reset-reason after))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-session-reset-policy-does-not-expire-legacy-mapping-on-first-touch
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        chat {:id 100 :type "private" :first_name "Test"}
+        policy {:mode :idle :idle-minutes 60}
+        old (Instant/parse "2026-01-01T00:00:00Z")
+        now (Instant/parse "2026-08-24T00:00:00Z")]
+    (try
+      (let [legacy (sqlite/ensure-channel-session!
+                    store
+                    {:source :telegram
+                     :external-chat-id 100
+                     :title "Telegram: Test"
+                     :metadata {:chat chat}
+                     :now (str old)})
+            first-touch (telegram-sessions/ensure-session! store chat policy now)
+            after-idle (telegram-sessions/ensure-session!
+                        store chat policy (.plusSeconds now 3601))]
+        (is (= (:session-id legacy) (:session-id first-touch)))
+        (is (nil? (:reset-reason first-touch)))
+        (is (not= (:session-id first-touch) (:session-id after-idle)))
+        (is (= :idle (:reset-reason after-idle))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-session-auto-reset-notifies-and-uses-new-session
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        events (atom [])
+        sent (atom [])
+        calls (atom [])
+        chat {:id 100 :type "private" :first_name "Test"}
+        old-mapping (sqlite/ensure-channel-session!
+                     store
+                     {:source :telegram
+                      :external-chat-id 100
+                      :title "Telegram: Test"
+                      :metadata {:chat chat :session-reset-tracked? true}
+                      :now (str (.minusSeconds (Instant/now) 7200))})
+        system {:store store
+                :event-bus (system-events/create-event-bus)
+                :event-sink #(swap! events conj %)}
+        config {:bot-token "token"
+                :session-reset {:mode :idle :idle-minutes 60 :notify? true}
+                :allowlist {:allow-all? true}}
+        opts {:send-message-fn (fn [chat-id text]
+                                 (swap! sent conj {:chat-id chat-id :text text}))
+              :send-message-draft-fn (fn [& _] nil)
+              :send-chat-action-fn (fn [& _] nil)}]
+    (try
+      (with-redefs [chat/run! (chat-stub
+                               (fn [{:keys [session-id]} emit!]
+                                 (swap! calls conj session-id)
+                                 (emit! :message-end {:content "pong" :final? true})
+                                 {:content "pong"}))]
+        (is (= :processed
+               (telegram/process-update! system config opts (update-for 1 100 7 "hi")))))
+      (is (= ["Session reset after inactivity." "pong"]
+             (mapv :text @sent)))
+      (is (= 1 (count @calls)))
+      (is (not= (:session-id old-mapping) (first @calls)))
+      (is (= :idle
+             (get-in (first (filter #(= :telegram.session.auto-reset
+                                            (:event-type %))
+                                    @events))
+                     [:payload :reason])))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))

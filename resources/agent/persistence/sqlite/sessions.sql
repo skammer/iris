@@ -223,6 +223,13 @@ insert or ignore into channel_session_mappings
 values
   (:source, :external_chat_id, :session_id, :metadata_json, :created_at, :updated_at)
 
+-- :name touch-channel-session-mapping :! :n
+update channel_session_mappings
+set metadata_json = :metadata_json,
+    updated_at = :updated_at
+where source = :source
+  and external_chat_id = :external_chat_id
+
 -- :name get-channel-offset :? :1
 select source, next_offset, updated_at
 from channel_offsets
