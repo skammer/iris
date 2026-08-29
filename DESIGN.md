@@ -248,10 +248,13 @@ Color creates section recognition but never replaces the tab label. Component pa
 | `--card-violet` / `--card-violet-ink` | `#dfb7e8` / `#56227c` | Automate and scheduled work |
 | `--card-graphite` / `--card-graphite-ink` | `#38494f` / `#f7f4ed` | Review and decisions |
 | `--card-mint` / `--card-mint-ink` | `#cce9cb` / `#1d6734` | Remember and durable knowledge |
+| `--card-black` / `--card-black-ink` | `#20201f` / `#f8f6ef` | Focused execution |
+| `--card-yellow` / `--card-yellow-ink` | `#f2e6a2` / `#5b4214` | Attention without failure |
+| `--card-red` / `--card-red-ink` | `#d7194b` / `#fff7f8` | Failure and incident response |
 | `--card-bg` / `--card-ink` | Per-section aliases | Active card surface and foreground |
 | `--tab-bg` / `--tab-ink` | Per-section aliases | Attached tab surface and foreground |
 
-Tabs change instantly; only hover and press feedback animate. On narrow screens, horizontal sets scroll as a unit and vertical labels retain their edge attachment.
+Tabs use angled shoulders instead of rounded rectangles, matching physical binder indexes. Inactive indexes keep a directional cast shadow; the selected index visually joins the card without one. Cards keep the same radius on all four corners and compact internal spacing for catalogue-like information density. Tabs change instantly; only hover and press feedback animate. On narrow screens, horizontal sets scroll as a unit and vertical labels retain their edge attachment.
 
 ### Menus, popovers, tooltips
 

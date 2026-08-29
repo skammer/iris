@@ -11,6 +11,7 @@ All notable project changes are recorded here. New entries go at the top.
 ### Changed
 
 - Updated active Iris web typography to Ioskeley Mono 2.1.0, using the optimized web subset for Latin UI and the Web Full build for Cyrillic fallback.
+- Extended card tabs with black, yellow, and red section palettes; added compact card spacing and cast shadows on inactive tabs, replaced rounded tab rectangles with angled binder-tab silhouettes, and restored equal card radii on every corner.
 
 ## 2026-08-15
 

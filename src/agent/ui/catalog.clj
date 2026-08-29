@@ -53,7 +53,28 @@
     :title "Memory catalogue"
     :meta "248 notes · indexed"
     :description "Durable knowledge, recent updates and retrieval quality share one recognisable home."
-    :items ["User preferences" "Deployment notes" "Project decisions"]}])
+    :items ["User preferences" "Deployment notes" "Project decisions"]}
+   {:id "focus"
+    :tone "black"
+    :label "Focus"
+    :title "Focused execution"
+    :meta "1 task · uninterrupted"
+    :description "A near-black section isolates the current task when everything else should recede."
+    :items ["Single active objective" "No pending interruptions" "Exit path preserved"]}
+   {:id "attention"
+    :tone "yellow"
+    :label "Attention"
+    :title "Needs attention"
+    :meta "3 checks · non-blocking"
+    :description "Warm yellow groups work that needs an operator soon without reading as a failure."
+    :items ["Battery below target" "Schedule overlaps" "Review due today"]}
+   {:id "incident"
+    :tone "red"
+    :label "Incident"
+    :title "Incident response"
+    :meta "1 failure · action required"
+    :description "Red is reserved for broken state, destructive consequence and immediate recovery work."
+    :items ["Delivery unavailable" "Retries exhausted" "Rollback ready"]}])
 
 (defn- card-tab [orientation {:keys [id tone label]} selected?]
   [:button.ui-card-tab
