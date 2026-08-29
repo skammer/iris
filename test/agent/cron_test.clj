@@ -223,6 +223,26 @@
            (:resolved-model overridden)))
     (is (= :cron-observe (get-in overridden [:resolved-tools :tool-profile])))))
 
+(deftest cron-agent-notification-snapshot-allows-notify-tool-test
+  (let [{:keys [path store]} (temp-store)
+        system (test-system store)
+        service (:cron-service system)
+        job (cron-service/create-job!
+             service
+             {:name "notify" :prompt "Report"
+              :schedule {:kind :cron :expression "0 9 * * *"}
+              :notification {:policy :agent
+                             :target {:kind :channel :adapter :telegram :recipient "123"}}}
+             {:created-by "test"})]
+    (try
+      (let [persisted (cron-service/get-job service (:id job))
+            snapshot (#'cron-service/snapshot service persisted)]
+        (is (= "agent" (get-in persisted [:notification :policy])))
+        (is (some #{:cron_notify} (:allowed-tools snapshot))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest cron-claim-session-and-overlap-test
   (let [{:keys [path store]} (temp-store)
         job (cron-store/create-job!

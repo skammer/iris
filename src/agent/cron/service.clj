@@ -177,7 +177,7 @@
         profile (resolve-profile service job)
         notification (:notification job)
         allowed (cond-> (:allowed-tools profile)
-                  (= :agent (:policy notification)) (conj :cron_notify))]
+                  (= :agent (some-> notification :policy keyword)) (conj :cron_notify))]
     (merge {:job-id (:id job) :job-revision (:revision job) :name (:name job)
             :prompt (:prompt job) :schedule (:schedule job) :timezone (:timezone job)
             :notification notification}
