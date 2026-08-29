@@ -97,9 +97,31 @@
 (defn- send-lifecycle-message!
   [system config opts chat-id operation content]
   (let [send! (or (:send-message-fn opts)
-                  (fn [cid text] (tg-api/send-message! (:bot-token config) cid text)))]
+                  (fn [cid text] (tg-api/send-message! (:bot-token config) cid text)))
+        send-with-markup! (or (:send-message-with-reply-markup-fn opts)
+                              (when-not (:send-message-fn opts)
+                                (fn [cid text reply-markup]
+                                  (tg-api/send-message-with-reply-markup!
+                                   (:bot-token config) cid text reply-markup)))
+                              (fn [cid text _] (send! cid text)))]
     (safe-telegram! system chat-id operation
-                    #(send! chat-id content))))
+                    #(if (= :agent-start-notification operation)
+                       (send-with-markup! chat-id content {:remove_keyboard true})
+                       (send! chat-id content)))))
+
+(defn- cancel-pending-reply-keyboard!
+  [system chat-id]
+  (when-let [pending* (:telegram-reply-keyboards system)]
+    (when-let [pending (get @pending* chat-id)]
+      (some-> (:future pending) future-cancel)
+      (swap! pending* dissoc chat-id))))
+
+(defn- cancel-all-pending-reply-keyboards!
+  [system]
+  (when-let [pending* (:telegram-reply-keyboards system)]
+    (doseq [{:keys [future]} (vals @pending*)]
+      (some-> future future-cancel))
+    (reset! pending* {})))
 
 (defn- parse-chat-id [value]
   (let [value* (str value)]
@@ -137,7 +159,8 @@
        (= "agent-end" (:event-type event))))
 
 (defn- run-chat-events!
-  [system config opts chat-id session-id messages stream-controls tool-call-controls]
+  [system config opts chat-id session-id messages stream-controls tool-call-controls
+   reply-keyboard-active?]
   (let [broker-instance (or (:event-bus system) (:broker system))
         subscription (broker/subscribe! broker-instance (broker/all-events-subject)
                                          {:buffer-strategy :sliding
@@ -229,6 +252,14 @@
                     (on-start! payload)))
                 (when (and event
                            (session-event? event session-id "tool-execution-end"))
+                  (when (and (= "telegram_ask"
+                                (some-> (or (:tool-name payload)
+                                            (get-in payload [:receipt :tool-name]))
+                                        name))
+                             (= :ok (some-> (or (:status payload)
+                                                (get-in payload [:receipt :status]))
+                                            keyword)))
+                    (reset! reply-keyboard-active? true))
                   (when-let [on-end! (:on-end! tool-call-controls)]
                     (on-end! {:receipt (:receipt payload)
                               :tool-call (:tool-call payload)})))
@@ -273,6 +304,10 @@
    tool-call summaries, approval cards, and final reply delivery."
   [system config opts chat chat-id session-id messages]
   (let [token (:bot-token config)
+        reply-keyboard-active? (atom false)
+        opts (assoc opts
+                    :clear-reply-keyboard? true
+                    :reply-keyboard-active? reply-keyboard-active?)
         send! (if (tg-rich/enabled? config)
                 (rich-send-fn system config opts)
                 (or (:send-message-fn opts)
@@ -298,7 +333,7 @@
                             stream-controls)
         result (try
                  (run-chat-events! system config opts chat-id session-id messages
-                                   stream-controls tool-call-controls)
+                                   stream-controls tool-call-controls reply-keyboard-active?)
                  (finally
                    (stop-typing!)
                    (when-let [stop-tool-calls! (:stop! tool-call-controls)]
@@ -403,10 +438,19 @@
                                  :payload {:chat-id chat-id
                                            :user-id (get-in message [:from :id])}})
           :blocked)
-        (let [send! (or send-message-fn #(tg-api/send-message! (:bot-token config) %1 %2))
+        (let [send-plain! (or send-message-fn #(tg-api/send-message! (:bot-token config) %1 %2))
+              send-with-markup! (or (:send-message-with-reply-markup-fn opts)
+                                    (when-not send-message-fn
+                                      (fn [cid content reply-markup]
+                                        (tg-api/send-message-with-reply-markup!
+                                         (:bot-token config) cid content reply-markup)))
+                                    (fn [cid content _] (send-plain! cid content)))
+              send! (fn [cid content]
+                      (send-with-markup! cid content {:remove_keyboard true}))
               reset-policy (cond-> (:session-reset config)
                              (get @(:active-tasks opts) chat-id) (assoc :mode :none))
               mapping (tg-sessions/ensure-session! (:store system) chat reset-policy)]
+          (cancel-pending-reply-keyboard! system chat-id)
           ((:event-sink system) {:event-type :channel.message.received
                                  :entity-type :channel
                                  :entity-id "telegram"
@@ -579,6 +623,7 @@
    (when service
      (let [was-running? @(:running? service)]
        (when was-running?
+         (cancel-all-pending-reply-keyboards! (current-system (:system service)))
          (notify-lifecycle! (:system service) (:config service) (:opts service)
                             :agent-stop-notification
                             agent-stopped-content)))

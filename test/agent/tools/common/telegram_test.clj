@@ -62,7 +62,8 @@
                (-> @calls first :body :document)))))))
 
 (deftest ask-tool-sends-reply-keyboard
-  (let [calls (atom [])]
+  (let [calls (atom [])
+        reply-keyboards (atom {})]
     (with-redefs [telegram-api/send-message-with-reply-markup!
                   (fn [token chat-id text reply-markup]
                     (swap! calls conj {:token token
@@ -70,7 +71,9 @@
                                        :text text
                                        :reply-markup reply-markup})
                     {:ok true})]
-      (let [tool (t-tool/create-ask-tool {:bot-token "t"})
+      (let [tool (t-tool/create-ask-tool {:bot-token "t"
+                                          :reply-keyboards reply-keyboards
+                                          :ask-timeout-seconds 3600})
             result (tools/execute tool
                                   {:question "Deploy?"
                                    :choices ["Yes" "No" "Later"]
@@ -86,7 +89,34 @@
                                 :resize_keyboard true
                                 :one_time_keyboard true
                                 :input_field_placeholder "Pick option"}}]
-               @calls))))))
+               @calls))
+        (is (some? (get @reply-keyboards 200)))
+        (future-cancel (:future (get @reply-keyboards 200)))))))
+
+(deftest ask-tool-expires-and-removes-reply-keyboard
+  (let [calls (atom [])
+        expired (promise)
+        reply-keyboards (atom {})]
+    (with-redefs [telegram-api/send-message-with-reply-markup!
+                  (fn [_ chat-id text reply-markup]
+                    (swap! calls conj {:chat-id chat-id
+                                       :text text
+                                       :reply-markup reply-markup})
+                    (when (= {:remove_keyboard true} reply-markup)
+                      (deliver expired true))
+                    {:ok true})]
+      (let [tool (t-tool/create-ask-tool {:bot-token "t"
+                                          :reply-keyboards reply-keyboards
+                                          :ask-timeout-seconds 1})]
+        (tools/execute tool
+                       {:question "Still needed?" :choices ["Yes" "No"]}
+                       {:telegram-chat-id 200})
+        (is (= true (deref expired 2000 false)))
+        (is (= {:chat-id 200
+                :text "Question expired."
+                :reply-markup {:remove_keyboard true}}
+               (last @calls)))
+        (is (nil? (get @reply-keyboards 200)))))))
 
 (deftest send-document-tool-uploads-local-file-inside-root
   (let [tmp (java.nio.file.Files/createTempDirectory "iris-telegram-doc" (make-array java.nio.file.attribute.FileAttribute 0))

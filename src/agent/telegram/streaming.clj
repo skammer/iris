@@ -44,6 +44,11 @@
   (= "Bad Request: RICH_MESSAGE_EMPTY"
      (get-in (ex-data error) [:body :description])))
 
+(defn- final-reply-markup [opts]
+  (when (and (:clear-reply-keyboard? opts)
+             (not (some-> (:reply-keyboard-active? opts) deref true?)))
+    {:remove_keyboard true}))
+
 (defn- next-draft-id []
   ;; Stream and tool-status controls coexist in one chat; random allocation
   ;; avoids adjacent timestamp ids colliding after either control rotates.
@@ -117,6 +122,12 @@
                            {:can-stop? true :keep-on-stop? true})))
         send-msg! (or (:send-message-fn opts)
                       (fn [cid text] (tg-api/send-message! token cid text)))
+        send-msg-with-markup! (or (:send-message-with-reply-markup-fn opts)
+                                  (when-not (:send-message-fn opts)
+                                    (fn [cid text reply-markup]
+                                      (tg-api/send-message-with-reply-markup!
+                                       token cid text reply-markup)))
+                                  (fn [cid text _] (send-msg! cid text)))
         send-html! (or (:send-html-message-fn opts)
                        (fn [cid text] (tg-api/send-html-message! token cid text)))
         do-flush! (fn []
@@ -142,7 +153,9 @@
                         (finalize-thinking!)
                         (when-not (str/blank? text)
                           (safe-telegram! system chat-id :draft-finalize
-                                          #(send-msg! chat-id text))))))]
+                                          #(if-let [reply-markup (final-reply-markup opts)]
+                                             (send-msg-with-markup! chat-id text reply-markup)
+                                             (send-msg! chat-id text)))))))]
     {:on-delta (fn [delta]
                  (swap! accumulator str delta)
                  ((:request! scheduler)))
@@ -174,6 +187,12 @@
                                 {:can-stop? true :keep-on-stop? true})))
         send-rich! (or (:send-rich-message-fn opts)
                        (fn [cid markdown] (tg-api/send-rich-message! token cid markdown)))
+        send-rich-with-markup! (or (:send-rich-message-with-reply-markup-fn opts)
+                                   (when-not (:send-rich-message-fn opts)
+                                     (fn [cid markdown reply-markup]
+                                       (tg-api/send-rich-message!
+                                        token cid markdown {:reply-markup reply-markup})))
+                                   (fn [cid markdown _] (send-rich! cid markdown)))
         send-draft! (or (:send-message-draft-fn opts)
                         (fn [cid did text]
                           (tg-api/send-message-draft!
@@ -181,6 +200,12 @@
                            {:can-stop? true :keep-on-stop? true})))
         send-msg! (or (:send-message-fn opts)
                       (fn [cid text] (tg-api/send-message! token cid text)))
+        send-msg-with-markup! (or (:send-message-with-reply-markup-fn opts)
+                                  (when-not (:send-message-fn opts)
+                                    (fn [cid text reply-markup]
+                                      (tg-api/send-message-with-reply-markup!
+                                       token cid text reply-markup)))
+                                  (fn [cid text _] (send-msg! cid text)))
         send-html! (or (:send-html-message-fn opts)
                        (fn [cid text] (tg-api/send-html-message! token cid text)))
         thinking-now (fn [] (str @pending-thinking @thinking-accumulator))
@@ -198,7 +223,9 @@
                                              #(send-html! chat-id (thinking-quote-html thinking))))
                            (when-not (str/blank? text)
                              (safe-telegram! system chat-id :draft-finalize
-                                             #(send-msg! chat-id text))))
+                                             #(if-let [reply-markup (final-reply-markup opts)]
+                                                (send-msg-with-markup! chat-id text reply-markup)
+                                                (send-msg! chat-id text)))))
         do-flush! (fn []
                     (let [text @accumulator
                           thinking (thinking-now)]
@@ -235,8 +262,15 @@
                           (if @rich-ok?
                             (safe-telegram! system chat-id :rich-finalize
                                             #(try
-                                               (doseq [chunk (rich/final-chunks thinking text)]
-                                                 (send-rich! chat-id chunk))
+                                               (doseq [[idx chunk]
+                                                       (map-indexed vector
+                                                                    (rich/final-chunks thinking text))]
+                                                 (if-let [reply-markup
+                                                          (and (zero? idx)
+                                                               (final-reply-markup opts))]
+                                                   (send-rich-with-markup!
+                                                    chat-id chunk reply-markup)
+                                                   (send-rich! chat-id chunk)))
                                                (catch Exception e
                                                  (reset! rich-ok? false)
                                                  (legacy-finalize! thinking text)

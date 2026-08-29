@@ -303,6 +303,7 @@
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path :evict-on-close? true})
         sent (atom [])
+        marked (atom [])
         system {:store store
                 :config {:channel-adapters {:telegram {:enabled true
                                                        :bot-token "token"
@@ -316,7 +317,12 @@
                                     (Thread/sleep 50)
                                     [])
                   :send-message-fn (fn [chat-id text]
-                                     (swap! sent conj {:chat-id chat-id :text text}))})]
+                                     (swap! sent conj {:chat-id chat-id :text text}))
+                  :send-message-with-reply-markup-fn
+                  (fn [chat-id text reply-markup]
+                    (swap! marked conj {:chat-id chat-id
+                                        :text text
+                                        :reply-markup reply-markup}))})]
     (try
       (sqlite/ensure-channel-session!
        store
@@ -325,13 +331,15 @@
         :title "Telegram: Test"
         :metadata {:chat {:id 100 :type "private"}}})
       (telegram/start! service)
-      (is (= [{:chat-id 100 :text "Agent started."}] @sent))
+      (is (= [{:chat-id 100
+               :text "Agent started."
+               :reply-markup {:remove_keyboard true}}]
+             @marked))
+      (is (empty? @sent))
       (telegram/stop! service 1000)
-      (is (= [{:chat-id 100 :text "Agent started."}
-              {:chat-id 100 :text "Agent stopped."}]
-             @sent))
+      (is (= [{:chat-id 100 :text "Agent stopped."}] @sent))
       (telegram/stop! service 1000)
-      (is (= 2 (count @sent)))
+      (is (= 1 (count @sent)))
       (finally
         (telegram/stop! service 1000)
         (sqlite/close-store! store)
@@ -1439,6 +1447,76 @@
       (testing "legacy senders untouched"
         (is (empty? @(:sent recorders)))
         (is (empty? @(:html-sent recorders))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-rich-final-clears-stale-reply-keyboard
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        rich-sent (atom [])
+        rich-with-markup (atom [])
+        expiry (future (Thread/sleep 60000))
+        reply-keyboards (atom {100 {:id "old" :future expiry}})
+        system {:store store
+                :event-bus (system-events/create-event-bus)
+                :event-sink (fn [_] nil)
+                :telegram-reply-keyboards reply-keyboards}
+        opts (assoc (recording-opts
+                     {:sent (atom []) :html-sent (atom []) :drafts (atom [])
+                      :rich-sent rich-sent :rich-drafts (atom [])})
+                    :send-rich-message-with-reply-markup-fn
+                    (fn [chat-id markdown reply-markup]
+                      (swap! rich-with-markup conj
+                             {:chat-id chat-id
+                              :markdown markdown
+                              :reply-markup reply-markup})))]
+    (try
+      (with-redefs [chat/run! (chat-stub
+                               (fn [_ emit!]
+                                 (emit! :message-update {:delta "fresh answer"})
+                                 (emit! :message-end {:content "fresh answer" :final? true})
+                                 {:content "fresh answer"}))]
+        (is (= :processed
+               (telegram/process-update! system (rich-test-config) opts
+                                         (update-for 1 100 7 "new context")))))
+      (is (= [{:chat-id 100
+               :markdown "fresh answer"
+               :reply-markup {:remove_keyboard true}}]
+             @rich-with-markup))
+      (is (nil? (get @reply-keyboards 100)))
+      (is (empty? @rich-sent))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-rich-final-keeps-keyboard-from-current-ask
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path :evict-on-close? true})
+        rich-sent (atom [])
+        rich-with-markup (atom [])
+        system {:store store
+                :event-bus (system-events/create-event-bus)
+                :event-sink (fn [_] nil)}
+        opts (assoc (recording-opts
+                     {:sent (atom []) :html-sent (atom []) :drafts (atom [])
+                      :rich-sent rich-sent :rich-drafts (atom [])})
+                    :send-rich-message-with-reply-markup-fn
+                    (fn [& args] (swap! rich-with-markup conj args)))]
+    (try
+      (with-redefs [chat/run! (chat-stub
+                               (fn [_ emit!]
+                                 (emit! :tool-execution-end
+                                        {:receipt {:tool-name "telegram_ask"
+                                                   :status :ok}})
+                                 (emit! :message-update {:delta "waiting"})
+                                 (emit! :message-end {:content "waiting" :final? true})
+                                 {:content "waiting"}))]
+        (is (= :processed
+               (telegram/process-update! system (rich-test-config) opts
+                                         (update-for 1 100 7 "ask me")))))
+      (is (empty? @rich-with-markup))
+      (is (some #(= "waiting" (:markdown %)) @rich-sent))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))

@@ -125,7 +125,9 @@
     (assoc :input_field_placeholder input-placeholder)))
 
 (defn create-ask-tool
-  [{:keys [bot-token]}]
+  [{:keys [bot-token reply-keyboards ask-timeout-seconds]}]
+  (let [reply-keyboards (or reply-keyboards (atom {}))
+        timeout-ms (* 1000 (long (or ask-timeout-seconds 3600)))]
   (tools/create-tool
    {:description
     (tools/create-tool-description
@@ -143,19 +145,49 @@
     (fn [input context]
       (let [chat-id (require-chat-id! context :telegram_ask)
             question (:question input)
-            choices (mapv str (:choices input))]
+            choices (mapv str (:choices input))
+            ask-id (str (java.util.UUID/randomUUID))
+            previous (get @reply-keyboards chat-id)]
         (require-non-blank! :telegram_ask :question question)
         (doseq [choice choices]
           (require-non-blank! :telegram_ask :choices choice))
-        (telegram-api/send-message-with-reply-markup!
-         bot-token
-         chat-id
-         question
-         (reply-keyboard (assoc input :choices choices)))
+        (swap! reply-keyboards assoc chat-id {:id ask-id})
+        (some-> (:future previous) future-cancel)
+        (try
+          (telegram-api/send-message-with-reply-markup!
+           bot-token
+           chat-id
+           question
+           (reply-keyboard (assoc input :choices choices)))
+          (let [expiry (future
+                         (Thread/sleep timeout-ms)
+                         (when (= ask-id (:id (get @reply-keyboards chat-id)))
+                           (try
+                             (telegram-api/send-message-with-reply-markup!
+                              bot-token chat-id "Question expired."
+                              {:remove_keyboard true})
+                             (finally
+                               (swap! reply-keyboards
+                                      (fn [pending]
+                                        (if (= ask-id (:id (get pending chat-id)))
+                                          (dissoc pending chat-id)
+                                          pending)))))))]
+            (swap! reply-keyboards
+                   (fn [pending]
+                     (if (= ask-id (:id (get pending chat-id)))
+                       (assoc-in pending [chat-id :future] expiry)
+                       (do (future-cancel expiry) pending)))))
+          (catch Exception e
+            (swap! reply-keyboards
+                   (fn [pending]
+                     (if (= ask-id (:id (get pending chat-id)))
+                       (dissoc pending chat-id)
+                       pending)))
+            (throw e)))
         {:sent true
          :chat-id chat-id
          :awaiting-reply true
-         :choices choices}))}))
+         :choices choices}))})))
 
 (defn enabled?
   [{:keys [bot-token]}]

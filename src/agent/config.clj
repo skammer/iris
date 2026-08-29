@@ -342,6 +342,7 @@
                                   :rich-messages? true
                                   :poll-timeout-seconds 30
                                   :poll-limit 100
+                                  :ask-timeout-seconds 3600
                                   :max-download-bytes 20971520
 	                                  :document-roots ["."]
 	                                  :max-document-bytes 20971520
@@ -748,7 +749,8 @@
                    [:cron :max-concurrency]
                    [:cron :run-timeout-seconds]
                    [:cron :misfire-grace-seconds]
-                   [:cron :output-max-chars]])))))
+                   [:cron :output-max-chars]
+                   [:channel-adapters :telegram :ask-timeout-seconds]])))))
 
 (defn- validate-config! [cfg]
   (let [errors (config-validation-errors cfg)]

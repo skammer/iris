@@ -205,6 +205,7 @@
               :rich-messages? true
               :poll-timeout-seconds 30
               :poll-limit 100
+              :ask-timeout-seconds 3600
               :max-download-bytes 20971520
               :document-roots ["."]
               :max-document-bytes 20971520

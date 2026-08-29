@@ -199,7 +199,7 @@
     :skills-registry :channel-adapters-cfg :system-control :observer :trace}"
   [{:keys [cfg event-sink store memory-service skills-registry channel-adapters-cfg cron-service
            system-control observer trace magi-service note-llm-provider llm-provider
-           user-profile-service]
+           user-profile-service telegram-reply-keyboards]
     telemetry-collector :telemetry}]
    (let [http-cfg (get cfg :http)
          web-cfg (get cfg :web)
@@ -309,7 +309,9 @@
        (telegram-tool/enabled? telegram-cfg)
        (-> (tools/register-tool (telegram-tool/create-send-photo-tool telegram-cfg))
            (tools/register-tool (telegram-tool/create-send-document-tool telegram-cfg))
-           (tools/register-tool (telegram-tool/create-ask-tool telegram-cfg)))
+           (tools/register-tool
+            (telegram-tool/create-ask-tool
+             (assoc telegram-cfg :reply-keyboards telegram-reply-keyboards))))
 
        system-control
        (-> (tools/register-tool (handoff-tool system-control))

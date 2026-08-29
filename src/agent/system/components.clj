@@ -116,6 +116,7 @@
        :user-profile-service (:user-profile-service system)
        :skills-registry (:skills-registry system)
        :cron-service (:cron-service system)
+       :telegram-reply-keyboards (:telegram-reply-keyboards system)
        :channel-adapters-cfg (:channel-adapters cfg)
        :system-control (:system-control system)
        :observer (:observer system)
@@ -169,7 +170,8 @@
                                                  llm-provider))
         chat-service (system-health/with-component-health health-registry :chat
                        #(chat/create-service))
-        cron-service (cron/create-service system-ref store (:cron cfg))]
+        cron-service (cron/create-service system-ref store (:cron cfg))
+        telegram-reply-keyboards (atom {})]
     (logging/log! :agent.system.lifecycle/created
                   {:config-path config-path
                    :provider (name (config/active-provider-key (:llm cfg)))
@@ -194,6 +196,7 @@
                        :event-sink event-sink
                        :chat-service chat-service
                        :cron-service cron-service
+                       :telegram-reply-keyboards telegram-reply-keyboards
                        :memory-idle-service (create-memory-idle-service system-ref)
                        :memory-magi-review-service (create-memory-magi-review-service system-ref)
                        :skills-registry (create-skills-registry-from-config cfg)
