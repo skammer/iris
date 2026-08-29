@@ -254,7 +254,7 @@ Color creates section recognition but never replaces the tab label. Component pa
 | `--card-bg` / `--card-ink` | Per-section aliases | Active card surface and foreground |
 | `--tab-bg` / `--tab-ink` | Per-section aliases | Attached tab surface and foreground |
 
-Tabs use angled shoulders instead of rounded rectangles, matching physical binder indexes. Inactive indexes keep a directional cast shadow; the selected index visually joins the card without one. Cards keep the same radius on all four corners and compact internal spacing for catalogue-like information density. Tabs change instantly; only hover and press feedback animate. On narrow screens, horizontal sets scroll as a unit and vertical labels retain their edge attachment.
+Tabs sit partly behind the card: only their rounded outer body and tapering attachment are visible, matching physical binder indexes. Inactive indexes receive the card's directional cast shadow; the selected index rises above and visually joins the card. Cards keep the same radius on all four corners and compact internal spacing for catalogue-like information density. Tabs change instantly; only hover and press feedback animate. On narrow screens, horizontal sets scroll as a unit and vertical labels retain their edge attachment.
 
 ### Menus, popovers, tooltips
 

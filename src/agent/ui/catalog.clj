@@ -3,6 +3,14 @@
   (:require
    [agent.ui.render :as ui-render]))
 
+;; Static assets are cached for an hour. A boot-specific URL prevents fresh
+;; catalogue markup from being rendered with an older stylesheet or component.
+(defonce ^:private asset-version
+  (str (System/currentTimeMillis)))
+
+(defn- asset-href [path]
+  (str path "?v=" asset-version))
+
 (defn- icon [glyph]
   [:span.ui-icon {:aria-hidden "true"} glyph])
 
@@ -185,8 +193,8 @@
      [:meta {:charset "utf-8"}]
      [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
      [:title "Iris UI system"]
-     [:link {:rel "stylesheet" :href "/public/app.css"}]
-     [:script {:type "module" :src "/public/web-components.js"}]]
+     [:link {:rel "stylesheet" :href (asset-href "/public/app.css")}]
+     [:script {:type "module" :src (asset-href "/public/web-components.js")}]]
     [:body.ui-catalog-page
      [:div.ui-catalog-shell
       [:aside.ui-catalog-nav

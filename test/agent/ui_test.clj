@@ -40,6 +40,8 @@
     (is (str/includes? html "Card tabs"))
     (is (str/includes? html "Horizontal tabs"))
     (is (str/includes? html "Vertical tabs"))
+    (is (re-find #"/public/app\.css\?v=\d+" html))
+    (is (re-find #"/public/web-components\.js\?v=\d+" html))
     (is (str/includes? html "Workflow canvas"))
     (is (str/includes? html "Layout recipes"))
     (is (str/includes? html "Dialog / onboarding"))))
