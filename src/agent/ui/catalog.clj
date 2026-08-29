@@ -94,7 +94,15 @@
     :aria-selected (str selected?)
     :tabindex (if selected? 0 -1)
     :data-card-tab id}
-   label])
+   [:span.ui-card-tab__label label]])
+
+(defn- card-tab-clip-defs []
+  [:svg.ui-card-tab-clip-defs {:aria-hidden "true" :width "0" :height "0"}
+   [:defs
+    [:clipPath {:id "ui-card-tab-horizontal" :clipPathUnits "objectBoundingBox"}
+     [:path {:d "M 0 1 L 0.11 0.18 L 0.115 0.145 Q 0.13 0 0.25 0 H 0.75 Q 0.87 0 0.885 0.145 L 0.89 0.18 L 1 1 Z"}]]
+    [:clipPath {:id "ui-card-tab-vertical" :clipPathUnits "objectBoundingBox"}
+     [:path {:d "M 0 0 L 0.82 0.11 L 0.855 0.115 Q 1 0.13 1 0.25 V 0.75 Q 1 0.87 0.855 0.885 L 0.82 0.89 L 0 1 Z"}]]]])
 
 (defn- card-panel [orientation index {:keys [id tone label title meta description items]} selected?]
   [:article.ui-catalog-card
@@ -118,19 +126,23 @@
     [:span {:aria-hidden "true"} "↗"]]])
 
 (defn- card-tabs [orientation]
-  (let [horizontal? (= orientation "horizontal")]
+  (let [horizontal? (= orientation "horizontal")
+        items (if horizontal?
+                card-tab-items
+                (filterv #(contains? #{"observe" "focus" "attention" "incident"} (:id %))
+                         card-tab-items))]
     [:catalog-card-tabs.ui-card-tabs
      {:class (str "ui-card-tabs--" orientation)}
      (when horizontal?
        (into [:div.ui-card-tab-list {:role "tablist" :aria-label "Horizontal section tabs"}]
-             (map-indexed #(card-tab orientation %2 (zero? %1)) card-tab-items)))
+             (map-indexed #(card-tab orientation %2 (zero? %1)) items)))
      (into [:div.ui-card-panel-stack]
-           (map-indexed #(card-panel orientation %1 %2 (zero? %1)) card-tab-items))
+           (map-indexed #(card-panel orientation %1 %2 (zero? %1)) items))
      (when-not horizontal?
        (into [:div.ui-card-tab-list {:role "tablist"
                                      :aria-label "Vertical section tabs"
                                      :aria-orientation "vertical"}]
-             (map-indexed #(card-tab orientation %2 (zero? %1)) card-tab-items)))]))
+             (map-indexed #(card-tab orientation %2 (zero? %1)) items)))]))
 
 (defn- metric-card []
   [:article.ui-showcase.ui-showcase--span-2
@@ -196,6 +208,7 @@
      [:link {:rel "stylesheet" :href (asset-href "/public/app.css")}]
      [:script {:type "module" :src (asset-href "/public/web-components.js")}]]
     [:body.ui-catalog-page
+     (card-tab-clip-defs)
      [:div.ui-catalog-shell
       [:aside.ui-catalog-nav
        [:a.ui-brand {:href "#foundations"}

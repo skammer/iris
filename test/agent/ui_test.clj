@@ -55,12 +55,16 @@
     (is (= ["foundations" "actions" "forms" "status" "data" "navigation" "card-tabs"
             "layouts" "workflow" "feedback"]
            (mapv #(.id %) sections)))
-    (is (= 14 (.size (.select doc ".ui-card-tab[role=tab]"))))
-    (is (= 14 (.size (.select doc ".ui-catalog-card[role=tabpanel]"))))
+    (is (= 11 (.size (.select doc ".ui-card-tab[role=tab]"))))
+    (is (= 11 (.size (.select doc ".ui-card-tab > .ui-card-tab__label"))))
+    (is (= 11 (.size (.select doc ".ui-catalog-card[role=tabpanel]"))))
+    (is (= 1 (.size (.select doc "clipPath#ui-card-tab-horizontal path"))))
+    (is (= 1 (.size (.select doc "clipPath#ui-card-tab-vertical path"))))
     (is (= 2 (.size (.select doc ".ui-card-tab[aria-selected=true]"))))
     (is (= 2 (.size (.select doc ".ui-card-tab--black"))))
     (is (= 2 (.size (.select doc ".ui-card-tab--yellow"))))
     (is (= 2 (.size (.select doc ".ui-card-tab--red"))))
+    (is (= 4 (.size (.select doc ".ui-card-tabs--vertical .ui-card-tab"))))
     (is (= (count ids) (count (distinct ids))) "catalog ids must be unique")
     (is (every? #(not (str/blank? (.attr % "aria-label")))
                 (.select doc ".ui-icon-button"))
