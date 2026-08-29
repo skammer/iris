@@ -2,6 +2,16 @@
 
 All notable project changes are recorded here. New entries go at the top.
 
+## 2026-08-30
+
+### Added
+
+- Added interactive horizontal and vertical card-tab components to `/ui`, with distinct section palettes, attached index-tab geometry, responsive layouts, and ARIA keyboard navigation.
+
+### Changed
+
+- Updated active Iris web typography to Ioskeley Mono 2.1.0, using the optimized web subset for Latin UI and the Web Full build for Cyrillic fallback.
+
 ## 2026-08-15
 
 ### Fixed

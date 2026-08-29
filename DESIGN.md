@@ -236,6 +236,23 @@ Chips identify state, not categories. Category tags use neutral styling.
 - Active state uses more than color: border, underline, fill, or weight.
 - Each page answers: where am I, where can I go, what is here, how do I leave?
 
+### Card tabs
+
+Card tabs combine navigation and context: the active section is a full content card and sibling sections remain visible as attached index tabs. Horizontal tabs suit wide primary workspaces; vertical tabs suit inspectors and dense side panels. Keyboard behavior follows the ARIA tabs pattern: arrow keys move by orientation, Home/End select endpoints, and focus follows selection.
+
+Color creates section recognition but never replaces the tab label. Component palette:
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `--card-sky` / `--card-sky-ink` | `#b9dcf6` / `#104f92` | Observe and live operations |
+| `--card-violet` / `--card-violet-ink` | `#dfb7e8` / `#56227c` | Automate and scheduled work |
+| `--card-graphite` / `--card-graphite-ink` | `#38494f` / `#f7f4ed` | Review and decisions |
+| `--card-mint` / `--card-mint-ink` | `#cce9cb` / `#1d6734` | Remember and durable knowledge |
+| `--card-bg` / `--card-ink` | Per-section aliases | Active card surface and foreground |
+| `--tab-bg` / `--tab-ink` | Per-section aliases | Attached tab surface and foreground |
+
+Tabs change instantly; only hover and press feedback animate. On narrow screens, horizontal sets scroll as a unit and vertical labels retain their edge attachment.
+
 ### Menus, popovers, tooltips
 
 - Menus and popovers originate from their trigger (`transform-origin` points to trigger).

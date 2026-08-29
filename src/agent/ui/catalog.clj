@@ -25,6 +25,84 @@
    [:span.dot {:class (str "dot--" kind)}]
    label])
 
+(def ^:private card-tab-items
+  [{:id "observe"
+    :tone "sky"
+    :label "Observe"
+    :title "Live operations"
+    :meta "12 signals · 3 active"
+    :description "Runtime health, active sessions and recent tool activity in one operational card."
+    :items ["Provider latency within target" "Telegram adapter connected" "No approvals waiting"]}
+   {:id "automate"
+    :tone "violet"
+    :label "Automate"
+    :title "Scheduled work"
+    :meta "8 jobs · next in 14m"
+    :description "Recurring jobs, delivery policy and execution history stay grouped by intent."
+    :items ["Daily office report" "Memory review" "Weekly deployment audit"]}
+   {:id "review"
+    :tone "graphite"
+    :label "Review"
+    :title "Decision queue"
+    :meta "4 proposals · 1 urgent"
+    :description "Approvals and agent decisions use a focused, high-contrast review surface."
+    :items ["Filesystem write" "New memory candidate" "Provider fallback"]}
+   {:id "remember"
+    :tone "mint"
+    :label "Remember"
+    :title "Memory catalogue"
+    :meta "248 notes · indexed"
+    :description "Durable knowledge, recent updates and retrieval quality share one recognisable home."
+    :items ["User preferences" "Deployment notes" "Project decisions"]}])
+
+(defn- card-tab [orientation {:keys [id tone label]} selected?]
+  [:button.ui-card-tab
+   {:id (str orientation "-tab-" id)
+    :class (str "ui-card-tab--" tone)
+    :type "button"
+    :role "tab"
+    :aria-controls (str orientation "-panel-" id)
+    :aria-selected (str selected?)
+    :tabindex (if selected? 0 -1)
+    :data-card-tab id}
+   label])
+
+(defn- card-panel [orientation index {:keys [id tone label title meta description items]} selected?]
+  [:article.ui-catalog-card
+   {:id (str orientation "-panel-" id)
+    :class (str "ui-catalog-card--" tone)
+    :role "tabpanel"
+    :aria-labelledby (str orientation "-tab-" id)
+    :data-card-panel id
+    :hidden (not selected?)}
+   [:header
+    [:span.ui-card-kicker label]
+    [:span.ui-card-index (format "%02d" (inc index))]]
+   [:h4 title]
+   [:p.ui-card-meta meta]
+   [:p.ui-card-description description]
+   [:ul.ui-card-list
+    (for [item items]
+      [:li [:span {:aria-hidden "true"} "↳"] item])]
+   [:footer
+    [:span "Open section"]
+    [:span {:aria-hidden "true"} "↗"]]])
+
+(defn- card-tabs [orientation]
+  (let [horizontal? (= orientation "horizontal")]
+    [:catalog-card-tabs.ui-card-tabs
+     {:class (str "ui-card-tabs--" orientation)}
+     (when horizontal?
+       (into [:div.ui-card-tab-list {:role "tablist" :aria-label "Horizontal section tabs"}]
+             (map-indexed #(card-tab orientation %2 (zero? %1)) card-tab-items)))
+     (into [:div.ui-card-panel-stack]
+           (map-indexed #(card-panel orientation %1 %2 (zero? %1)) card-tab-items))
+     (when-not horizontal?
+       (into [:div.ui-card-tab-list {:role "tablist"
+                                     :aria-label "Vertical section tabs"
+                                     :aria-orientation "vertical"}]
+             (map-indexed #(card-tab orientation %2 (zero? %1)) card-tab-items)))]))
+
 (defn- metric-card []
   [:article.ui-showcase.ui-showcase--span-2
    [:div.ui-card-header
@@ -102,6 +180,7 @@
         [:a {:href "#status"} "Status"]
         [:a {:href "#data"} "Cards & tables"]
         [:a {:href "#navigation"} "Navigation"]
+        [:a {:href "#card-tabs"} "Card tabs"]
         [:span.ui-nav-group "PATTERNS"]
         [:a {:href "#layouts"} "Layouts"]
         [:a {:href "#workflow"} "Workflow"]
@@ -249,7 +328,19 @@
           [:summary "Last 7 days"]
           [:div [:button "Today"] [:button "Last 7 days"] [:button "Last 30 days"] [:button "Year to date"]]]])
 
-       (section "layouts" "07 / PATTERNS" "Layout recipes" "Reference layouts are reusable compositions, not page-specific one-offs."
+       (section "card-tabs" "07 / NAVIGATION" "Card tabs" "Sections become recognisable objects: a coloured card carries context while attached index tabs switch sibling views."
+        [:article.ui-showcase.ui-showcase--span-2.ui-card-tabs-showcase
+         [:div.ui-card-tabs-heading
+          [:div [:h3 "Horizontal tabs"] [:p "Best for wide workspaces and primary section switching."]]
+          [:code "orientation / horizontal"]]
+         (card-tabs "horizontal")]
+        [:article.ui-showcase.ui-showcase--span-2.ui-card-tabs-showcase
+         [:div.ui-card-tabs-heading
+          [:div [:h3 "Vertical tabs"] [:p "Best for card stacks, inspectors and dense side panels."]]
+          [:code "orientation / vertical"]]
+         (card-tabs "vertical")])
+
+       (section "layouts" "08 / PATTERNS" "Layout recipes" "Reference layouts are reusable compositions, not page-specific one-offs."
         [:article.ui-showcase.ui-layout-card
          [:h3 "Dashboard shell"]
          [:div.ui-layout-preview.ui-layout-dashboard
@@ -271,7 +362,7 @@
           [:aside] [:header] [:section] [:footer]]
          [:p "Filter rail + table/canvas + persistent pagination."]])
 
-       (section "workflow" "08 / PATTERNS" "Workflow canvas" "Node graphs use direct manipulation, visible connection state and explicit zoom controls."
+       (section "workflow" "09 / PATTERNS" "Workflow canvas" "Node graphs use direct manipulation, visible connection state and explicit zoom controls."
         [:article.ui-showcase.ui-showcase--span-2
          [:div.ui-workflow-toolbar
           [:div
@@ -293,7 +384,7 @@
            [:span "95%"]
            [:button {:aria-label "Zoom in"} "+"]]]])
 
-       (section "feedback" "09 / PATTERNS" "Feedback & overlays" "Status, warning and errors appear near their cause; overlays preserve escape routes."
+       (section "feedback" "10 / PATTERNS" "Feedback & overlays" "Status, warning and errors appear near their cause; overlays preserve escape routes."
         [:article.ui-showcase
          [:h3 "Inline feedback"]
          [:div.ui-alert.ui-alert--success [:strong "Deployment complete"] [:p "iris.jar passed its health check."]]

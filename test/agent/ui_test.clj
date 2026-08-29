@@ -37,6 +37,9 @@
     (is (str/includes? html "IRIS UI SYSTEM"))
     (is (str/includes? html "Status &amp; progress"))
     (is (str/includes? html "Cards, metrics &amp; tables"))
+    (is (str/includes? html "Card tabs"))
+    (is (str/includes? html "Horizontal tabs"))
+    (is (str/includes? html "Vertical tabs"))
     (is (str/includes? html "Workflow canvas"))
     (is (str/includes? html "Layout recipes"))
     (is (str/includes? html "Dialog / onboarding"))))
@@ -47,9 +50,12 @@
         ids (mapv #(.id %) (.select doc "[id]"))]
     (is (= 1 (.size (.select doc ".ui-catalog-shell > aside.ui-catalog-nav"))))
     (is (= 1 (.size (.select doc ".ui-catalog-shell > main.ui-catalog-main"))))
-    (is (= ["foundations" "actions" "forms" "status" "data" "navigation"
+    (is (= ["foundations" "actions" "forms" "status" "data" "navigation" "card-tabs"
             "layouts" "workflow" "feedback"]
            (mapv #(.id %) sections)))
+    (is (= 8 (.size (.select doc ".ui-card-tab[role=tab]"))))
+    (is (= 8 (.size (.select doc ".ui-catalog-card[role=tabpanel]"))))
+    (is (= 2 (.size (.select doc ".ui-card-tab[aria-selected=true]"))))
     (is (= (count ids) (count (distinct ids))) "catalog ids must be unique")
     (is (every? #(not (str/blank? (.attr % "aria-label")))
                 (.select doc ".ui-icon-button"))
