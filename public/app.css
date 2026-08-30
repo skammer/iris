@@ -4972,23 +4972,24 @@ button.row--link:focus-visible {
 
 .ui-card-tabs--vertical {
   position: relative;
-  padding-right: 48px;
+  padding-right: 43px;
   width: min(680px, calc(100% - 24px));
 }
 
-.ui-card-tabs--horizontal { position: relative; padding-top: 50px; }
-.ui-card-tab-list { display: flex; position: absolute; z-index: 1; }
-.ui-card-tabs--horizontal .ui-card-tab-list { top: 0; left: var(--space-4); align-items: end; gap: 2px; height: 68px; }
+.ui-card-tabs--horizontal { position: relative; padding-top: 43px; }
+.ui-card-tab-list { display: flex; position: absolute; }
+.ui-card-tabs--horizontal .ui-card-tab-list { top: 0; left: var(--space-4); align-items: end; gap: 2px; height: 55px; }
 .ui-card-tabs--horizontal .ui-card-tab-list::-webkit-scrollbar { display: none; }
-.ui-card-tabs--vertical .ui-card-tab-list { top: 14px; right: 0; bottom: 14px; width: 76px; flex-direction: column; justify-content: space-between; gap: 5px; }
+.ui-card-tabs--vertical .ui-card-tab-list { top: 14px; right: 0; bottom: 14px; width: 55px; flex-direction: column; justify-content: space-between; gap: 5px; }
 
 .ui-card-tab {
   --tab-bg: var(--card-sky);
   --tab-ink: var(--card-sky-ink);
   display: block;
+  z-index: 1;
   flex: 0 0 auto;
   width: clamp(82px, 12vw, 104px);
-  height: 68px;
+  height: 55px;
   margin: 0;
   padding: 0;
   border: 0;
@@ -5002,14 +5003,14 @@ button.row--link:focus-visible {
   font: 600 11px/1.1 "IoskeleyMono", monospace;
   letter-spacing: 0;
   text-transform: none;
-  transform: translateY(8px);
+  transform: translateY(7px);
   transition: transform 160ms var(--ease-out), filter 160ms ease;
 }
 
 .ui-card-tab__label {
   position: absolute;
   z-index: 1;
-  top: 17px;
+  top: 10px;
   left: 50%;
   max-width: calc(100% - 26px);
   overflow: hidden;
@@ -5019,7 +5020,7 @@ button.row--link:focus-visible {
   pointer-events: none;
 }
 
-.ui-card-tab[aria-selected="true"] { transform: translateY(0); filter: saturate(1.04) drop-shadow(0 7px 9px rgba(0, 0, 0, 0.24)); }
+.ui-card-tab[aria-selected="true"] { z-index: 3; transform: translateY(0); filter: none; }
 .ui-card-tab:active { transform: scale(0.97); }
 .ui-card-tab:focus-visible { outline: 0; filter: drop-shadow(0 0 2px var(--text-display)); }
 .ui-card-tab--violet { --tab-bg: var(--card-violet); --tab-ink: var(--card-violet-ink); }
@@ -5030,25 +5031,25 @@ button.row--link:focus-visible {
 .ui-card-tab--red { --tab-bg: var(--card-red); --tab-ink: var(--card-red-ink); }
 
 .ui-card-tabs--vertical .ui-card-tab {
-  width: 76px;
-  min-width: 76px;
+  width: 55px;
+  min-width: 55px;
   height: auto;
   min-height: 62px;
   flex: 1 1 0;
   clip-path: polygon(0 0, 82% 12%, 100% 28%, 100% 72%, 82% 88%, 0 100%);
   -webkit-clip-path: url(#ui-card-tab-vertical);
   clip-path: url(#ui-card-tab-vertical);
-  transform: translateX(-8px);
+  transform: translateX(-7px);
 }
 
 .ui-card-tabs--vertical .ui-card-tab__label {
   top: 50%;
-  right: 15px;
+  right: 10px;
   left: auto;
   width: auto;
   height: calc(100% - 22px);
   max-width: none;
-  font-size: 10px;
+  font-size: 9px;
   letter-spacing: -0.01em;
   line-height: 1;
   writing-mode: vertical-rl;
@@ -5075,6 +5076,12 @@ button.row--link:focus-visible {
 }
 
 .ui-card-tabs--vertical .ui-catalog-card { min-height: 500px; }
+.ui-card-tabs--horizontal .ui-catalog-card {
+  box-shadow: 0 -10px 18px -8px rgba(0, 0, 0, 0.62), 0 18px 38px rgba(0, 0, 0, 0.16);
+}
+.ui-card-tabs--vertical .ui-catalog-card {
+  box-shadow: 10px 0 18px -8px rgba(0, 0, 0, 0.62), 0 18px 38px rgba(0, 0, 0, 0.16);
+}
 .ui-catalog-card[hidden] { display: none; }
 .ui-catalog-card--violet { --card-bg: var(--card-violet); --card-ink: var(--card-violet-ink); }
 .ui-catalog-card--graphite { --card-bg: var(--card-graphite); --card-ink: var(--card-graphite-ink); }
@@ -5223,7 +5230,7 @@ button.row--link:focus-visible {
 
 @media (hover: hover) and (pointer: fine) {
   .ui-action-tile:hover { border-color: var(--text-primary); background: var(--surface-raised); }
-  .ui-card-tab:not([aria-selected="true"]):hover { filter: saturate(1.08) brightness(1.015) drop-shadow(0 8px 10px rgba(0, 0, 0, 0.26)); transform: translateY(4px); }
+  .ui-card-tab:not([aria-selected="true"]):hover { filter: drop-shadow(0 8px 10px rgba(0, 0, 0, 0.26)); transform: translateY(4px); }
   .ui-card-tabs--vertical .ui-card-tab:not([aria-selected="true"]):hover { transform: translateX(-4px); }
 }
 
@@ -5258,15 +5265,15 @@ button.row--link:focus-visible {
   .ui-stepper,
   .ui-choice-grid,
   .ui-variant-grid { grid-template-columns: 1fr; }
-  .ui-card-tabs--horizontal { padding-top: 46px; }
-  .ui-card-tabs--horizontal .ui-card-tab-list { left: 5px; width: calc(100% - 10px); height: 62px; }
-  .ui-card-tabs--horizontal .ui-card-tab { width: auto; min-width: 0; height: 62px; flex: 1 1 0; }
-  .ui-card-tab__label { top: 16px; max-width: calc(100% - 18px); font-size: 9px; }
-  .ui-card-tabs--vertical { width: calc(100% - 8px); padding-right: 38px; }
+  .ui-card-tabs--horizontal { padding-top: 43px; }
+  .ui-card-tabs--horizontal .ui-card-tab-list { left: 5px; width: calc(100% - 10px); height: 55px; }
+  .ui-card-tabs--horizontal .ui-card-tab { width: auto; min-width: 0; height: 55px; flex: 1 1 0; }
+  .ui-card-tab__label { top: 10px; max-width: calc(100% - 18px); font-size: 9px; }
+  .ui-card-tabs--vertical { width: calc(100% - 8px); padding-right: 36px; }
   .ui-card-tabs--vertical .ui-catalog-card { min-height: 460px; }
-  .ui-card-tabs--vertical .ui-card-tab-list { top: 12px; bottom: 12px; width: 60px; gap: 4px; }
-  .ui-card-tabs--vertical .ui-card-tab { width: 60px; min-width: 60px; min-height: 56px; }
-  .ui-card-tabs--vertical .ui-card-tab__label { top: 50%; right: 11px; height: calc(100% - 18px); font-size: 9px; }
+  .ui-card-tabs--vertical .ui-card-tab-list { top: 12px; bottom: 12px; width: 48px; gap: 4px; }
+  .ui-card-tabs--vertical .ui-card-tab { width: 48px; min-width: 48px; min-height: 56px; }
+  .ui-card-tabs--vertical .ui-card-tab__label { top: 50%; right: 8px; height: calc(100% - 18px); font-size: 8px; }
   .ui-stepper li + li { border-left: 0; }
   .ui-stepper__active { box-shadow: inset 2px 0 0 var(--primary); }
   .ui-workflow-canvas { height: 500px; }

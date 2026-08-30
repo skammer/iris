@@ -104,6 +104,13 @@
     (is (not (re-find #"border-(?:left|right)\s*:\s*[2-9][0-9]*px" css)))
     (is (not (re-find #"border-(?:left|right)-width\s*:\s*[2-9][0-9]*px" css)))))
 
+(deftest card-tab-hover-preserves-ink-color
+  (let [css (slurp (io/file "public/app.css"))
+        [_ hover-rule] (re-find #"(?s)\.ui-card-tab:not\(\[aria-selected=\"true\"\]\):hover\s*\{([^}]*)\}" css)]
+    (is hover-rule)
+    (is (not (str/includes? hover-rule "brightness(")))
+    (is (not (str/includes? hover-rule "saturate(")))))
+
 (deftest shell-brand-is-text-only
   (let [source (slurp (io/file "src/agent/ui.clj"))]
     (is (str/includes? source "[:strong \"IRIS\"]"))
