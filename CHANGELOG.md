@@ -6,6 +6,7 @@ All notable project changes are recorded here. New entries go at the top.
 
 ### Added
 
+- Added bottom and left card-tab placements to `/ui`, including mirrored SVG silhouettes, directional shadows, responsive sizing, and axis-correct keyboard navigation.
 - Added interactive horizontal and vertical card-tab components to `/ui`, with distinct section palettes, attached index-tab geometry, responsive layouts, and ARIA keyboard navigation.
 
 ### Changed
@@ -15,6 +16,7 @@ All notable project changes are recorded here. New entries go at the top.
 
 ### Fixed
 
+- Kept card-tab label colors bound to `--tab-ink` on hover, overriding the generic white `button:hover` foreground.
 - Reduced horizontal card-tab height to 50px, aligned labels at 10px, kept a compact 55px vertical protrusion, and layered the active tab above the panel so the shared border disappears while inactive tabs retain the card shadow; hover preserves tab ink colors.
 - Replaced the approximate card-tab silhouettes with the supplied smooth SVG trapezoids, reduced their footprint, and limited the vertical sample to four roomy indexes with centered, clipped labels.
 - Versioned `/ui` CSS and JavaScript URLs per server boot, preventing fresh catalogue markup from rendering with cached styles; rebuilt tabs as rounded binder indexes partially occluded by the card.

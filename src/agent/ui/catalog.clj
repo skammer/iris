@@ -102,7 +102,11 @@
     [:clipPath {:id "ui-card-tab-horizontal" :clipPathUnits "objectBoundingBox"}
      [:path {:d "M 0 1 L 0.11 0.18 L 0.115 0.145 Q 0.13 0 0.25 0 H 0.75 Q 0.87 0 0.885 0.145 L 0.89 0.18 L 1 1 Z"}]]
     [:clipPath {:id "ui-card-tab-vertical" :clipPathUnits "objectBoundingBox"}
-     [:path {:d "M 0 0 L 0.82 0.11 L 0.855 0.115 Q 1 0.13 1 0.25 V 0.75 Q 1 0.87 0.855 0.885 L 0.82 0.89 L 0 1 Z"}]]]])
+     [:path {:d "M 0 0 L 0.82 0.11 L 0.855 0.115 Q 1 0.13 1 0.25 V 0.75 Q 1 0.87 0.855 0.885 L 0.82 0.89 L 0 1 Z"}]]
+    [:clipPath {:id "ui-card-tab-bottom" :clipPathUnits "objectBoundingBox"}
+     [:path {:d "M 0 0 L 0.11 0.82 L 0.115 0.855 Q 0.13 1 0.25 1 H 0.75 Q 0.87 1 0.885 0.855 L 0.89 0.82 L 1 0 Z"}]]
+    [:clipPath {:id "ui-card-tab-left" :clipPathUnits "objectBoundingBox"}
+     [:path {:d "M 1 0 L 0.18 0.11 L 0.145 0.115 Q 0 0.13 0 0.25 V 0.75 Q 0 0.87 0.145 0.885 L 0.18 0.89 L 1 1 Z"}]]]])
 
 (defn- card-panel [orientation index {:keys [id tone label title meta description items]} selected?]
   [:article.ui-catalog-card
@@ -126,23 +130,26 @@
     [:span {:aria-hidden "true"} "↗"]]])
 
 (defn- card-tabs [orientation]
-  (let [horizontal? (= orientation "horizontal")
-        items (if horizontal?
+  (let [horizontal-axis? (contains? #{"horizontal" "bottom"} orientation)
+        vertical-axis? (not horizontal-axis?)
+        items (if horizontal-axis?
                 card-tab-items
                 (filterv #(contains? #{"observe" "focus" "attention" "incident"} (:id %))
-                         card-tab-items))]
+                         card-tab-items))
+        orientation-label (case orientation
+                            "horizontal" "Top"
+                            "vertical" "Right"
+                            "bottom" "Bottom"
+                            "left" "Left")]
     [:catalog-card-tabs.ui-card-tabs
      {:class (str "ui-card-tabs--" orientation)}
-     (when horizontal?
-       (into [:div.ui-card-tab-list {:role "tablist" :aria-label "Horizontal section tabs"}]
-             (map-indexed #(card-tab orientation %2 (zero? %1)) items)))
+     (into [:div.ui-card-tab-list
+            (cond-> {:role "tablist"
+                     :aria-label (str orientation-label " section tabs")}
+              vertical-axis? (assoc :aria-orientation "vertical"))]
+           (map-indexed #(card-tab orientation %2 (zero? %1)) items))
      (into [:div.ui-card-panel-stack]
-           (map-indexed #(card-panel orientation %1 %2 (zero? %1)) items))
-     (when-not horizontal?
-       (into [:div.ui-card-tab-list {:role "tablist"
-                                     :aria-label "Vertical section tabs"
-                                     :aria-orientation "vertical"}]
-             (map-indexed #(card-tab orientation %2 (zero? %1)) items)))]))
+           (map-indexed #(card-panel orientation %1 %2 (zero? %1)) items))]))
 
 (defn- metric-card []
   [:article.ui-showcase.ui-showcase--span-2
@@ -380,7 +387,17 @@
          [:div.ui-card-tabs-heading
           [:div [:h3 "Vertical tabs"] [:p "Best for card stacks, inspectors and dense side panels."]]
           [:code "orientation / vertical"]]
-         (card-tabs "vertical")])
+         (card-tabs "vertical")]
+        [:article.ui-showcase.ui-showcase--span-2.ui-card-tabs-showcase
+         [:div.ui-card-tabs-heading
+          [:div [:h3 "Bottom tabs"] [:p "Best when the card header must stay visually quiet."]]
+          [:code "orientation / bottom"]]
+         (card-tabs "bottom")]
+        [:article.ui-showcase.ui-showcase--span-2.ui-card-tabs-showcase
+         [:div.ui-card-tabs-heading
+          [:div [:h3 "Left tabs"] [:p "Mirrors edge tabs for right-aligned inspectors and utilities."]]
+          [:code "orientation / left"]]
+         (card-tabs "left")])
 
        (section "layouts" "08 / PATTERNS" "Layout recipes" "Reference layouts are reusable compositions, not page-specific one-offs."
         [:article.ui-showcase.ui-layout-card

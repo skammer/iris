@@ -254,7 +254,7 @@ Color creates section recognition but never replaces the tab label. Component pa
 | `--card-bg` / `--card-ink` | Per-section aliases | Active card surface and foreground |
 | `--tab-bg` / `--tab-ink` | Per-section aliases | Attached tab surface and foreground |
 
-Tabs use smooth SVG clip paths: horizontal indexes are 50px high with labels 10px from the top; vertical indexes use a 55px protrusion and center text in the outer lane. Inactive indexes remain beneath the card and receive its directional shadow. The selected index rises above the panel, covering only the shared border segment so tab and card read as one surface. Cards keep the same radius on all four corners and compact internal spacing.
+Tabs support all four card edges with smooth SVG clip paths. Top and bottom indexes are 50px high; right and left indexes use a 55px protrusion with centered vertical text. Bottom and left paths mirror the taper, label direction, hover movement, panel shadow, and seamless selected border of their opposite edge. Inactive indexes remain beneath the card and receive its directional shadow. The selected index rises above the panel, covering only the shared border segment so tab and card read as one surface.
 
 ### Menus, popovers, tooltips
 
