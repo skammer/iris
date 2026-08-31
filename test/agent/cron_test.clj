@@ -69,6 +69,7 @@
             new-html (ui-cron/fragment system {:tab :new :limit 20})
             editor-html (ui-cron/job-editor-detail-fragment system job)]
         (is (= 4 (count (re-seq #"role=\"tab\"" jobs-html))))
+        (is (str/includes? jobs-html "class=\"cron-workspace scroll-fade\""))
         (is (str/includes? jobs-html "Persistent schedules"))
         (is (str/includes? jobs-html "cron-job-link"))
         (is (str/includes? jobs-html "<td><div class=\"cron-actions\">"))

@@ -506,7 +506,7 @@
                 (cron/list-jobs service {:limit (if (= :stats tab*) 200 limit)}))
          runs (when (= :runs tab*) (cron/list-runs service nil limit))]
      (render/render
-      [:section#cron-workspace.cron-workspace
+      [:section#cron-workspace.cron-workspace.scroll-fade
       [:nav.cron-tabs {:role "tablist" :aria-label "Cron sections"}
        (for [[tab label] tabs] (tab-link tab label tab* limit))]
       (case tab*
