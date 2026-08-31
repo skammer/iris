@@ -12,6 +12,10 @@ All notable project changes are recorded here. New entries go at the top.
 - Reserved a clean seam zone below shell tabs and removed inactive-tab hover shadows, preventing tab pixels from bleeding over page controls.
 - Fixed WebKit/Safari clipping the bottom of tab workspaces, including the Chat composer, by replacing the nested percentage height with explicit workspace insets.
 
+### Fixed
+
+- Restored Cron job action submissions by letting Datastar resolve each submitted form, moved Delete into the job editor, compacted the three routine row actions, and replaced inherited white values with the violet workspace ink.
+
 ## 2026-08-30
 
 ### Added

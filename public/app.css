@@ -4722,12 +4722,12 @@ button.row--link:focus-visible {
 .memory-file-source pre { max-height: 360px; overflow: auto; white-space: pre-wrap; }
 .memory-preview-empty { display: grid; place-content: center; min-height: 100%; padding: 24px; text-align: center; }
 .cron-table-wrap { overflow-x: auto; overflow-y: visible; }
-.cron-table td { vertical-align: top; }
+.cron-table td { vertical-align: top; color: var(--text-primary); }
 .cron-table td small { display: block; margin-top: 4px; color: var(--text-secondary); max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
 .cron-job-link { display: block; max-width: 280px; padding: 0; border: 0; background: transparent; color: var(--text-display); font-weight: 600; letter-spacing: 0; text-align: left; text-transform: none; }
 .cron-job-link:hover { color: var(--primary); }
 .cron-row--active { box-shadow: inset 2px 0 0 var(--success); }
-.cron-actions { display: flex; align-items: stretch; flex-wrap: nowrap; gap: 6px; white-space: nowrap; }
+.cron-actions { display: flex; align-items: stretch; flex-wrap: nowrap; gap: 4px; white-space: nowrap; }
 .cron-actions .cron-inline-form { display: flex; align-items: stretch; margin: 0; }
 .cron-actions .btn-small {
   display: inline-flex;
@@ -4737,7 +4737,9 @@ button.row--link:focus-visible {
   height: 32px;
   min-height: 32px;
   margin: 0;
-  padding: 5px 9px;
+  padding: 5px 8px;
+  font-size: 10px;
+  letter-spacing: .04em;
   line-height: 1;
   white-space: nowrap;
 }
@@ -4787,6 +4789,11 @@ button.row--link:focus-visible {
 .cron-prompt { grid-column: 1 / -1; }
 .cron-editor__actions { display: flex; justify-content: flex-end; margin-top: 14px; }
 .cron-editor__actions { gap: 8px; }
+.cron-editor__actions .cron-delete-button {
+  margin-right: auto;
+  border-color: var(--danger);
+  color: var(--danger);
+}
 .cron-delivery-help { margin: 12px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
 .cron-editors { display: grid; gap: 8px; margin-top: 14px; }
 .cron-job-editor { border-top: 1px solid var(--border); padding-top: 10px; }

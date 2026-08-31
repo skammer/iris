@@ -227,6 +227,8 @@ Chips identify state, not categories. Category tags use neutral styling.
 - Headers use compact uppercase labels; body stays sentence case.
 - Numeric values align consistently; IDs truncate with recovery.
 - Row hover is quiet and only used when rows are interactive.
+- Dense row controls contain routine actions only; destructive actions move into the record editor.
+- Themed tables explicitly resolve body text through `--text-primary`; do not inherit neutral-shell ink.
 - On narrow screens, allow horizontal scroll or convert to labeled rows; never crush all columns.
 
 ### Navigation

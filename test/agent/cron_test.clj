@@ -73,6 +73,8 @@
         (is (str/includes? jobs-html "cron-job-link"))
         (is (str/includes? jobs-html "<td><div class=\"cron-actions\">"))
         (is (not (str/includes? jobs-html "<td class=\"cron-actions\">")))
+        (is (= 2 (count (re-seq #"<form class=\"cron-inline-form\"" jobs-html))))
+        (is (not (str/includes? jobs-html "selector: el")))
         (is (str/includes? jobs-html "scrollIntoView"))
         (is (not (str/includes? jobs-html "Scheduler")))
         (is (not (str/includes? jobs-html "Recent runs")))
@@ -89,12 +91,21 @@
         (is (str/includes? new-html "Create job"))
         (is (str/includes? new-html "Telegram — always send result"))
         (is (str/includes? editor-html "update-run"))
+        (is (str/includes? editor-html "cron-delete-button"))
+        (is (str/includes? editor-html "this.form.elements.action.value=&apos;delete&apos;"))
+        (is (not (str/includes? editor-html "selector: el")))
         (is (str/includes? editor-html "this.form.elements.action.value=&apos;update-run&apos;"))
         (is (str/includes? editor-html "Save &amp; run"))
         (is (str/includes? editor-html "notify_policy.value === &apos;never&apos;")))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
+
+(deftest cron-job-table-keeps-themed-text-and-compact-actions-test
+  (let [css (slurp (io/file "public/app.css"))]
+    (is (str/includes? css ".cron-table td { vertical-align: top; color: var(--text-primary); }"))
+    (is (str/includes? css ".cron-actions { display: flex; align-items: stretch; flex-wrap: nowrap; gap: 4px;"))
+    (is (str/includes? css ".cron-editor__actions .cron-delete-button"))))
 
 (deftest cron-stats-renders-week-gantt-and-month-calendar-test
   (let [{:keys [path store]} (temp-store)

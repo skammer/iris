@@ -211,7 +211,7 @@
 (defn- action-form [job action label]
   [:form.cron-inline-form
    {:method "post"
-    "data-on:submit" "@post('/ui/cron/action', {contentType: 'form', selector: el})"}
+    "data-on:submit" "@post('/ui/cron/action', {contentType: 'form'})"}
    [:input {:type "hidden" :name "id" :value (:id job)}]
    [:input {:type "hidden" :name "revision" :value (:revision job)}]
    [:input {:type "hidden" :name "action" :value action}]
@@ -254,8 +254,7 @@
               (action-form job "pause" "Pause")
               (action-form job "resume" "Resume"))
             (edit-job-button job "Edit" "btn-small")
-            (action-form job "run" "Run now")
-            (action-form job "delete" "Delete")]]])
+            (action-form job "run" "Run now")]]])
        [:tr [:td {:colspan 7} "No cron jobs."]])]]])
 
 (defn- configured-model-pairs [system]
@@ -277,7 +276,7 @@
     [:div.cron-job-editor__detail {:id (str "cron-job-detail-" (:id job))}
      [:form.cron-edit-form
        {:method "post"
-        "data-on:submit" "@post('/ui/cron/action', {contentType: 'form', selector: el})"}
+        "data-on:submit" "@post('/ui/cron/action', {contentType: 'form'})"}
        [:input {:type "hidden" :name "action" :value "update"}]
        [:input {:type "hidden" :name "id" :value (:id job)}]
        [:input {:type "hidden" :name "revision" :value (:revision job)}]
@@ -322,6 +321,9 @@
         [:label.cron-prompt [:span "Prompt"] [:textarea {:name "prompt" :rows 5 :required true} (:prompt job)]]]
        [:p.cron-delivery-help "Local only keeps output in Runs. Telegram modes require a saved chat ID."]
        [:div.cron-editor__actions
+        [:button.cron-delete-button {:type "submit"
+                                     :onclick "this.form.elements.action.value='delete'"}
+         "Delete"]
         [:button {:type "submit"
                   :onclick "this.form.elements.action.value='update'"}
          "Save"]
