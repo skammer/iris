@@ -7,6 +7,7 @@ All notable project changes are recorded here. New entries go at the top.
 ### Changed
 
 - Removed light mode, theme persistence, theme-switch animation, and both theme controls; Iris now always uses its dark palette.
+- Replaced top-level navigation with accessible horizontal Card tabs; Chat uses black, with semantic colors assigned to the other workspaces.
 
 ## 2026-08-30
 

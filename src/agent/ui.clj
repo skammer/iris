@@ -35,13 +35,13 @@
 	         tool-approvals-fragment)
 
 (def ^:private tabs
-  [{:key :overview :label "Overview"}
-   {:key :chat :label "Chat"}
-   {:key :cron :label "Cron"}
-   {:key :tools :label "Tools"}
-   {:key :memory :label "Memory"}
-   {:key :magi :label "MAGI"}
-   {:key :logs :label "Logs"}])
+  [{:key :overview :label "Overview" :tone "sky"}
+   {:key :chat :label "Chat" :tone "black"}
+   {:key :cron :label "Cron" :tone "violet"}
+   {:key :tools :label "Tools" :tone "graphite"}
+   {:key :memory :label "Memory" :tone "mint"}
+   {:key :magi :label "MAGI" :tone "yellow"}
+   {:key :logs :label "Logs" :tone "red"}])
 
 (def memory-search-results-fragment ui-memory/memory-search-results-fragment)
 (def memory-tool-result-fragment ui-memory/memory-tool-result-fragment)
@@ -95,22 +95,37 @@
   (str path "?v=" asset-version))
 
 (defn- tab-link [tab active-tab]
-  [:button.tab-link
-   {:type "button"
-    :class (when (= (:key tab) active-tab) "active")
-    "data-route" (route-path {:tab (:key tab)})
-    "data-on:click" (str "@get('/ui/route?tab=" (name (:key tab))
-                         "&client_id=' + window.irisUiClientId)")}
-   (:label tab)])
+  (let [selected? (= (:key tab) active-tab)]
+    [:button.ui-card-tab
+     {:id (str "shell-tab-" (name (:key tab)))
+      :type "button"
+      :role "tab"
+      :class (str "ui-card-tab--" (:tone tab))
+      :aria-controls "workspace-content"
+      :aria-selected (str selected?)
+      :tabindex (if selected? 0 -1)
+      "data-route" (route-path {:tab (:key tab)})
+      "data-on:click" (str "@get('/ui/route?tab=" (name (:key tab))
+                           "&client_id=' + window.irisUiClientId)")}
+     [:span.ui-card-tab__label (:label tab)]]))
+
+(defn- shell-card-tab-clip-defs []
+  [:svg.ui-card-tab-clip-defs {:aria-hidden "true" :width "0" :height "0"}
+   [:defs
+    [:clipPath {:id "ui-card-tab-horizontal" :clipPathUnits "objectBoundingBox"}
+     [:path {:d "M 0 1 L 0.11 0.18 L 0.115 0.145 Q 0.13 0 0.25 0 H 0.75 Q 0.87 0 0.885 0.145 L 0.89 0.18 L 1 1 Z"}]]]])
 
 (defn- shell-nav-node [active-tab]
-  [:nav#shell-nav.shell-nav
-   [:span.shell-nav__pill {:aria-hidden "true"}]
-   (for [tab tabs]
-     (tab-link tab active-tab))])
+  [:nav#shell-nav.shell-nav.ui-card-tabs.ui-card-tabs--horizontal
+   {:aria-label "Primary navigation"}
+   (shell-card-tab-clip-defs)
+   (into [:div.ui-card-tab-list {:role "tablist"}]
+         (map #(tab-link % active-tab) tabs))])
 
 (defn- workspace-node [system active-tab session-id]
   [:div#workspace-content.workspace-content
+   {:role "tabpanel"
+    :aria-labelledby (str "shell-tab-" (name active-tab))}
    (ui-render/trusted-fragment
     (case active-tab
       :chat (ui-render/render-many

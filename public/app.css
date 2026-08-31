@@ -174,7 +174,6 @@ chat-stream {
 }
 
 .panel,
-.shell-nav,
 .shell-header {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -189,7 +188,6 @@ chat-stream {
 .session-meta,
 .meta,
 .muted,
-.tab-link,
 .status-label,
 .status-value {
   font-family: "IoskeleyMono", "Space Mono", "JetBrains Mono", "SF Mono", monospace;
@@ -305,68 +303,6 @@ chat-stream {
 .shell-system-link:focus-visible {
   color: var(--text-display);
   outline: 0;
-}
-
-.shell-nav {
-  position: relative;
-  display: flex;
-  gap: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  flex: 0 0 auto;
-}
-
-/* Sliding active-tab pill (transitions.dev tabs-sliding, squared to match
-   the surface language). JS writes transform/width from the active tab. */
-.shell-nav__pill {
-  position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  width: 0;
-  background: var(--surface-raised);
-  box-shadow: inset 0 -2px 0 var(--accent);
-  transform: translateX(0);
-  transition:
-    transform var(--tabs-dur) var(--tabs-ease);
-  will-change: transform;
-  pointer-events: none;
-}
-
-.tab-link {
-  appearance: none;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--text-secondary);
-  padding: 10px 14px;
-  font-size: 12px;
-  line-height: 1.2;
-  cursor: pointer;
-  position: relative;
-  z-index: 1;
-  transition: color var(--tabs-dur) var(--tabs-ease);
-}
-
-.tab-link:last-child {
-  border-right: 0;
-}
-
-.tab-link:hover,
-.tab-link.active {
-  color: var(--text-display);
-}
-
-/* No-JS fallback: until the pill has been positioned once, the active tab
-   paints its own highlight. JS marks the nav as managed. */
-.shell-nav:not([data-pill-ready]) .tab-link.active {
-  background: var(--surface-raised);
-  box-shadow: inset 0 -2px 0 var(--accent);
-}
-
-.tab-link:focus-visible {
-  outline: none;
-  box-shadow: inset 0 0 0 1px var(--text-display);
 }
 
 .workspace-stack {
@@ -2393,9 +2329,6 @@ textarea {
   --shimmer-base: #514b43;
   --shimmer-highlight: var(--text-display);
   --shimmer-band: 400%;
-  /* Tabs sliding */
-  --tabs-dur: var(--duration-fast);
-  --tabs-ease: var(--ease-out);
   /* Text states swap */
   --text-swap-dur: 150ms;
   --text-swap-ease: var(--ease-in-out);
@@ -4128,8 +4061,6 @@ button.row--link:focus-visible {
 
 /* --- reduced motion (required by every transitions.dev snippet) --- */
 @media (prefers-reduced-motion: reduce) {
-  .shell-nav__pill,
-  .tab-link,
   .reload-status {
     transition: none !important;
   }
@@ -4151,7 +4082,6 @@ button.row--link:focus-visible {
 }
 
 @media (hover: none), (pointer: coarse) {
-  .tab-link,
   button,
   .session-link,
   .tool-button,
@@ -4988,6 +4918,27 @@ button.row--link:focus-visible {
 .ui-card-tab--yellow { --tab-bg: var(--card-yellow); --tab-ink: var(--card-yellow-ink); }
 .ui-card-tab--red { --tab-bg: var(--card-red); --tab-ink: var(--card-red-ink); }
 
+.shell-nav.ui-card-tabs {
+  width: 100%;
+  margin: 0 0 -8px;
+  padding-top: 38px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+
+.shell-nav.ui-card-tabs .ui-card-tab-list {
+  right: var(--space-4);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.shell-nav.ui-card-tabs .ui-card-tab-list::-webkit-scrollbar { display: none; }
+.shell-nav.ui-card-tabs .ui-card-tab { width: clamp(82px, 12vw, 110px); }
+.shell-nav + .workspace-content > .workspace-grid { position: relative; z-index: 2; }
+
 .ui-card-tabs--vertical .ui-card-tab,
 .ui-card-tabs--left .ui-card-tab {
   width: 55px;
@@ -5260,6 +5211,7 @@ button.row--link:focus-visible {
   .ui-card-tabs--bottom .ui-card-tab-list { left: 5px; width: calc(100% - 10px); height: 50px; }
   .ui-card-tabs--horizontal .ui-card-tab,
   .ui-card-tabs--bottom .ui-card-tab { width: auto; min-width: 0; height: 50px; flex: 1 1 0; }
+  .shell-nav.ui-card-tabs .ui-card-tab { width: auto; min-width: 0; flex: 1 1 0; }
   .ui-card-tab__label { top: 10px; max-width: calc(100% - 18px); font-size: 9px; }
   .ui-card-tabs--bottom .ui-card-tab__label { top: auto; bottom: 10px; }
   .ui-card-tabs--vertical,

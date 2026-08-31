@@ -104,6 +104,24 @@ window.addEventListener("popstate", () => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeToolDetail();
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  const current = target.closest("#shell-nav .ui-card-tab[role=tab]");
+  if (!(current instanceof HTMLButtonElement)) return;
+  const tablist = current.closest("[role=tablist]");
+  if (!(tablist instanceof HTMLElement)) return;
+  const tabs = [...tablist.querySelectorAll(".ui-card-tab[role=tab]")];
+  const index = tabs.indexOf(current);
+  const nextIndex = {
+    ArrowLeft: (index - 1 + tabs.length) % tabs.length,
+    ArrowRight: (index + 1) % tabs.length,
+    Home: 0,
+    End: tabs.length - 1,
+  }[event.key];
+  if (nextIndex === undefined) return;
+  event.preventDefault();
+  tabs[nextIndex].focus();
+  tabs[nextIndex].click();
 });
 
 class AgentChatPanel extends HTMLElement {
@@ -498,48 +516,6 @@ document.addEventListener("click", (event) => {
   if (spoiler) spoiler.classList.toggle("spoiler--revealed");
 });
 
-// --- motion orchestration (transitions.dev) ----------------------------------
-// Sliding nav pill: position survives Datastar morphs via module state, so a
-// tab change animates from the previous tab even when inline styles are
-// stripped by the patch.
-const navPillState = { left: null, width: null };
-
-const positionNavPill = () => {
-  const nav = document.getElementById("shell-nav");
-  if (!nav) return;
-  const pill = nav.querySelector(".shell-nav__pill");
-  const active = nav.querySelector(".tab-link.active");
-  if (!pill || !active) return;
-  const left = active.offsetLeft;
-  const width = active.offsetWidth;
-  const apply = (l, w) => {
-    pill.style.transform = `translateX(${l}px)`;
-    pill.style.width = `${w}px`;
-  };
-  const snap = (l, w) => {
-    pill.style.transition = "none";
-    apply(l, w);
-    void pill.offsetWidth;
-    pill.style.transition = "";
-  };
-  if (navPillState.left === null) {
-    snap(left, width);
-  } else if (navPillState.left !== left || navPillState.width !== width) {
-    snap(navPillState.left, navPillState.width);
-    apply(left, width);
-  } else {
-    snap(left, width);
-  }
-  navPillState.left = left;
-  navPillState.width = width;
-  nav.setAttribute("data-pill-ready", "true");
-};
-
-window.addEventListener("resize", () => {
-  navPillState.left = null;
-  positionNavPill();
-});
-
 // Workspace entrance: staggered rise on the FIRST paint only. Tab switches
 // must be instant — re-animating on navigation makes every click read as a
 // full-page flash (content paints, blinks to opacity 0, fades back in).
@@ -603,18 +579,13 @@ const animateChangedNumbers = () => {
 
 let motionTimer = null;
 const motionObserver = new MutationObserver(() => {
-  // Pre-paint (observer callbacks are microtasks): both the entrance class
-  // and the pill position must land before the browser paints the patched
-  // content. A morph strips the pill's inline transform, and a deferred
-  // reposition lets it visibly transition toward translateX(0) — the first
-  // tab — before snapping back to the clicked one.
+  // Pre-paint (observer callbacks are microtasks): entrance state lands before
+  // the browser paints patched content.
   replayWorkspaceEntrance();
-  positionNavPill();
   clearTimeout(motionTimer);
   motionTimer = setTimeout(animateChangedNumbers, 40);
 });
 motionObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
-positionNavPill();
 replayWorkspaceEntrance();
 animateChangedNumbers();
 

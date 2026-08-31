@@ -242,6 +242,8 @@ Chips identify state, not categories. Category tags use neutral styling.
 
 Card tabs combine navigation and context: the active section is a full content card and sibling sections remain visible as attached index tabs. Horizontal tabs suit wide primary workspaces; vertical tabs suit inspectors and dense side panels. Keyboard behavior follows the ARIA tabs pattern: arrow keys move by orientation, Home/End select endpoints, and focus follows selection.
 
+Primary shell navigation uses the same horizontal index-tab silhouette. Its fixed mapping is Overview/sky, Chat/black, Cron/violet, Tools/graphite, Memory/mint, MAGI/yellow, and Logs/red. Tabs overlap the neutral workspace edge; the active tab rises above it while inactive tabs remain behind it.
+
 Color creates section recognition but never replaces the tab label. Component palette:
 
 | Token | Value | Use |
@@ -359,8 +361,6 @@ Component motion tokens are derived from the global tokens:
 | `--page-slide-distance` | `8px` | First workspace travel |
 | `--page-slide-ease` | `--ease-out` | First workspace easing |
 | `--stagger-stagger` | `40ms` | First workspace child offset |
-| `--tabs-dur` | `--duration-fast` | Pointer-driven active-tab travel |
-| `--tabs-ease` | `--ease-out` | Active-tab easing |
 | `--text-swap-dur` | `150ms` | Runtime status color swap |
 | `--text-swap-ease` | `--ease-in-out` | Runtime status color easing |
 

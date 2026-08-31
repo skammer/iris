@@ -230,13 +230,35 @@
 
 (deftest route-fragment-patches-nav-and-workspace-only
   (with-redefs [tool-approvals/list-review-records (constantly [])]
-    (let [html (ui/route-fragment {:store nil} {:tab :tools})]
+    (let [html (ui/route-fragment {:store nil} {:tab :tools})
+          doc (Jsoup/parse html)
+          nav (.first (.select doc "#shell-nav"))
+          selected (.first (.select nav ".ui-card-tab[aria-selected=true]"))]
       (is (str/includes? html "id=\"shell-nav\""))
       (is (str/includes? html "id=\"workspace-content\""))
       (is (str/includes? html "id=\"router-state\""))
       (is (not (str/includes? html "shell-header")))
       (is (str/includes? html "/ui/route?tab=chat"))
+      (is (.hasClass nav "ui-card-tabs--horizontal"))
+      (is (= 7 (.size (.select nav ".ui-card-tab[role=tab]"))))
+      (is (.hasClass (.first (.select nav "#shell-tab-chat"))
+                     "ui-card-tab--black"))
+      (is (= "shell-tab-tools" (.id selected)))
+      (is (.hasClass selected "ui-card-tab--graphite"))
+      (is (= "workspace-content"
+             (.attr (.first (.select nav "#shell-tab-tools")) "aria-controls")))
+      (is (= "shell-tab-tools"
+             (.attr (.first (.select doc "#workspace-content")) "aria-labelledby")))
       (is (not (str/includes? html ".leading"))))))
+
+(deftest shell-navigation-reuses-card-tab-component
+  (let [css (slurp (io/file "public/app.css"))
+        js (slurp (io/file "public/web-components.js"))]
+    (is (str/includes? css ".shell-nav.ui-card-tabs"))
+    (is (not (str/includes? css ".shell-nav__pill")))
+    (is (not (str/includes? js "positionNavPill")))
+    (doseq [key ["ArrowLeft" "ArrowRight" "Home" "End"]]
+      (is (str/includes? js key)))))
 
 (deftest create-session-form-posts-explicit-form-and-clears-on-success
   (let [path (temp-db-path)
