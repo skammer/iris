@@ -16,6 +16,7 @@ All notable project changes are recorded here. New entries go at the top.
 
 - Restored Cron job action submissions by letting Datastar resolve each submitted form, moved Delete into the job editor, compacted the three routine row actions, and replaced inherited white values with the violet workspace ink.
 - Made Cron editor Save, Save & run, and Delete set an explicit hidden action through Datastar click handlers, avoiding missing submitter values and inline browser handlers.
+- Normalized persisted Cron schedule kinds before rendering the editor, so cron, one-shot, and interval forms include their required schedule fields instead of submitting incomplete updates.
 - Restored the scroll-edge fade on the vertically scrolling Cron workspace.
 
 ## 2026-08-30

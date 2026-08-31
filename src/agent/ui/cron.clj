@@ -273,7 +273,8 @@
 (defn- job-editor-detail-node [system job]
   (let [profiles (keys (get-in system [:config :tools :profiles]))
         model-pairs (configured-model-pairs system)
-        form-id (str "cron-edit-form-" (:id job))]
+        form-id (str "cron-edit-form-" (:id job))
+        schedule-kind (some-> (get-in job [:schedule :kind]) keyword)]
     [:div.cron-job-editor__detail {:id (str "cron-job-detail-" (:id job))}
      [:form.cron-edit-form
        {:id form-id
@@ -282,13 +283,13 @@
        [:input {:type "hidden" :name "action" :value "update"}]
        [:input {:type "hidden" :name "id" :value (:id job)}]
        [:input {:type "hidden" :name "revision" :value (:revision job)}]
-       [:input {:type "hidden" :name "schedule_kind" :value (name (get-in job [:schedule :kind]))}]
-       (when (= :interval (get-in job [:schedule :kind]))
+       [:input {:type "hidden" :name "schedule_kind" :value (name schedule-kind)}]
+       (when (= :interval schedule-kind)
          [:input {:type "hidden" :name "anchor_at" :value (get-in job [:schedule :anchor-at])}])
        [:div.cron-form-grid
         [:label [:span "Name"] [:input {:name "name" :value (:name job) :required true}]]
         [:label [:span "Timezone"] [:input {:name "timezone" :value (:timezone job) :required true}]]
-        (case (get-in job [:schedule :kind])
+        (case schedule-kind
           :cron [:label [:span "Cron expression"] [:input {:name "cron_expression" :value (get-in job [:schedule :expression])}]]
           :at [:label [:span "Once at"] [:input {:name "at" :value (get-in job [:schedule :at])}]]
           :interval [:label [:span "Every seconds"] [:input {:name "every_seconds" :type "number" :min "60"

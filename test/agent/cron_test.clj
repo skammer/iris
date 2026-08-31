@@ -94,6 +94,8 @@
         (is (str/includes? editor-html "update-run"))
         (is (str/includes? editor-html "cron-delete-button"))
         (is (str/includes? editor-html "name=\"action\" type=\"hidden\" value=\"update\""))
+        (is (str/includes? editor-html "name=\"schedule_kind\" type=\"hidden\" value=\"cron\""))
+        (is (str/includes? editor-html "name=\"cron_expression\" value=\"0 9 * * *\""))
         (is (str/includes? editor-html "data-on:click=\"el.form.elements.action.value=&apos;delete&apos;\""))
         (is (str/includes? editor-html "data-on:click=\"el.form.elements.action.value=&apos;update&apos;\""))
         (is (str/includes? editor-html "data-on:click=\"el.form.elements.action.value=&apos;update-run&apos;\""))
