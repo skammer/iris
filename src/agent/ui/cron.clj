@@ -279,6 +279,7 @@
        {:id form-id
         :method "post"
         "data-on:submit" "@post('/ui/cron/action', {contentType: 'form'})"}
+       [:input {:type "hidden" :name "action" :value "update"}]
        [:input {:type "hidden" :name "id" :value (:id job)}]
        [:input {:type "hidden" :name "revision" :value (:revision job)}]
        [:input {:type "hidden" :name "schedule_kind" :value (name (get-in job [:schedule :kind]))}]
@@ -322,11 +323,14 @@
         [:label.cron-prompt [:span "Prompt"] [:textarea {:name "prompt" :rows 5 :required true} (:prompt job)]]]
        [:p.cron-delivery-help "Local only keeps output in Runs. Telegram modes require a saved chat ID."]
        [:div.cron-editor__actions
-        [:button.cron-delete-button {:type "submit" :name "action" :value "delete"}
+        [:button.cron-delete-button {:type "submit"
+                                     "data-on:click" "el.form.elements.action.value='delete'"}
          "Delete"]
-        [:button {:type "submit" :name "action" :value "update"}
+        [:button {:type "submit"
+                  "data-on:click" "el.form.elements.action.value='update'"}
          "Save"]
-        [:button {:type "submit" :name "action" :value "update-run"}
+        [:button {:type "submit"
+                  "data-on:click" "el.form.elements.action.value='update-run'"}
          "Save & run"]]]]))
 
 (defn job-editor-detail-fragment [system job]
