@@ -131,6 +131,20 @@
   --duration-press: 120ms;
   --duration-fast: 160ms;
   --duration-standard: 220ms;
+  --card-sky: #b9dcf6;
+  --card-sky-ink: #104f92;
+  --card-violet: #dfb7e8;
+  --card-violet-ink: #56227c;
+  --card-graphite: #38494f;
+  --card-graphite-ink: #f7f4ed;
+  --card-mint: #cce9cb;
+  --card-mint-ink: #1d6734;
+  --card-black: #20201f;
+  --card-black-ink: #f8f6ef;
+  --card-yellow: #f2e6a2;
+  --card-yellow-ink: #5b4214;
+  --card-red: #d7194b;
+  --card-red-ink: #fff7f8;
 }
 
 * {
@@ -323,7 +337,69 @@ chat-stream {
 }
 
 .workspace-content {
-  display: contents;
+  --workspace-bg: var(--card-black);
+  --workspace-ink: var(--card-black-ink);
+  --canvas: var(--workspace-bg);
+  --black: var(--workspace-bg);
+  --surface: var(--workspace-bg);
+  --surface-raised: color-mix(in srgb, var(--workspace-bg) 88%, var(--workspace-ink));
+  --surface-overlay: color-mix(in srgb, var(--workspace-bg) 94%, transparent);
+  --border: color-mix(in srgb, var(--workspace-ink) 18%, transparent);
+  --border-visible: color-mix(in srgb, var(--workspace-ink) 38%, transparent);
+  --text-disabled: color-mix(in srgb, var(--workspace-ink) 48%, var(--workspace-bg));
+  --text-secondary: color-mix(in srgb, var(--workspace-ink) 68%, var(--workspace-bg));
+  --text-primary: var(--workspace-ink);
+  --text-display: var(--workspace-ink);
+  --primary: var(--workspace-ink);
+  --primary-strong: color-mix(in srgb, var(--workspace-ink) 82%, var(--workspace-bg));
+  --accent: var(--workspace-ink);
+  --grid-dot: color-mix(in srgb, var(--workspace-ink) 16%, transparent);
+  --scrollbar-track: color-mix(in srgb, var(--workspace-ink) 8%, transparent);
+  --scrollbar-thumb: color-mix(in srgb, var(--workspace-ink) 36%, var(--workspace-bg));
+  --scrollbar-thumb-hover: var(--workspace-ink);
+  --scrollbar-thumb-active: var(--workspace-ink);
+  position: relative;
+  z-index: 2;
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  padding: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--workspace-bg);
+  color: var(--workspace-ink);
+  box-shadow: 0 -10px 18px -8px rgba(0, 0, 0, 0.62), var(--shadow-sm);
+}
+
+.workspace-content--sky { --workspace-bg: var(--card-sky); --workspace-ink: var(--card-sky-ink); }
+.workspace-content--violet { --workspace-bg: var(--card-violet); --workspace-ink: var(--card-violet-ink); }
+.workspace-content--graphite { --workspace-bg: var(--card-graphite); --workspace-ink: var(--card-graphite-ink); }
+.workspace-content--mint { --workspace-bg: var(--card-mint); --workspace-ink: var(--card-mint-ink); }
+.workspace-content--black { --workspace-bg: var(--card-black); --workspace-ink: var(--card-black-ink); }
+.workspace-content--yellow { --workspace-bg: var(--card-yellow); --workspace-ink: var(--card-yellow-ink); }
+.workspace-content--red { --workspace-bg: var(--card-red); --workspace-ink: var(--card-red-ink); }
+
+.workspace-content--sky,
+.workspace-content--violet,
+.workspace-content--mint,
+.workspace-content--yellow {
+  --success: #2f7d46;
+  --warning: #8a5a0a;
+  --danger: #a8202d;
+  --info: var(--workspace-ink);
+}
+
+.workspace-content--red {
+  --success: #dff5e6;
+  --warning: #fff0b8;
+  --danger: var(--workspace-ink);
+  --info: var(--workspace-ink);
+}
+
+.workspace-content > .workspace-grid,
+.workspace-content > .memory-workspace {
+  height: 100%;
 }
 
 .workspace-grid.two-up {
@@ -4814,20 +4890,6 @@ button.row--link:focus-visible {
 .ui-card-tabs-heading code { color: var(--text-secondary); font-size: 9px; white-space: nowrap; }
 
 .ui-card-tabs {
-  --card-sky: #b9dcf6;
-  --card-sky-ink: #104f92;
-  --card-violet: #dfb7e8;
-  --card-violet-ink: #56227c;
-  --card-graphite: #38494f;
-  --card-graphite-ink: #f7f4ed;
-  --card-mint: #cce9cb;
-  --card-mint-ink: #1d6734;
-  --card-black: #20201f;
-  --card-black-ink: #f8f6ef;
-  --card-yellow: #f2e6a2;
-  --card-yellow-ink: #5b4214;
-  --card-red: #d7194b;
-  --card-red-ink: #fff7f8;
   display: block;
   width: min(760px, 100%);
   margin-inline: auto;
@@ -4937,7 +4999,6 @@ button.row--link:focus-visible {
 
 .shell-nav.ui-card-tabs .ui-card-tab-list::-webkit-scrollbar { display: none; }
 .shell-nav.ui-card-tabs .ui-card-tab { width: clamp(82px, 12vw, 110px); }
-.shell-nav + .workspace-content > .workspace-grid { position: relative; z-index: 2; }
 
 .ui-card-tabs--vertical .ui-card-tab,
 .ui-card-tabs--left .ui-card-tab {

@@ -249,12 +249,18 @@
              (.attr (.first (.select nav "#shell-tab-tools")) "aria-controls")))
       (is (= "shell-tab-tools"
              (.attr (.first (.select doc "#workspace-content")) "aria-labelledby")))
+      (is (.hasClass (.first (.select doc "#workspace-content"))
+                     "workspace-content--graphite"))
       (is (not (str/includes? html ".leading"))))))
 
 (deftest shell-navigation-reuses-card-tab-component
   (let [css (slurp (io/file "public/app.css"))
         js (slurp (io/file "public/web-components.js"))]
     (is (str/includes? css ".shell-nav.ui-card-tabs"))
+    (is (str/includes? css ".workspace-content--sky"))
+    (is (str/includes? css "--workspace-bg: var(--card-sky)"))
+    (is (str/includes? css "background: var(--workspace-bg)"))
+    (is (not (str/includes? css ".workspace-content {\n  display: contents;")))
     (is (not (str/includes? css ".shell-nav__pill")))
     (is (not (str/includes? js "positionNavPill")))
     (doseq [key ["ArrowLeft" "ArrowRight" "Home" "End"]]

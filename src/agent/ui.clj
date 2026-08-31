@@ -52,6 +52,10 @@
   (let [tab (some-> value name str/lower-case keyword)]
     (if (some #(= tab (:key %)) tabs) tab :chat)))
 
+(defn- tab-tone [tab-key]
+  (or (some #(when (= tab-key (:key %)) (:tone %)) tabs)
+      "black"))
+
 (defn- route-path [{:keys [tab session-id]}]
   (case (normalize-tab tab)
     :overview "/overview"
@@ -124,7 +128,8 @@
 
 (defn- workspace-node [system active-tab session-id]
   [:div#workspace-content.workspace-content
-   {:role "tabpanel"
+   {:class (str "workspace-content--" (tab-tone active-tab))
+    :role "tabpanel"
     :aria-labelledby (str "shell-tab-" (name active-tab))}
    (ui-render/trusted-fragment
     (case active-tab

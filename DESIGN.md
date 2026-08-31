@@ -257,8 +257,11 @@ Color creates section recognition but never replaces the tab label. Component pa
 | `--card-red` / `--card-red-ink` | `#d7194b` / `#fff7f8` | Failure and incident response |
 | `--card-bg` / `--card-ink` | Per-section aliases | Active card surface and foreground |
 | `--tab-bg` / `--tab-ink` | Per-section aliases | Attached tab surface and foreground |
+| `--workspace-bg` / `--workspace-ink` | Active section aliases | Product workspace surface and foreground |
 
 Tabs support all four card edges with smooth SVG clip paths. Top and bottom indexes are 50px high; right and left indexes use a 55px protrusion with centered vertical text. Bottom and left paths mirror the taper, label direction, hover movement, panel shadow, and seamless selected border of their opposite edge. Inactive indexes remain beneath the card and receive its directional shadow. The selected index rises above the panel, covering only the shared border segment so tab and card read as one surface.
+
+The product workspace inherits the active tab's card background and ink. Its nested surfaces, borders, controls, and scrollbars derive tonal variants from that pair, so the selected tab and page form one continuous card without a visible overlap seam.
 
 ### Menus, popovers, tooltips
 
@@ -437,7 +440,7 @@ The Overview page directly applies this reference: identity summary, four worksp
 
 ## Navigation and performance contracts
 
-- Persistent shell chrome is never replaced during ordinary tab navigation. Route responses patch only `#shell-nav`, `#workspace-content`, and `#router-state`; the workspace patch root uses `display: contents` so it never becomes a competing scroll container.
+- Persistent shell chrome is never replaced during ordinary tab navigation. Route responses patch only `#shell-nav`, `#workspace-content`, and `#router-state`; the workspace patch root owns the active Card-tab surface while preserving one bounded inner scroll layout.
 - Chat live streams are client-scoped. Leaving Chat aborts the browser request and closes the matching server stream; opening another session replaces the previous stream for that client.
 - Server-rendered panels include their initial data. Interval refreshes must not use a leading request that immediately downloads the same markup again.
 - Large non-streaming text responses use gzip when accepted. SSE remains uncompressed and receives heartbeat cleanup support.
