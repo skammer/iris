@@ -263,6 +263,8 @@ Tabs support all four card edges with smooth SVG clip paths. Top and bottom inde
 
 The product workspace inherits the active tab's card background and ink. Its nested surfaces, borders, controls, and scrollbars derive tonal variants from that pair, so the selected tab and page form one continuous card without a visible overlap seam.
 
+Product workspaces reserve a 16px top seam zone: the 12px selected-tab overlap never covers page controls. Inactive shell tabs remain stationary without hover shadows, preventing filtered pixels from painting through the workspace stacking boundary.
+
 ### Menus, popovers, tooltips
 
 - Menus and popovers originate from their trigger (`transform-origin` points to trigger).

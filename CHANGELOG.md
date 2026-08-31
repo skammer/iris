@@ -9,6 +9,7 @@ All notable project changes are recorded here. New entries go at the top.
 - Removed light mode, theme persistence, theme-switch animation, and both theme controls; Iris now always uses its dark palette.
 - Replaced top-level navigation with accessible horizontal Card tabs; Chat uses black, with semantic colors assigned to the other workspaces.
 - Matched every workspace surface and ink to its active Card tab, making the selected tab-to-page seam continuous instead of overlapping a dark panel.
+- Reserved a clean seam zone below shell tabs and removed inactive-tab hover shadows, preventing tab pixels from bleeding over page controls.
 
 ## 2026-08-30
 

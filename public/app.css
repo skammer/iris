@@ -326,6 +326,7 @@ chat-stream {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  isolation: isolate;
 }
 
 .workspace-grid {
@@ -363,7 +364,7 @@ chat-stream {
   display: block;
   min-width: 0;
   min-height: 0;
-  padding: 8px;
+  padding: 16px 8px 8px;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -4999,6 +5000,7 @@ button.row--link:focus-visible {
 
 .shell-nav.ui-card-tabs .ui-card-tab-list::-webkit-scrollbar { display: none; }
 .shell-nav.ui-card-tabs .ui-card-tab { width: clamp(82px, 12vw, 110px); }
+.shell-nav.ui-card-tabs .ui-card-tab:not([aria-selected="true"]) { filter: none; }
 
 .ui-card-tabs--vertical .ui-card-tab,
 .ui-card-tabs--left .ui-card-tab {
@@ -5228,6 +5230,7 @@ button.row--link:focus-visible {
 @media (hover: hover) and (pointer: fine) {
   .ui-action-tile:hover { border-color: var(--text-primary); background: var(--surface-raised); }
   .ui-card-tab:not([aria-selected="true"]):hover { filter: drop-shadow(0 8px 10px rgba(0, 0, 0, 0.26)); transform: translateY(4px); }
+  .shell-nav.ui-card-tabs .ui-card-tab:not([aria-selected="true"]):hover { filter: none; transform: translateY(7px); }
   .ui-card-tabs--vertical .ui-card-tab:not([aria-selected="true"]):hover { transform: translateX(-4px); }
   .ui-card-tabs--bottom .ui-card-tab:not([aria-selected="true"]):hover { transform: translateY(-4px); }
   .ui-card-tabs--left .ui-card-tab:not([aria-selected="true"]):hover { transform: translateX(4px); }
