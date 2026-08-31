@@ -15,6 +15,7 @@ All notable project changes are recorded here. New entries go at the top.
 ### Fixed
 
 - Restored Cron job action submissions by letting Datastar resolve each submitted form, moved Delete into the job editor, compacted the three routine row actions, and replaced inherited white values with the violet workspace ink.
+- Made Cron editor Save, Save & run, and Delete actions use the native submitter name/value contract supported by the pinned Datastar bundle, removing inline action-field mutation.
 
 ## 2026-08-30
 

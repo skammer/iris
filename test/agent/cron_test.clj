@@ -92,9 +92,11 @@
         (is (str/includes? new-html "Telegram — always send result"))
         (is (str/includes? editor-html "update-run"))
         (is (str/includes? editor-html "cron-delete-button"))
-        (is (str/includes? editor-html "this.form.elements.action.value=&apos;delete&apos;"))
+        (is (str/includes? editor-html "name=\"action\" type=\"submit\" value=\"delete\""))
+        (is (str/includes? editor-html "name=\"action\" type=\"submit\" value=\"update\""))
+        (is (str/includes? editor-html "name=\"action\" type=\"submit\" value=\"update-run\""))
+        (is (not (str/includes? editor-html "this.form.elements.action.value")))
         (is (not (str/includes? editor-html "selector: el")))
-        (is (str/includes? editor-html "this.form.elements.action.value=&apos;update-run&apos;"))
         (is (str/includes? editor-html "Save &amp; run"))
         (is (str/includes? editor-html "notify_policy.value === &apos;never&apos;")))
       (finally
@@ -161,6 +163,46 @@
         (is (= :manual (:trigger run)))
         (is (= :claimed (:status run)))
         (is (str/includes? (:body response) "Recent runs")))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest cron-ui-edit-actions-use-submitter-value-test
+  (let [{:keys [path store]} (temp-store)
+        system (test-system store)
+        job (cron-store/create-job!
+             store
+             {:name "editable" :prompt "Before" :schedule {:kind :cron :expression "0 9 * * *"}
+              :timezone "UTC" :status :active :notification {:policy :never}
+              :next-run-at "2026-09-02T09:00:00Z" :created-by "test"})
+        form (fn [revision action prompt]
+               {:form-params {"id" (:id job)
+                              "revision" (str revision)
+                              "action" action
+                              "name" "editable"
+                              "prompt" prompt
+                              "timezone" "UTC"
+                              "schedule_kind" "cron"
+                              "cron_expression" "0 10 * * *"
+                              "max_occurrences" ""
+                              "tool_profile" ""
+                              "model_pair" ""
+                              "notify_policy" "never"
+                              "telegram_recipient" ""}})]
+    (try
+      (let [save-response (ui-handlers/cron-action system (form (:revision job) "update" "Saved"))
+            saved (cron-store/get-job store (:id job))
+            run-response (ui-handlers/cron-action system (form (:revision saved) "update-run" "Saved and run"))
+            updated (cron-store/get-job store (:id job))
+            run (first (cron-store/list-runs store (:id job) 1))]
+        (is (= 200 (:status save-response)))
+        (is (= "Saved" (:prompt saved)))
+        (is (= "0 10 * * *" (get-in saved [:schedule :expression])))
+        (is (= 200 (:status run-response)))
+        (is (= "Saved and run" (:prompt updated)))
+        (is (= :manual (:trigger run)))
+        (is (= :claimed (:status run)))
+        (is (str/includes? (:body run-response) "Recent runs")))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
