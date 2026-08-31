@@ -400,7 +400,8 @@ chat-stream {
 
 .workspace-content > .workspace-grid,
 .workspace-content > .memory-workspace {
-  height: 100%;
+  position: absolute;
+  inset: 16px 8px 8px;
 }
 
 .workspace-grid.two-up {

@@ -261,6 +261,8 @@
     (is (str/includes? css "--workspace-bg: var(--card-sky)"))
     (is (str/includes? css "background: var(--workspace-bg)"))
     (is (str/includes? css "padding: 16px 8px 8px"))
+    (is (str/includes? css "inset: 16px 8px 8px"))
+    (is (not (str/includes? css ".workspace-content > .workspace-grid,\n.workspace-content > .memory-workspace {\n  height: 100%;")))
     (is (str/includes? css ".shell-nav.ui-card-tabs .ui-card-tab:not([aria-selected=\"true\"]):hover { filter: none; transform: translateY(7px); }"))
     (is (not (str/includes? css ".workspace-content {\n  display: contents;")))
     (is (not (str/includes? css ".shell-nav__pill")))

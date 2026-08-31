@@ -10,6 +10,7 @@ All notable project changes are recorded here. New entries go at the top.
 - Replaced top-level navigation with accessible horizontal Card tabs; Chat uses black, with semantic colors assigned to the other workspaces.
 - Matched every workspace surface and ink to its active Card tab, making the selected tab-to-page seam continuous instead of overlapping a dark panel.
 - Reserved a clean seam zone below shell tabs and removed inactive-tab hover shadows, preventing tab pixels from bleeding over page controls.
+- Fixed WebKit/Safari clipping the bottom of tab workspaces, including the Chat composer, by replacing the nested percentage height with explicit workspace insets.
 
 ## 2026-08-30
 

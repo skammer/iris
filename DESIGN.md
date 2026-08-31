@@ -443,6 +443,7 @@ The Overview page directly applies this reference: identity summary, four worksp
 ## Navigation and performance contracts
 
 - Persistent shell chrome is never replaced during ordinary tab navigation. Route responses patch only `#shell-nav`, `#workspace-content`, and `#router-state`; the workspace patch root owns the active Card-tab surface while preserving one bounded inner scroll layout.
+- `#workspace-content` bounds its single page workspace with explicit top/right/bottom/left insets instead of percentage heights, avoiding WebKit resolving nested `height: 100%` against the viewport and clipping bottom controls.
 - Chat live streams are client-scoped. Leaving Chat aborts the browser request and closes the matching server stream; opening another session replaces the previous stream for that client.
 - Server-rendered panels include their initial data. Interval refreshes must not use a leading request that immediately downloads the same markup again.
 - Large non-streaming text responses use gzip when accepted. SSE remains uncompressed and receives heartbeat cleanup support.
