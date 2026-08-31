@@ -1,13 +1,16 @@
 (ns agent.cron-test
   (:require
    [agent.api.handlers.ui :as ui-handlers]
+   [agent.chat :as chat]
    [agent.chat.kernel-ops :as kernel-ops]
    [agent.chat.turn :as chat-turn]
+   [agent.cron.notification :as cron-notification]
    [agent.cron.schedule :as schedule]
    [agent.cron.runner :as cron-runner]
    [agent.cron.service :as cron-service]
    [agent.cron.store :as cron-store]
    [agent.llm.registry :as llm-registry]
+   [agent.llm.service :as llm-service]
    [agent.persistence.sqlite :as sqlite]
    [agent.tools.common.cron :as cron-tool]
    [agent.tools.core :as tools]
@@ -45,10 +48,70 @@
               "- reference-time-utc: 2026-08-20T15:44:04Z\n"
               "- timezone: Europe/Moscow\n"
               "- trigger: manual\n\n"
-              "Task:\nSearch the last 48 hours")
+              "Task:\nSearch the last 48 hours\n\n"
+              "Delivery protocol:\n"
+              "- Put the final task result between exact marker lines <iris-cron-final> and </iris-cron-final>.\n"
+              "- Text outside those markers is discarded and will not be delivered.\n"
+              "- Do not quote, escape, or explain the markers.")
          (#'cron-runner/contextual-prompt
           {:scheduled-for "2026-08-20T15:44:04Z" :trigger :manual}
           {:timezone "Europe/Moscow" :prompt "Search the last 48 hours"}))))
+
+(deftest cron-final-output-extracts-last-complete-envelope-test
+  (testing "drops narration and superseded drafts"
+    (is (= "final report"
+           (#'cron-runner/final-output
+            (str "planning\n"
+                 "<iris-cron-final>\nold report\n</iris-cron-final>\n"
+                 "more planning\n"
+                 "<iris-cron-final>\nfinal report\n</iris-cron-final>\n"
+                 "postscript")))))
+  (testing "rejects missing, malformed, and empty envelopes"
+    (doseq [[content expected-type]
+            [["plain output" :cron-output-envelope-missing]
+             ["planning <iris-cron-final> unfinished" :cron-output-envelope-missing]
+             ["<iris-cron-final> \n </iris-cron-final>" :cron-output-envelope-empty]]]
+      (let [error (try
+                    (#'cron-runner/final-output content)
+                    nil
+                    (catch clojure.lang.ExceptionInfo e e))]
+        (is (= expected-type (:type (ex-data error))))))))
+
+(deftest cron-run-persists-and-delivers-only-enveloped-output-test
+  (let [{:keys [path store]} (temp-store)
+        system (test-system store)
+        snapshot {:name "digest"
+                  :prompt "Report"
+                  :timezone "UTC"
+                  :notification {:policy :always
+                                 :target {:kind :channel :adapter :telegram :recipient "123"}}
+                  :allowed-tools []
+                  :allowed-actions {}
+                  :permissions []}
+        job (cron-store/create-job!
+             store
+             {:name "digest" :prompt "Report"
+              :schedule {:kind :cron :expression "0 9 * * *"}
+              :timezone "UTC" :status :active :notification (:notification snapshot)
+              :next-run-at "2026-09-01T09:00:00Z" :created-by "test"})
+        run (cron-store/claim-manual! store job {:snapshot snapshot})
+        delivered (atom nil)]
+    (try
+      (with-redefs [llm-service/create-llm-provider-with-override (fn [& _] ::provider)
+                    chat/run! (fn [& _]
+                                {:content (str "internal reasoning\n"
+                                               "<iris-cron-final>\nfinal report\n</iris-cron-final>")
+                                 :usage {:tokens 10}
+                                 :stop-reason :completed})
+                    cron-notification/dispatch-success! (fn [_ _ output]
+                                                          (reset! delivered output))]
+        (let [finished (cron-runner/execute! system run)]
+          (is (= :succeeded (:status finished)))
+          (is (= "final report" (:output finished)))
+          (is (= "final report" @delivered))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
 
 (deftest cron-ui-tabs-and-delivery-controls-test
   (let [{:keys [path store]} (temp-store)

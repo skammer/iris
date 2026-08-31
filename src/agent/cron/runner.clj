@@ -17,6 +17,27 @@
 (defn- bounded [value max-chars]
   (util/truncate (or value "") max-chars #(str "\n[truncated " % " chars]")))
 
+(def ^:private final-open "<iris-cron-final>")
+(def ^:private final-close "</iris-cron-final>")
+
+(defn- final-output [value]
+  (let [raw (str (or value ""))
+        close-at (.lastIndexOf raw final-close)
+        before-close (when (not= -1 close-at) (subs raw 0 close-at))
+        open-at (when before-close (.lastIndexOf before-close final-open))
+        marked (when (and open-at (not= -1 open-at))
+                 (str/trim (subs raw (+ open-at (count final-open)) close-at)))]
+    (cond
+      (or (= -1 close-at) (nil? open-at) (= -1 open-at))
+      (throw (ex-info "cron completion missing final delivery envelope"
+                      {:type :cron-output-envelope-missing}))
+
+      (str/blank? marked)
+      (throw (ex-info "cron completion final delivery envelope is empty"
+                      {:type :cron-output-envelope-empty}))
+
+      :else marked)))
+
 (defn- terminal-error [result]
   (let [reason (:stop-reason result)
         approval-ids (keep :id (:approvals result))]
@@ -30,7 +51,11 @@
        "- reference-time-utc: " (:scheduled-for run) "\n"
        "- timezone: " (:timezone snapshot) "\n"
        "- trigger: " (name (:trigger run)) "\n\n"
-       "Task:\n" (:prompt snapshot)))
+       "Task:\n" (:prompt snapshot) "\n\n"
+       "Delivery protocol:\n"
+       "- Put the final task result between exact marker lines " final-open " and " final-close ".\n"
+       "- Text outside those markers is discarded and will not be delivered.\n"
+       "- Do not quote, escape, or explain the markers."))
 
 (defn execute! [system run]
   (let [snapshot (:snapshot run)
@@ -74,9 +99,12 @@
               (catch Exception e
                 (logging/log-error! :agent.cron/notification-failed e {:run-id (:id run)})))
             (emit! system :cron.run.failed run {:error message})))
-        (let [output (bounded (:content result) max-chars)
-              usage (:usage result)
+        (let [usage (:usage result)
               terminal-error* (terminal-error result)
+              output (bounded (if terminal-error*
+                                (:content result)
+                                (final-output (:content result)))
+                              max-chars)
               notification-status (if (= :never (some-> snapshot :notification :policy keyword))
                                     :not-configured
                                     (:notification-status (store/get-run (:store system) (:id run))))]
