@@ -2,6 +2,12 @@
 
 All notable project changes are recorded here. New entries go at the top.
 
+## 2026-08-31
+
+### Changed
+
+- Removed light mode, theme persistence, theme-switch animation, and both theme controls; Iris now always uses its dark palette.
+
 ## 2026-08-30
 
 ### Added

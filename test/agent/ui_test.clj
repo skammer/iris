@@ -32,6 +32,20 @@
   (let [html (ui/index-page "/chat/session-1")]
     (is (str/includes? html "/ui/shell?tab=chat&amp;session_id=session-1"))))
 
+(deftest ui-is-dark-only
+  (let [css (slurp (io/file "public/app.css"))
+        js (slurp (io/file "public/web-components.js"))
+        ui-source (slurp (io/file "src/agent/ui.clj"))
+        catalog-html (ui-catalog/page)]
+    (is (str/includes? css "color-scheme: dark"))
+    (is (not (str/includes? css ":root[data-theme=\"light\"]")))
+    (is (not (str/includes? css "theme-switching")))
+    (is (not (str/includes? js "ThemeToggle")))
+    (is (not (str/includes? js "iris-theme")))
+    (is (not (str/includes? ui-source "theme-toggle")))
+    (is (not (str/includes? catalog-html "theme-toggle")))
+    (is (not (str/includes? catalog-html "data-theme=")))))
+
 (deftest ui-catalog-covers-reference-components-and-layouts
   (let [html (ui-catalog/page)]
     (is (str/includes? html "IRIS UI SYSTEM"))

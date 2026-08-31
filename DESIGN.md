@@ -27,36 +27,38 @@ The intended feeling is **quiet confidence**. Information is dense, but never cr
 
 Never use raw colors in component rules. Use semantic tokens.
 
-| Token | Dark | Light | Use |
-| --- | --- | --- | --- |
-| `--canvas` | `#0a0908` | `#f2efe9` | Page background |
-| `--surface` | `#12110f` | `#faf8f4` | Primary panels, dialog body |
-| `--surface-raised` | `#1a1815` | `#ebe7df` | Controls, rows, nested cards |
-| `--surface-overlay` | `rgba(26, 24, 21, 0.92)` | `rgba(250, 248, 244, 0.92)` | Popovers, menus, toasts |
-| `--border` | `#2b2823` | `#d8d1c7` | Quiet structure |
-| `--border-visible` | `#484239` | `#9c9386` | Inputs, interactive edges |
-| `--text-disabled` | `#746d62` | `#898174` | Disabled/supporting metadata |
-| `--text-secondary` | `#aaa195` | `#625c53` | Labels, secondary copy |
-| `--text-primary` | `#e8e1d7` | `#24211d` | Body copy |
-| `--text-display` | `#fffaf2` | `#0b0a09` | Titles, primary values |
-| `--primary` | `#c8beb0` | `#5d554b` | Selection, navigation, links |
-| `--primary-strong` | `#eee6dc` | `#2f2a25` | Primary hover/emphasis |
-| `--success` | `#52b788` | `#2f7d46` | Completed, connected, healthy |
-| `--warning` | `#e3b341` | `#9a6a12` | Pending, degraded, approval |
-| `--danger` | `#ef6a6a` | `#bd2c35` | Failed, destructive, invalid |
-| `--info` | `#a99f91` | `#746b5f` | Running, queued, informational |
+Iris uses one dark palette. No theme switch or alternate light tokens exist.
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `--canvas` | `#0a0908` | Page background |
+| `--surface` | `#12110f` | Primary panels, dialog body |
+| `--surface-raised` | `#1a1815` | Controls, rows, nested cards |
+| `--surface-overlay` | `rgba(26, 24, 21, 0.92)` | Popovers, menus, toasts |
+| `--border` | `#2b2823` | Quiet structure |
+| `--border-visible` | `#484239` | Inputs, interactive edges |
+| `--text-disabled` | `#746d62` | Disabled/supporting metadata |
+| `--text-secondary` | `#aaa195` | Labels, secondary copy |
+| `--text-primary` | `#e8e1d7` | Body copy |
+| `--text-display` | `#fffaf2` | Titles, primary values |
+| `--primary` | `#c8beb0` | Selection, navigation, links |
+| `--primary-strong` | `#eee6dc` | Primary hover/emphasis |
+| `--success` | `#52b788` | Completed, connected, healthy |
+| `--warning` | `#e3b341` | Pending, degraded, approval |
+| `--danger` | `#ef6a6a` | Failed, destructive, invalid |
+| `--info` | `#a99f91` | Running, queued, informational |
 
 `--accent` is a compatibility alias for `--primary`. New code should use the semantic name.
 
 #### Canvas and scrollbar tokens
 
-| Token | Dark | Light | Use |
-| --- | --- | --- | --- |
-| `--grid-dot` | `#181613` | `#d8d1c7` | Background dot grid |
-| `--scrollbar-track` | `rgba(255,255,255,.03)` | `rgba(0,0,0,.05)` | Scrollbar track |
-| `--scrollbar-thumb` | `#4a443b` | `#9c9386` | Resting thumb |
-| `--scrollbar-thumb-hover` | `--primary` | `--primary` | Hovered thumb |
-| `--scrollbar-thumb-active` | `#e8e0d5` | `#24211d` | Dragged thumb |
+| Token | Value | Use |
+| --- | --- | --- |
+| `--grid-dot` | `#181613` | Background dot grid |
+| `--scrollbar-track` | `rgba(255,255,255,.03)` | Scrollbar track |
+| `--scrollbar-thumb` | `#4a443b` | Resting thumb |
+| `--scrollbar-thumb-hover` | `--primary` | Hovered thumb |
+| `--scrollbar-thumb-active` | `#e8e0d5` | Dragged thumb |
 
 Scroll hints use `--scroll-fade-start`, `--scroll-fade-end`, `--scroll-fade-size`,
 and `--scroll-fade-reveal` to dissolve both long-list edges without overlays or JS listeners.
@@ -342,8 +344,6 @@ Frequency policy:
 | `--duration-press` | `120ms` | Pointer-down feedback |
 | `--duration-fast` | `160ms` | Tooltip, small state change |
 | `--duration-standard` | `220ms` | Popover, dropdown, panel |
-| `--theme-fade-out` | `80ms` | Theme content fade before token swap |
-| `--theme-fade-in` | `120ms` | Theme content return after token swap |
 
 Component motion tokens are derived from the global tokens:
 
@@ -366,11 +366,11 @@ Component motion tokens are derived from the global tokens:
 
 Static boot-loading treatment tokens do not animate indefinitely:
 
-| Token | Dark | Light | Use |
-| --- | --- | --- | --- |
-| `--shimmer-base` | `#514b43` | `#aaa297` | Loading label base |
-| `--shimmer-highlight` | `--text-display` | `--text-display` | Static loading highlight |
-| `--shimmer-band` | `400%` | `400%` | Highlight gradient scale |
+| Token | Value | Use |
+| --- | --- | --- |
+| `--shimmer-base` | `#514b43` | Loading label base |
+| `--shimmer-highlight` | `--text-display` | Static loading highlight |
+| `--shimmer-band` | `400%` | Highlight gradient scale |
 
 Rules:
 
@@ -460,4 +460,4 @@ The Overview page directly applies this reference: identity summary, four worksp
 - Product pages use real data. `/ui` uses deterministic examples.
 - Update this document whenever tokens, motion, responsive behavior, or component contracts change.
 - Record every product or user-visible behavior change in `CHANGELOG.md` in the same change.
-- Verify UI changes with targeted Clojure tests, lint, real browser screenshots at desktop and narrow widths, keyboard navigation, light/dark themes, and reduced-motion mode.
+- Verify UI changes with targeted Clojure tests, lint, real browser screenshots at desktop and narrow widths, keyboard navigation, dark palette, and reduced-motion mode.

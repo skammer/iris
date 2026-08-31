@@ -131,36 +131,6 @@
   --duration-press: 120ms;
   --duration-fast: 160ms;
   --duration-standard: 220ms;
-  --theme-fade-out: 80ms;
-  --theme-fade-in: 120ms;
-}
-
-:root[data-theme="light"] {
-  color-scheme: light;
-  background: #f2efe9;
-  --canvas: #f2efe9;
-  --black: var(--canvas);
-  --surface: #faf8f4;
-  --surface-raised: #ebe7df;
-  --surface-overlay: rgba(250, 248, 244, 0.92);
-  --border: #d8d1c7;
-  --border-visible: #9c9386;
-  --text-disabled: #898174;
-  --text-secondary: #625c53;
-  --text-primary: #24211d;
-  --text-display: #0b0a09;
-  --primary: #5d554b;
-  --primary-strong: #2f2a25;
-  --accent: var(--primary);
-  --success: #2f7d46;
-  --warning: #9a6a12;
-  --danger: #bd2c35;
-  --info: #746b5f;
-  --grid-dot: #d8d1c7;
-  --scrollbar-track: rgba(0, 0, 0, 0.05);
-  --scrollbar-thumb: #9c9386;
-  --scrollbar-thumb-hover: var(--primary);
-  --scrollbar-thumb-active: #24211d;
 }
 
 * {
@@ -182,20 +152,6 @@ body {
     var(--canvas);
   color: var(--text-primary);
   font-family: "IoskeleyMono", monospace;
-  opacity: 1;
-  transition: opacity var(--theme-fade-in) var(--ease-out);
-}
-
-html.theme-switching body {
-  opacity: 0;
-  transition: opacity var(--theme-fade-out) var(--ease-out) !important;
-}
-
-html.theme-switching body *,
-html.theme-switching body *::before,
-html.theme-switching body *::after {
-  transition: none !important;
-  animation-play-state: paused !important;
 }
 
 main {
@@ -215,11 +171,6 @@ agent-chat-panel {
 
 chat-stream {
   display: flex;
-}
-
-theme-toggle {
-  display: block;
-  flex: 0 0 auto;
 }
 
 .panel,
@@ -354,13 +305,6 @@ theme-toggle {
 .shell-system-link:focus-visible {
   color: var(--text-display);
   outline: 0;
-}
-
-.theme-toggle {
-  flex: 0 0 auto;
-  margin: 4px;
-  padding: 6px 10px;
-  min-width: 58px;
 }
 
 .shell-nav {
@@ -2457,11 +2401,6 @@ textarea {
   --text-swap-ease: var(--ease-in-out);
 }
 
-:root[data-theme="light"] {
-  --shimmer-base: #aaa297;
-  --shimmer-highlight: var(--text-display);
-}
-
 /* --- static boot loading treatment: no indefinite decorative loop --- */
 .t-shimmer {
   position: relative;
@@ -4189,12 +4128,6 @@ button.row--link:focus-visible {
 
 /* --- reduced motion (required by every transitions.dev snippet) --- */
 @media (prefers-reduced-motion: reduce) {
-  body,
-  html.theme-switching body {
-    opacity: 1;
-    transition: none !important;
-  }
-
   .shell-nav__pill,
   .tab-link,
   .reload-status {

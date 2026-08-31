@@ -207,7 +207,7 @@
 (defn page []
   (str "<!doctype html>"
        (ui-render/render
-   [:html {:lang "en" :data-theme "light"}
+   [:html {:lang "en"}
     [:head
      [:meta {:charset "utf-8"}]
      [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
@@ -235,9 +235,7 @@
         [:a {:href "#workflow"} "Workflow"]
         [:a {:href "#feedback"} "Feedback"]]
        [:div.ui-catalog-nav__footer
-        [:a {:href "/"} "← Control plane"]
-        [:theme-toggle
-         [:button#theme-toggle.theme-toggle {:type "button" :aria-label "Toggle theme"} "Light"]]]]
+        [:a {:href "/"} "← Control plane"]]]
 
       [:main.ui-catalog-main
        [:header.ui-catalog-hero

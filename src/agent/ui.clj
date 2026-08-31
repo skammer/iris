@@ -213,13 +213,7 @@
          [:span.status-label "events"]
          [:span.status-value (str event-count)]]]
        [:div.shell-header__actions
-        [:a.shell-system-link {:href "/ui"} "UI SYSTEM"]
-        [:theme-toggle
-         [:button#theme-toggle.theme-toggle
-          {:type "button"
-           :aria-label "Toggle light or dark mode"
-           :title "Toggle light/dark mode"}
-          "Dark"]]]]
+        [:a.shell-system-link {:href "/ui"} "UI SYSTEM"]]]
       (shell-nav-node active-tab)
       (workspace-node system active-tab session-id)])))
 

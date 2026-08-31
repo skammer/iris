@@ -1,5 +1,4 @@
 const AUTOSCROLL_THRESHOLD_PX = 32;
-const THEME_STORAGE_KEY = "iris-theme";
 
 const createUiClientId = () => {
   if (typeof globalThis.crypto?.randomUUID === "function") {
@@ -106,76 +105,6 @@ window.addEventListener("popstate", () => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeToolDetail();
 });
-
-const storedTheme = () => {
-  try {
-    return localStorage.getItem(THEME_STORAGE_KEY);
-  } catch (_error) {
-    return null;
-  }
-};
-
-const persistTheme = (theme) => {
-  try {
-    localStorage.setItem(THEME_STORAGE_KEY, theme);
-  } catch (_error) {
-    return;
-  }
-};
-
-const preferredTheme = () =>
-  storedTheme()
-  || (window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark");
-
-const applyTheme = (theme) => {
-  document.documentElement.dataset.theme = theme === "light" ? "light" : "dark";
-};
-
-applyTheme(preferredTheme());
-
-class ThemeToggle extends HTMLElement {
-  #switchTimer = null;
-  #pendingTheme = null;
-
-  connectedCallback() {
-    this.button?.addEventListener("click", this);
-    this.render();
-  }
-
-  disconnectedCallback() {
-    this.button?.removeEventListener("click", this);
-    clearTimeout(this.#switchTimer);
-  }
-
-  get button() {
-    return this.querySelector("button");
-  }
-
-  handleEvent() {
-    const root = document.documentElement;
-    const current = this.#pendingTheme || root.dataset.theme;
-    const next = current === "light" ? "dark" : "light";
-    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    this.#pendingTheme = next;
-    root.classList.add("theme-switching");
-    clearTimeout(this.#switchTimer);
-    this.#switchTimer = setTimeout(() => {
-      persistTheme(next);
-      applyTheme(next);
-      this.#pendingTheme = null;
-      this.render();
-      requestAnimationFrame(() => root.classList.remove("theme-switching"));
-    }, reduceMotion ? 0 : 90);
-  }
-
-  render() {
-    const button = this.button;
-    if (!(button instanceof HTMLButtonElement)) return;
-    const light = document.documentElement.dataset.theme === "light";
-    button.textContent = light ? "Light" : "Dark";
-    button.setAttribute("aria-pressed", String(light));
-  }
-}
 
 class AgentChatPanel extends HTMLElement {
   #streamController = null;
@@ -511,7 +440,6 @@ const attachSkillAutocompletes = () => {
   document.querySelectorAll("form[data-skill-autocomplete]").forEach(attachSkillAutocomplete);
 };
 
-if (!customElements.get("theme-toggle")) customElements.define("theme-toggle", ThemeToggle);
 if (!customElements.get("chat-stream")) customElements.define("chat-stream", ChatStream);
 if (!customElements.get("agent-chat-panel")) customElements.define("agent-chat-panel", AgentChatPanel);
 if (!customElements.get("catalog-card-tabs")) customElements.define("catalog-card-tabs", CatalogCardTabs);
