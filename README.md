@@ -1,6 +1,154 @@
 # iris: Isolated Reasoning & Intelligence Substrate
 
-Current canonical runtime lives under `src`:
+Iris is a stateful Clojure agent runtime for chat, Telegram, scheduled work,
+tool execution, and reviewed long-term memory. It is designed to stay useful
+with both hosted frontier models and small local models.
+
+## Core features
+
+### 0. Telegram integration
+
+- Telegram chats are persisted as normal Iris sessions, so they share history,
+  memory, tools, approvals, cancellation, and session reset policies with the
+  web/API runtime.
+- Rich messages are enabled by default: streamed drafts, formatted Markdown,
+  code, tables, media blocks, live thinking, collapsed final thinking, and
+  automatic fallback to legacy messages when the rich API fails.
+- Iris accepts text and Telegram media, can send photos/documents, asks
+  questions with custom reply keyboards, and renders sensitive tool approvals
+  as user-facing Approve/Deny buttons. Tool calls and results have compact
+  Telegram summaries instead of raw internal payloads.
+- Access is deny-by-default unless the configured user/chat allowlist or
+  `allow-all?` admits the update.
+
+### 1. Small-model reliability
+
+The `small-local` chat profile turns a weak local model into a stricter agent:
+
+- tool schemas are routed by task category to reduce prompt load;
+- tool choice is required and final output goes through a synthetic `respond`
+  tool, avoiding ambiguous bare-text/tool mixtures;
+- bounded nudges repair bare text, unknown tools, malformed arguments, missing
+  read-before-write prerequisites, repeated calls/errors, premature finals,
+  truncated output, and failed edits;
+- doom-loop detection stops both identical calls and repeated multi-step tool
+  sequences;
+- per-call context packing budgets system prompt, memory, recent conversation,
+  tool schemas, tool results, referenced files, and output reserve. Old tool
+  results are truncated/compacted, stale nudges are dropped, and old session
+  history is summarized while the current user turn and active tool loop remain
+  protected.
+
+The normal profile keeps the context and loop protections but disables
+small-model-specific forced routing/nudging.
+
+### 2. MAGI
+
+MAGI is an optional independent decision layer, not another tool executor. A
+Filter normalizes a concrete yes/no question and its risk; MELCHIOR (scientific
+progress), BALTHASAR (care and safety), and CASPER (human wants and agency)
+review it independently; Judge verifies the deterministic aggregate. One `no`
+denies after valid yes/no votes, any condition remains conditional, and
+approval requires unanimous unconditional `yes`. Errors or non-binary results
+remain errors/information instead of being coerced into approval.
+
+Iris uses MAGI for configured tool-approval decisions and memory-candidate
+review, where a single acting model should not approve its own risky action or
+its own claim as durable truth. Unsupported, failed, or critical reviews fall
+back to a human unless policy explicitly says otherwise. The triumvirate can be
+given a bounded read-only file-review loop; Filter and Judge never receive
+tools. Prompts live in `resources/prompts/magi/` and each participant may use a
+different provider/model.
+
+### 3. Cron jobs
+
+- Persistent jobs support five-field Unix cron schedules, one-shot `at`
+  instants, and fixed-rate intervals, all with explicit IANA timezones, DST
+  handling, misfire grace, occurrence limits, pause/resume, optimistic
+  revisions, run-now, and run history.
+- Every occurrence creates a fresh persisted Iris session and runs through the
+  normal agent loop. The run snapshots prompt, provider/model, tool profile,
+  origin, and notification target, so later configuration edits cannot change
+  in-flight work.
+- Tool profiles restrict each job (`cron-observe`, `cron-memory`, or
+  `cron-automation`) without bypassing global roots, permissions, command
+  policy, or approvals. Cron cannot recursively create cron jobs.
+- Results are always stored locally. Delivery policy is `never`, `always`, or
+  agent-controlled via one bounded `cron_notify` call; Telegram delivery can
+  target the originating chat. Jobs are managed through web UI, HTTP API, CLI,
+  or the `cronjob` tool; mutations use the normal approval path.
+
+See [`docs/cron-jobs.md`](docs/cron-jobs.md).
+
+### 4. Memory
+
+Memory is layered by lifetime and authority:
+
+1. **Turn context** — bounded system/context files, recalled memory, recent
+   conversation, active tool loop, and compacted summaries.
+2. **Working memory** — global or session scratchpads. Exact replacement
+   requires the current SHA-256 revision, preventing stale concurrent edits.
+3. **Episodic memory** — persisted SQLite messages, events, tool receipts, and
+   compaction records. This is searchable history and audit evidence, not
+   automatically trusted long-term knowledge.
+4. **Durable memory** — high-confidence user-profile facts in Iris's managed
+   `USER.md` section plus scoped OKF-style Markdown vault notes. Markdown is the
+   source of truth; SQLite is a rebuildable search index.
+
+Lifecycle:
+
+```text
+chat messages/events
+  -> bounded recall for each turn
+  -> idle extraction after a quiet window or explicit /dream
+  -> candidate note / revision-guarded update, move, merge, or delete proposal
+  -> MAGI or human review
+  -> approved | rejected | superseded
+  -> Markdown vault folders + regenerated index.md files
+  -> heading-based chunks in SQLite FTS5/BM25
+  -> optional embeddings + hybrid ranking
+  -> scope-filtered, diverse, bounded recall context
+```
+
+`/dream` is the deliberate grooming pass: it extracts durable facts, updates
+only the managed high-confidence portion of `USER.md`, searches for duplicates,
+proposes corrections/merges/moves/deletions, prunes stale material, reindexes
+and audits the vault, and may distill a repeated verified workflow into a skill.
+Automatic idle extraction is lower-authority: it creates review candidates and
+never silently promotes them to global memory.
+
+Vault notes carry `iris.scope` (`global`, `project`, `session`, or `agent`),
+`iris.status`, confidence, and `iris.origins`. Origins preserve compact message
+and event ranges, session/project/request IDs, or source vault paths. Review
+evidence is bounded and excluded from durable-body indexing and recall. Recall
+admits approved global notes, approved notes for the active project, and
+approved/`auto_session` notes for the active session. Embeddings are optional
+and disabled by default; lexical search remains the baseline.
+
+See [`docs/memory-architecture.md`](docs/memory-architecture.md).
+
+### 5. Tools
+
+Tools are registered capabilities with a stable name, JSON schema, category,
+operation (`read` or `act`), permissions, routing categories, sensitivity, and
+parallel-safety metadata. The runtime validates/coerces input, applies startup
+allow/block/scope policy, checks entrypoint or cron-profile permissions, and
+then executes independent safe reads in parallel while serializing sensitive,
+approval-dependent, or tool-activating calls. Every call produces correlated
+events and a bounded receipt returned to the model and UI.
+
+Sensitive calls create persisted, expiring approvals bound to the exact tool,
+input hash, permissions, and requester. They can be decided by the web UI,
+Telegram buttons, MAGI policy, or explicit yolo mode; approval never grants a
+different call. Built-ins cover filesystem, shell, HTTP/web search, memory,
+todo, skills, cron, Telegram, Home Assistant, WASM/Endive, system reload/handoff,
+and MAGI. Installed WASM bundles and remote MCP servers can add tools without
+changing the agent loop. Skills add instructions only; they never grant tools
+or permissions.
+
+## Runtime layout
+
+Canonical runtime lives under `src`:
 
 - `agent.core`
 - `agent.api`
@@ -12,10 +160,16 @@ Current canonical runtime lives under `src`:
 - `agent.chat`
 - `agent.runtime.*`
 - `agent.runners.*`
+- `agent.telegram.*`
+- `agent.cron.*`
+- `agent.memory.*`
+- `agent.magi.*`
+- `agent.tools.*`
 
-Default classpath is `src` + `resources`. `legacy_src` is available only through the `:legacy` alias. New work should use `agent.runtime.*`, `agent.runners.*`, and typed API handlers as source of truth.
+Default classpath is `src` + `resources`. Use `agent.runtime.*`,
+`agent.runners.*`, and typed API handlers as source of truth.
 
-Run rewritten CLI:
+Run CLI:
 
 ```bash
 clojure -M -m agent.core "hello"
@@ -31,19 +185,19 @@ clojure -M -m agent.core --session <id> "resume"  # resume exact session
 clojure -M -m agent.core --no-session "one shot"  # do not persist session
 ```
 
-Run rewritten API:
+Run API:
 
 ```bash
 clojure -M -m agent.core serve
 ```
 
-Run rewritten API without SQLite native-access warning:
+Run API without SQLite native-access warning:
 
 ```bash
 clojure -J--enable-native-access=ALL-UNNAMED -M -m agent.core serve
 ```
 
-Run rewritten API with explicit config and without SQLite native-access warning:
+Run API with explicit config and without SQLite native-access warning:
 
 ```bash
 clojure -J--enable-native-access=ALL-UNNAMED -M -m agent.core --config config/deepseek.local.edn serve
@@ -63,10 +217,11 @@ Configuration:
 - If a generated file starts with `#:iris`, nested keys like `:api` read as `:iris/api`; current loader normalizes this, but prefer normal map syntax: `{:iris/config-version 1 :api {:port 9090}}`.
 - Config dir resolution: `IRIS_CONFIG_DIR`, then `$XDG_CONFIG_HOME/iris`, then `~/.config/iris`.
 - Project-local overlay dir: `./.iris/`.
-- Global files are created from `resources/` templates by `config init`: `config.edn`, `SOUL.md`, `AGENTS.md`, `USER.md`, `TOOLS.md`, `BOOT.md`, `HEARTBEAT.md`, `MEMORY.md`.
+- Global files are created from `resources/` templates by `config init`: `config.edn`, `SOUL.md`, `AGENTS.md`, `USER.md`, `TOOLS.md`, `BOOT.md`, `HEARTBEAT.md`.
 - EDN merge order: global `config.edn` → local `./.iris/config.edn` → explicit `--config` file → env vars.
 - Markdown context files merge by concatenating global then local in this order: `SOUL.md`, `AGENTS.md`, `USER.md`, `TOOLS.md`, `BOOT.md`, `HEARTBEAT.md`.
-- `:memory {:prompt {:paths ["MEMORY.md"]}}` uses paths relative to process cwd unless absolute paths are configured.
+- `:memory {:vault {:paths ["memory"]}}` configures Markdown vault roots;
+  relative paths resolve against the process working directory.
 - `:skills {:dirs ["skills"]}` resolves relative dirs as config-dir first, then process cwd.
 
 WASM / Endive:
@@ -141,10 +296,12 @@ A2A compatibility notes:
 - Cancel is session-scoped because Iris chat cancellation is session-scoped; canceling one task cancels other non-terminal tasks in the same `contextId`.
 - `pageToken` is ignored; task listing returns the newest matching tasks from the local store.
 
-Run rewritten tests:
+Run tests in isolated config/data directories:
 
 ```bash
-clojure -M:test -e "(require 'agent.test-runner) (agent.test-runner/run-all-tests)"
+mkdir -p target/test-iris-config target/test-iris-data
+env IRIS_CONFIG_DIR=target/test-iris-config IRIS_DATA_DIR=target/test-iris-data \
+  clojure -M:test -e "(require 'agent.test-runner :reload) (agent.test-runner/run-all-tests) (shutdown-agents)"
 ```
 
 Build and upload the standalone JAR:
@@ -155,16 +312,11 @@ Build and upload the standalone JAR:
 
 Required: `IRIS_DEPLOY_HOST`. Optional: `IRIS_DEPLOY_USER`, `IRIS_DEPLOY_DIR`, `IRIS_DEPLOY_PORT`, `IRIS_DEPLOY_JAR`, `IRIS_DEPLOY_SSH_OPTS`.
 
-Load legacy namespaces intentionally:
-
-```bash
-clojure -M:legacy
-```
-
 Notes:
 
-- OpenRouter + Ollama are first-class providers in rewritten path.
-- SQLite session/message/completion persistence is in rewritten path.
+- Ollama, OpenRouter, and OpenAI-compatible endpoints are first-class providers.
+- SQLite persists sessions, messages, completions, events, approvals, memory
+  indexes, cron jobs/runs, todos, and async tasks.
 - Default logs go to `logs/iris.log`.
 - Logging env vars:
   - `AGENT_LOG_FILE`
@@ -175,7 +327,7 @@ Notes:
 - SQLite env var:
   - `AGENT_SQLITE_PATH`
   - `AGENT_SQLITE_DESTRUCTIVE_RESET_ON_DRIFT=true`: delete and rebuild SQLite files if migration metadata drift is detected. Default is false; otherwise Iris prints exact files to delete.
-- SSE chat streaming is available on rewritten `/v1/chat/completions` with `{\"stream\": true}`.
+- SSE chat streaming is available on `/v1/chat/completions` with `{\"stream\": true}`.
 - `/loop run` and CLI loop `--run` no longer execute shell validation commands. Run checks through approved shell/tool paths.
 
 ## Run Iris isolated
@@ -259,7 +411,7 @@ docker run --rm \
   -e AGENT_TELEGRAM_BOT_TOKEN= \
   -e AGENT_TELEGRAM_ALLOWED_USER_IDS= \
   -e AGENT_TELEGRAM_ALLOWED_CHAT_IDS= \
-  -e AGENT_MEMORY_PROMPT_PATHS=/app/data/MEMORY.md \
+  -e AGENT_MEMORY_VAULT_PATHS=/app/data/memory \
   iris:0.1
 ```
 
@@ -288,13 +440,13 @@ Required/important env:
 
 - `AGENT_API_KEY`: protects `/v1/*` and `/ui/*`.
 - `AGENT_API_HOST=0.0.0.0`: required inside container.
-- `IRIS_DATA_DIR=~/.config/iris/data`: default host data dir. `AGENT_SQLITE_PATH` and `AGENT_MEMORY_GRAPH_PATH` override individual stores.
+- `IRIS_DATA_DIR=~/.config/iris/data`: default host data dir.
 - `AGENT_SQLITE_PATH=/app/data/agent.db`: persisted SQLite path.
 - `AGENT_SQLITE_DESTRUCTIVE_RESET_ON_DRIFT=false`: keep false in production unless data loss is acceptable; true rebuilds drifted DB files.
 - `JAVA_TOOL_OPTIONS=--enable-native-access=ALL-UNNAMED`: suppresses sqlite-jdbc native access warning.
-- Tool permissions/policy: `AGENT_API_TOOL_PERMISSIONS`, `AGENT_UI_TOOL_PERMISSIONS`, `AGENT_AGENT_TOOL_PERMISSIONS`, `AGENT_TOOL_ALLOWLIST`, `AGENT_TOOL_BLOCKLIST`, `AGENT_TOOL_APPROVAL_TTL_SECONDS`, `AGENT_TOOLS_YOLO`.
+- Tool permissions/policy: `AGENT_API_TOOL_PERMISSIONS`, `AGENT_UI_TOOL_PERMISSIONS`, `AGENT_AGENT_TOOL_PERMISSIONS`, `AGENT_CHAT_TOOL_PERMISSIONS`, `AGENT_TOOL_ALLOWLIST`, `AGENT_TOOL_BLOCKLIST`, `AGENT_TOOL_APPROVAL_TTL_SECONDS`, `AGENT_TOOLS_YOLO`.
 - LLM: `AGENT_LLM_PROVIDER`, `AGENT_LLM_MODEL`, `AGENT_LLM_API=chat-completions|responses`, plus `OLLAMA_BASE_URL`, `OPENROUTER_API_KEY`, or `OPENAI_API_KEY`.
-- Telegram: env `AGENT_TELEGRAM_ENABLED`, `AGENT_TELEGRAM_BOT_TOKEN`, `AGENT_TELEGRAM_ALLOWED_USER_IDS`, `AGENT_TELEGRAM_ALLOWED_CHAT_IDS`, `AGENT_TELEGRAM_ALLOW_ALL`. Empty allowlist denies by default. Telegram chats appear in the Sessions sidebar as `Telegram: <name>`.
-- Memory: `AGENT_MEMORY_PROMPT_PATHS`, `AGENT_MEMORY_SEARCH_DEFAULT_LIMIT`, `AGENT_MEMORY_SEARCH_MAX_LIMIT`, `AGENT_MEMORY_GRAPH_ENABLED`, `AGENT_MEMORY_GRAPH_PATH`.
-- Fact extraction: `AGENT_FACT_EXTRACTOR_ENABLED`, `AGENT_FACT_EXTRACTOR_PROVIDER`, `AGENT_FACT_EXTRACTOR_MODEL`.
+- Telegram: `AGENT_TELEGRAM_ENABLED`, `AGENT_TELEGRAM_BOT_TOKEN`, `AGENT_TELEGRAM_RICH_MESSAGES`, `AGENT_TELEGRAM_ALLOWED_USER_IDS`, `AGENT_TELEGRAM_ALLOWED_CHAT_IDS`, `AGENT_TELEGRAM_ALLOW_ALL`. Empty allowlist denies by default. Telegram chats appear in the Sessions sidebar as `Telegram: <name>`.
+- Memory: `AGENT_MEMORY_VAULT_PATHS`, `AGENT_MEMORY_VAULT_WRITABLE`, `AGENT_MEMORY_SEARCH_DEFAULT_LIMIT`, `AGENT_MEMORY_SEARCH_MAX_LIMIT`, `AGENT_MEMORY_SEARCH_MIN_SCORE`.
+- Note extraction: `AGENT_NOTE_EXTRACTOR_ENABLED`, `AGENT_NOTE_EXTRACTOR_PROVIDER`, `AGENT_NOTE_EXTRACTOR_MODEL`, `AGENT_NOTE_EXTRACTOR_FORMAT`.
 - nREPL: `AGENT_NREPL_ENABLED`, `AGENT_NREPL_BIND`, `AGENT_NREPL_PORT`, `AGENT_NREPL_PORT_FILE`. `serve` writes the selected port to `.nrepl-port`.
