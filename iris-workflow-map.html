@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Iris — Agentic Workflow Map</title>
+<title>Iris — Runtime &amp; Workflow Map</title>
 <style>
   :root{
     --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --line:#30363d;
     --txt:#e6edf3; --dim:#8b949e; --accent:#58a6ff;
     --entry:#d29922; --transport:#a371f7; --runtime:#58a6ff; --control:#3fb950;
     --llm:#f778ba; --tool:#ff7b72; --sandbox:#db6d28; --persistence:#56d364;
-    --memory:#79c0ff; --output:#8b949e;
+    --memory:#79c0ff; --output:#8b949e; --ops:#bc8cff;
     --crit:#f85149; --high:#ff7b72; --med:#d29922; --low:#8b949e;
   }
   *{box-sizing:border-box}
@@ -71,8 +71,8 @@
 </head>
 <body>
 <header>
-  <h1>Iris — Agentic Workflow Map</h1>
-  <span class="sub">release-risk map · <code>src/agent</code></span>
+  <h1>Iris — Runtime &amp; Workflow Map</h1>
+  <span class="sub">current architecture + findings · audited <code>2026-09-03</code></span>
   <span class="hint">click node → role + actionable findings · hover edge highlights flow</span>
 </header>
 <div id="wrap">
@@ -88,102 +88,117 @@
 const TYPES = {
   entry:'Ingress', transport:'Transport', runtime:'Runtime', control:'Control',
   llm:'LLM', tool:'Tools', sandbox:'Sandbox', persistence:'Persistence',
-  memory:'Memory', output:'Output'
+  memory:'Memory', output:'Output', ops:'Operations'
 };
 // stage = vertical band (pipeline order). lane assigned automatically.
 const NODES = {
-  cli:{l:'CLI main / stream-prompt!',t:'entry',f:'cli.clj',s:0,d:'Parses args, builds the system, resolves a session, calls chat/run! with an :on-delta stdout callback.'},
-  http:{l:'HTTP /v1/chat/completions',t:'entry',f:'api/handlers/chat.clj',s:0,d:'Validates + normalizes the chat request, ensures the session, then complete! (non-stream) or stream-response (SSE).'},
-  tg:{l:'Telegram poller',t:'entry',f:'telegram.clj',s:0,d:'Long-polls getUpdates, persists to channel inbox, allowlist-checks, maps chat→session, downloads media, calls run-chat! → chat/run!.'},
-  sse:{l:'SSE streaming handler',t:'transport',f:'api/streaming.clj',s:1,d:'managed-response opens an SSE channel, runs chat/run! on a worker future, converts broker events → OpenAI-style chat.completion.chunk.'},
-  ui:{l:'Server-rendered UI',t:'transport',f:'ui.clj · api/handlers/ui.clj',s:1,d:'Hiccup/Datastar operator UI for chat, sessions, tools, approvals, logs, and memory workspace.'},
-  broker:{l:'Event broker / bus',t:'transport',f:'system/events.clj · broker/local.clj',s:1,d:'publish! fans events synchronously to all subscriptions. SSE + Telegram subscribe here.'},
-  chatrun:{l:'chat/run! + queue manager',t:'runtime',f:'chat.clj · chat/queue.clj',s:2,d:'Facade dispatches to queue/service owners: loop-control, active turn, or persisted queued item under manager-lock.'},
-  runturn:{l:'chat/run-turn!',t:'runtime',f:'chat/turn.clj',s:3,d:'Persists user turn, auto-compacts, loads history, recalls memory, builds context-injectors, wires the layered event-sink, then calls the loop.'},
-  compaction:{l:'auto-compact!',t:'memory',f:'runtime/compaction.clj',s:4,d:'Trims persisted session entries above token thresholds, writing a deterministic :compaction entry. (Uses its own estimator, separate from context-pack.)'},
-  memrecall:{l:'memory recall',t:'memory',f:'memory/core.clj',s:4,d:'Reads MEMORY.md prompt docs + hybrid search across messages/events/facts/graph before each turn.'},
-  prompts:{l:'prompts · skills · modes',t:'memory',f:'prompts.clj · skills.clj',s:4,d:'Builds context-injectors: iris context, prompt-mode system message, invoked-skill section, memory-context message.'},
-  loop:{l:'runtime.loop/run!',t:'runtime',f:'runtime/loop.clj',s:5,d:'The pure evented loop. Per step: repair history → pack context → route tools → plan → guardrails → execute → recur or terminate. All side effects injected as fns.'},
-  ctxpack:{l:'context-pack/pack-context',t:'runtime',f:'runtime/context_pack.clj',s:6,d:'Per-call window shrink: drop stale nudges, truncate/compact old tool results, summarize a prefix via an LLM summarizer-fn if still over budget.'},
-  router:{l:'tool-router/route-tools',t:'control',f:'runtime/tool_router.clj',s:6,d:'Pure fn returning the trimmed tool schemas the model sees AND the allowed-tools set used to gate execution.'},
-  planner:{l:'planner/plan-step!',t:'control',f:'planner.clj',s:7,d:'Stateless: prepends the planner-system prompt, attaches native tool defs, one LLM invoke, converts tool_calls→directives (or :complete).'},
-  kernel:{l:'kernel.runtime/execute-step!',t:'control',f:'kernel/runtime.clj',s:7,d:'Pure directive dispatch; batches consecutive tool-call directives, preserves per-directive receipt ordering. Driven via ChatKernelOps.'},
-  llm:{l:'llm.core/invoke',t:'llm',f:'llm/core.clj',s:8,d:'Provider-agnostic invoke → normalized turn {:content :tool-calls :usage :stop-reason}. messages.clj does wire translation; dsml.clj salvages leaked tool calls.'},
-  provider:{l:'OpenAI-compatible provider',t:'llm',f:'llm/providers/openai_compatible.clj',s:8,d:'HTTP to /chat/completions; streams deltas back into the loop via on-content-delta, or post-json. Ollama is a parallel provider.'},
-  batch:{l:'runtime.tools/execute-batch!',t:'tool',f:'runtime/tools.clj',s:9,d:'Preflights, groups parallel-safe vs sequential calls, forces sequential for approval-sensitive/tool-activating calls, preserves source-index ordering.'},
-  toolreg:{l:'tools.core / execute-tool',t:'tool',f:'tools/core.clj',s:9,d:'Per-call: allow-list → permissions → Malli validate → before-hook → approval → execute-fn → after-hook → events.'},
-  shell:{l:'fs · shell · http · memory · todo',t:'tool',f:'tools/common/*.clj',s:10,d:'Built-in tools. shell/fs are bounded to allowed roots; in the chat path tools run in-process (not via the sandbox substrates).'},
-  kerneldown:{l:'receipts → loop',t:'control',f:'kernel/runtime.clj',s:11,d:'Tool receipts flow back; the loop emits the assistant tool-call message + per-tool results, appends protocol messages, and recurs.'},
-  eventsink:{l:'system event-sink',t:'persistence',f:'system/events.clj',s:12,d:'Each runtime event is persisted (log-event!) AND published to the broker. Central event write path.'},
-  persist:{l:'persistence.sqlite',t:'persistence',f:'persistence/sqlite/*.clj',s:12,d:'Sessions/messages/entries/completions/events. Parameterized SQL, transactional writes under a tx-lock, idempotent inserts, FTS5 mirrors. Each assistant turn\'s provider :usage is now stored in messages.metadata_json (feeds the web-UI stats).'},
-  factmem:{l:'memory fact extraction',t:'memory',f:'memory/core.clj',s:12,d:'After the turn, mines subject/predicate/object facts via a structured-output LLM call and saves to SQLite. Non-fatal on failure.'},
-  output:{l:'Response / SSE / Telegram',t:'output',f:'api/handlers/chat.clj',s:13,d:'Non-stream → OpenAI chat.completion; stream → chat.completion.chunk + [DONE]; Telegram → finalize draft to a real message.'},
+  system:{l:'System lifecycle / reload',t:'control',f:'system.clj · system/components.clj',s:0,d:'Composition root builds storage, providers, broker, memory, skills, tools, chat, cron, API, and adapters. Soft reload preserves chat; full restart can persist a handoff.'},
+  ops:{l:'Build / test / packaging',t:'ops',f:'Dockerfile · .github/workflows',s:0,d:'Uberjar, container, local test runner, public-history scan, and the currently disabled build/test/lint release workflow.'},
+  cli:{l:'CLI / local commands',t:'entry',f:'cli.clj · cron/cli.clj',s:1,d:'Starts Iris, runs local prompts, manages config and cron jobs, and installs/enables WASM bundles.'},
+  api:{l:'HTTP API + A2A',t:'entry',f:'api/routes/* · api/handlers/*',s:1,d:'Chat completions, A2A task lifecycle, sessions, cron, tools, memory, providers, events, health, and authenticated operator surfaces.'},
+  tg:{l:'Telegram channel adapter',t:'entry',f:'telegram.clj · telegram/*',s:1,d:'Persistent inbox/offsets, chat-session mapping, streamed drafts, media, commands, approvals, reply keyboards, and Bot API delivery.'},
+  ui:{l:'Server-rendered UI',t:'transport',f:'ui.clj · ui/{render,memory,cron}',s:1,d:'Hiccup/Datastar control plane for chat, cron, tools, approvals, memory, MAGI, events, logs, catalogue, and health.'},
+  cronclock:{l:'Cron due-time trigger',t:'entry',f:'cron/schedule.clj',s:1,d:'Five-field cron, one-shot at, and UTC-anchored interval schedules provide due occurrences with explicit timezone semantics.'},
+  memoryworkers:{l:'Idle memory + review workers',t:'memory',f:'memory/{idle,magi_review,user_profile}',s:1,d:'Idle extraction creates Vault candidates and learns USER.md; the MAGI worker reviews eligible notes and update/skill proposals.'},
+  broker:{l:'Replayable event broker',t:'transport',f:'broker/local.clj · system/events.clj',s:2,d:'Wildcard subscriptions fan durable events to SSE, Telegram, and other consumers; bounded/drop policies rely on replay for recovery.'},
+  cronservice:{l:'Persistent cron service',t:'control',f:'cron/{service,store,schedule}.clj',s:2,d:'DB-backed ticker atomically claims due jobs, creates dedicated cron sessions, snapshots execution policy, and owns recovery/health.'},
+  chatrun:{l:'chat/run! + session queue',t:'runtime',f:'chat.clj · chat/{service,queue}.clj',s:2,d:'Per-session ExecutorService-backed queue serializes turns, cancellation, loop control, and persisted queued prompts.'},
+  outerloop:{l:'Explicit /loop worker',t:'control',f:'loop.clj · chat/loop_control.clj',s:2,d:'A separate plan-driven worker handles /loop start/status/stop, recursively queues bounded loop turns, and is not the per-turn runtime loop.'},
+  cronrunner:{l:'Cron runner + notification',t:'runtime',f:'cron/{runner,notification}.clj',s:3,d:'Runs a claimed snapshot through normal chat/run!, requires an exact final-output envelope, records outcome, then dispatches optional bound delivery.'},
+  runturn:{l:'Turn composition',t:'runtime',f:'chat/turn.clj',s:3,d:'Persists input, compacts, loads history/recall/profile/skills, installs persistence and streaming subscribers, then invokes the evented runtime loop.'},
+  compaction:{l:'Persisted compaction',t:'memory',f:'runtime/compaction.clj',s:4,d:'Compacts old persisted session entries above configured thresholds while preserving the active turn and recent evidence.'},
+  memrecall:{l:'Hybrid memory recall',t:'memory',f:'chat/memory · memory/{recall,core,vault}',s:4,d:'Bounded recall merges SQLite message/event search with Vault FTS and optional embeddings, then emits typed provenance and a context message.'},
+  prompts:{l:'Context / skills / modes',t:'memory',f:'prompts.clj · skills.clj',s:4,d:'Injects Iris context, active mode, explicitly invoked slash skills, learned profile context, and bounded memory recall.'},
+  loop:{l:'Evented agent loop',t:'runtime',f:'runtime/loop.clj',s:5,d:'Repairs protocol history, packs context, routes tools, plans, applies retry/doom guards, executes directives, emits terminal state, and falls back safely.'},
+  ctxpack:{l:'Context pack / evidence budget',t:'runtime',f:'runtime/context_pack.clj',s:6,d:'Drops stale nudges, retains active-turn evidence, truncates/compacts old tool results, and LLM-summarizes an older prefix when required.'},
+  router:{l:'Tool schema router',t:'control',f:'runtime/tool_router.clj',s:6,d:'Selects model-visible tool schemas and returns the matching allowed-tool execution set; small-model routing can force a respond tool.'},
+  guards:{l:'Nudge + doom-loop guards',t:'control',f:'runtime/{nudge,doom_loop,messages}.clj',s:6,d:'Classifies malformed/plausibly recoverable model turns, injects bounded retry guidance, and stops identical or periodic call loops.'},
+  planner:{l:'Planner / directive creation',t:'control',f:'planner.clj',s:7,d:'One normalized LLM turn becomes a closed kernel step: tool-call directives, explicit response, or completion.'},
+  magi:{l:'MAGI oversight',t:'control',f:'magi/{core,file_review}.clj',s:7,d:'Filter + three independent reviewers + Judge evaluate approvals and durable memory. File review is bounded/read-only; MAGI never executes the reviewed action.'},
+  llm:{l:'LLM instrumentation / registry',t:'llm',f:'llm/{core,service,registry,instrumented}',s:8,d:'Resolves provider/model capabilities, applies telemetry and retry policy, normalizes content/tool calls/usage, and supports embeddings.'},
+  provider:{l:'Provider transports',t:'llm',f:'llm/providers/*',s:8,d:'OpenAI-compatible chat/Responses parsing and streaming are split into focused modules; Ollama is a parallel provider implementation.'},
+  kernel:{l:'Closed kernel directives',t:'control',f:'kernel/{schema,runtime,ops}.clj',s:9,d:'Normalizes a closed directive schema and dispatches consecutive tool calls through explicit ChatKernelOps.'},
+  batch:{l:'Tool batch executor',t:'tool',f:'runtime/tools.clj',s:9,d:'Preflights calls, separates parallel-safe and sequential work, forces activating/approval-sensitive calls sequentially, and preserves receipt order.'},
+  toolreg:{l:'Tool registry + policy',t:'tool',f:'tools/{core,service}.clj',s:10,d:'Enforces visibility, permissions, action allowlists, Malli validation, hooks, approvals, execution, redaction, telemetry, and tool events.'},
+  approvals:{l:'Approval ledger',t:'control',f:'tools/approvals.clj',s:10,d:'Input-hash-bound expiring approvals preserve pending/approved/denied state across API, UI, Telegram, and optional MAGI evaluation.'},
+  extreg:{l:'Skill / extension discovery',t:'tool',f:'skills.clj · wasm/bundles.clj · mcp/core.clj',s:10,d:'Loads local and bundled skills, installs/enables WASM bundles, and registers configured remote MCP tools into the common registry.'},
+  builtins:{l:'Built-in tool families',t:'tool',f:'tools/common/*.clj',s:11,d:'Filesystem, shell, HTTP/web, memory, skills, todo, Telegram, Home Assistant, cron, MAGI, and direct WASM tools share one policy pipeline.'},
+  wasm:{l:'WASI bundle execution',t:'sandbox',f:'wasm/bundles.clj',s:11,d:'Validated .tool/.skill archives execute with empty filesystem mounts, bounded runtime/output/memory, and declared host functions.'},
+  mcp:{l:'Remote MCP tools',t:'transport',f:'mcp/core.clj',s:11,d:'Configured HTTP MCP servers initialize at registry build time; discovered tools receive stable prefixes and normal Iris policy wrappers.'},
+  receipts:{l:'Receipts back to loop',t:'control',f:'kernel/runtime.clj · runtime/loop.clj',s:12,d:'Ordered receipts become assistant tool-call and tool-result protocol messages; approvals may pause, then the loop recurs or terminates.'},
+  eventsink:{l:'Durable event / telemetry sink',t:'persistence',f:'system/events · telemetry/* · runtime/trace',s:13,d:'Validates and logs runtime events, records metrics/observer/trace data, then publishes them to the replayable broker.'},
+  persist:{l:'SQLite state',t:'persistence',f:'persistence/sqlite.clj · sqlite/*',s:13,d:'Sessions, messages/entries, completions, events, A2A tasks, cron, approvals, todos, channel inbox, memory index, and restart handoffs.'},
+  vault:{l:'Vault memory lifecycle',t:'memory',f:'memory/{core,vault,scratchpad}.clj',s:13,d:'Filesystem notes plus SQLite FTS/vector indexes support candidates, reviewed operations, project/session scope, provenance, scratchpads, and skills.'},
+  health:{l:'Health / quality aggregation',t:'ops',f:'system/health.clj · memory/core.clj',s:13,d:'Aggregates component health, restart counts, scheduler state, memory quality, trace, adapters, and MCP status for /health and UI.'},
+  output:{l:'SSE / API / UI / channels',t:'output',f:'api/streaming · telegram/streaming · cron/notification',s:14,d:'Returns JSON or SSE, morphs Datastar UI, finalizes Telegram drafts, replays event streams, and sends cron notifications through channel adapters.'},
 };
 const EDGES = [
-  ['cli','chatrun','chat/run! {:on-delta}'],['http','chatrun','complete!'],['http','sse','stream-response'],
-  ['http','ui','/ui shell/forms'],
-  ['ui','chatrun','chat form'],
-  ['sse','chatrun','run-task! {:stream? true}'],['sse','broker','subscribe all-events'],
-  ['tg','chatrun','run-chat!'],['tg','broker','subscribe (stream)'],
+  ['ops','system','build / package / serve'],
+  ['system','api','start-server!'],['system','tg','start adapter'],['system','broker','construct'],
+  ['system','cronservice','start / reload'],['system','memoryworkers','start / reload'],['system','toolreg','build registry'],['system','health','component registry'],
+  ['cli','chatrun','prompt'],['cli','cronservice','cron commands'],['cli','extreg','bundle / config commands'],
+  ['api','chatrun','chat + A2A task'],['api','cronservice','cron API'],['api','ui','serve /ui'],['api','broker','event SSE'],['api','health','GET /health'],['api','persist','A2A task ledger'],
+  ['ui','chatrun','chat form'],['ui','cronservice','job actions'],['ui','magi','review actions'],
+  ['tg','chatrun','run-chat!'],['tg','broker','subscribe stream'],
+  ['cronclock','cronservice','due occurrence'],['cronservice','cronrunner','claimed run'],['cronservice','persist','jobs / runs'],
+  ['cronrunner','chatrun','snapshot chat/run!'],['cronrunner','output','final envelope / notify'],
+  ['memoryworkers','vault','extract / promote / profile'],['memoryworkers','magi','review candidates'],['memoryworkers','llm','note / profile extraction'],['memoryworkers','eventsink','worker events'],
+  ['chatrun','outerloop','/loop control'],['outerloop','chatrun','bounded loop turns'],
   ['chatrun','runturn','run-active-item!'],
-  ['runturn','compaction','auto-compact!'],['runturn','persist','persist-user-turn! / context'],
+  ['runturn','compaction','auto-compact!'],
   ['runturn','memrecall','recall-memory'],['runturn','prompts','injectors'],
   ['runturn','loop','runtime-loop/run!'],
   ['loop','ctxpack','context-pack-fn'],['ctxpack','llm','summarizer-fn (LLM)'],
-  ['loop','router','route-tools'],['loop','planner','planner-fn'],
+  ['loop','router','route-tools'],['loop','guards','pre / post verdict'],['guards','loop','retry / stop'],['loop','planner','planner-fn'],
   ['planner','prompts','planner-system prompt'],['planner','llm','llm/invoke'],
   ['llm','provider','HTTP'],['provider','loop','streamed deltas'],['llm','planner','normalized turn'],
   ['planner','loop','step + directives'],['loop','kernel','execute-step-fn'],
   ['kernel','batch','execute-agent-tool-batch!'],['batch','toolreg','preflight + execute-tool'],
-  ['toolreg','shell','execute-fn'],
-  ['shell','batch','tool result'],['batch','kerneldown','receipts'],['kerneldown','loop','executed step'],
-  ['loop','runturn','emit events'],['runturn','eventsink','emit!'],
+  ['toolreg','approvals','approval required'],['approvals','magi','optional evaluation'],['approvals','persist','approval row'],
+  ['magi','llm','Filter / reviewers / Judge'],['magi','toolreg','bounded file review'],['magi','eventsink','decision audit'],
+  ['toolreg','builtins','execute-fn'],['toolreg','extreg','extension tool'],['extreg','prompts','bundled skill'],['extreg','wasm','bundle tool'],['extreg','mcp','remote tool'],
+  ['builtins','receipts','tool result'],['wasm','receipts','WASI result'],['mcp','receipts','MCP result'],['batch','receipts','ordered receipts'],['receipts','loop','executed step'],
+  ['loop','runturn','emit events'],['runturn','eventsink','layered emit!'],
   ['eventsink','persist','log-event!'],['eventsink','broker','publish!'],
-  ['broker','sse','events → SSE'],['broker','tg','events → drafts'],
-  ['runturn','persist','persist-final-assistant!'],['runturn','factmem','extract-turn-memory!'],
-  ['factmem','llm','structured-output call'],['factmem','persist','save-memory-fact!'],
+  ['vault','persist','FTS / vectors / review state'],['broker','output','SSE / drafts / replay'],
+  ['runturn','persist','messages / entries / completion'],
   ['runturn','chatrun','{:content} result'],['chatrun','output','final content'],
-  ['sse','output','chunk / [DONE]'],['tg','output','finalize draft'],
+  ['health','output','status JSON / UI'],['api','output','JSON / SSE'],['tg','output','finalize / deliver'],
 ];
-const STAGE_NAMES = ['Ingress','Transport','Runtime','Per-turn prep','Loop','Loop','Plan / control','Plan / control','LLM','Tools','Tools / sandbox','Return','Persist / memory','Output'];
-// finding tuple: [severity, title]  — open/actionable only; completed items removed.
+const STAGE_NAMES = ['Lifecycle / ops','Ingress / autonomous','Services / scheduling','Turn composition','Context / memory','Runtime loop','Budget / guardrails','Plan / review','LLM transport','Tool dispatch','Policy / extensions','Tool implementations','Return','State / observability','Delivery'];
+// finding tuple: [severity, title, evidence/action] — current actionable items only.
 const FIND = {
-  cli:[],
-  http:[['high','P0 remote Actions not release-trustworthy until full clj-kondo is green'],
-        ['med','P1 schema-backed handlers still mix coerced :parameters/:body with raw/body-params reads']],
-  ui:[['med','P2 ui.clj remains 880 lines; split shell/router, sessions, tools, telemetry panels']],
-  tg:[['med','P2 telegram.clj remains 938 lines; split polling, drafts, media, chat bridge, task lifecycle']],
-  sse:[['low','P2 worker future is cancelled on disconnect, but broader worker supervision remains ad hoc']],
-  broker:[],
-  chatrun:[['med','P2 chat queue/loop-control still uses raw futures; central worker supervision remains thin']],
-  runturn:[['med','P2 fact extraction runs after turns by default; cost/latency visibility is weak']],
-  loop:[],
-  ctxpack:[],
-  prompts:[],
-  memrecall:[],
-  compaction:[['med','P1 coverage gate missing for compaction/retrieval quality; no LCOV/cloverage baseline']],
-  router:[],
-  planner:[],
-  llm:[['low','P2 retry-with-backoff uses blocking sleep and no jitter; retry storms can align']],
-  provider:[['med','P2 openai_compatible.clj remains 834 lines; split payloads, streaming parser, response normalization']],
-  kernel:[['med','P1 kernel/runtime/schema need direct tests; coverage report shows missing namespace tests']],
-  kerneldown:[],
-  batch:[],
-  toolreg:[],
-  shell:[],
-  runners:[['high','P0 Dockerfile binds 0.0.0.0 but sets no AGENT_API_KEY; default container startup conflicts with auth guard'],
-           ['med','P1 UI run path bypasses API substrate allow-list; gate unsafe run modes explicitly']],
-  eventsink:[],
-  persist:[['high','P0 full clj-kondo sees HugSQL generated SQL fns as unresolved; CI lint fails'],
-           ['med','P1 persistence internals lack direct tests despite migration/run/session complexity']],
-  factmem:[['med','P2 graph save/remove failures are non-fatal events; add health/drift policy if graph enabled']],
-  output:[],
+  ops:[
+    ['high','Build/test/lint CI is disabled; only public-history scanning runs','Enable .github/workflows/ci-cd.yml.disabled or replace it with an active verified workflow.'],
+    ['high','Default Docker command cannot start safely: 0.0.0.0 bind, no API key','Dockerfile conflicts with api/assert-api-auth-safe!; require AGENT_API_KEY or bind loopback.'],
+    ['high','Configured test runner omits 4 existing test namespaces','Add MAGI core/tool, approvals, and Telegram tool-summary tests or assert discovery parity.'],
+    ['med','clj-kondo is not green: 65 errors, 9 warnings','All observed errors are unresolved generated HugSQL *-sqlvec symbols; add project lint config/hooks.']],
+  system:[
+    ['med','Architecture entry docs still advertise removed agent.runners.*','README.md and the June codebase map need a separate current-doc refresh.']],
+  health:[
+    ['high','Unauthenticated /health exposes vault/trace paths and MCP endpoint URLs','Redact sensitive topology or authenticate detailed health; add a response-shape regression test.'],
+    ['high','/health performs synchronous memory-quality scans over large bounded sets','Split liveness/readiness or cache/background the quality report.']],
+  ui:[
+    ['med','UI composition remains concentrated despite extracted render/memory/cron modules','ui.clj is 1,172 LOC and api/handlers/ui.clj is 798 LOC; keep splitting by surface ownership.']],
+  cronservice:[
+    ['med','A young stale run can block its job until timeout and another restart','Startup abandons stale runs once; add periodic stale reconciliation or a lease/heartbeat.']],
+  ctxpack:[
+    ['low','Durable evidence and tool-family retention policies remain deferred','TODO.md tracks evidence-aware compaction and browser/http/fs/shell-specific retention.']],
+  llm:[
+    ['low','LLM retry backoff blocks and has no jitter','llm/core.clj uses Thread.sleep with exponential delay; inject sleep/jitter for safer concurrency and tests.']],
+  extreg:[
+    ['med','Enabled WASM bundles are trusted and receive configured settings in stdin','Keep third-party bundles disabled until secrets move behind narrower host-owned capabilities.']],
+  persist:[
+    ['med','messages and session_entries remain dual rich-message sources','The deferred unification still dual-writes and merges entry overrides on reads.']],
+  vault:[
+    ['med','Memory ownership is concentrated in two very large modules','memory/core.clj is 1,761 LOC; memory/vault.clj is 1,013 LOC. Split only behind characterization tests.'],
+    ['low','Embedding rollout still lacks the planned production measurement window','Measure recall/latency, duplicates, evidence size, acceptance, and diversity before enabling broadly.']],
 };
 const SEVRANK={crit:0,high:1,med:2,low:3};
 const SEVCOL={crit:'var(--crit)',high:'var(--high)',med:'var(--med)',low:'var(--low)'};
 
 // ---- layout -------------------------------------------------------------
-const NW=176, NH=44, VGAP=88, TOP=40, COLW=1320;
+const NW=190, NH=46, VGAP=92, TOP=40, COLW=1580;
 const byStage={};
 Object.entries(NODES).forEach(([id,n])=>{(byStage[n.s]=byStage[n.s]||[]).push(id);});
 const maxStage=Math.max(...Object.keys(byStage).map(Number));
@@ -303,10 +318,10 @@ function highlight(id,showLabels){
 function select(id){
   selected=id; highlight(id,true);
   const n=NODES[id]; const f=FIND[id]||[]; const {ins,outs}=neighbors(id);
-  const findHtml = f.length? f.map(([sv,ti])=>{
+  const findHtml = f.length? f.map(([sv,ti,fix])=>{
     const cls=(sv==='crit'?'crit':sv);
     const lab=(sv==='crit'?'CRITICAL':sv.toUpperCase());
-    return `<div class="finding ${cls}"><div class="sv">${lab}</div><div class="ti">${ti}</div></div>`;
+    return `<div class="finding ${cls}"><div class="sv">${lab}</div><div class="ti">${ti}</div>${fix?`<div class="fix">${fix}</div>`:''}</div>`;
   }).join('') : `<div class="empty">No findings attached — clean in this review.</div>`;
   const openN=f.length;
   const flowList = `
@@ -327,15 +342,16 @@ function intro(){
   const counts={crit:0,high:0,med:0,low:0};
   Object.values(FIND).forEach(arr=>arr.forEach(f=>{counts[f[0]]++;}));
   document.getElementById('panel').innerHTML=`
-    <div class="ph"><h2>Release review map</h2>
-      <div class="desc">Open findings only. Completed historical items were removed. Map follows the main chat/runtime workflow plus adjacent UI, runner, and persistence release-risk surfaces.</div>
+    <div class="ph"><h2>Current runtime map</h2>
+      <div class="desc">Chat + A2A, Telegram, Cron, memory workers, MAGI, MCP/WASM, persistence, observability, and delivery. Findings were re-audited against current source.</div>
     </div>
     <div class="flow"><h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);margin:0 0 10px">Open findings</h3>
-      <div class="finding high"><div class="sv">P0 / HIGH × ${counts.high}</div><div class="ti">Release gates: CI lint, Docker startup contract, remote Actions verification.</div></div>
-      <div class="finding med"><div class="sv">P1-P2 / MEDIUM × ${counts.med}</div><div class="ti">Security/product hardening, coverage, namespace splits, worker supervision, memory operations.</div></div>
-      <div class="finding low"><div class="sv">P2 / LOW × ${counts.low}</div><div class="ti">Retry ergonomics and lower operational polish.</div></div>
-      <div class="desc" style="margin-top:14px">Local verification: full tests pass, uberjar builds, script syntax passes. Full clj-kondo fails: 92 errors, 60 warnings.</div>
-      <div class="desc" style="margin-top:12px">Release verdict: do not tag until P0 closes. See <b style="color:var(--accent)">RELEASE_REPORT.md</b>.</div>
+      <div class="finding high"><div class="sv">HIGH × ${counts.high}</div><div class="ti">CI/container correctness, test discovery, and health endpoint exposure/cost.</div></div>
+      <div class="finding med"><div class="sv">MEDIUM × ${counts.med}</div><div class="ti">Lint baseline, stale-run recovery, documentation drift, trusted extensions, dual persistence, and ownership hotspots.</div></div>
+      <div class="finding low"><div class="sv">LOW × ${counts.low}</div><div class="ti">Evidence retention, retry jitter, and measured embedding rollout.</div></div>
+      <div class="desc" style="margin-top:14px"><b style="color:var(--control)">Verified now:</b> configured suite 783 tests / 3,200 assertions, 0 failures. Four omitted namespaces pass separately: 21 tests / 78 assertions.</div>
+      <div class="desc" style="margin-top:12px"><b style="color:var(--high)">Lint:</b> 65 errors / 9 warnings; observed errors are unresolved generated HugSQL <code>*-sqlvec</code> symbols.</div>
+      <div class="desc" style="margin-top:12px">Stale fact-graph extraction, raw chat futures, provider-monolith, missing-kernel-test, and orphan runner findings were removed.</div>
     </div>`;
 }
 intro();
