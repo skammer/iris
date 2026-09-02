@@ -4,6 +4,10 @@ Iris is a stateful Clojure agent runtime for chat, Telegram, scheduled work,
 tool execution, and reviewed long-term memory. It is designed to stay useful
 with both hosted frontier models and small local models.
 
+> This is Alpha level software. Things are expected not to work.
+> Setup is a nightmare. "It works on _my_ machine" is the norm.
+> Just setting the expectations here.
+
 ## Core features
 
 ### 0. Telegram integration
