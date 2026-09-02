@@ -8,6 +8,8 @@ with both hosted frontier models and small local models.
 
 ### 0. Telegram integration
 
+![Chat UI](./screenshots/2.png)
+
 - Telegram chats are persisted as normal Iris sessions, so they share history,
   memory, tools, approvals, cancellation, and session reset policies with the
   web/API runtime.
@@ -44,6 +46,8 @@ small-model-specific forced routing/nudging.
 
 ### 2. MAGI
 
+![MAGI UI](./screenshots/6.png)
+
 MAGI is an optional independent decision layer, not another tool executor. A
 Filter normalizes a concrete yes/no question and its risk; MELCHIOR (scientific
 progress), BALTHASAR (care and safety), and CASPER (human wants and agency)
@@ -61,6 +65,8 @@ tools. Prompts live in `resources/prompts/magi/` and each participant may use a
 different provider/model.
 
 ### 3. Cron jobs
+
+![Cron UI](./screenshots/3.png)
 
 - Persistent jobs support five-field Unix cron schedules, one-shot `at`
   instants, and fixed-rate intervals, all with explicit IANA timezones, DST
@@ -81,6 +87,8 @@ different provider/model.
 See [`docs/cron-jobs.md`](docs/cron-jobs.md).
 
 ### 4. Memory
+
+![Memory UI](./screenshots/5.png)
 
 Memory is layered by lifetime and authority:
 
@@ -128,6 +136,8 @@ and disabled by default; lexical search remains the baseline.
 See [`docs/memory-architecture.md`](docs/memory-architecture.md).
 
 ### 5. Tools
+
+![Tools UI](./screenshots/4.png)
 
 Tools are registered capabilities with a stable name, JSON schema, category,
 operation (`read` or `act`), permissions, routing categories, sensitivity, and
