@@ -14,6 +14,8 @@
 - [[codebase-map]] - Full namespace map, layer diagram, flows (June 2026 review)
 - [[a2a-http-tasks]] - Async HTTP task API and A2A compatibility notes
 - [[configuration-observability]] - Config overlay order and OTel export
+- [[architecture/cron-jobs|Cron jobs architecture]] - Scheduler execution, persistence, security, and recovery invariants
+- [[magi]] - Independent approval and memory-review architecture
 - [[session-entries-unification]] - Deferred design: single source of truth for messages
 - [[wasm-tool-skill-bundles]] - `.tool`/`.skill` WASM bundle format and runtime
 - [[design-principles]] - Core architectural decisions

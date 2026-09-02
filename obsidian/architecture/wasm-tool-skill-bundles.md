@@ -5,6 +5,9 @@
 Iris supports zip-based WASM bundles for shipping tools and slash skills as
 portable packages.
 
+Status: implemented. Operator setup and CLI usage also live in
+`docs/wasm-bundles.md`.
+
 ## Package Extensions
 
 - `.tool`: executable tool bundle.

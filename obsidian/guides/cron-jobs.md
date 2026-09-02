@@ -373,4 +373,4 @@ See [[configuration-observability]].
 6. For shell or writes, check whether approval policy blocked the call.
 7. For Telegram, distinguish `suppressed`, `failed`, and `succeeded` delivery.
 
-Architecture and invariants: [CRON_JOBS_PLAN.md](../../CRON_JOBS_PLAN.md).
+Architecture and invariants: [[architecture/cron-jobs|Cron jobs architecture]].
