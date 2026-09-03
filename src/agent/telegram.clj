@@ -18,6 +18,7 @@
    [agent.telegram.sessions :as tg-sessions]
    [agent.telegram.streaming :as tg-streaming]
    [clojure.core.async :as async]
+   [clojure.java.io :as io]
    [clojure.string :as str]))
 
 (defn- id-set [ids]
@@ -491,8 +492,14 @@
                                   (tg-commands/response system chat text mapping))]
               (if builtin-reply
                 (do (send! chat-id builtin-reply) :processed)
-                (let [content (try
-                                (tg-media/user-content! config opts message)
+                (let [media-dir (some-> (get-in system [:config :iris :data-dir])
+                                        (io/file "telegram-media")
+                                        str)
+                      content (try
+                                (tg-media/user-content! config
+                                                        (cond-> opts
+                                                          media-dir (assoc :media-dir media-dir))
+                                                        message)
                                 (catch Exception e
                                   (send! chat-id (str "Media processing failed: " (.getMessage e)))
                                   ::media-processing-failed))]

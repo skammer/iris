@@ -1242,10 +1242,14 @@
 
 (deftest telegram-photo-message-downloads-and-sends-rich-content-to-chat-test
   (let [path (temp-db-path)
+        data-dir (.toFile (java.nio.file.Files/createTempDirectory
+                           "iris-telegram-media-"
+                           (make-array java.nio.file.attribute.FileAttribute 0)))
         store (sqlite/create-store {:path path :evict-on-close? true})
         sent (atom [])
         calls (atom [])
         system {:store store
+                :config {:iris {:data-dir (.getAbsolutePath data-dir)}}
                 :event-bus (system-events/create-event-bus)
                 :event-sink (fn [_] nil)}
         config {:bot-token "token"
@@ -1276,21 +1280,30 @@
         (is (= :processed
                (telegram/process-update! system config opts
                                          (photo-update-for 1 100 7 "what is this?")))))
-      (let [content (->> @calls (filter #(= :chat (:op %))) first :messages first :content)]
-        (is (= [{:type :text :text "what is this?"}
-                {:type :image
+      (let [content (->> @calls (filter #(= :chat (:op %))) first :messages first :content)
+            saved-file (io/file data-dir "telegram-media" "100" "1-01-big.jpg")]
+        (is (= {:type :text
+                :text (str "what is this?\n\n"
+                           "Local copies of attached files (use file/shell operations, not fs_read):\n"
+                           "- " (.getAbsolutePath saved-file))}
+               (first content)))
+        (is (= [{:type :image
                  :source {:type :base64
                           :media-type "image/jpeg"
                           :value "aW1hZ2UtYnl0ZXM="}
                  :alt "Telegram photo"
                  :filename "big.jpg"}]
-               content)))
+               (rest content)))
+        (is (.isFile saved-file))
+        (is (= "image-bytes" (slurp saved-file))))
       (is (= [{:op :get-file :token "token" :file-id "big"}
               {:op :download :token "token" :file-path "photos/big.jpg"}]
              (take 2 @calls)))
       (is (= [{:chat-id 100 :text "ok"}] @sent))
       (finally
         (sqlite/close-store! store)
+        (doseq [file (reverse (file-seq data-dir))]
+          (io/delete-file file true))
         (io/delete-file path true)))))
 
 (deftest telegram-voice-message-becomes-audio-content-test

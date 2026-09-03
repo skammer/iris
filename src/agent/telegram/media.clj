@@ -3,8 +3,10 @@
   (:require
    [agent.telegram.api :as tg-api]
    [agent.telegram.rich :as rich]
+   [clojure.java.io :as io]
    [clojure.string :as str])
   (:import
+   (java.nio.file Files StandardOpenOption)
    (java.util Base64)))
 
 (def ^:private default-max-download-bytes (* 20 1024 1024))
@@ -121,8 +123,31 @@
       (some-> file-path (str/split #"/") last not-empty)
       (str (:file-id descriptor))))
 
+(defn- safe-path-component [value fallback]
+  (let [component (-> (str (or value ""))
+                      (str/replace #"[^A-Za-z0-9._-]" "_")
+                      (str/replace #"^\.+$" ""))]
+    (if (str/blank? component) fallback component)))
+
+(defn- persist-media!
+  [media-dir message index filename bytes]
+  (when media-dir
+    (let [chat-id (safe-path-component (get-in message [:chat :id]) "unknown-chat")
+          message-id (safe-path-component (:message_id message) "message")
+          filename* (safe-path-component (some-> filename io/file .getName) "attachment")
+          dir (.toPath (io/file media-dir chat-id))
+          path (.resolve dir (format "%s-%02d-%s" message-id (inc index) filename*))]
+      (Files/createDirectories dir (make-array java.nio.file.attribute.FileAttribute 0))
+      (Files/write path
+                   bytes
+                   (into-array java.nio.file.OpenOption
+                               [StandardOpenOption/CREATE
+                                StandardOpenOption/TRUNCATE_EXISTING
+                                StandardOpenOption/WRITE]))
+      (str (.toAbsolutePath path)))))
+
 (defn- media-block!
-  [config opts descriptor]
+  [config opts message index descriptor]
   (let [token (:bot-token config)
         limit (max-download-bytes config)
         get-file (or (:get-file-fn opts) tg-api/get-file!)
@@ -138,13 +163,15 @@
                          :file-id (:file-id descriptor)})))
       (let [bytes (download-file token file-path)
             filename (infer-filename descriptor file-path)
-            media-type (or (:media-type descriptor) "application/octet-stream")]
-        (cond-> {:type (:kind descriptor)
-                 :source {:type :base64
-                          :media-type media-type
-                          :value (.encodeToString (Base64/getEncoder) bytes)}}
-          (:alt descriptor) (assoc :alt (:alt descriptor))
-          filename (assoc :filename filename))))))
+            media-type (or (:media-type descriptor) "application/octet-stream")
+            local-path (persist-media! (:media-dir opts) message index filename bytes)]
+        {:block (cond-> {:type (:kind descriptor)
+                         :source {:type :base64
+                                  :media-type media-type
+                                  :value (.encodeToString (Base64/getEncoder) bytes)}}
+                  (:alt descriptor) (assoc :alt (:alt descriptor))
+                  filename (assoc :filename filename))
+         :local-path local-path}))))
 
 (defn- default-media-prompt [descriptors]
   (let [kinds (->> descriptors (map (comp name :kind)) distinct (str/join ", "))]
@@ -156,9 +183,18 @@
                  (:caption message)
                  (rich/message->markdown message))
         descriptors* (vec (keep identity (descriptors message)))
-        media-blocks (mapv #(media-block! config opts %) descriptors*)
-        prompt (or (some-> text str/trim not-empty)
-                   (when (seq media-blocks) (default-media-prompt descriptors*)))]
+        media-results (mapv (fn [index descriptor]
+                              (media-block! config opts message index descriptor))
+                            (range)
+                            descriptors*)
+        media-blocks (mapv :block media-results)
+        local-paths (into [] (keep :local-path) media-results)
+        prompt* (or (some-> text str/trim not-empty)
+                    (when (seq media-blocks) (default-media-prompt descriptors*)))
+        prompt (cond-> prompt*
+                 (seq local-paths)
+                 (str "\n\nLocal copies of attached files (use file/shell operations, not fs_read):\n"
+                      (str/join "\n" (map #(str "- " %) local-paths))))]
     (if (seq media-blocks)
       (cond-> []
         prompt (conj {:type :text :text prompt})
