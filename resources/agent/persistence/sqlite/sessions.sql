@@ -50,6 +50,20 @@ from messages
 where session_id = :session_id
 order by coalesce(json_extract(metadata_json, '$.activated-at'), created_at) asc, id asc
 
+-- :name get-message :? :1
+select id, role, content, tool_calls, tool_call_id, metadata_json, excluded_from_context, created_at
+from messages
+where session_id = :session_id and id = :id
+limit 1
+
+-- :name get-tool-result :? :1
+select id, role, content, tool_calls, tool_call_id, metadata_json, excluded_from_context, created_at
+from messages
+where session_id = :session_id and role = 'tool'
+  and tool_call_id = :tool_call_id and id > :after_id
+order by id asc
+limit 1
+
 -- :name count-messages :? :1
 select count(*) as n
 from messages

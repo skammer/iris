@@ -113,6 +113,9 @@
 (defn list-messages [store session-id]
   (sessions/list-messages store session-id))
 
+(defn tool-detail-messages [store session-id message-id call-id]
+  (sessions/tool-detail-messages store session-id message-id call-id))
+
 (defn count-messages [store session-id]
   (sessions/count-messages store session-id))
 

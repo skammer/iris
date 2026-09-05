@@ -295,7 +295,7 @@
     (responses/html-response
      200
      (agent.ui.render/tool-detail-fragment
-      (sqlite/list-messages (:store system) session_id)
+      (sqlite/tool-detail-messages (:store system) session_id message_id tool_call_id)
       message_id
       tool_call_id))))
 

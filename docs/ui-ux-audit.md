@@ -53,7 +53,15 @@ Chrome must be installed. Browser script exercises synthetic stream state only i
 ## Remaining audit
 
 - Bound/paginate session listing without losing access to older sessions or project suggestions.
-- Tool-detail endpoint currently loads every message and entry in the selected session; replace with targeted lookup while preserving rich tool-result support.
+- [x] Tool detail reads at most the selected call and its first subsequent result, with rich-entry hydration restricted to those IDs. Migration 014 normalizes legacy rich result IDs and adds the lookup index. Session scope and reused IDs are covered by tests.
 - History “Load older” caps at 400; lifecycle patches reset the expanded window. Preserve browsing position/window and make older history reachable.
 - Measure long-running generation, lifecycle patch frequency and idle refresh traffic; inspect representative populated Memory/approvals/cron/logs, not only empty fixture states.
 - Verify serving stack and timings against representative real data after the remaining fixes. No remote deployment performed in this pass.
+
+## Tool-detail follow-up
+
+74 tests / 581 assertions passed after targeted lookup change (UI, UI performance,
+SQLite, session entries). Coverage includes pending/orphan calls, cross-session
+isolation, repeated call IDs, rich blocks preceded by text, entry insertion,
+legacy backfill, and indexed query plan. Existing HugSQL-generated SQL vars are
+not understood by a standalone clj-kondo invocation; compilation and tests pass.

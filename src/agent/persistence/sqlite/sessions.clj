@@ -52,6 +52,12 @@
     (sequential? content) (str/join "\n" (keep content-block-preview content))
     :else (str content)))
 
+(defn- result-call-id [role explicit-id content-blocks]
+  (or explicit-id
+      (when (= "tool" role)
+        (:tool-call-id (first (filter #(= :tool-result (some-> (:type %) keyword))
+                                     content-blocks))))))
+
 (defn- payload->message [payload]
   (let [message (or (:message payload) payload)
         raw-content (or (:content message) "")
@@ -62,7 +68,7 @@
      :content (content-preview (or content-blocks raw-content))
      :content-blocks content-blocks
      :tool-calls (:tool-calls message)
-     :tool-call-id (:tool-call-id message)
+     :tool-call-id (result-call-id (:role message) (:tool-call-id message) content-blocks)
      :metadata (:metadata message)
      :excluded-from-context? (true? (:excluded-from-context? message))}))
 
@@ -186,7 +192,8 @@
   ([store session-id role content {:keys [tool-calls tool-call-id metadata excluded-from-context?
                                           select-leaf? content-blocks]
                                    :or {select-leaf? true}}]
-   (let [tool-calls-json (when (seq tool-calls) (common/json-string tool-calls))
+   (let [tool-call-id (result-call-id role tool-call-id content-blocks)
+         tool-calls-json (when (seq tool-calls) (common/json-string tool-calls))
          metadata-json (common/json-string metadata)
          content-preview* (content-preview (or content-blocks content))
          message {:session_id session-id
@@ -293,6 +300,27 @@
               (common/select-many conn
                                   (list-messages-sqlvec {:session_id session-id})
                                   identity))))))
+
+(defn tool-detail-messages
+  "Read only the selected call and its first subsequent result, scoped to a session."
+  [store session-id message-id call-id]
+  (common/with-connection
+    store
+    (fn [conn]
+      (if-let [message (common/select-one conn
+                                         (get-message-sqlvec {:session_id session-id :id message-id})
+                                         identity)]
+        (let [result (when (= "assistant" (:role message))
+                       (common/select-one conn
+                                          (get-tool-result-sqlvec {:session_id session-id
+                                                                   :after_id (:id message)
+                                                                   :tool_call_id call-id})
+                                          identity))
+              rows (cond-> [message] result (conj result))
+              overrides (message-entry-overrides-for-ids conn session-id (mapv :id rows))]
+          (mapv #(assoc (merge-entry-overrides (row->message %) overrides) :session-id session-id)
+                rows))
+        []))))
 
 (defn count-messages [store session-id]
   (common/with-connection

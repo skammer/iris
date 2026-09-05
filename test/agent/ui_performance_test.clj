@@ -4,6 +4,9 @@
             [agent.api.streaming :as streaming]
             [agent.chat :as chat]
             [agent.persistence.sqlite :as sqlite]
+            [agent.persistence.sqlite.common :as db]
+            [agent.persistence.sqlite.sessions :as sessions]
+            [clojure.java.io :as io]
             [agent.ui :as ui]
             [clojure.core.async :as async]
             [clojure.string :as str]
@@ -65,3 +68,54 @@
           (is (not= :timeout (deref worker 3000 :timeout)))
           (is (= ["streaming" "final"] @patches))
           (finally (reset! open? false) (async/close! channel) (future-cancel worker)))))))
+
+(deftest tool-details-are-scoped-bounded-and-preserve-rich-results
+  (let [path (.getAbsolutePath (java.io.File/createTempFile "iris-detail-" ".db"))
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [sid (:id (sqlite/create-session! store "tools"))
+            other (:id (sqlite/create-session! store "other"))
+            call {:id "reused" :function {:name "shell" :arguments "{}"}}
+            _old (sqlite/append-message! store sid "tool" "old result" {:tool-call-id "reused"})
+            request (sqlite/append-message! store sid "assistant" "" {:tool-calls [call]})
+            _foreign (sqlite/append-message! store other "tool" "foreign result" {:tool-call-id "reused"})
+            blocks [{:type :text :text "preface"}
+                    {:type :tool-result :tool-call-id "reused" :name "shell"
+                     :status "done" :content "correct rich result"}]
+            result (sqlite/append-message! store sid "tool" "" {:content-blocks blocks})
+            _later (sqlite/append-message! store sid "tool" "later result" {:tool-call-id "reused"})
+            messages (sqlite/tool-detail-messages store sid (:id request) "reused")]
+        (is (= [(:id request) (:id result)] (mapv :id messages)))
+        (is (= "reused" (:tool-call-id (second messages))))
+        (is (= (mapv #(update % :type name) blocks) (:content-blocks (second messages))))
+        (is (= [] (sqlite/tool-detail-messages store other (:id request) "reused")))
+        (is (= [] (sqlite/tool-detail-messages store sid "invalid" "reused")))
+        (is (= [(:id request)] (mapv :id (sqlite/tool-detail-messages store sid (:id request) "pending"))))
+        (is (= [(:id result)] (mapv :id (sqlite/tool-detail-messages store sid (:id result) "reused"))))
+        (with-redefs [sqlite/list-messages (fn [& _] (throw (ex-info "Unbounded read" {})))]
+          (let [html (:body (handler/chat-tool-detail {:store store}
+                               {:parameters {:query {:session_id sid
+                                                    :message_id (str (:id request))
+                                                    :tool_call_id "reused"}}}))]
+            (is (str/includes? html "correct rich result"))
+            (is (not (str/includes? html "foreign result")))
+            (is (not (str/includes? html "old result")))))
+        ;; Reproduce pre-migration data, then run the exact shipped backfill.
+        (db/with-connection store
+          (fn [conn]
+            (db/execute! conn ["update messages set tool_call_id = null where id = ?" (:id result)])
+            (doseq [sql (str/split (slurp (io/resource "agent/persistence/sqlite/migrations/014-tool-result-lookup.up.sql")) #";")
+                    :when (not (str/blank? sql))]
+              (db/execute-ddl! conn sql))))
+        (is (= [(:id request) (:id result)]
+               (mapv :id (sqlite/tool-detail-messages store sid (:id request) "reused"))))
+        (let [plan (db/with-connection store
+                     #(db/select-many %
+                        (update (sessions/get-tool-result-sqlvec {:session_id sid :tool_call_id "reused" :after_id (:id request)})
+                                0 (fn [sql] (str "explain query plan " sql))) identity))]
+          (is (some #(str/includes? (:detail %) "idx_messages_tool_result") plan)))
+        (let [entry (sqlite/append-entry! store sid :message
+                      {:role "tool" :content-blocks [{:type :tool-result :tool-call-id "entry-call" :content "entry result"}]})
+              message-id (get-in entry [:payload :message-id])]
+          (is (= "entry-call" (:tool-call-id (first (sqlite/tool-detail-messages store sid message-id "entry-call")))))))
+      (finally (sqlite/close-store! store) (io/delete-file path true)))))
