@@ -32,5 +32,6 @@ Evidence and remaining scope: [docs/ui-ux-audit.md](docs/ui-ux-audit.md).
 - [x] Fix ephemeral row width, mobile chat layout, Memory stacking and table overflow.
 - [x] Coalesce streaming deltas and patch only the current message; index bounded history reads; correct gzip negotiation.
 - [x] Bound session listing and tool-detail reads; keep project suggestions available through prefix search.
+- [x] Bound real POST streaming payloads; eliminate duplicate sender patches and disconnected SSE subscriptions.
 - [ ] Preserve access to older history and expanded windows.
 - [ ] Verify populated secondary screens, long streaming runs, idle traffic and representative runtime performance.

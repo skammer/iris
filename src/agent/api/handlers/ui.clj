@@ -30,6 +30,23 @@
 (def ^:private max-chat-image-bytes (* 10 1024 1024))
 (defonce ^:private ui-session-streams (atom {}))
 
+(defonce ^:private ui-chat-posts (atom {}))
+
+(defn- owns-chat-stream? [client-id session-id]
+  (pos? (get @ui-chat-posts [client-id session-id] 0)))
+
+(defn- own-chat-stream! [ctx client-id session-id]
+  (when-not (str/blank? client-id)
+    (let [key [client-id session-id]]
+      (swap! ui-chat-posts update key (fnil inc 0))
+      (streaming/register-cleanup!
+       ctx
+       #(swap! ui-chat-posts
+               (fn [owners]
+                 (if (> (get owners key 0) 1)
+                   (update owners key dec)
+                   (dissoc owners key))))))))
+
 (defn- request-ui-limit
   ([request] (request-ui-limit request 20 100))
   ([request default maximum]
@@ -303,26 +320,14 @@
       message_id
       tool_call_id))))
 
-(defn- relevant-session-event? [event session-id]
-  (and (= "session" (:entity-type event))
-       (= session-id (:entity-id event))
-       (or (contains? #{"message.updated"
-                        "session.created"
-                        "session.title.updated"
-                        "session-state-changed"
-                        "turn-queued"}
-                      (:event-type event))
-           (contains? #{"agent-start"
-                        "agent-end"
-                        "turn-start"
-                        "turn-end"
-                        "message-start"
-                        "message-update"
-                        "message-end"
-                        "tool-execution-start"
-                        "tool-execution-update"
-                        "tool-execution-end"}
-                      (:event-type event)))))
+(defn- transcript-changed-event? [event session-id]
+  (and (= "session" (:entity-type event)) (= session-id (:entity-id event))
+       (contains? #{"agent-start" "message-end" "message.updated" "turn-queued"}
+                  (:event-type event))))
+
+(defn- status-changed-event? [event session-id]
+  (and (= "session" (:entity-type event)) (= session-id (:entity-id event))
+       (contains? #{"session-state-changed" "agent-end"} (:event-type event))))
 
 (defn- terminal-session-event? [event session-id]
   (and (= "session" (:entity-type event))
@@ -379,7 +384,7 @@
                    [value source] (async/alts!! [deadline ch] :priority true)]
                (cond
                  (= source deadline)
-                 (when (if pending
+                 (when (if (and pending (not (owns-chat-stream? client-id session-id)))
                          (streaming/send-datastar-patch!
                           ctx (ui/session-streaming-fragment system session-id))
                          (streaming/send-sse-text! ctx ":\n\n"))
@@ -391,19 +396,24 @@
                      (message-stream-update-event? event session-id)
                      (recur (or pending (async/timeout 50)))
 
-                     (relevant-session-event? event session-id)
+                     (and (or (title-updated-event? event session-id)
+                              (transcript-changed-event? event session-id)
+                              (status-changed-event? event session-id))
+                          (not (owns-chat-stream? client-id session-id)))
                      (when (streaming/send-datastar-patch!
                             ctx
-                            (if (title-updated-event? event session-id)
-                              (ui/session-title-fragments system session-id)
-                              (ui/session-messages-fragment system session-id)))
+                            (cond
+                              (title-updated-event? event session-id) (ui/session-title-fragments system session-id)
+                              (transcript-changed-event? event session-id) (ui/session-messages-fragment system session-id)
+                              (status-changed-event? event session-id) (ui/session-status-fragment system session-id)
+                              :else ""))
                        (recur nil))
 
                      :else (recur pending))))))))))))
 
 (defn chat-action [system request]
   (let [body (h/read-form-body request)
-        {:keys [session_id prompt image]} body
+        {:keys [session_id client_id prompt image]} body
         content (try
                   (chat-content prompt image)
                   (catch Exception e
@@ -427,6 +437,7 @@
                    ctx
                    (ui/session-messages-fragment system session_id)))}
      (fn [ctx]
+       (own-chat-stream! ctx client_id session_id)
        (let [broker-instance (or (:event-bus system) (:broker system))
              final-fallback-ms 1000
              subscription (streaming/subscribe! ctx
@@ -445,31 +456,19 @@
                      ([streaming]
                       (streaming/send-datastar-patch!
                        ctx
-                       (ui/session-messages-fragment system
-                                                     session_id
-                                                     {:streaming streaming}))))
+                       (ui/session-streaming-fragment system session_id {:streaming streaming}))))
              final-pushed? (atom false)
              push-final! (fn []
                            (when-not @final-pushed?
                              (reset! final-pushed? true)
                              (push!)))
-             push-delta! (fn [delta]
-                           (when-not (str/blank? (str delta))
-                             (push! (swap! streaming-state
-                                           update :content (fnil str "") delta))))
-             push-thinking! (fn [delta]
-                              (when-not (str/blank? (str delta))
-                                (push! (swap! streaming-state
-                                              update :thinking (fnil str "") delta))))
              result-ch (streaming/run-task!
                         ctx
                         #(chat/run! system
                                     {:messages [{:role "user" :content content}]
                                      :session-id session_id
-                                     :stream? true
-                                     :on-delta push-delta!
-                                     :on-thinking-delta push-thinking!}))]
-         (push!)
+                                     :stream? true}))]
+         (streaming/send-datastar-patch! ctx (ui/session-status-fragment system session_id))
          (loop [done? false
                 result-ch* result-ch
                 terminal? false
@@ -496,7 +495,13 @@
                                         (terminal-session-event? event session_id))]
                      (cond
                        (message-stream-update-event? event session_id)
-                       nil
+                       (let [{:keys [delta thinking-delta]} (:payload event)]
+                         (reset! final-pushed? false)
+                         (push! (swap! streaming-state
+                                       (fn [state]
+                                         (cond-> state
+                                           (string? delta) (update :content (fnil str "") delta)
+                                           (string? thinking-delta) (update :thinking (fnil str "") thinking-delta))))))
 
                        (stream-ending-message-event? event session_id)
                        (do
@@ -508,8 +513,11 @@
                         ctx
                         (ui/session-title-fragments system session_id))
 
-                       (relevant-session-event? event session_id)
-                       (push!))
+                       (transcript-changed-event? event session_id)
+                       (push!)
+
+                       (status-changed-event? event session_id)
+                       (streaming/send-datastar-patch! ctx (ui/session-status-fragment system session_id)))
                      (if (and done? terminal?*)
                        (push-final!)
                        (recur done? result-ch* terminal?* fallback-ch)))

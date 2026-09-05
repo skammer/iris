@@ -133,7 +133,7 @@
             editor-html (ui-cron/job-editor-detail-fragment system job)]
         (is (= 4 (count (re-seq #"role=\"tab\"" jobs-html))))
         (is (str/includes? jobs-html "class=\"cron-workspace scroll-fade\""))
-        (is (str/includes? jobs-html "Persistent schedules"))
+        (is (str/includes? jobs-html "<h2>Jobs</h2>"))
         (is (str/includes? jobs-html "cron-job-link"))
         (is (str/includes? jobs-html "<td><div class=\"cron-actions\">"))
         (is (not (str/includes? jobs-html "<td class=\"cron-actions\">")))
@@ -149,7 +149,7 @@
         (is (str/includes? runs-html "cron-audit-links"))
         (is (not (str/includes? runs-html "<td><span class=\"status-badge status-badge--succeeded\">succeeded</span><details")))
         (is (not (str/includes? runs-html "Persistent schedules")))
-        (is (str/includes? stats-html "Scheduler"))
+        (is (str/includes? stats-html "class=\"cron-stats\""))
         (is (str/includes? stats-html "Active jobs"))
         (is (not (str/includes? stats-html "Persistent schedules")))
         (is (str/includes? new-html "Create job"))

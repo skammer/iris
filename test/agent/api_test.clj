@@ -17,6 +17,7 @@
    [agent.system.components :as components]
    [agent.system.events :as events]
    [agent.tools.service :as tool-service]
+   [agent.ui :as ui]
    [cheshire.core :as json]
    [clojure.core.async :as async]
    [clojure.java.io :as io]
@@ -1054,3 +1055,52 @@
       (finally
         (api/stop-server! server)
         (io/delete-file path true)))))
+
+(deftest ui-chat-keeps-history-out-of-token-patches-test
+  (let [path (temp-db-path)
+        port (free-port)
+        {:keys [server system]} (started-test-system path port identity)
+        sid (:id (sqlite/create-session! (:store system) "bounded stream"))
+        renders (atom 0)
+        original ui/session-messages-fragment]
+    (try
+      (dotimes [_ 60] (sqlite/append-message! (:store system) sid "user" "unchanged-history-marker"))
+      (let [response (with-redefs [ui/session-messages-fragment
+                                  (fn [system sid & [opts]]
+                                    (swap! renders inc)
+                                    (original system sid (or opts {})))]
+                       (http-post-form (str "http://127.0.0.1:" port "/ui/chat")
+                                       (str "session_id=" sid "&prompt=hello&client_id=bounded-test")))
+            body (:body response)]
+        (is (= 200 (:status response)))
+        (is (str/includes? body "message--streaming"))
+        (is (str/includes? body "hello world"))
+        (is (<= @renders 3))
+        (is (<= (count (re-seq #"unchanged-history-marker" body)) 180)))
+      (finally (api/stop-server! server) (sqlite/close-store! (:store system)) (io/delete-file path true)))))
+
+(deftest ui-live-disconnect-releases-subscription-test
+  (let [path (temp-db-path)
+        port (free-port)
+        {:keys [server system]} (started-test-system path port identity)
+        sid (:id (sqlite/create-session! (:store system) "disconnect"))
+        streams (deref (ns-resolve 'agent.api.handlers.ui 'ui-session-streams))
+        client-id (str "disconnect-" sid)
+        await-state (fn [pred]
+                      (loop [attempt 0]
+                        (cond (pred) true
+                              (< attempt 100) (do (Thread/sleep 20) (recur (inc attempt)))
+                              :else false)))]
+    (try
+      ;; Repeated connections catch stale channel attachments as well as first disconnect.
+      (dotimes [_ 3]
+        (let [connection (.openConnection (URL. (str "http://127.0.0.1:" port
+                                                    "/ui/session/live?session_id=" sid
+                                                    "&client_id=" client-id)))]
+          (.setReadTimeout connection 3000)
+          (with-open [input (.getInputStream connection)]
+            (is (= 58 (.read input)))
+            (is (await-state #(contains? @streams client-id)))
+            (.disconnect connection))
+          (is (await-state #(not (contains? @streams client-id))))))
+      (finally (api/stop-server! server) (sqlite/close-store! (:store system)) (io/delete-file path true)))))

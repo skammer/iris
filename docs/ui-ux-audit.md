@@ -83,3 +83,42 @@ NODE_PATH=/tmp/iris-playwright/node_modules node dev/ui_session_review.cjs
 
 The script removes only the sessions it created, including on failure. Screenshot:
 `target/ui-review/session-pages-390.png`.
+
+## Real POST streaming and disconnect follow-up
+
+The earlier synthetic GET check missed `/ui/chat` callbacks retransmitting full
+history for each delta. POST now consumes ordered runtime deltas already coalesced
+at 50ms, patches only the current message, and updates status separately. The
+sender's GET connection suppresses duplicate patches while its POST owns the turn;
+other tabs continue receiving live updates.
+
+Chrome, actual form submit with 120 chunks spaced 15ms apart and 60 historical
+messages (~1.6KB each): 5,282,686 → 204,725 POST bytes (96.1% reduction), 62 → 2
+full transcript renders. Sender saw 37 progressive updates, observer 28; neither
+regressed. Both tabs rendered the final answer, hid Stop, and released their SSE
+subscriptions on close. Exactly four total history renders across the two tabs.
+Measured response duration: 2,373ms with an intentionally delayed test provider.
+
+This check exposed 42 retained subscriptions after earlier browser runs. In
+http-kit 2.8.0 the current HTTP channel was not attached to the connection, so
+socket disconnect did not call its close handler. Updated to 2.9.0-beta4, which
+includes the upstream lifecycle fixes. This is a prerelease dependency; it needs
+production validation before deployment. References:
+[original regression fix](https://github.com/http-kit/http-kit/commit/76b869f),
+[response lifecycle fix](https://github.com/http-kit/http-kit/commit/c4a6ff4).
+
+77 focused tests / 717 assertions pass, including repeated SSE disconnects and
+bounded POST history patches. Full suite: 791 tests / 3,277 assertions, only two
+stale Cron heading expectations failed. Updated those assertions to the simplified
+UI; focused Cron rerun passed 15 tests / 99 assertions. No production-code changes
+after the full run. Changed Clojure files lint without warnings.
+
+Reproduce in an isolated process (the ordinary fixture may run alongside it):
+
+```sh
+env IRIS_CONFIG_DIR=target/test-iris-config IRIS_DATA_DIR=target/test-iris-data clojure -M:test dev/ui_stream_review.clj
+NODE_PATH=/tmp/iris-playwright/node_modules node dev/ui_stream_review.cjs
+```
+
+This short deterministic generation does not replace the remaining long-duration,
+tool-turn, populated-secondary-screen and representative-data checks.

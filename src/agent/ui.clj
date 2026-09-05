@@ -487,6 +487,29 @@
     (route-path {:tab :chat :session-id (:id session)})
     "/chat"))
 
+(defn- chat-status-nodes [state]
+  (let [visible? (or (:working? state) (:loop-active? state))
+        label (cond
+                (:loop-active? state) (str "Loop active, " (:loop-label state))
+                (pos? (:queued-count state)) (str "Working, queued " (:queued-count state))
+                :else "Working")
+        text (cond
+               (:loop-active? state) (:loop-label state)
+               (pos? (:queued-count state)) (str "queued " (:queued-count state))
+               :else "")
+        visibility {:style (when-not visible? "display:none")
+                    "data-show" (if visible? "true" "$chatLoading")}]
+    [[:button#chat-stop.chat-stop
+      (assoc visibility :type "button"
+             "data-on:click" "@post('/ui/chat/stop', {contentType: 'form', selector: '#chat-form'})")
+      "Stop"]
+     [:div#chat-status.meta.chat-status (assoc visibility :role "status" :aria-label label)
+      [:span.chat-spinner {:aria-hidden true}]
+      [:span.chat-status__text text]]]))
+
+(defn session-status-fragment [system session-id]
+  (apply ui-render/render-many (chat-status-nodes (chat/session-state system session-id))))
+
 (defn session-detail-fragment [system session-id]
   (let [session (session-target system session-id)]
     (ui-render/render
@@ -495,15 +518,7 @@
         [:h2 "Transcript"]
         [:div.empty "Create session to start chatting."]]
        (let [state (chat/session-state system (:id session))
-             status-visible? (or (:working? state) (:loop-active? state))
-             status-label (cond
-                            (:loop-active? state) (str "Loop active, " (:loop-label state))
-                            (pos? (:queued-count state)) (str "Working, queued " (:queued-count state))
-                            :else "Working")
-             status-text (cond
-                           (:loop-active? state) (:loop-label state)
-                           (pos? (:queued-count state)) (str "queued " (:queued-count state))
-                           :else "")]
+             [stop-node status-node] (chat-status-nodes state)]
          [:agent-chat-panel#session-detail-panel.panel
           {:data-session-id (:id session)
            ;; Generous retry budget: the default 10 retries can be exhausted
@@ -568,6 +583,8 @@
             "data-class:is-loading" "$chatLoading"
             "data-skill-autocomplete" "true"
             :enctype "multipart/form-data"}
+           [:input {:type "hidden" :name "client_id"
+                    "data-attr:value" "window.irisUiClientId"}]
            [:input {:id (str "chat-session-id-" (:id session))
                     :type "hidden"
                     :name "session_id"
@@ -584,21 +601,11 @@
                     :name "image"
                     :accept "image/*"
                     :multiple true}]]
-          [:button.chat-stop {:type "button"
-                     :style (when-not status-visible? "display:none")
-                     "data-show" (if status-visible? "true" "$chatLoading")
-                     "data-on:click" "@post('/ui/chat/stop', {contentType: 'form', selector: '#chat-form'})"}
-            "Stop"]
+          stop-node
            [:button {:type "submit"
                      "data-attr:disabled" "$chatLoading"}
             "Send"]
-           [:div#chat-status.meta.chat-status
-            {:style (when-not status-visible? "display:none")
-             "data-show" (if status-visible? "true" "$chatLoading")
-             :role "status"
-             :aria-label status-label}
-            [:span.chat-spinner {:aria-hidden true}]
-            [:span.chat-status__text status-text]]]])))))
+           status-node]])))))
 
 (defn- streaming-message [{:keys [content thinking]}]
   [:article#streaming-message.message.message--assistant.message--streaming
@@ -619,12 +626,13 @@
 
 (defn session-streaming-fragment
   "Patch only the in-flight message; never read persisted history for a token."
-  [system session-id]
-  (let [streaming (streaming-state system session-id {})]
-    (ui-render/render
-     (if (some #(not (str/blank? (str %))) (vals streaming))
-       (streaming-message streaming)
-       [:div#streaming-message {:hidden true}]))))
+  ([system session-id] (session-streaming-fragment system session-id {}))
+  ([system session-id opts]
+   (let [streaming (streaming-state system session-id opts)]
+     (ui-render/render
+      (if (some #(not (str/blank? (str %))) (vals streaming))
+        (streaming-message streaming)
+        [:div#streaming-message {:hidden true}])))))
 
 (def ^:private default-visible-messages 60)
 
