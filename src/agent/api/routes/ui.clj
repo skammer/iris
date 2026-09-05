@@ -87,6 +87,9 @@
 (def ^:private session-messages-query
   [:map
    [:session_id schemas/NonBlankString]
+   [:client_id {:optional true} :string]
+   [:before {:optional true} :int]
+   [:after {:optional true} :int]
    [:limit {:optional true} :string]])
 
 (def ^:private tool-detail-query

@@ -54,7 +54,7 @@ Chrome must be installed. Browser script exercises synthetic stream state only i
 
 - [x] Sidebar pages contain 50 sessions plus the selected session when outside the page. Counts stay global. SQL returns only the displayed page and one alternate-kind target; project autocomplete returns at most 30 indexed prefix matches.
 - [x] Tool detail reads at most the selected call and its first subsequent result, with rich-entry hydration restricted to those IDs. Migration 014 normalizes legacy rich result IDs and adds the lookup index. Session scope and reused IDs are covered by tests.
-- History “Load older” caps at 400; lifecycle patches reset the expanded window. Preserve browsing position/window and make older history reachable.
+- [x] History uses 60-message cursor pages without the 400-message cap. Live events preserve the selected page and reading position; Latest returns to the live tail.
 - Measure long-running generation, lifecycle patch frequency and idle refresh traffic; inspect representative populated Memory/approvals/cron/logs, not only empty fixture states.
 - Verify serving stack and timings against representative real data after the remaining fixes. No remote deployment performed in this pass.
 
@@ -122,3 +122,36 @@ NODE_PATH=/tmp/iris-playwright/node_modules node dev/ui_stream_review.cjs
 
 This short deterministic generation does not replace the remaining long-duration,
 tool-turn, populated-secondary-screen and representative-data checks.
+
+## History pagination follow-up
+
+Replaced expanding transcript downloads with Older / Newer / Latest cursor pages.
+Each page contains at most 60 messages. Two index seeks retrieve at most 61 rows
+each (timestamp ties and adjacent timestamps); only those bounded candidates are
+sorted and at most 60 message IDs are hydrated. EXPLAIN confirms display-order
+index range scans including the ID range for equal timestamps.
+
+History mode belongs to the existing browser SSE context, so disconnect cleanup
+also releases this state. GET and POST leave a historical page unchanged during
+live generation. Latest and a new submission resume current-message updates.
+The floating Latest button also returns from history to the current answer.
+
+94 tests / 795 assertions passed (API, UI, UI performance, SQLite). Tests cover
+605 tied timestamps, an older message activated last, both directions, foreign
+session cursors and empty pages. Chrome traversed 605 messages in 11 pages with
+no duplicates or gaps, preserved scrollTop=100 after a new final answer, and
+preserved a historical page while 1,200 delayed chunks completed. Latest showed
+the final answer once. Two-tab streaming regression passed with four total
+history renders and both subscriptions released after close.
+
+```sh
+NODE_PATH=/tmp/iris-playwright/node_modules node dev/ui_history_review.cjs
+```
+
+Uses the isolated stream fixture; creates and deletes only its own test session.
+Screenshot: `target/ui-review/history-390.png`.
+
+Pre-deploy server inspection: healthy, active provider `deepseek`, 238 sessions,
+4,814 messages, largest session 452 messages; schema 12. These are observed values,
+not the older provider expectation in local deploy notes. Deployment is authorized
+once remaining populated-screen and representative-data checks are complete.

@@ -339,3 +339,47 @@ on conflict(session_id) do update set
 -- :name count-sessions :? :1
 select count(*) as n
 from sessions
+
+-- :name list-message-page-before :? :*
+with anchor as (
+  select coalesce(json_extract(metadata_json, '$.activated-at'), created_at) as stamp from messages where session_id = :session_id and id = :cursor
+)
+select * from (
+  select * from (
+    select id, role, content, tool_calls, tool_call_id, metadata_json, excluded_from_context, created_at, coalesce(json_extract(metadata_json, '$.activated-at'), created_at) as display_at
+    from messages where session_id = :session_id
+      and coalesce(json_extract(metadata_json, '$.activated-at'), created_at) = (select stamp from anchor) and id < :cursor
+    order by id desc limit :limit
+  )
+  union all
+  select * from (
+    select id, role, content, tool_calls, tool_call_id, metadata_json, excluded_from_context, created_at, coalesce(json_extract(metadata_json, '$.activated-at'), created_at) as display_at
+    from messages where session_id = :session_id
+      and coalesce(json_extract(metadata_json, '$.activated-at'), created_at) < (select stamp from anchor)
+    order by coalesce(json_extract(metadata_json, '$.activated-at'), created_at) desc, id desc limit :limit
+  )
+)
+order by display_at desc, id desc
+limit :limit
+
+-- :name list-message-page-after :? :*
+with anchor as (
+  select coalesce(json_extract(metadata_json, '$.activated-at'), created_at) as stamp from messages where session_id = :session_id and id = :cursor
+)
+select * from (
+  select * from (
+    select id, role, content, tool_calls, tool_call_id, metadata_json, excluded_from_context, created_at, coalesce(json_extract(metadata_json, '$.activated-at'), created_at) as display_at
+    from messages where session_id = :session_id
+      and coalesce(json_extract(metadata_json, '$.activated-at'), created_at) = (select stamp from anchor) and id > :cursor
+    order by id asc limit :limit
+  )
+  union all
+  select * from (
+    select id, role, content, tool_calls, tool_call_id, metadata_json, excluded_from_context, created_at, coalesce(json_extract(metadata_json, '$.activated-at'), created_at) as display_at
+    from messages where session_id = :session_id
+      and coalesce(json_extract(metadata_json, '$.activated-at'), created_at) > (select stamp from anchor)
+    order by coalesce(json_extract(metadata_json, '$.activated-at'), created_at) asc, id asc limit :limit
+  )
+)
+order by display_at asc, id asc
+limit :limit

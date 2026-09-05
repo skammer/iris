@@ -403,8 +403,8 @@
                      (ui/session-messages-fragment {:store store} (:id session)))
               doc (Jsoup/parse html)]
           (is (= 60 (.size (.select doc "article.message"))))
-          (is (str/includes? html "Load 5 older"))
-          (is (str/includes? html "&amp;limit=120"))
+          (is (str/includes? html ">Older</button>"))
+          (is (str/includes? html "&amp;before="))
           (is (not (str/includes? html "message-0")))
           (is (str/includes? html "message-64"))))
       (finally

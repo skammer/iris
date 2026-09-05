@@ -636,23 +636,26 @@
 
 (def ^:private default-visible-messages 60)
 
-(defn- visible-message-limit [value]
-  (try
-    (-> (or value default-visible-messages) long (max default-visible-messages) (min 400))
-    (catch Exception _
-      default-visible-messages)))
+(defn- history-button [session-id direction cursor label]
+  [:button.chat-history-more
+   {:type "button" :data-history-latest (when-not cursor true)
+    "data-on:click" (str "@get('/ui/session-messages?session_id=" (ui-render/url-encode session-id)
+                         (when cursor (str "&" (name direction) "=" cursor))
+                         "&client_id=' + window.irisUiClientId)")}
+   label])
 
 (defn session-messages-fragment
   ([system session-id]
    (session-messages-fragment system session-id {}))
   ([system session-id opts]
-   (let [limit (visible-message-limit (:limit opts))
+   (let [history? (or (:before opts) (:after opts))
+         page (when history? (sqlite/message-page (:store system) session-id opts))
          message-count (sqlite/count-messages (:store system) session-id)
-         visible-messages (sqlite/list-recent-messages (:store system) session-id limit)
+         visible-messages (if history? (:messages page) (sqlite/list-recent-messages (:store system) session-id default-visible-messages))
          hidden-count (- message-count (count visible-messages))
          thread-stats (sqlite/session-thread-stats (:store system) session-id)
          state (chat/session-state system session-id)
-         streaming (streaming-state system session-id opts)
+         streaming (when-not history? (streaming-state system session-id opts))
          streaming* (cond-> {}
                       (not (str/blank? (str (:content streaming))))
                       (assoc :content (str (:content streaming)))
@@ -661,23 +664,25 @@
          streaming? (seq streaming*)]
      (ui-render/render
       [:chat-stream#session-messages-panel
+       {:data-history (str (boolean history?))}
        (if (or (seq visible-messages) streaming? (:working? state))
          (list*
           (ui-render/thread-stats-bar thread-stats)
-          (when (pos? hidden-count)
-            [:button.chat-history-more
-             {:type "button"
-              "data-on:click" (str "@get('/ui/session-messages?session_id="
-                                   (ui-render/url-encode session-id)
-                                   "&limit=" (min 400 (+ limit default-visible-messages)) "')")}
-             (str "Load " (min hidden-count default-visible-messages) " older")])
+          [:nav.chat-history-nav {:aria-label "Message history"}
+           (when (if history? (or (:after opts) (:more? page)) (pos? hidden-count))
+             (history-button session-id :before (:id (first visible-messages)) "Older"))
+           (when history?
+             (history-button session-id nil nil "Latest"))
+           (when (and history? (or (:before opts) (:more? page)))
+             (history-button session-id :after (:id (last visible-messages)) "Newer"))]
           [:div.chat-stream__filler]
           (concat
            (ui-render/message-list system visible-messages)
            (cond
              streaming? [(streaming-message streaming*)]
              :else [[:div#streaming-message {:hidden true}]])))
-         (list [:div.empty "No messages yet."]
+         (list (when history? (history-button session-id nil nil "Latest"))
+               [:div.empty (if history? "No messages on this page." "No messages yet.")]
                [:div#streaming-message {:hidden true}]))
        [:div#chat-bottom-anchor.chat-stream__bottom-anchor {:aria-hidden true}]]))))
 

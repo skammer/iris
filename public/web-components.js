@@ -227,6 +227,7 @@ class ChatStream extends HTMLElement {
 
   handleEvent(event) {
     if (event.type === "click") {
+      if (this.dataset.history === "true") this.querySelector("[data-history-latest]")?.click();
       this.followBottom();
       return;
     }
@@ -258,6 +259,7 @@ class ChatStream extends HTMLElement {
   }
 
   afterChange() {
+    if (this.dataset.history === "true") this.#syncFollowState();
     // CSS scroll anchoring (app.css) pins growth natively where supported,
     // but it is suppressed while scrollTop is 0 and absent in Safari, so
     // keep pinning from here too. Both target the same position; no fight.
@@ -271,7 +273,7 @@ class ChatStream extends HTMLElement {
   #syncFollowState() {
     this.dataset.followBottom = this.#stick ? "true" : "false";
     if (this.#bottomButton instanceof HTMLButtonElement) {
-      const visible = !this.#stick && this.#distanceFromBottom() > AUTOSCROLL_THRESHOLD_PX;
+      const visible = this.dataset.history === "true" || (!this.#stick && this.#distanceFromBottom() > AUTOSCROLL_THRESHOLD_PX);
       this.#bottomButton.hidden = !visible;
       this.#bottomButton.setAttribute("aria-hidden", String(!visible));
     }

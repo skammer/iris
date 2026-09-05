@@ -158,3 +158,32 @@
       (is (str/includes? html "id=\"chat-session-title\""))
       (is (not (str/includes? html "sessions-panel")))
       (is (not (str/includes? html "session-detail-panel"))))))
+
+(deftest history-cursors-cover-old-messages-and-activation-order
+  (let [path (.getAbsolutePath (java.io.File/createTempFile "iris-history-" ".db"))
+        store (sqlite/create-store {:path path})]
+    (try
+      (let [sid (:id (sqlite/create-session! store "history"))
+            other (:id (sqlite/create-session! store "other"))
+            activated (sqlite/append-message! store sid "user" "activated last"
+                                              {:metadata {:activated-at "2099-01-01T00:00:00Z"}})
+            messages (mapv #(sqlite/append-message! store sid "user" (str "row-" %) {:metadata {:activated-at "2026-01-01T00:00:00Z"}}) (range 605))
+            foreign (sqlite/append-message! store other "user" "foreign")
+            latest (sqlite/list-recent-messages store sid 60)
+            pages (loop [cursor (:id (first latest)) result [latest]]
+                    (let [{:keys [messages more?]} (sqlite/message-page store sid {:before cursor})]
+                      (if more? (recur (:id (first messages)) (conj result messages))
+                          (conj result messages))))
+            all (vec (mapcat identity (reverse pages)))]
+        (is (= (conj (mapv :id messages) (:id activated)) (mapv :id all)))
+        (is (= 606 (count all)))
+        (is (every? #(<= (count %) 60) pages))
+        (is (= (mapv :id (take 60 (drop 1 messages)))
+               (mapv :id (:messages (sqlite/message-page store sid {:after (:id (first messages))})))))
+        (is (empty? (:messages (sqlite/message-page store sid {:before (:id foreign)}))))
+        (is (empty? (:messages (sqlite/message-page store sid {:before -1}))))
+        (let [html (ui/session-messages-fragment {:store store} sid {:before (:id foreign)})]
+          (is (str/includes? html ">Latest</button>"))
+          (is (str/includes? html "data-history=\"true\""))
+          (is (not (str/includes? html "foreign")))))
+      (finally (sqlite/close-store! store) (io/delete-file path true)))))

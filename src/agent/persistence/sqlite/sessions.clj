@@ -363,6 +363,18 @@
         (mapv #(assoc (merge-entry-overrides % overrides) :session-id session-id)
               messages)))))
 
+(defn message-page [store session-id {:keys [before after]}]
+  (common/with-connection
+   store
+   (fn [conn]
+     (let [query (if after list-message-page-after-sqlvec list-message-page-before-sqlvec)
+           rows (common/select-many conn (query {:session_id session-id :cursor (or after before) :limit 61}) identity)
+           selected (cond-> (take 60 rows) (not after) reverse)
+           messages (mapv row->message selected)
+           overrides (message-entry-overrides-for-ids conn session-id (mapv :id messages))]
+       {:messages (mapv #(assoc (merge-entry-overrides % overrides) :session-id session-id) messages)
+        :more? (> (count rows) 60)}))))
+
 (defn session-thread-stats [store session-id]
   (common/with-connection
     store

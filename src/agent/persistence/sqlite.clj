@@ -126,6 +126,9 @@
 (defn list-recent-messages [store session-id limit]
   (sessions/list-recent-messages store session-id limit))
 
+(defn message-page [store session-id opts]
+  (sessions/message-page store session-id opts))
+
 (defn session-thread-stats [store session-id]
   (sessions/session-thread-stats store session-id))
 

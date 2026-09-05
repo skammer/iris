@@ -1,6 +1,8 @@
 (require '[agent.api-test :as fixture] '[agent.persistence.sqlite :as sqlite]
          '[agent.llm.core :as llm] '[clojure.java.io :as io] '[nrepl.server :as nrepl])
 
+(def stream-chunks (atom 120))
+
 (defrecord UiStreamReviewProvider []
   llm/ILLMProvider
   (complete [_ _ _] "complete")
@@ -11,7 +13,7 @@
   (estimate-cost [_ _ _] {:tokens 0 :cost-usd 0})
   llm/ILLMProviderInvoke
   (invoke [_ {:keys [on-content-delta] :as request}]
-    (let [parts (mapv #(str "word" % " ") (range 120))]
+    (let [parts (mapv #(str "word" % " ") (range @stream-chunks))]
       (when on-content-delta
         (doseq [part parts] (on-content-delta part) (Thread/sleep 15)))
       (llm/normalize-llm-response (apply str parts) request)))

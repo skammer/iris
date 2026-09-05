@@ -64,17 +64,26 @@
     (swap! ui-session-streams dissoc client-id)
     (streaming/close! ctx)))
 
+(defn- history-session [client-id]
+  (some-> (get @ui-session-streams client-id) :history-session deref))
+
+(defn- set-history-session! [client-id session-id]
+  (when-let [state (:history-session (get @ui-session-streams client-id))]
+    (reset! state session-id)))
+
 (defn- register-ui-session-stream! [client-id ctx]
   (when-not (str/blank? client-id)
-    (close-ui-session-stream! client-id)
-    (swap! ui-session-streams assoc client-id ctx)
-    (streaming/register-cleanup!
-     ctx
-     #(swap! ui-session-streams
-             (fn [streams]
-               (if (identical? ctx (get streams client-id))
-                 (dissoc streams client-id)
-                 streams))))))
+    (let [ctx (assoc ctx :history-session
+                     (or (:history-session (get @ui-session-streams client-id)) (atom nil)))]
+      (close-ui-session-stream! client-id)
+      (swap! ui-session-streams assoc client-id ctx)
+      (streaming/register-cleanup!
+       ctx
+       #(swap! ui-session-streams
+               (fn [streams]
+                 (if (identical? ctx (get streams client-id))
+                   (dissoc streams client-id)
+                   streams)))))))
 
 (defn- uploaded-files [value]
   (cond
@@ -306,9 +315,9 @@
   (let [query (-> request :parameters :query)
         session-id (:session_id query)]
     (h/ensure-session-exists! system session-id)
-    (responses/html-response 200
-                             (ui/session-messages-fragment system session-id
-                                                           {:limit (:limit query)}))))
+    (let [html (ui/session-messages-fragment system session-id (select-keys query [:before :after]))]
+      (set-history-session! (:client_id query) (when (or (:before query) (:after query)) session-id))
+      (responses/html-response 200 html))))
 
 (defn chat-tool-detail [system request]
   (let [{:keys [session_id message_id tool_call_id]} (-> request :parameters :query)]
@@ -384,7 +393,7 @@
                    [value source] (async/alts!! [deadline ch] :priority true)]
                (cond
                  (= source deadline)
-                 (when (if (and pending (not (owns-chat-stream? client-id session-id)))
+                 (when (if (and pending (not= session-id (history-session client-id)) (not (owns-chat-stream? client-id session-id)))
                          (streaming/send-datastar-patch!
                           ctx (ui/session-streaming-fragment system session-id))
                          (streaming/send-sse-text! ctx ":\n\n"))
@@ -394,10 +403,12 @@
                  (let [event (:payload value)]
                    (cond
                      (message-stream-update-event? event session-id)
-                     (recur (or pending (async/timeout 50)))
+                     (recur (if (or (= session-id (history-session client-id))
+                                    (owns-chat-stream? client-id session-id))
+                              pending (or pending (async/timeout 50))))
 
                      (and (or (title-updated-event? event session-id)
-                              (transcript-changed-event? event session-id)
+                              (and (not= session-id (history-session client-id)) (transcript-changed-event? event session-id))
                               (status-changed-event? event session-id))
                           (not (owns-chat-stream? client-id session-id)))
                      (when (streaming/send-datastar-patch!
@@ -435,9 +446,12 @@
 	      :on-error (fn [ctx _]
                   (streaming/send-datastar-patch!
                    ctx
-                   (ui/session-messages-fragment system session_id)))}
+                   (if (= session_id (history-session client_id))
+                     (ui/session-status-fragment system session_id)
+                     (ui/session-messages-fragment system session_id))))}
      (fn [ctx]
        (own-chat-stream! ctx client_id session_id)
+       (set-history-session! client_id nil)
        (let [broker-instance (or (:event-bus system) (:broker system))
              final-fallback-ms 1000
              subscription (streaming/subscribe! ctx
@@ -450,13 +464,11 @@
              streaming-state (atom {})
              push! (fn
                      ([]
-                      (streaming/send-datastar-patch!
-                       ctx
-                       (ui/session-messages-fragment system session_id)))
+                      (when-not (= session_id (history-session client_id))
+                        (streaming/send-datastar-patch! ctx (ui/session-messages-fragment system session_id))))
                      ([streaming]
-                      (streaming/send-datastar-patch!
-                       ctx
-                       (ui/session-streaming-fragment system session_id {:streaming streaming}))))
+                      (when-not (= session_id (history-session client_id))
+                        (streaming/send-datastar-patch! ctx (ui/session-streaming-fragment system session_id {:streaming streaming})))))
              final-pushed? (atom false)
              push-final! (fn []
                            (when-not @final-pushed?
@@ -525,8 +537,9 @@
                      (push-final!))))))))))))
 
 (defn chat-stop [system request]
-  (let [{:keys [session_id]} (h/read-form-body request)]
+  (let [{:keys [session_id client_id]} (h/read-form-body request)]
     (h/ensure-session-exists! system session_id)
+    (set-history-session! client_id nil)
     (chat/cancel-session! system session_id)
     (responses/html-response 200
                              (str (ui/session-messages-fragment system session_id)

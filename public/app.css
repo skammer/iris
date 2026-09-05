@@ -5400,3 +5400,6 @@ button:focus-visible, summary:focus-visible, a:focus-visible { outline: 1px soli
 .session-pagination { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 10px; }
 .session-pagination button { padding: 6px 10px; }
 .session-pagination button:disabled { opacity: .4; cursor: default; }
+
+.chat-history-nav { display: flex; justify-content: center; gap: 6px; flex: 0 0 auto; }
+.chat-history-nav .chat-history-more { margin: 4px 0; }
