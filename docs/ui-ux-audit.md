@@ -58,14 +58,27 @@ Chrome must be installed. Browser script exercises synthetic stream state only i
 - Measure long-running generation, lifecycle patch frequency and idle refresh traffic; inspect representative populated Memory/approvals/cron/logs, not only empty fixture states.
 - [x] Verify serving stack and timings against representative production data after deployment.
 
-Production verification on 2026-09-06: local and remote JAR SHA-256 matched
-(`e7e22c6228b19b3c887ce19244cb34ec08cb566320730418d6cd36736bbcec25`),
-`/health` returned `ok=true` with schema 12/12, active provider `deepseek`,
-and Telegram running. Authenticated requests to Chat, Overview, Cron, Tools,
-Memory, MAGI, Logs, sessions, approvals, and operator board returned HTTP 200
-without error markers. Populated responses contained 5 chat rows, 7 Cron rows,
-3 Memory table rows, 17-23 secondary-screen rows, and 18 Logs rows. Representative
-server render timings were 21-89 ms, with no failed requests.
+Correction on 2026-09-06 (Europe/Moscow): the earlier matching JAR hash
+`e7e22c6228b19b3c887ce19244cb34ec08cb566320730418d6cd36736bbcec25`
+belonged to the September 3 build on both machines. Schema 12/12 and successful
+GET requests verified the old deployment, not these UI changes. The earlier
+21-89 ms render timings must not be attributed to the updated serving stack.
+
+Rebuilt and uploaded clean commit `4c219f0c77ffe458b0df440e21afe9bd6867c755`,
+then restarted Iris (PID 281882). Local and remote JAR SHA-256:
+`192906164a5de5083db8e29577fe4c99adfd34c99a1f851989954c6d1e96a7fa`.
+Before restart, backed up SQLite to
+`~/.config/iris/data/agent.pre-deploy-20260905T215626Z.db` on the server.
+`/health` now reports `ok=true`, schema 15/15, provider `deepseek`, and Telegram
+running. The live Overview renders build commit `4c219f0c77ff`.
+
+Authenticated Chrome verification against `http://100.64.0.4:8689`: Chat,
+Overview, Cron, Tools, Memory, MAGI, and Logs rendered populated content with
+HTTP 200, no browser errors, and no viewport overflow at 1440x900. At 390x844,
+Chat keeps its composer visible and its Sessions toggle opens/closes correctly.
+Served CSS matches `public/app.css` byte-for-byte; the root page uses a new asset
+version and no longer loads Google Fonts. After browser close, SSE metrics showed
+15 opened, 15 closed, 15 unsubscribed, and zero errors; broker subscriptions were 0.
 
 Long-running generation, lifecycle patch frequency, and idle refresh traffic
 remain open; these require an explicit production interaction rather than GET
@@ -166,5 +179,5 @@ Screenshot: `target/ui-review/history-390.png`.
 
 Pre-deploy server inspection: healthy, active provider `deepseek`, 238 sessions,
 4,814 messages, largest session 452 messages; schema 12. These are observed values,
-not the older provider expectation in local deploy notes. Deployment is authorized
-once remaining populated-screen and representative-data checks are complete.
+not the older provider expectation in local deploy notes. Deployment completed on
+2026-09-06 as recorded in the corrected production verification above.
