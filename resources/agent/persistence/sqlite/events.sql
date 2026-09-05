@@ -61,3 +61,15 @@ from agent_events
 -- :name latest-event-id :? :1
 select coalesce(max(id), 0) as id
 from agent_events
+
+-- :name daily-dashboard-activity :? :*
+select substr(created_at, 1, 10) as day,
+       sum(event_type = 'turn-start') as chat,
+       sum(event_type = 'cron.run.started') as cron,
+       sum(event_type = 'tool.approval.requested') as tools,
+       sum(event_type glob 'memory.*') as memory,
+       count(*) as logs
+from agent_events
+where created_at >= :since and created_at < :until
+group by substr(created_at, 1, 10)
+order by day

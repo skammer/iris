@@ -1,6 +1,7 @@
 (ns agent.persistence.sqlite-test
   (:require
    [agent.persistence.sqlite.common :as sqlite-common]
+   [agent.persistence.sqlite.events :as sqlite-events]
    [agent.persistence.sqlite :as sqlite]
    [clojure.java.io :as io]
    [clojure.test :refer [deftest is]])
@@ -9,6 +10,33 @@
 
 (defn temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-" ".db")))
+
+(deftest dashboard-activity-counts-seven-utc-days
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        today (java.time.LocalDate/parse "2026-09-06")]
+    (try
+      (is (= (repeat 7 0) (map :logs (sqlite-events/dashboard-activity store today))))
+      (doseq [[event-type created-at]
+              [[:turn-start "2026-08-30T23:59:59.999Z"]
+               [:turn-start "2026-08-31T00:00:00.000Z"]
+               [:message-update "2026-08-31T00:00:00.001Z"]
+               [:cron.run.started "2026-09-02T12:00:00Z"]
+               [:tool.approval.requested "2026-09-02T12:01:00Z"]
+               [:memory.vault.note_updated "2026-09-06T23:59:59.999Z"]
+               [:turn-start "2026-09-07T00:00:00.000Z"]]]
+        (sqlite/log-event! store {:event-type event-type :created-at created-at}))
+      (let [days (sqlite-events/dashboard-activity store today)]
+        (is (= ["2026-08-31" "2026-09-01" "2026-09-02" "2026-09-03"
+                "2026-09-04" "2026-09-05" "2026-09-06"] (mapv :day days)))
+        (is (= [2 0 2 0 0 0 1] (mapv :logs days)))
+        (is (= [1 0 0 0 0 0 0] (mapv :chat days)))
+        (is (= [0 0 1 0 0 0 0] (mapv :cron days)))
+        (is (= [0 0 1 0 0 0 0] (mapv :tools days)))
+        (is (= [0 0 0 0 0 0 1] (mapv :memory days))))
+      (finally
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
 
 (deftest sqlite-session-flow-test
   (let [path (temp-db-path)

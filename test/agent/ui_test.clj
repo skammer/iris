@@ -142,6 +142,7 @@
                                                            :event-count 0
                                                            :schema-version 1
                                                            :tool-approval-count 0}})
+                sqlite/dashboard-activity (constantly [{:day "2026-09-06" :chat 2 :cron 0 :tools 0 :memory 0 :logs 3}])
                 tools/registry-health (constantly {:count 0})
                 memory/health-check (constantly {:vault {:note-count 0}})
                 channel-adapters/registry-health (constantly {:count 0})
@@ -150,7 +151,8 @@
                                                         :commit-short "abc123"
                                                         :built-at "2026-06-14T10:20:30Z"})]
     (let [html (ui/dashboard-fragment
-                {:config {:llm {:active-provider :openai-compatible
+                {:store :dashboard-test
+                 :config {:llm {:active-provider :openai-compatible
                                 :providers {:openai-compatible {:type :openai-compatible
                                                                  :model "gpt-4o-mini"}}}}
                  :reload-state (atom {:status :idle})})]
@@ -158,6 +160,10 @@
       (is (str/includes? html ">gpt-4o-mini</dd>"))
       (is (str/includes? html "<h1>Overview</h1>"))
       (is (str/includes? html "overview-action-grid"))
+      (is (= 5 (count (re-seq #"class=\"overview-activity__chart\"" html))))
+      (is (str/includes? html "Turns: 2 over 7 UTC days, including today"))
+      (is (str/includes? html "2026-09-06 UTC: 2 Turns"))
+      (is (not (str/includes? html "NaN")))
       (is (str/includes? html "Current deployment"))
       (is (str/includes? html "href=\"/chat\""))
       (is (str/includes? html "href=\"/tools\""))

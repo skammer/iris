@@ -84,6 +84,25 @@ Long-running generation, lifecycle patch frequency, and idle refresh traffic
 remain open; these require an explicit production interaction rather than GET
 render checks.
 
+## Overview charts and metric row — 2026-09-06
+
+The five workspace cards now show daily event counts over seven UTC calendar
+days, including today: chat turns, Cron starts, approval requests, memory events,
+and all logged events. Empty days remain zero; each bar exposes its date/count.
+One date-indexed aggregate reads event types and dates without hydrating payloads.
+On production data its median was 7.59 ms over 10 runs; EXPLAIN used
+`idx_agent_events_created`. Existing dashboard refresh remains 10 seconds.
+
+The metric grid had five columns for six values. It now has six columns above
+760px; mobile retains two columns. Chrome checked 1920, 1440, 1024, 768, 390,
+and 320px: all five charts render, metric rows fit, and no horizontal overflow
+or browser errors occur, including after a dashboard refresh.
+
+63 focused UI/SQLite tests / 532 assertions passed, including missing days,
+UTC boundaries with fractional timestamps, event classification, and zero charts.
+Whitespace checks passed. Standalone clj-kondo reports only unresolved
+HugSQL-generated SQL functions in the events namespace; compilation/tests pass.
+
 ## Tool-detail follow-up
 
 74 tests / 581 assertions passed after targeted lookup change (UI, UI performance,

@@ -260,6 +260,9 @@
 (defn latest-event-id [store]
   (events/latest-event-id store))
 
+(defn dashboard-activity [store]
+  (events/dashboard-activity store))
+
 (defn list-memory-events-window [store opts]
   (events/list-memory-events-window store opts))
 

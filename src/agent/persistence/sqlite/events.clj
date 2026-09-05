@@ -98,6 +98,22 @@
 (defn count-events [store]
   (common/count-rows store (count-events-sqlvec)))
 
+(defn dashboard-activity
+  "Seven UTC calendar days, including today; missing days have zero activity."
+  ([store] (dashboard-activity store (java.time.LocalDate/now java.time.ZoneOffset/UTC)))
+  ([store today]
+   (let [days (mapv #(str (.minusDays ^java.time.LocalDate today %)) (range 6 -1 -1))
+         rows (common/with-connection
+                store
+                #(common/select-many %
+                                     (daily-dashboard-activity-sqlvec
+                                      {:since (first days)
+                                       :until (str (.plusDays ^java.time.LocalDate today 1))})
+                                     identity))
+         by-day (into {} (map (juxt :day identity)) rows)]
+     (mapv #(merge {:day % :chat 0 :cron 0 :tools 0 :memory 0 :logs 0}
+                   (get by-day %)) days))))
+
 (defn latest-event-id [store]
   (common/with-connection
     store

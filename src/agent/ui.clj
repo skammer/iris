@@ -236,9 +236,30 @@
       (shell-nav-node active-tab)
       (workspace-node system active-tab session-id)])))
 
+(defn- activity-chart [days metric label]
+  (let [values (mapv metric days)
+        peak (apply max 1 values)
+        total (reduce + 0 values)]
+    [:span.overview-activity
+     [:svg.overview-activity__chart
+      {:viewBox "0 0 140 44" :preserveAspectRatio "none"
+       :role "img" :aria-label (str label ": " total " over 7 UTC days, including today")}
+      [:line.overview-activity__baseline {:x1 0 :y1 43 :x2 140 :y2 43}]
+      (for [[idx day] (map-indexed vector days)
+            :let [value (metric day)
+                  height (* 40.0 (/ value peak))]]
+        [:g
+         [:title (str (:day day) " UTC: " value " " label)]
+         [:rect {:x (+ 3 (* idx 20)) :y (- 43 height)
+                 :width 14 :height height :rx 2}]])]
+     [:span.overview-activity__caption
+      [:span (str label " · 7d UTC")]
+      [:strong (str total)]]]))
+
 (defn dashboard-fragment [system]
   (let [storage (sqlite/health-check (:store system))
         build (build-info/read-build-info)
+        activity (when (:store system) (sqlite/dashboard-activity (:store system)))
         llm-config (get-in system [:config :llm])
         tools-health (tools/registry-health (:tool-registry system))
         memory-health (memory/health-check (:memory-service system))
@@ -259,17 +280,19 @@
          [:div [:dt "Provider"] [:dd (name (config/active-provider-key llm-config))]]
          [:div [:dt "Model"] [:dd (or (config/active-model llm-config) "-")]]]]
        [:nav.overview-action-grid {:aria-label "Primary workspaces"}
-        (for [[mark label detail href] [["01" "Open chat" "Sessions and messages" "/chat"]
-                                        ["02" "Cron jobs" (str (:active-jobs cron-health) " active · " (:running-runs cron-health) " running") "/cron"]
-                                        ["03" "Review tools" (str pending-approvals " pending approvals") "/tools"]
-                                        ["04" "Browse memory" (str (get-in memory-health [:vault :note-count] 0) " vault notes") "/memory"]
-                                        ["05" "Inspect logs" (str (get-in storage [:details :event-count] 0) " events") "/logs"]]]
+        (for [[mark label detail href metric chart-label]
+              [["01" "Open chat" "Sessions and messages" "/chat" :chat "Turns"]
+               ["02" "Cron jobs" (str (:active-jobs cron-health) " active · " (:running-runs cron-health) " running") "/cron" :cron "Runs"]
+               ["03" "Review tools" (str pending-approvals " pending approvals") "/tools" :tools "Requests"]
+               ["04" "Browse memory" (str (get-in memory-health [:vault :note-count] 0) " vault notes") "/memory" :memory "Memory events"]
+               ["05" "Inspect logs" (str (get-in storage [:details :event-count] 0) " events") "/logs" :logs "Events"]]]
           [:a.overview-action-tile {:href href}
            [:span.overview-action-tile__mark {:aria-hidden "true"} mark]
            [:span.overview-action-tile__copy
             [:strong label]
             [:small detail]]
-           [:span.overview-action-tile__arrow {:aria-hidden "true"} "↗"]])]]
+           [:span.overview-action-tile__arrow {:aria-hidden "true"} "↗"]
+           (activity-chart activity metric chart-label)])]]
       [:section.runtime-card
        [:header.runtime-card__header
         [:div
