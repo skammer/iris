@@ -135,6 +135,10 @@
     (case active-tab
       :chat (ui-render/render-many
              [:section.workspace-grid.chat-workspace
+              [:button.chat-sessions-toggle
+               {:type "button" :aria-expanded "false" :aria-controls "sessions-panel"
+                "data-on:click" "el.setAttribute('aria-expanded', String(el.parentElement.classList.toggle('chat-workspace--sessions-open')))"}
+               "Sessions"]
               (ui-render/trusted-fragment (sessions-fragment system session-id))
               (ui-render/trusted-fragment (session-detail-fragment system session-id))])
       :cron (ui-render/render-many
@@ -180,10 +184,6 @@
      [:meta {:charset "utf-8"}]
      [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
      [:title "iris control plane"]
-     [:link {:rel "preconnect" :href "https://fonts.googleapis.com"}]
-     [:link {:rel "preconnect" :href "https://fonts.gstatic.com" :crossorigin true}]
-     [:link {:rel "stylesheet"
-             :href "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap"}]
      [:link {:rel "stylesheet" :href (asset-href "/public/app.css")}]
      [:link {:rel "stylesheet" :href (asset-href "/public/katex/katex.min.css")}]
      [:script {:defer true :src (asset-href "/public/katex/katex.min.js")}]
@@ -216,8 +216,7 @@
       [:header.shell-header
        [:a.shell-brand {:href "/" :aria-label "Iris control plane"}
         [:span.shell-brand__copy
-         [:strong "IRIS"]
-         [:small "CONTROL PLANE"]]]
+         [:strong "IRIS"]]]
        [:div.status-bar
         [:div.status-block.status-block--accent
          (ui-render/status-dot "running")
@@ -255,9 +254,7 @@
       {"data-on-interval__duration.10s" "@get('/ui/dashboard')"}
       [:div.overview-intro
        [:div.overview-title-block
-        [:span.overview-kicker "Iris / Runtime"]
-        [:h1 "Agent Control Plane"]
-        [:p "Local-first agent runtime, memory, tools, and operator review."]
+        [:h1 "Overview"]
         [:dl.overview-runtime-identity
          [:div [:dt "Provider"] [:dd (name (config/active-provider-key llm-config))]]
          [:div [:dt "Model"] [:dd (or (config/active-model llm-config) "-")]]]]
@@ -276,7 +273,6 @@
       [:section.runtime-card
        [:header.runtime-card__header
         [:div
-         [:span.overview-kicker "Live runtime"]
          [:strong "Current deployment"]]
         [:form#system-reload-form.panel-head__form
          {:method "post"
@@ -336,7 +332,6 @@
       {"data-on-interval__duration.10s" "@get('/ui/operator-board')"}
       [:div.panel-head
        [:div
-        [:span.overview-kicker "Operations"]
         [:h2 "Operator Board"]]
        [:a.overview-text-link {:href "/logs"} "View all activity ↗"]]
       [:div.board
@@ -376,7 +371,7 @@
          sessions (get sessions-by-kind active-kind)
          active-id (or (:id selected-session)
                        (some-> sessions first :id))
-         project-ids (->> (sqlite/list-sessions store {:kind :chat})
+         project-ids (->> (:chat sessions-by-kind)
                           (keep #(get-in % [:metadata :project-id]))
                           distinct
                           sort)]
@@ -399,6 +394,7 @@
                   :name "project_id"
                   :list "session-project-ids"
                   :placeholder "Project (optional)"
+                  :aria-label "Project for new session"
                   :maxlength "64"
                   :pattern "[a-z0-9][a-z0-9._-]{0,63}"
                   :autocomplete "off"}]
@@ -435,11 +431,11 @@
               :aria-current (when (= id active-id) "page")
              "data-route" (route-path {:tab :chat :session-id id})
              "data-on:click" (str "@get('/ui/session-detail?session_id=" id "')")}
-             [:strong (or title "Untitled session")]
-             [:div.session-meta
+             [:strong {:title (or title "Untitled session")} (or title "Untitled session")]
+             [:div.session-meta {:title created-at}
               (str (when-let [project-id (:project-id metadata)]
                      (str "project " project-id " | "))
-                   created-at
+                   (ui-render/short-timestamp created-at)
                    (when (:loop-active? state) " | loop")
                    (when (:working? state) " | working")
                    (when (pos? (:queued-count state))
@@ -480,8 +476,8 @@
            "data-init" (str "@get('/ui/session/live?session_id=" (:id session)
                             "&client_id=' + window.irisUiClientId, {requestCancellation: window.irisChatStreamController, openWhenHidden: true, retryMaxCount: 1000, retryMaxWaitMs: 10000})")}
           [:div.chat-titlebar
-           [:h2 (or (:title session) "Untitled session")]
-           [:span.meta.code (:id session)]
+           [:h2 {:title (str (:title session) " · " (:id session))}
+            (or (:title session) "Untitled session")]
            [:form.session-project-form
             {"data-on:submit" "@post('/ui/session/project', {contentType: 'form', selector: 'form.session-project-form'})"}
             [:input {:type "hidden" :name "session_id" :value (:id session)}]
@@ -544,7 +540,8 @@
                                   :data-skill-input "true"
                                   :data-submit-on-enter "true"
                                   :rows 1
-                                  :placeholder "Ask model something concrete"}]
+                                  :aria-label "Message"
+                                  :placeholder "Message…"}]
           [:label.chat-file-input
            [:span "Image"]
            [:input {:type "file"
@@ -568,7 +565,7 @@
             [:span.chat-status__text status-text]]]])))))
 
 (defn- streaming-message [{:keys [content thinking]}]
-  [:article.message.message--assistant.message--streaming
+  [:article#streaming-message.message.message--assistant.message--streaming
    [:div.message-role {:class "assistant"} "assistant"]
    (ui-render/thinking-content thinking "streaming")
    (when-not (str/blank? (str content))
@@ -583,6 +580,15 @@
     (if (map? value)
       value
       {:content value})))
+
+(defn session-streaming-fragment
+  "Patch only the in-flight message; never read persisted history for a token."
+  [system session-id]
+  (let [streaming (streaming-state system session-id {})]
+    (ui-render/render
+     (if (some #(not (str/blank? (str %))) (vals streaming))
+       (streaming-message streaming)
+       [:div#streaming-message {:hidden true}]))))
 
 (def ^:private default-visible-messages 60)
 
@@ -626,8 +632,9 @@
            (ui-render/message-list system visible-messages)
            (cond
              streaming? [(streaming-message streaming*)]
-             :else nil)))
-         [:div.empty "No messages yet."])
+             :else [[:div#streaming-message {:hidden true}]])))
+         (list [:div.empty "No messages yet."]
+               [:div#streaming-message {:hidden true}]))
        [:div#chat-bottom-anchor.chat-stream__bottom-anchor {:aria-hidden true}]]))))
 
 (defn events-fragment [system]
@@ -756,9 +763,7 @@
       [:section#logs-panel.panel.logs-page
       [:header.logs-page__header
        [:div
-        [:span.overview-kicker "Runtime observability"]
-        [:h1 "Logs"]
-        [:p "SQLite events are durable application history. Runtime Trace is a separate diagnostic stream."]]
+        [:h1 "Logs"]]
        [:div.panel-head__form
         [:span.badge (str "Latest " limit " per source")]
         [:button {:type "button"
@@ -1138,7 +1143,6 @@
       [:section#tool-approvals-panel.panel.approvals-page
       [:header.approvals-page__header
        [:div
-        [:span.overview-kicker "Operator review"]
         [:h1 "Tool Approvals"]
         [:p "Review sensitive actions requested by agents. Open a row for full context and decision controls."]]
        (ui-render/trusted-fragment (tool-approvals-status-fragment approvals* limit))]

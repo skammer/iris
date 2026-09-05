@@ -41,39 +41,53 @@
       (.write gzip bytes))
     (.toByteArray output)))
 
-(defn- gzip-body [body]
-  (cond
-    (string? body) (gzip-bytes (.getBytes ^String body StandardCharsets/UTF_8))
-    (instance? byte-array-class body) (gzip-bytes body)
-    :else nil))
+(defn- accepts-gzip? [value]
+  (let [weights (into {}
+                      (for [entry (str/split (str/lower-case (or value "")) #",")
+                            :let [[coding & params] (str/split entry #";")
+                                  q (some #(second (re-matches #"\s*q\s*=\s*(.*?)\s*" %)) params)]]
+                        [(str/trim coding)
+                         (if (nil? q) 1.0
+                             (if (re-matches #"(?:0(?:\.[0-9]{0,3})?|1(?:\.0{0,3})?)" q)
+                               (Double/parseDouble q) 0.0))]))]
+    (pos? (get weights "gzip" (get weights "*" 0.0)))))
+
+(defn- vary-encoding [headers]
+  (let [vary (header-value headers "vary")
+        tokens (set (map str/trim (str/split (str/lower-case (or vary "")) #",")))]
+    (if (or (tokens "*") (tokens "accept-encoding"))
+      headers
+      (assoc (remove-header headers "vary") "Vary"
+             (if (str/blank? vary) "Accept-Encoding" (str vary ", Accept-Encoding"))))))
 
 (defn wrap-gzip-response
   [handler]
   (fn [request]
     (let [response (handler request)
           headers (:headers response)
-          encoding (str/lower-case (or (get-in request [:headers "accept-encoding"]) ""))
-          body (:body response)]
-      (if (and response
-               (str/includes? encoding "gzip")
-               (not (str/includes? encoding "gzip;q=0"))
+          body (:body response)
+          content-type (header-value headers "content-type")
+          bytes (cond
+                  (string? body) (.getBytes ^String body StandardCharsets/UTF_8)
+                  (instance? byte-array-class body) body)]
+      (if (and response bytes
+               (not= :head (:request-method request))
+               (not (contains? #{204 206 304} (:status response)))
                (nil? (header-value headers "content-encoding"))
-               (compressible-content-type? (header-value headers "content-type"))
-               (or (string? body) (instance? byte-array-class body))
-               (> (if (string? body)
-                    (count (.getBytes ^String body StandardCharsets/UTF_8))
-                    (alength ^bytes body))
-                  512))
-        (let [compressed (gzip-body body)
-              vary (header-value headers "vary")
-              headers* (-> headers
-                           (remove-header "content-length")
-                           (assoc "Content-Encoding" "gzip"
-                                  "Content-Length" (str (alength ^bytes compressed))
-                                  "Vary" (if (str/blank? (str vary))
-                                           "Accept-Encoding"
-                                           (str vary ", Accept-Encoding"))))]
-          (assoc response :headers headers* :body compressed))
+               (nil? (header-value headers "content-range"))
+               (not (str/includes? (str/lower-case (or content-type "")) "text/event-stream"))
+               (not (re-find #"(?i)\bno-transform\b" (or (header-value headers "cache-control") "")))
+               (compressible-content-type? content-type)
+               (> (alength ^bytes bytes) 512))
+        (let [headers* (vary-encoding headers)]
+          (if (accepts-gzip? (get-in request [:headers "accept-encoding"]))
+            (let [compressed (gzip-bytes bytes)]
+              (assoc response :body compressed
+                     :headers (-> headers*
+                                  (remove-header "content-length")
+                                  (assoc "Content-Encoding" "gzip"
+                                         "Content-Length" (str (alength ^bytes compressed))))))
+            (assoc response :headers headers*)))
         response))))
 
 (defn wrap-request-id

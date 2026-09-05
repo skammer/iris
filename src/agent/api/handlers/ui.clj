@@ -371,24 +371,35 @@
                                                  :slow-client :drop-new})
              ch (:channel subscription)
              heartbeat-ms 5000]
-         (loop []
+         ;; Coalesce token bursts into at most 20 paints/s. A fixed deadline
+         ;; prevents continuous input from postponing delivery indefinitely.
+         (loop [pending nil]
            (when (streaming/open? ctx)
-             (let [heartbeat (async/timeout heartbeat-ms)
-                   [value source] (async/alts!! [ch heartbeat])]
+             (let [deadline (or pending (async/timeout heartbeat-ms))
+                   [value source] (async/alts!! [deadline ch] :priority true)]
                (cond
-                 (= source heartbeat)
-                 (when (streaming/send-sse-text! ctx ":\n\n")
-                   (recur))
+                 (= source deadline)
+                 (when (if pending
+                         (streaming/send-datastar-patch!
+                          ctx (ui/session-streaming-fragment system session-id))
+                         (streaming/send-sse-text! ctx ":\n\n"))
+                   (recur nil))
 
                  value
                  (let [event (:payload value)]
-                   (when (relevant-session-event? event session-id)
-                     (streaming/send-datastar-patch!
-                      ctx
-                      (if (title-updated-event? event session-id)
-                        (session-shell-fragments system session-id)
-                        (ui/session-messages-fragment system session-id))))
-                   (recur)))))))))))
+                   (cond
+                     (message-stream-update-event? event session-id)
+                     (recur (or pending (async/timeout 50)))
+
+                     (relevant-session-event? event session-id)
+                     (when (streaming/send-datastar-patch!
+                            ctx
+                            (if (title-updated-event? event session-id)
+                              (session-shell-fragments system session-id)
+                              (ui/session-messages-fragment system session-id)))
+                       (recur nil))
+
+                     :else (recur pending))))))))))))
 
 (defn chat-action [system request]
   (let [body (h/read-form-body request)

@@ -46,6 +46,7 @@
    [agent.runtime.trace-test]
    [agent.skills-test]
    [agent.ui-test]
+   [agent.ui-performance-test]
    [agent.ui.render-test]
    [agent.tools.common.fs-test]
    [agent.tools.common.homeassistant-test]
@@ -113,6 +114,7 @@
     agent.runtime.trace-test
     agent.skills-test
     agent.ui-test
+    agent.ui-performance-test
     agent.ui.render-test
     agent.tools.common.fs-test
     agent.tools.common.homeassistant-test

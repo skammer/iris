@@ -21,6 +21,15 @@ The intended feeling is **quiet confidence**. Information is dense, but never cr
 7. **Accessible by construction.** Keyboard access, visible focus, reduced motion, reduced transparency, contrast, and responsive layout are component requirements.
 8. **Current runtime is truth.** Dashboards show actual state and useful empty states; no decorative fake telemetry in product surfaces.
 
+### Chat and small screens (2026-09-05)
+
+Use local IoskeleyMono for controls/metadata and system sans-serif for prose. Keep
+metadata in normal case, tool summaries compact, and full identifiers available
+via titles/details. At 760px and below, session browsing expands above the
+full-width transcript. Utility chat content appears immediately. Wide tables
+scroll inside their section; Memory stacks below 1180px. See
+[UI/UX audit](docs/ui-ux-audit.md) for runtime evidence and remaining work.
+
 ## Foundations
 
 ### Color tokens

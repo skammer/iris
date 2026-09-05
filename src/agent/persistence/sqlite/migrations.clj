@@ -10,7 +10,7 @@
    (java.nio.charset StandardCharsets)
    (java.security MessageDigest)))
 
-(def latest-schema-version 12)
+(def latest-schema-version 13)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -74,6 +74,11 @@
     :id "012-memory-proposal-operations"
     :name "memory-proposal-operations"
     :up-resource "agent/persistence/sqlite/migrations/012-memory-proposal-operations.up.sql"
+    :irreversible? true}
+   {:version 13
+    :id "013-chat-read-indexes"
+    :name "chat-read-indexes"
+    :up-resource "agent/persistence/sqlite/migrations/013-chat-read-indexes.up.sql"
     :irreversible? true}])
 
 (defn descriptor-by-version [version]

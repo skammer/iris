@@ -94,6 +94,11 @@ document.addEventListener("click", (event) => {
       if (path.startsWith("/chat")) resetChatStreamController();
       else abortChatStreamController();
       syncRoute(path);
+      if (route.matches(".session-link")) {
+        const workspace = route.closest(".chat-workspace");
+        workspace?.classList.remove("chat-workspace--sessions-open");
+        workspace?.querySelector(".chat-sessions-toggle")?.setAttribute("aria-expanded", "false");
+      }
     }
   }
 }, true);
@@ -530,6 +535,7 @@ const replayWorkspaceEntrance = () => {
   const grid = document.querySelector(".workspace-grid");
   if (!grid) return;
   entrancePlayed = true;
+  if (grid.classList.contains("chat-workspace")) return;
   grid.classList.add("is-entering");
   clearTimeout(entranceCleanupTimer);
   entranceCleanupTimer = setTimeout(() => {

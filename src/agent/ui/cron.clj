@@ -192,7 +192,7 @@
                      (.format day-label-formatter (.plusDays week-start 6))))]
     [:section.panel.cron-schedule-panel
      [:div.panel-head.cron-schedule-head
-      [:div [:span.overview-kicker "Schedules"] [:h2 title]
+      [:div [:h2 title]
        [:small (str "Displayed in " zone)]]
       (schedule-view-controls view* anchor* limit zone)]
      (if (= :calendar view*)
@@ -416,7 +416,7 @@
      {:method "post"
       "data-on:submit" "@post('/ui/cron/jobs', {contentType: 'form', selector: '#cron-create-form'})"
       "data-on:datastar-fetch" "evt.detail.el === el && evt.detail.type === 'finished' && el.reset()"}
-     [:div.panel-head [:div [:span.overview-kicker "New schedule"] [:h2 "Create job"]]]
+     [:div.panel-head [:div [:h2 "Create job"]]]
      [:div.cron-form-grid
       [:label [:span "Name"] [:input {:name "name" :required true :placeholder "Check production logs"}]]
       [:label [:span "Timezone"] [:input {:name "timezone" :required true :value (:timezone cron-cfg)}]]
@@ -475,7 +475,7 @@
                                                       (when anchor (str "&date=" anchor))))
                                                "')")}
    [:div.panel-head
-    [:div [:span.overview-kicker "Scheduler"] [:h2 "Cron jobs"]]
+    [:div [:h2 "Cron jobs"]]
     [:div.panel-head__form
      [:span.status-badge {:class (if (:running health) "status-badge--active" "status-badge--paused")}
       (if (:running health) "running" "stopped")]
@@ -520,14 +520,14 @@
                 (schedule-panel system jobs view* date limit)]
         :runs [:section.panel.cron-tab-panel
                [:div.panel-head
-                [:div [:span.overview-kicker "Audit"] [:h2 "Recent runs"]]
+                [:div [:h2 "Recent runs"]]
                 [:button {:type "button"
                           "data-on:click" (str "@get('/ui/cron?tab=runs&limit=" limit "')")}
                  "Refresh"]]
                (runs-table runs jobs)]
         :new (create-form system)
         [:section.panel.cron-tab-panel
-         [:div.panel-head [:div [:span.overview-kicker "Persistent schedules"] [:h2 "Jobs"]]]
+         [:div.panel-head [:div [:h2 "Jobs"]]]
          (jobs-table jobs)
          (job-editors jobs)])
       (when (or (= (count jobs) limit) (= (count runs) limit))

@@ -23,3 +23,13 @@
 - [ ] Git diff context injection. Not part of P0. Accept when dirty diff is selectively injected into coding turns.
 - [ ] Recommended sampling defaults. Not part of P0. Accept when small-model profiles include tested temperature/top-p defaults.
 - [ ] Guarded-vs-bare eval harness. Not part of P0. Accept when same prompts can run with nudging on/off and compare outcomes.
+
+## UI/UX and performance audit
+
+Evidence and remaining scope: [docs/ui-ux-audit.md](docs/ui-ux-audit.md).
+
+- [x] Remove redundant page copy; compact chat typography and tool calls.
+- [x] Fix ephemeral row width, mobile chat layout, Memory stacking and table overflow.
+- [x] Coalesce streaming deltas and patch only the current message; index bounded history reads; correct gzip negotiation.
+- [ ] Bound session listing and tool-detail reads; preserve access to older history and expanded windows.
+- [ ] Verify populated secondary screens, long streaming runs, idle traffic and representative runtime performance.

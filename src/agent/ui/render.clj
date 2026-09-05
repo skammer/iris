@@ -468,7 +468,7 @@
                                                     (:preview-chars cfg)
                                                     800))
         status (display-tool-status result-data)
-        preview (result-preview (:result result-data) (or (:preview-chars cfg) 800))
+        preview (result-preview (:result result-data) (min 180 (or (:preview-chars cfg) 180)))
         detail-id (safe-dom-id "tool-entry" (or call-id
                                                 (:id result-message)
                                                 (str name* "-" (hash tool-call))))]
@@ -484,7 +484,7 @@
        (status-dot status)
        [:span.tool-row__name tool-name]
        (tool-status-node status)
-       (when call-id [:span.tool-row__id.meta call-id])]
+       (when call-id [:span.tool-row__id.meta {:title call-id} (subs call-id 0 (min 12 (count call-id)))])]
       (when-not (str/blank? args-preview)
         [:span.tool-row__args.code args-preview])
       (when-not (str/blank? preview)
@@ -591,7 +591,7 @@
 
 (defn- message-meta-text
   [{:keys [created-at metadata excluded-from-context? tool-calls]}]
-  (str created-at
+  (str (short-timestamp created-at)
        (when (:queued metadata) " | queued")
        (when excluded-from-context? " | out-of-context")
        (message-meta-suffix metadata tool-calls)))

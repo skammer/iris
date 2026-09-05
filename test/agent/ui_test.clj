@@ -156,7 +156,7 @@
                  :reload-state (atom {:status :idle})})]
       (is (str/includes? html ">Model</dt>"))
       (is (str/includes? html ">gpt-4o-mini</dd>"))
-      (is (str/includes? html "Agent Control Plane"))
+      (is (str/includes? html "<h1>Overview</h1>"))
       (is (str/includes? html "overview-action-grid"))
       (is (str/includes? html "Current deployment"))
       (is (str/includes? html "href=\"/chat\""))
