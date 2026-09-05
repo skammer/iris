@@ -34,4 +34,5 @@ Evidence and remaining scope: [docs/ui-ux-audit.md](docs/ui-ux-audit.md).
 - [x] Bound session listing and tool-detail reads; keep project suggestions available through prefix search.
 - [x] Bound real POST streaming payloads; eliminate duplicate sender patches and disconnected SSE subscriptions.
 - [x] Make all history reachable through bounded cursor pages; preserve the reading window during generation.
-- [ ] Verify populated secondary screens, long streaming runs, idle traffic and representative runtime performance.
+- [x] Verify populated secondary screens and representative runtime render performance against production data.
+- [ ] Verify long streaming runs, lifecycle patch frequency and idle traffic with an explicit production interaction.

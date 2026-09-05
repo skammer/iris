@@ -1,6 +1,6 @@
 # UI/UX audit — 2026-09-05
 
-Status: first implementation pass verified locally; performance audit remains open.
+Status: deployed and verified on representative production data; long-running performance audit remains open.
 
 | Before | After | Why |
 | --- | --- | --- |
@@ -56,7 +56,20 @@ Chrome must be installed. Browser script exercises synthetic stream state only i
 - [x] Tool detail reads at most the selected call and its first subsequent result, with rich-entry hydration restricted to those IDs. Migration 014 normalizes legacy rich result IDs and adds the lookup index. Session scope and reused IDs are covered by tests.
 - [x] History uses 60-message cursor pages without the 400-message cap. Live events preserve the selected page and reading position; Latest returns to the live tail.
 - Measure long-running generation, lifecycle patch frequency and idle refresh traffic; inspect representative populated Memory/approvals/cron/logs, not only empty fixture states.
-- Verify serving stack and timings against representative real data after the remaining fixes. No remote deployment performed in this pass.
+- [x] Verify serving stack and timings against representative production data after deployment.
+
+Production verification on 2026-09-06: local and remote JAR SHA-256 matched
+(`e7e22c6228b19b3c887ce19244cb34ec08cb566320730418d6cd36736bbcec25`),
+`/health` returned `ok=true` with schema 12/12, active provider `deepseek`,
+and Telegram running. Authenticated requests to Chat, Overview, Cron, Tools,
+Memory, MAGI, Logs, sessions, approvals, and operator board returned HTTP 200
+without error markers. Populated responses contained 5 chat rows, 7 Cron rows,
+3 Memory table rows, 17-23 secondary-screen rows, and 18 Logs rows. Representative
+server render timings were 21-89 ms, with no failed requests.
+
+Long-running generation, lifecycle patch frequency, and idle refresh traffic
+remain open; these require an explicit production interaction rather than GET
+render checks.
 
 ## Tool-detail follow-up
 
