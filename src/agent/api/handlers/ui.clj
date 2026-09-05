@@ -244,7 +244,11 @@
 (defn sessions [system request]
   (responses/html-response 200
                            (ui/sessions-fragment system
-                                                 (-> request :parameters :query :session_id))))
+                                                 (-> request :parameters :query :session_id)
+                                                 {:offset (-> request :parameters :query :offset)})))
+
+(defn session-projects [system request]
+  (responses/html-response 200 (ui/session-projects-fragment system (-> request :parameters :query :prefix))))
 
 (defn create-session [system request]
   (let [{:keys [project_id]} (h/read-form-body request)
@@ -276,7 +280,7 @@
 (defn session-detail [system request]
   (let [session-id (-> request :parameters :query :session_id)]
     (responses/html-response 200
-                             (str (ui/sessions-fragment system session-id)
+                             (str (ui/sessions-fragment system session-id {:offset (-> request :parameters :query :offset)})
                                   (ui/session-detail-fragment system session-id)
                                   (ui/router-state-fragment
                                    (ui/session-route-path system session-id))))))
@@ -345,10 +349,6 @@
        (= session-id (:entity-id event))
        (= "session.title.updated" (:event-type event))))
 
-(defn- session-shell-fragments [system session-id]
-  (str (ui/sessions-fragment system session-id)
-       (ui/session-detail-fragment system session-id)))
-
 (defn session-live-response
   [system request]
   (let [query (-> request :parameters :query)
@@ -395,7 +395,7 @@
                      (when (streaming/send-datastar-patch!
                             ctx
                             (if (title-updated-event? event session-id)
-                              (session-shell-fragments system session-id)
+                              (ui/session-title-fragments system session-id)
                               (ui/session-messages-fragment system session-id)))
                        (recur nil))
 
@@ -506,7 +506,7 @@
                        (title-updated-event? event session_id)
                        (streaming/send-datastar-patch!
                         ctx
-                        (session-shell-fragments system session_id))
+                        (ui/session-title-fragments system session_id))
 
                        (relevant-session-event? event session_id)
                        (push!))

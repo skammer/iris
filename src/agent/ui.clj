@@ -359,28 +359,56 @@
                                                " · receipts " (get payload :receipt-count 0))]
                          [:span.row__time (ui-render/short-timestamp created-at)]]))]])))
 
+(defn- session-title-node [{:keys [id title]} chat?]
+  [(if chat? :h2 :strong)
+   {:id (if chat? "chat-session-title" (str "session-title-" id))
+    :title (if chat? (str title " · " id) (or title "Untitled session"))}
+   (or title "Untitled session")])
+
+(defn session-title-fragments [system session-id]
+  (if-let [session (sqlite/get-session (:store system) session-id)]
+    (ui-render/render-many (session-title-node session false) (session-title-node session true))
+    ""))
+
+(defn session-projects-fragment [system prefix]
+  (ui-render/render
+   [:datalist#session-project-ids
+    (for [project-id (sqlite/session-project-ids (:store system) prefix)]
+      [:option {:value project-id}])]))
+
+(defn- session-list-offset [value total]
+  (let [requested (try (Long/parseLong (str (or value 0))) (catch Exception _ 0))]
+    (* 50 (quot (max 0 (min requested (max 0 (dec total)))) 50))))
+
 (defn sessions-fragment
   ([system] (sessions-fragment system nil))
-  ([system active-session-id]
+  ([system active-session-id] (sessions-fragment system active-session-id {}))
+  ([system active-session-id opts]
    (let [store (:store system)
          selected-session (some->> active-session-id not-empty
                                    (sqlite/get-session store))
          active-kind (if (= :cron (:kind selected-session)) :cron :chat)
-         sessions-by-kind {:chat (sqlite/list-sessions store {:kind :chat})
-                           :cron (sqlite/list-sessions store {:kind :cron})}
-         sessions (get sessions-by-kind active-kind)
-         active-id (or (:id selected-session)
-                       (some-> sessions first :id))
-         project-ids (->> (:chat sessions-by-kind)
-                          (keep #(get-in % [:metadata :project-id]))
-                          distinct
-                          sort)]
+         counts (sqlite/session-kind-counts store)
+         offset (session-list-offset (:offset opts) (get counts active-kind))
+         sessions-by-kind (into {}
+                                (for [kind [:chat :cron]]
+                                  [kind (sqlite/list-sessions store {:kind kind
+                                                                    :limit (if (= kind active-kind) 50 1)
+                                                                    :offset (if (= kind active-kind) offset 0)})]))
+         page-sessions (get sessions-by-kind active-kind)
+         active-id (or (:id selected-session) (some-> page-sessions first :id))
+         sessions (if (and selected-session (not-any? #(= active-id (:id %)) page-sessions))
+                    (cons selected-session page-sessions)
+                    page-sessions)
+         page-url (fn [offset*]
+                    (str "/ui/sessions?session_id=" (ui-render/url-encode active-id) "&offset=" offset*))]
      (ui-render/render
       [:aside#sessions-panel.panel.sessions-sidebar
        {"data-on-interval__duration.15s"
-        (str "@get('/ui/sessions"
+        (str "document.hidden || el.contains(document.activeElement) || @get('/ui/sessions"
              (when active-id
                (str "?session_id=" (ui-render/url-encode active-id)))
+             (when (pos? offset) (str "&offset=" offset))
              "')")}
        ;; datastar-fetch events are dispatched on document for EVERY fetch on
        ;; the page; evt.detail.el identifies the initiator. Guarding on it is
@@ -393,6 +421,8 @@
          [:input {:type "text"
                   :name "project_id"
                   :list "session-project-ids"
+                  "data-on:input__debounce.200ms" "@get('/ui/sessions/projects?prefix=' + encodeURIComponent(el.value))"
+                  "data-on:focus" "@get('/ui/sessions/projects?prefix=' + encodeURIComponent(el.value))"
                   :placeholder "Project (optional)"
                   :aria-label "Project for new session"
                   :maxlength "64"
@@ -401,9 +431,7 @@
          [:button {:type "submit"
                    "data-attr:disabled" "$createSessionLoading"}
           "New"]]
-        [:datalist#session-project-ids
-         (for [project-id project-ids]
-           [:option {:value project-id}])]]
+        (ui-render/trusted-fragment (session-projects-fragment system ""))]
        [:div.session-sidebar-heading
         [:h2 "Sessions"]
         [:div.session-kind-tabs {:role "tablist" :aria-label "Session type"}
@@ -420,18 +448,18 @@
                             (route-path {:tab :chat :session-id target-id}))
              "data-on:click" (when target-id
                                (str "@get('/ui/session-detail?session_id=" target-id "')"))}
-            [:span (str label " " (count (get sessions-by-kind kind)))]])]]
+            [:span (str label " " (get counts kind))]])]]
        (if (seq sessions)
          [:div.session-list
-          (for [{:keys [id title created-at metadata]} sessions
+          (for [{:keys [id created-at metadata] :as session} sessions
                 :let [state (chat/session-state system id)]]
             [:button.session-link
              {:type "button"
               :class (when (= id active-id) "session-link--active")
               :aria-current (when (= id active-id) "page")
              "data-route" (route-path {:tab :chat :session-id id})
-             "data-on:click" (str "@get('/ui/session-detail?session_id=" id "')")}
-             [:strong {:title (or title "Untitled session")} (or title "Untitled session")]
+             "data-on:click" (str "@get('/ui/session-detail?session_id=" id "&offset=" offset "')")}
+             (session-title-node session false)
              [:div.session-meta {:title created-at}
               (str (when-let [project-id (:project-id metadata)]
                      (str "project " project-id " | "))
@@ -440,12 +468,19 @@
                    (when (:working? state) " | working")
                    (when (pos? (:queued-count state))
                      (str " | queued " (:queued-count state))))]])]
-         [:div.empty "No sessions yet."])]))))
+         [:div.empty "No sessions yet."])
+       (when (> (get counts active-kind) 50)
+         [:nav.session-pagination {:aria-label "Session pages"}
+          [:button {:type "button" :disabled (zero? offset) :aria-label "Previous sessions"
+                    "data-on:click" (str "@get('" (page-url (max 0 (- offset 50))) "')")} "←"]
+          [:span (str (inc offset) "–" (+ offset (count page-sessions)) " / " (get counts active-kind))]
+          [:button {:type "button" :disabled (>= (+ offset 50) (get counts active-kind)) :aria-label "Next sessions"
+                    "data-on:click" (str "@get('" (page-url (+ offset 50)) "')")} "→"]])]))))
 
 (defn- session-target [system session-id]
   (let [store (:store system)]
     (or (some->> session-id not-empty (sqlite/get-session store))
-        (first (sqlite/list-sessions store {:kind :chat})))))
+        (first (sqlite/list-sessions store {:kind :chat :limit 1})))))
 
 (defn session-route-path [system session-id]
   (if-let [session (session-target system session-id)]
@@ -476,8 +511,7 @@
            "data-init" (str "@get('/ui/session/live?session_id=" (:id session)
                             "&client_id=' + window.irisUiClientId, {requestCancellation: window.irisChatStreamController, openWhenHidden: true, retryMaxCount: 1000, retryMaxWaitMs: 10000})")}
           [:div.chat-titlebar
-           [:h2 {:title (str (:title session) " · " (:id session))}
-            (or (:title session) "Untitled session")]
+           (session-title-node session true)
            [:form.session-project-form
             {"data-on:submit" "@post('/ui/session/project', {contentType: 'form', selector: 'form.session-project-form'})"}
             [:input {:type "hidden" :name "session_id" :value (:id session)}]
@@ -485,6 +519,8 @@
                      :name "project_id"
                      :value (or (get-in session [:metadata :project-id]) "")
                      :list "session-project-ids"
+                  "data-on:input__debounce.200ms" "@get('/ui/sessions/projects?prefix=' + encodeURIComponent(el.value))"
+                  "data-on:focus" "@get('/ui/sessions/projects?prefix=' + encodeURIComponent(el.value))"
                      :placeholder "No project"
                      :maxlength "64"
                      :pattern "[a-z0-9][a-z0-9._-]{0,63}"

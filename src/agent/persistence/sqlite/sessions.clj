@@ -130,12 +130,30 @@
 
 (defn list-sessions
   ([store] (list-sessions store {}))
-  ([store {:keys [kind] :or {kind :chat}}]
+  ([store {:keys [kind limit offset] :or {kind :chat offset 0}}]
   (common/with-connection
     store
     (fn [conn]
       (mapv row->session
-            (common/select-many conn (list-sessions-sqlvec {:kind (name kind)}) identity))))))
+            (common/select-many conn (list-sessions-sqlvec {:kind (name kind)
+                                                          :limit (if (some? limit) (common/bounded-limit limit 50 1000) -1)
+                                                          :offset (max 0 (long offset))}) identity))))))
+
+(defn session-kind-counts [store]
+  (common/with-connection store
+    (fn [conn]
+      (into {:chat 0 :cron 0}
+            (map (fn [{:keys [kind n]}] [(keyword kind) (long n)]))
+            (common/select-many conn (session-kind-counts-sqlvec) identity)))))
+
+(defn session-project-ids [store prefix]
+  (let [prefix (subs (str prefix) 0 (min 64 (count (str prefix))))]
+    (common/with-connection store
+      (fn [conn]
+        (mapv :project_id
+              (common/select-many conn
+                                  (session-project-ids-sqlvec {:prefix prefix :prefix_upper (str prefix "\uffff")})
+                                  identity))))))
 
 (defn count-sessions [store]
   (common/count-rows store (count-sessions-sqlvec)))

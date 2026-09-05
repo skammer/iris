@@ -10,7 +10,7 @@
    (java.nio.charset StandardCharsets)
    (java.security MessageDigest)))
 
-(def latest-schema-version 14)
+(def latest-schema-version 15)
 
 (def ^:private metadata-table "schema_migration_meta")
 
@@ -84,6 +84,11 @@
     :id "014-tool-result-lookup"
     :name "tool-result-lookup"
     :up-resource "agent/persistence/sqlite/migrations/014-tool-result-lookup.up.sql"
+    :irreversible? true}
+   {:version 15
+    :id "015-project-autocomplete"
+    :name "project-autocomplete"
+    :up-resource "agent/persistence/sqlite/migrations/015-project-autocomplete.up.sql"
     :irreversible? true}])
 
 (defn descriptor-by-version [version]

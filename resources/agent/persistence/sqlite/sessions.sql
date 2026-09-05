@@ -10,7 +10,20 @@ order by coalesce((select max(messages.created_at)
                    from messages
                    where messages.session_id = sessions.id),
                   created_at) desc,
-         created_at desc
+         created_at desc, id desc
+limit :limit offset :offset
+
+-- :name session-kind-counts :? :*
+select kind, count(*) as n from sessions group by kind
+
+-- :name session-project-ids :? :*
+select distinct json_extract(metadata_json, '$."project-id"') as project_id
+from sessions
+where kind = 'chat'
+  and json_extract(metadata_json, '$."project-id"') >= :prefix
+  and json_extract(metadata_json, '$."project-id"') < :prefix_upper
+order by project_id
+limit 30
 
 -- :name get-session :? :1
 select id, title, active_mode, kind, metadata_json, created_at

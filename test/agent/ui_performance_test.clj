@@ -119,3 +119,42 @@
               message-id (get-in entry [:payload :message-id])]
           (is (= "entry-call" (:tool-call-id (first (sqlite/tool-detail-messages store sid message-id "entry-call")))))))
       (finally (sqlite/close-store! store) (io/delete-file path true)))))
+
+(deftest session-pages-and-project-suggestions-are-bounded
+  (let [path (.getAbsolutePath (java.io.File/createTempFile "iris-pages-" ".db"))
+        store (sqlite/create-store {:path path})]
+    (try
+      (doseq [n (range 123)]
+        (sqlite/create-session! store (str "long-session-" n)
+                                {:metadata {:project-id (format "project-%03d" n)}}))
+      (sqlite/create-session! store "cron" {:kind :cron})
+      (let [all (sqlite/list-sessions store)
+            first-page (sqlite/list-sessions store {:limit 50})
+            second-page (sqlite/list-sessions store {:limit 50 :offset 50})
+            last-page (sqlite/list-sessions store {:limit 50 :offset 100})
+            selected (:id (first first-page))
+            html (ui/sessions-fragment {:store store} selected {:offset "50"})
+            doc (org.jsoup.Jsoup/parse html)]
+        (is (= all (vec (concat first-page second-page last-page))))
+        (is (= [50 50 23] (mapv count [first-page second-page last-page])))
+        (is (= {:chat 123 :cron 1} (sqlite/session-kind-counts store)))
+        (is (= 51 (.size (.select doc ".session-link"))) "50 rows plus pinned selection")
+        (is (= 1 (.size (.select doc ".session-link[aria-current=page]"))))
+        (is (str/includes? html "51–100 / 123"))
+        (is (str/includes? html "&amp;offset=50"))
+        (is (str/includes? html "Chats 123"))
+        (is (= 30 (count (sqlite/session-project-ids store ""))))
+        (is (= ["project-122"] (sqlite/session-project-ids store "project-122")))
+        (is (= [] (sqlite/session-project-ids store "project-%")))
+        (is (str/includes? (ui/session-projects-fragment {:store store} "project-122") "value=\"project-122\""))
+        (is (str/includes? (ui/sessions-fragment {:store store} selected {:offset "99999"}) "101–123 / 123"))
+        (is (str/includes? (ui/sessions-fragment {:store store} selected {:offset "invalid"}) "1–50 / 123")))
+      (finally (sqlite/close-store! store) (io/delete-file path true)))))
+
+(deftest title-update-does-not-replace-composer-or-paged-sidebar
+  (with-redefs [sqlite/get-session (constantly {:id "session" :title "Updated title"})]
+    (let [html (ui/session-title-fragments {} "session")]
+      (is (str/includes? html "id=\"session-title-session\""))
+      (is (str/includes? html "id=\"chat-session-title\""))
+      (is (not (str/includes? html "sessions-panel")))
+      (is (not (str/includes? html "session-detail-panel"))))))

@@ -89,6 +89,10 @@
   ([store] (sessions/list-sessions store))
   ([store opts] (sessions/list-sessions store opts)))
 
+(defn session-kind-counts [store] (sessions/session-kind-counts store))
+
+(defn session-project-ids [store prefix] (sessions/session-project-ids store prefix))
+
 (defn get-session [store session-id]
   (sessions/get-session store session-id))
 

@@ -717,7 +717,7 @@ textarea {
 #sessions-panel.sessions-sidebar {
   padding: 10px;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: 10px;
   overflow: hidden;
 }
@@ -5396,3 +5396,7 @@ button:focus-visible, summary:focus-visible, a:focus-visible { outline: 1px soli
   .shell-nav.ui-card-tabs .ui-card-tab { min-width: 70px; }
   .shell-nav .ui-card-tab__label { font-size: 10px; max-width: none; }
 }
+
+.session-pagination { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 10px; }
+.session-pagination button { padding: 6px 10px; }
+.session-pagination button:disabled { opacity: .4; cursor: default; }

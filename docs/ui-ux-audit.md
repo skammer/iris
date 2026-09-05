@@ -52,7 +52,7 @@ Chrome must be installed. Browser script exercises synthetic stream state only i
 
 ## Remaining audit
 
-- Bound/paginate session listing without losing access to older sessions or project suggestions.
+- [x] Sidebar pages contain 50 sessions plus the selected session when outside the page. Counts stay global. SQL returns only the displayed page and one alternate-kind target; project autocomplete returns at most 30 indexed prefix matches.
 - [x] Tool detail reads at most the selected call and its first subsequent result, with rich-entry hydration restricted to those IDs. Migration 014 normalizes legacy rich result IDs and adds the lookup index. Session scope and reused IDs are covered by tests.
 - History “Load older” caps at 400; lifecycle patches reset the expanded window. Preserve browsing position/window and make older history reachable.
 - Measure long-running generation, lifecycle patch frequency and idle refresh traffic; inspect representative populated Memory/approvals/cron/logs, not only empty fixture states.
@@ -65,3 +65,21 @@ SQLite, session entries). Coverage includes pending/orphan calls, cross-session
 isolation, repeated call IDs, rich blocks preceded by text, entry insertion,
 legacy backfill, and indexed query plan. Existing HugSQL-generated SQL vars are
 not understood by a standalone clj-kondo invocation; compilation and tests pass.
+
+## Session-list follow-up
+
+- 99 tests / 790 assertions passed (UI, API, UI performance, SQLite and session entries).
+- Chrome paging test seeds 120 disposable sessions: advances pages, switches sessions without resetting page, waits for the real 15s sidebar refresh, resolves a project outside initial suggestions, and verifies title updates preserve draft and sidebar page.
+- Title events now patch only the two title nodes in both live and POST streams. They do not rebuild the composer or reset session pagination.
+- Sidebar polling pauses when the document is hidden or a sidebar control has focus.
+- A synthetic indexed in-memory SQLite query over 10,000 sessions with one message each selected 51 recent sessions in 5.82ms median (25 runs). No additional activity cache introduced; session ordering retains existing semantics.
+- Migration 015 indexes project-prefix lookup. The default persistence API still permits full enumeration for non-UI callers; UI callers always pass limits.
+
+Run the additional browser gate against the isolated fixture:
+
+```sh
+NODE_PATH=/tmp/iris-playwright/node_modules node dev/ui_session_review.cjs
+```
+
+The script removes only the sessions it created, including on failure. Screenshot:
+`target/ui-review/session-pages-390.png`.

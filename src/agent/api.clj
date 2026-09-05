@@ -76,6 +76,7 @@
    :ui-cron-action (fn [r] (ui/cron-action (sys) r))
    :ui-operator-board (fn [r] (ui/operator-board (sys) r))
    :ui-sessions (fn [r] (ui/sessions (sys) r))
+   :ui-session-projects (fn [r] (ui/session-projects (sys) r))
    :ui-create-session (fn [r] (ui/create-session (sys) r))
    :ui-session-project (fn [r] (ui/session-project (sys) r))
    :ui-session-detail (fn [r] (ui/session-detail (sys) r))

@@ -56,10 +56,11 @@
   [:map
    [:tab {:optional true} :string]
    [:session_id {:optional true} :string]
-   [:client_id {:optional true} :string]])
+   [:client_id {:optional true} :string]
+   [:offset {:optional true} :string]])
 
 (def ^:private optional-session-id-query
-  [:map [:session_id {:optional true} :string]])
+  [:map [:session_id {:optional true} :string] [:offset {:optional true} :string]])
 
 (def ^:private progressive-limit-query
   [:map [:limit {:optional true} :string]])
@@ -80,7 +81,8 @@
 (def ^:private session-id-query
   [:map
    [:session_id schemas/NonBlankString]
-   [:client_id {:optional true} :string]])
+   [:client_id {:optional true} :string]
+   [:offset {:optional true} :string]])
 
 (def ^:private session-messages-query
   [:map
@@ -114,6 +116,8 @@
                           :parameters {:query optional-session-id-query}}
                     :post {:handler/id :ui-create-session
                            :parameters {:form ui-create-session-form}}}]
+   ["/ui/sessions/projects" {:get {:handler/id :ui-session-projects
+                                   :parameters {:query [:map [:prefix {:optional true} :string]]}}}]
    ["/ui/session-detail" {:get {:handler/id :ui-session-detail
                                 :parameters {:query session-id-query}}}]
    ["/ui/session/project" {:post {:handler/id :ui-session-project
