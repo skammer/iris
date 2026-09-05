@@ -103,6 +103,14 @@ UTC boundaries with fractional timestamps, event classification, and zero charts
 Whitespace checks passed. Standalone clj-kondo reports only unresolved
 HugSQL-generated SQL functions in the events namespace; compilation/tests pass.
 
+Deployed clean commit `9d6d2061e1b014cbe3b0e3780a9134479908f9f9` to
+`agent.tailscale` and restarted Iris (PID 282953). Both JARs have SHA-256
+`6a3f15c631605bc61f686264457a33a6b718d16394cbae0a795891f2193a7100`.
+Live Overview displays that commit. The same six-width Chrome check passed
+against `http://100.64.0.4:8689`, including the 10-second refresh; production
+charts contain real event counts. Health is OK, schema 15, provider `deepseek`,
+and the Telegram adapter is healthy.
+
 ## Tool-detail follow-up
 
 74 tests / 581 assertions passed after targeted lookup change (UI, UI performance,
