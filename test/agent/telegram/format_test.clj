@@ -62,6 +62,16 @@
   (is (= "[see *here*](https://x)"
          (fmt/md->markdown-v2 "[see **here**](https://x)"))))
 
+(deftest md-markdown-v2-links-inside-formatting
+  (is (= "*↑63 \\| [💬3](https://news.ycombinator.com/item?id=49585644)*"
+         (fmt/md->markdown-v2
+          "**↑63 | [💬3](https://news.ycombinator.com/item?id=49585644)**")))
+  (is (= "*first [one](https://one)* and ~second [two](https://two)~"
+         (fmt/md->markdown-v2
+          "**first [one](https://one)** and ~~second [two](https://two)~~")))
+  (is (= "*outer _inner [link](https://x)_*"
+         (fmt/md->markdown-v2 "**outer _inner [link](https://x)_**"))))
+
 (deftest md-markdown-v2-escapes-specials
   (is (= "<script\\>alert\\(1\\)</script\\>"
          (fmt/md->markdown-v2 "<script>alert(1)</script>")))

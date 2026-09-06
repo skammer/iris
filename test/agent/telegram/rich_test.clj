@@ -42,6 +42,15 @@
   (is (= "&#65; &#x1F600;" (rich/sanitize-markdown "&#65; &#x1F600;"))
       "numeric entities pass through"))
 
+(deftest sanitize-preserves-token-like-text
+  (doseq [text ["IBM Quantum Nighthawk R2"
+                "R0 `first` R1 `second` R2 `third`"
+                "R999999999999999999999999999999"
+                "\u0001R0\u0001 `literal <div>`"
+                "R0\n\n```html\n<div>R2</div>\n```"]]
+    (is (= text (rich/sanitize-markdown text)))
+    (is (= [text] (rich/final-chunks nil text)))))
+
 (deftest sanitize-stray-and-dangling-tags
   (is (= "trailing &lt;di" (rich/sanitize-markdown "trailing <di")))
   (is (= "use &lt;placeholder everywhere\nnext line"

@@ -51,10 +51,11 @@
                  (stash! acc token (render m)))))
 
 (defn- reinsert-tokens [s token acc]
-  (str/replace s
-               (re-pattern (str token "(\\d+)" token-end))
-               (fn [[_ idx]]
-                 (get acc (Integer/parseInt idx)))))
+  ;; Later entities may wrap earlier tokens (e.g. a bold link).
+  (reduce (fn [text idx]
+            (str/replace text (str token idx token-end) (get acc idx)))
+          s
+          (reverse (range (count acc)))))
 
 (declare render-inline)
 
@@ -77,7 +78,11 @@
     (str "`" (escape-code body) "`")))
 
 (defn- render-inline [s]
-  (let [acc (volatile! [])
+  (let [local-token (loop [prefix local-token]
+                      (if (str/includes? (str s) prefix)
+                        (recur (str prefix "L"))
+                        prefix))
+        acc (volatile! [])
         s1 (str/replace (str s)
                         #"\[([^\]\n]+)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)"
                         (fn [m] (stash! acc local-token (render-link m))))

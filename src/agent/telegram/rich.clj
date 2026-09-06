@@ -27,8 +27,8 @@
 (def ^:private inline-code-rx
   #"`([^`\n]+)`")
 
-(def ^:private token "R")
-(def ^:private token-end "")
+(def ^:private token "\u0001R")
+(def ^:private token-end "\u0001")
 
 (def supported-tags
   "HTML tags accepted inside Rich Markdown / Rich HTML content."
@@ -69,21 +69,23 @@
   [s]
   (str/replace (str s) thinking-tag-rx ""))
 
-(defn- stash! [acc rendered]
+(defn- stash! [acc token rendered]
   (let [n (count @acc)]
     (vswap! acc conj rendered)
     (str token n token-end)))
 
 (defn- extract-code-regions
   "Replaces fenced blocks and inline code spans with tokens so passes over
-   the remainder cannot corrupt literal code. Returns [text acc]."
+   the remainder cannot corrupt literal code. Returns [text acc token]."
   [s]
-  (let [acc (volatile! [])
-        s1 (str/replace s fence-rx (fn [[m]] (stash! acc m)))
-        s2 (str/replace s1 inline-code-rx (fn [[m]] (stash! acc m)))]
-    [s2 acc]))
+  (let [token (loop [prefix token]
+                (if (str/includes? s prefix) (recur (str prefix "R")) prefix))
+        acc (volatile! [])
+        s1 (str/replace s fence-rx (fn [[m]] (stash! acc token m)))
+        s2 (str/replace s1 inline-code-rx (fn [[m]] (stash! acc token m)))]
+    [s2 acc token]))
 
-(defn- reinsert-code-regions [s acc]
+(defn- reinsert-code-regions [s acc token]
   (str/replace s
                (re-pattern (str token "(\\d+)" token-end))
                (fn [[_ idx]]
@@ -123,13 +125,13 @@
    HTML tags and named entities the rich parser does not support, leaving
    code regions untouched. Numeric entities pass through (all supported)."
   [s]
-  (let [[text acc] (extract-code-regions (str s))
+  (let [[text acc token] (extract-code-regions (str s))
         cleaned (-> text
                     escape-unsupported-tags
                     escape-stray-tag-starts
                     escape-dangling-tag
                     escape-unsupported-entities)]
-    (reinsert-code-regions cleaned acc)))
+    (reinsert-code-regions cleaned acc token)))
 
 (defn- close-odd-marker [s marker-rx closer strip-code]
   (if (odd? (count (re-seq marker-rx (strip-code s))))
