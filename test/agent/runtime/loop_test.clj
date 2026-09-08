@@ -481,3 +481,84 @@
     (is (= "short" (:content result)))
     (is (= :completed (:stop-reason result)))
     (is (some #(= "max-token-truncation" (get-in % [:payload :reason])) @events))))
+
+(deftest result-tool-submission-test
+  (let [requests (atom [])
+        executions (atom 0)
+        {:keys [result events]}
+        (run-loop {:result-tool? true
+                   :stream? true
+                   :chat-profile {:respond-tool? true :tool-routing? true :tool-categories #{:read}}
+                   :execute-step-fn (fn [_] (swap! executions inc))
+                   :planner-fn (fn [_ request]
+                                 (swap! requests conj request)
+                                 ((:on-content-delta request) "private draft")
+                                 (assoc-in (tool-batch-step "result" :return_result
+                                                           [{:md "  First  "} {:md "Second"}])
+                                           [:llm-response :content] "private draft"))})]
+    (is (= "First\n\nSecond" (:content result)))
+    (is (true? (:result-submitted? result)))
+    (is (= :completed (:stop-reason result)))
+    (is (= 1 (count @requests)))
+    (is (zero? @executions))
+    (is (= [:return_result] (mapv :name (:tools (first @requests)))))
+    (is (= ["First\n\nSecond"]
+           (keep #(get-in % [:payload :delta]) @events)))
+    (is (= ["result_0" "result_1"]
+           (mapv :tool-call-id (get-in result [:trace 0 :receipts]))))
+    (is (= 1 (count (filter #(= :agent-end (:event-type %)) @events))))))
+
+(deftest result-tool-repairs-invalid-turns-test
+  (doseq [invalid [(complete-step "Let me write the result")
+                   (tool-step "empty" :return_result {:md " \n "})
+                   (tool-step "wrong" :return_result {:md 42})
+                   (tool-step "extra" :return_result {:md "text" :other true})
+                   (assoc-in (tool-step "broken" :return_result {})
+                             [:llm-response :tool-calls 0 :function :arguments] "{")
+                   (let [submission (tool-step "result" :return_result {:md "premature"})
+                         work (tool-step "work" :fs_list {:path "."})]
+                     (-> submission
+                         (update :directives into (:directives work))
+                         (update-in [:llm-response :tool-calls] into (get-in work [:llm-response :tool-calls]))))
+                   (tool-batch-step "partial" :return_result [{:md "valid"} {:md ""}])]]
+    (let [requests (atom [])
+          {:keys [result]}
+          (run-loop {:result-tool? true
+                     :execute-step-fn (fn [_] (throw (ex-info "must not execute rejected batch" {})))
+                     :planner-fn (fn [_ request]
+                                   (swap! requests conj request)
+                                   (if (= 1 (count @requests)) invalid
+                                       (tool-step "fixed" :return_result {:md "corrected"})))})]
+      (is (= "corrected" (:content result)))
+      (is (:result-submitted? result))
+      (is (= 2 (count @requests)))
+      (is (= "user" (:role (last (:messages (second @requests)))))))))
+
+(deftest result-tool-retry-budget-test
+  (let [calls (atom 0)
+        {:keys [result]} (run-loop {:result-tool? true :max-steps 10
+                                    :planner-fn (fn [_ _]
+                                                  (swap! calls inc)
+                                                  (complete-step "draft"))})]
+    (is (= 3 @calls))
+    (is (= :guardrail-exhausted (:stop-reason result)))
+    (is (not (:result-submitted? result)))))
+
+(deftest result-tool-work-before-submission-test
+  (let [calls (atom 0)
+        {:keys [result]} (run-loop {:result-tool? true
+                                    :planner-fn (fn [_ _]
+                                                  (if (= 1 (swap! calls inc))
+                                                    (tool-step)
+                                                    (tool-step "result" :return_result {:md "done"})))})]
+    (is (= 2 @calls))
+    (is (= "done" (:content result)))
+    (is (:result-submitted? result))))
+
+(deftest result-tool-does-not-fall-back-to-text-test
+  (let [fallbacks (atom 0)]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"provider down"
+                         (run-loop {:result-tool? true
+                                    :planner-fn (fn [_ _] (throw (ex-info "provider down" {})))
+                                    :fallback-fn (fn [_] (swap! fallbacks inc) {:content "draft"})})))
+    (is (zero? @fallbacks))))

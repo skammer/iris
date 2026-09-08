@@ -287,6 +287,7 @@
    :model model
    :provider-config provider-config
    :chat-profile chat-profile
+   :result-tool? (= :cron (:permission-profile env))
    :telemetry (:telemetry system)
    :observer (:observer system)
    :trace (:trace system)

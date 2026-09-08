@@ -22,6 +22,21 @@ run gets a fresh persisted session with its own transcript.
 This keeps skill use, scripts, tool calls, memory, persistence, timeouts, and
 notifications on one execution path.
 
+## Final result
+
+Cron adds a terminal `return_result` tool automatically, independently of the
+job's work-tool allowlist. The model submits the complete Markdown as `md`.
+Only this submission becomes the run output and automatic success notification;
+ordinary assistant text remains in the execution transcript.
+
+Multiple `return_result` calls in one model response concatenate in source order,
+separated by a blank line. Each part must be a non-empty string. A batch mixing
+submission with other tools is rejected without executing any calls. Invalid or
+missing submissions receive at most two correction requests, within the existing
+step/time limits. A valid submission ends the loop immediately, without another
+model call. Delivery still follows the job's notification policy. Text markers
+are no longer used.
+
 ## Quick Start: Web UI
 
 Open **Cron** in Iris:

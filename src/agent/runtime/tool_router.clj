@@ -87,7 +87,7 @@
                             all-categories))
 	        selected (if (:tool-routing? profile)
 	                   (filterv (fn [tool]
-	                              (or (= :respond (tool-name tool))
+	                              (or (contains? #{:respond :return_result} (tool-name tool))
 	                                  (seq (clojure.set/intersection categories
 	                                                                 (classify-tool tool)))))
 	                            tools*)

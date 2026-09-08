@@ -2,6 +2,12 @@
 
 All notable project changes are recorded here. New entries go at the top.
 
+## 2026-09-08
+
+### Changed
+
+- Cron completes through the terminal `return_result({"md": "…"})` tool instead of text markers. Multiple calls in one response concatenate in source order with blank lines; only submitted Markdown reaches notifications. Missing/invalid submissions get two correction attempts; mixed batches execute nothing. Ordinary chat behavior is unchanged.
+
 ## 2026-08-31
 
 ### Changed

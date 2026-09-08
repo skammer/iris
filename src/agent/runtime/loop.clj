@@ -12,6 +12,7 @@
    [agent.runtime.events :as runtime-events]
    [agent.runtime.messages :as runtime-messages]
    [agent.runtime.nudge :as nudge]
+   [agent.runtime.result :as result-tool]
    [agent.runtime.tool-router :as tool-router]
    [agent.security :as security]
    [agent.util :as util]
@@ -262,7 +263,7 @@
   [{:keys [messages context-injectors system-prompt tools model provider-config
            telemetry observer planner-fn context-pack-fn execute-step-fn approval-fn fallback-fn event-sink
            cancellation-token request-id session-id agent-id max-steps stream?
-           tool-output-max-chars doom-loop-config chat-profile on-thinking-delta]
+           tool-output-max-chars doom-loop-config chat-profile on-thinking-delta result-tool?]
     :or {planner-fn planner/plan-step!
          context-pack-fn identity
          max-steps defaults/chat-max-steps
@@ -274,11 +275,13 @@
         messages* (apply-context-injectors (vec (or messages [])) context-injectors)
         stream?* (true? stream?)
         env {:sink event-sink :base base :request-id request-id :stream? stream?*}
-        chat-profile* (nudge/normalize-profile chat-profile)
+        chat-profile* (cond-> (nudge/normalize-profile chat-profile)
+                        result-tool? (assoc :respond-tool? false))
+        tools (cond-> (vec tools) result-tool? (conj result-tool/tool))
         fallback-messages (atom messages*)
         delta-emitted? (atom false)
         pending-deltas (atom [])
-        buffer-deltas? (nudge/enabled? chat-profile*)
+        buffer-deltas? (or result-tool? (nudge/enabled? chat-profile*))
         emit-delta! (fn [chunk]
                       (when (and (string? chunk) (not= "" chunk))
                         (reset! delta-emitted? true)
@@ -390,6 +393,8 @@
                 ;; a tool-call-free truncation surfaces as a max-tokens stop.
                 max-token-terminal? (and max-token?
                                          (empty? (:tool-calls llm-response)))
+                submission (when (and result-tool? (not max-token-terminal?))
+                             (result-tool/check llm-response0))
                 pre-verdict (nudge/check-before-exec chat-profile*
                                                      nudge-state
                                                      {:step executable-step
@@ -397,6 +402,37 @@
                                                       :allowed-tools allowed-tools
                                                       :max-token? max-token?})]
             (cond
+              submission
+              (let [_ (discard-pending-deltas!)
+                    error (:error submission)
+                    receipts (result-tool/receipts llm-response0 error)
+                    protocol (if (seq (:tool-calls llm-response0))
+                               (runtime-events/emit-tool-turn! event-sink base request-id llm-response0
+                                                              (:tool-calls llm-response0) receipts tool-output-max-chars)
+                               (do
+                                 (runtime-events/emit! event-sink :message-end base
+                                                      {:role "assistant" :content (:content llm-response0 "")
+                                                       :audit? true :final? false})
+                                 [{:role "assistant" :content (:content llm-response0 "")}]))
+                    trace* (conj trace {:step step-no :directives (:directives step) :receipts receipts})
+                    final-messages* (into final-messages protocol)]
+                (runtime-events/emit! event-sink :turn-end base
+                                     {:step step-no :directives (:directives step) :receipts receipts})
+                (if error
+                  (let [verdict {:action (if (< (get nudge-state :result-retries 0) 2) :retry :fatal)
+                                 :reason :invalid-result :content error}]
+                    (retry-events! event-sink base verdict step-no)
+                    (if (= :retry (:action verdict))
+                      (recur (inc step-no) state
+                             (conj (into planner-visible-messages protocol) {:role "user" :content error})
+                             trace* final-messages* usage* doom-loop-state
+                             (update nudge-state :result-retries (fnil inc 0)))
+                      (fatal-guardrail! env verdict step-no final-messages* trace* usage*)))
+                  (let [content (:content submission)]
+                    (emit-delta! content)
+                    (assoc (completed-terminal! env content llm-response0 step-no final-messages* trace* usage*)
+                           :result-submitted? true))))
+
               (= :retry (:action pre-verdict))
               (do
                 (discard-pending-deltas!)
@@ -494,7 +530,7 @@
         (if (or (cancel/cancelled? cancellation-token)
                 (= :chat-cancelled (some-> e ex-data :type)))
           (cancelled-terminal! env e)
-          (if fallback-fn
+          (if (and fallback-fn (not result-tool?))
             (try
               (reset! delta-emitted? false)
               (runtime-events/emit! event-sink :message-start base {:role "assistant"

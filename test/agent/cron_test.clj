@@ -50,34 +50,24 @@
               "- trigger: manual\n\n"
               "Task:\nSearch the last 48 hours\n\n"
               "Delivery protocol:\n"
-              "- Put the final task result between exact marker lines <iris-cron-final> and </iris-cron-final>.\n"
-              "- Text outside those markers is discarded and will not be delivered.\n"
-              "- Do not quote, escape, or explain the markers.")
+              "- Call return_result with the complete final Markdown in md to finish.\n"
+              "- Only md is delivered; ordinary assistant text is not delivered.\n"
+              "- Multiple return_result calls in one response are joined in call order with a blank line.\n"
+              "- Do not mix return_result with other tools. Do not add delivery markers or wrappers.")
          (#'cron-runner/contextual-prompt
           {:scheduled-for "2026-08-20T15:44:04Z" :trigger :manual}
           {:timezone "Europe/Moscow" :prompt "Search the last 48 hours"}))))
 
-(deftest cron-final-output-extracts-last-complete-envelope-test
-  (testing "drops narration and superseded drafts"
-    (is (= "final report"
-           (#'cron-runner/final-output
-            (str "planning\n"
-                 "<iris-cron-final>\nold report\n</iris-cron-final>\n"
-                 "more planning\n"
-                 "<iris-cron-final>\nfinal report\n</iris-cron-final>\n"
-                 "postscript")))))
-  (testing "rejects missing, malformed, and empty envelopes"
-    (doseq [[content expected-type]
-            [["plain output" :cron-output-envelope-missing]
-             ["planning <iris-cron-final> unfinished" :cron-output-envelope-missing]
-             ["<iris-cron-final> \n </iris-cron-final>" :cron-output-envelope-empty]]]
-      (let [error (try
-                    (#'cron-runner/final-output content)
-                    nil
-                    (catch clojure.lang.ExceptionInfo e e))]
-        (is (= expected-type (:type (ex-data error))))))))
+(deftest cron-final-output-requires-submission-test
+  (is (= "final report" (#'cron-runner/final-output
+                         {:result-submitted? true :content "final report"})))
+  (doseq [result [{:content "plain output"}
+                  {:content "<iris-cron-final>old result</iris-cron-final>"}
+                  {:result-submitted? true :content "  "}]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"missing return_result"
+                         (#'cron-runner/final-output result)))))
 
-(deftest cron-run-persists-and-delivers-only-enveloped-output-test
+(deftest cron-run-persists-and-delivers-only-submitted-output-test
   (let [{:keys [path store]} (temp-store)
         system (test-system store)
         snapshot {:name "digest"
@@ -99,8 +89,8 @@
     (try
       (with-redefs [llm-service/create-llm-provider-with-override (fn [& _] ::provider)
                     chat/run! (fn [& _]
-                                {:content (str "internal reasoning\n"
-                                               "<iris-cron-final>\nfinal report\n</iris-cron-final>")
+                                {:content "final report"
+                                 :result-submitted? true
                                  :usage {:tokens 10}
                                  :stop-reason :completed})
                     cron-notification/dispatch-success! (fn [_ _ output]
@@ -402,10 +392,12 @@
         options (#'chat-turn/runtime-loop-options
                  {:tool-registry registry}
                  {:history [] :context-injectors [] :model "test" :provider-config ::provider
+                  :permission-profile :cron
                   :allowed-tools #{:http} :allowed-actions {:http #{:get :head}}
                   :chat-profile {} :max-steps 1 :stream-content? false
                   :max-parallelism 1 :yolo? false :cancelled? (atom false)}
                  {:event-sink nil :ops nil :on-thinking-delta nil})]
+    (is (true? (:result-tool? options)))
     (is (= #{"get" "head"}
            (set (get-in options [:tools 0 :input-schema :properties :method :enum]))))
     (is (= :tool-blocked

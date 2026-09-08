@@ -17,26 +17,13 @@
 (defn- bounded [value max-chars]
   (util/truncate (or value "") max-chars #(str "\n[truncated " % " chars]")))
 
-(def ^:private final-open "<iris-cron-final>")
-(def ^:private final-close "</iris-cron-final>")
-
-(defn- final-output [value]
-  (let [raw (str (or value ""))
-        close-at (.lastIndexOf raw final-close)
-        before-close (when (not= -1 close-at) (subs raw 0 close-at))
-        open-at (when before-close (.lastIndexOf before-close final-open))
-        marked (when (and open-at (not= -1 open-at))
-                 (str/trim (subs raw (+ open-at (count final-open)) close-at)))]
-    (cond
-      (or (= -1 close-at) (nil? open-at) (= -1 open-at))
-      (throw (ex-info "cron completion missing final delivery envelope"
-                      {:type :cron-output-envelope-missing}))
-
-      (str/blank? marked)
-      (throw (ex-info "cron completion final delivery envelope is empty"
-                      {:type :cron-output-envelope-empty}))
-
-      :else marked)))
+(defn- final-output [result]
+  (when-not (and (:result-submitted? result)
+                 (string? (:content result))
+                 (not (str/blank? (:content result))))
+    (throw (ex-info "cron completion missing return_result submission"
+                    {:type :cron-result-missing})))
+  (:content result))
 
 (defn- terminal-error [result]
   (let [reason (:stop-reason result)
@@ -53,9 +40,10 @@
        "- trigger: " (name (:trigger run)) "\n\n"
        "Task:\n" (:prompt snapshot) "\n\n"
        "Delivery protocol:\n"
-       "- Put the final task result between exact marker lines " final-open " and " final-close ".\n"
-       "- Text outside those markers is discarded and will not be delivered.\n"
-       "- Do not quote, escape, or explain the markers."))
+       "- Call return_result with the complete final Markdown in md to finish.\n"
+       "- Only md is delivered; ordinary assistant text is not delivered.\n"
+       "- Multiple return_result calls in one response are joined in call order with a blank line.\n"
+       "- Do not mix return_result with other tools. Do not add delivery markers or wrappers."))
 
 (defn execute! [system run]
   (let [snapshot (:snapshot run)
@@ -103,7 +91,7 @@
               terminal-error* (terminal-error result)
               output (bounded (if terminal-error*
                                 (:content result)
-                                (final-output (:content result)))
+                                (final-output result))
                               max-chars)
               notification-status (if (= :never (some-> snapshot :notification :policy keyword))
                                     :not-configured
