@@ -40,9 +40,9 @@
        "- trigger: " (name (:trigger run)) "\n\n"
        "Task:\n" (:prompt snapshot) "\n\n"
        "Delivery protocol:\n"
-       "- Call return_result with the complete final Markdown in md to finish.\n"
+       "- Call return_result with the COMPLETE final Markdown in md. This ends the task immediately; there is no next turn.\n"
        "- Only md is delivered; ordinary assistant text is not delivered.\n"
-       "- Multiple return_result calls in one response are joined in call order with a blank line.\n"
+       "- A single call must contain the entire result. Split only if ALL parts are calls in the SAME response; they are joined in call order with a blank line.\n"
        "- Do not mix return_result with other tools. Do not add delivery markers or wrappers."))
 
 (defn execute! [system run]

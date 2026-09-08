@@ -5,7 +5,7 @@
 
 (def tool
   {:name :return_result
-   :description "Submit the final Markdown result and finish the task. Only md is delivered. Multiple calls in one response are joined in call order with a blank line. Do not mix with other tools."
+   :description "Submit the COMPLETE final Markdown result and immediately finish the task. There is no next turn after this call. A single call must contain the entire result. Split only if ALL parts are included as calls in this SAME response; they are joined in call order with a blank line. Only md is delivered. Do not mix with other tools."
    :version "1.0.0"
    :category :respond
    :operation :read
