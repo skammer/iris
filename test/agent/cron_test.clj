@@ -400,6 +400,8 @@
     (is (true? (:result-tool? options)))
     (is (= #{"get" "head"}
            (set (get-in options [:tools 0 :input-schema :properties :method :enum]))))
+    (is (nil? (#'kernel-ops/enforce-action! :http {}
+                                                   {:allowed-actions {:http #{:get}}})))
     (is (= :tool-blocked
            (:type (ex-data
                    (try

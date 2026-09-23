@@ -25,7 +25,7 @@
 
 (defn- normalize-action [tool-name input]
   (case tool-name
-    :http (some-> (:method input) name keyword)
+    :http (-> (or (:method input) :get) name keyword)
     :homeassistant (some-> (:action input) name keyword)
     nil))
 
