@@ -51,45 +51,40 @@
                       :scheduled? false
                       :timer-id 0})
          flush! (fn [expected-timer-id]
-                  (let [event* (locking lock
-                                 (let [{:keys [field text event timer-id]} @state]
-                                   (when (or (nil? expected-timer-id)
-                                             (= expected-timer-id timer-id))
-                                     (swap! state assoc
-                                            :field nil
-                                            :text ""
-                                            :event nil
-                                            :scheduled? false)
-                                     (when (and event (not= "" text))
-                                       (buffered-delta-event event field text)))))]
-                    (when event*
-                      (emit-event! event*))))]
+                  (locking lock
+                    (let [{:keys [field text event timer-id]} @state]
+                      (when (or (nil? expected-timer-id)
+                                (= expected-timer-id timer-id))
+                        (swap! state assoc
+                               :field nil
+                               :text ""
+                               :event nil
+                               :scheduled? false)
+                        ;; Publication belongs to the same critical section as
+                        ;; draining: completion must not overtake this delta.
+                        (when (and event (not= "" text))
+                          (emit-event! (buffered-delta-event event field text)))))))]
      {:flush! #(flush! nil)
       :emit! (fn [event]
-               (if-let [field (delta-field event)]
-                 (let [payload (chat-util/event-payload event)
-                       value (get payload field)
-                       [event* schedule? timer-id] (locking lock
-                                                      (let [flush-now? (and (:field @state)
-                                                                            (not= field (:field @state)))
-                                                            event* (when flush-now?
-                                                                     (let [{:keys [field text event]} @state]
-                                                                       (when (and event (not= "" text))
-                                                                         (buffered-delta-event event field text))))
-                                                            schedule? (or flush-now? (not (:scheduled? @state)))]
-                                                        (swap! state
-                                                               (fn [s]
-                                                                 (cond-> (-> s
-                                                                             (assoc :field field
-                                                                                    :event event
-                                                                                    :scheduled? true)
-                                                                             (update :text #(str (if flush-now? "" %) value)))
-                                                                   schedule? (update :timer-id inc))))
-                                                        [event* schedule? (:timer-id @state)]))]
-                   (when event*
-                     (emit-event! event*))
-                   (when schedule?
-                     (schedule-flush! scheduler #(flush! timer-id))))
-                 (do
-                   (flush! nil)
-                   (emit-event! event))))})))
+               (locking lock
+                 (if-let [field (delta-field event)]
+                   (let [payload (chat-util/event-payload event)
+                         value (get payload field)
+                         flush-now? (and (:field @state)
+                                         (not= field (:field @state)))
+                         schedule? (or flush-now? (not (:scheduled? @state)))]
+                     (when flush-now? (flush! nil))
+                     (swap! state
+                            (fn [s]
+                              (cond-> (-> s
+                                          (assoc :field field
+                                                 :event event
+                                                 :scheduled? true)
+                                          (update :text str value))
+                                schedule? (update :timer-id inc))))
+                     (when schedule?
+                       (let [timer-id (:timer-id @state)]
+                         (schedule-flush! scheduler #(flush! timer-id)))))
+                   (do
+                     (flush! nil)
+                     (emit-event! event)))))})))

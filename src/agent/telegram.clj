@@ -233,12 +233,9 @@
                   (if (and @suppress-approval-final?
                            (= :approval-required (keyword (:stop-reason payload))))
                     (reset! suppress-approval-final? false)
-                    (do
-                      (when (and (not @saw-delta?)
-                                 (not (str/blank? (:content payload))))
-                        (when-let [on-delta (:on-delta stream-controls)]
-                          (on-delta (:content payload))))
-                      (when finalize! (finalize!))))
+                    ;; The final content is authoritative even if preview
+                    ;; deltas were dropped or delayed by the event transport.
+                    (when finalize! (finalize! (:content payload))))
                   (reset! saw-delta? false))
                 (when (and event
                            (session-event? event session-id "tool-execution-update")

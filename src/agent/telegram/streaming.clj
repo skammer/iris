@@ -144,18 +144,20 @@
                                (when-not (str/blank? text)
                                  (safe-telegram! system chat-id :thinking-summary
                                                  #(send-html! chat-id (thinking-quote-html text))))))
-        finalize! (fn []
-                    (locking lock
-                      (let [text @accumulator]
-                        (reset! accumulator "")
-                        ((:reset! scheduler))
-                        (swap! draft-id rotate-draft-id)
-                        (finalize-thinking!)
-                        (when-not (str/blank? text)
-                          (safe-telegram! system chat-id :draft-finalize
-                                          #(if-let [reply-markup (final-reply-markup opts)]
-                                             (send-msg-with-markup! chat-id text reply-markup)
-                                             (send-msg! chat-id text)))))))]
+        finalize! (fn finalize!
+                    ([] (finalize! nil))
+                    ([final-content]
+                      (locking lock
+                        (let [text (if (string? final-content) final-content @accumulator)]
+                          (reset! accumulator "")
+                          ((:reset! scheduler))
+                          (swap! draft-id rotate-draft-id)
+                          (finalize-thinking!)
+                          (when-not (str/blank? text)
+                            (safe-telegram! system chat-id :draft-finalize
+                                            #(if-let [reply-markup (final-reply-markup opts)]
+                                               (send-msg-with-markup! chat-id text reply-markup)
+                                               (send-msg! chat-id text))))))))]
     {:on-delta (fn [delta]
                  (swap! accumulator str delta)
                  ((:request! scheduler)))
@@ -249,33 +251,35 @@
                           (safe-telegram! system chat-id :draft-update
                                           #(legacy-draft! text))))))
         scheduler (make-flush-scheduler lock has-content? do-flush!)
-        finalize! (fn []
-                    (locking lock
-                      (let [text @accumulator
-                            thinking (thinking-now)]
-                        (reset! accumulator "")
-                        (reset! thinking-accumulator "")
-                        (reset! pending-thinking "")
-                        ((:reset! scheduler))
-                        (when (or (not (str/blank? text))
-                                  (not (str/blank? thinking)))
-                          (if @rich-ok?
-                            (safe-telegram! system chat-id :rich-finalize
-                                            #(try
-                                               (doseq [[idx chunk]
-                                                       (map-indexed vector
-                                                                    (rich/final-chunks thinking text))]
-                                                 (if-let [reply-markup
-                                                          (and (zero? idx)
-                                                               (final-reply-markup opts))]
-                                                   (send-rich-with-markup!
-                                                    chat-id chunk reply-markup)
-                                                   (send-rich! chat-id chunk)))
-                                               (catch Exception e
-                                                 (reset! rich-ok? false)
-                                                 (legacy-finalize! thinking text)
-                                                 (throw e))))
-                            (legacy-finalize! thinking text))))))]
+        finalize! (fn finalize!
+                    ([] (finalize! nil))
+                    ([final-content]
+                      (locking lock
+                        (let [text (if (string? final-content) final-content @accumulator)
+                              thinking (thinking-now)]
+                          (reset! accumulator "")
+                          (reset! thinking-accumulator "")
+                          (reset! pending-thinking "")
+                          ((:reset! scheduler))
+                          (when (or (not (str/blank? text))
+                                    (not (str/blank? thinking)))
+                            (if @rich-ok?
+                              (safe-telegram! system chat-id :rich-finalize
+                                              #(try
+                                                 (doseq [[idx chunk]
+                                                         (map-indexed vector
+                                                                      (rich/final-chunks thinking text))]
+                                                   (if-let [reply-markup
+                                                            (and (zero? idx)
+                                                                 (final-reply-markup opts))]
+                                                     (send-rich-with-markup!
+                                                      chat-id chunk reply-markup)
+                                                     (send-rich! chat-id chunk)))
+                                                 (catch Exception e
+                                                   (reset! rich-ok? false)
+                                                   (legacy-finalize! thinking text)
+                                                   (throw e))))
+                              (legacy-finalize! thinking text)))))))]
     {:on-delta (fn [delta]
                  (swap! accumulator str delta)
                  ((:request! scheduler)))

@@ -1423,6 +1423,41 @@
                                                               :markdown markdown})))
    :send-chat-action-fn (fn [& _] nil)})
 
+(deftest telegram-finalizes-with-full-content-after-incomplete-deltas
+  (doseq [mode [:legacy :rich :downgraded]]
+    (testing (name mode)
+      (let [path (temp-db-path)
+            store (sqlite/create-store {:path path :evict-on-close? true})
+            recorders {:sent (atom []) :html-sent (atom []) :drafts (atom [])
+                       :rich-sent (atom []) :rich-drafts (atom [])}
+            system {:store store
+                    :event-bus (system-events/create-event-bus)
+                    :event-sink (fn [_] nil)}
+            prefix "Проверенные и стабильные вариан"
+            final (str prefix "ты - Qwen3, GigaEmbeddings, BGE-M3, e5.")
+            config (assoc (rich-test-config) :rich-messages? (not= :legacy mode))
+            opts (if (= :downgraded mode)
+                   (recording-opts recorders
+                                   :rich-draft-fn (fn [& _]
+                                                    (throw (ex-info "rich draft unavailable" {}))))
+                   (recording-opts recorders))]
+        (try
+          (with-redefs [chat/run! (chat-stub
+                                   (fn [_ emit!]
+                                     (emit! :message-update {:delta prefix})
+                                     (emit! :message-end {:content final :final? true})
+                                     {:content final}))]
+            (is (= :processed
+                   (telegram/process-update! system config opts
+                                             (update-for 1 100 7 "hi")))))
+          (let [texts (concat (map :text @(:sent recorders))
+                              (map :markdown @(:rich-sent recorders)))]
+            (is (= [final] (vec texts))
+                "send authoritative final content once, replacing the incomplete preview"))
+          (finally
+            (sqlite/close-store! store)
+            (io/delete-file path true)))))))
+
 (deftest telegram-rich-streams-thinking-and-finalizes-with-details
   (let [path (temp-db-path)
         store (sqlite/create-store {:path path :evict-on-close? true})
