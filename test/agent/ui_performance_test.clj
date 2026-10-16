@@ -5,7 +5,7 @@
             [agent.chat :as chat]
             [agent.persistence.sqlite :as sqlite]
             [agent.persistence.sqlite.common :as db]
-            [agent.persistence.sqlite.sessions :as sessions]
+            [agent.persistence.sqlite.sessions.queries :as queries]
             [clojure.java.io :as io]
             [agent.ui :as ui]
             [clojure.core.async :as async]
@@ -111,7 +111,7 @@
                (mapv :id (sqlite/tool-detail-messages store sid (:id request) "reused"))))
         (let [plan (db/with-connection store
                      #(db/select-many %
-                        (update (sessions/get-tool-result-sqlvec {:session_id sid :tool_call_id "reused" :after_id (:id request)})
+                        (update (queries/get-tool-result-sqlvec {:session_id sid :tool_call_id "reused" :after_id (:id request)})
                                 0 (fn [sql] (str "explain query plan " sql))) identity))]
           (is (some #(str/includes? (:detail %) "idx_messages_tool_result") plan)))
         (let [entry (sqlite/append-entry! store sid :message

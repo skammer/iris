@@ -4,7 +4,7 @@
    Their job is to fail loudly if the api.clj refactor breaks a route's wiring."
   (:require
    [agent.api :as api]
-   [agent.api-test :as helpers]
+   [agent.api.test-support :as helpers]
    [cheshire.core :as json]
    [clojure.java.io :as io]
    [clojure.string :as str]

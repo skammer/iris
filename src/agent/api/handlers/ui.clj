@@ -1,33 +1,52 @@
 (ns agent.api.handlers.ui
   (:require
    [agent.api.errors :as errors]
-   [agent.api.handlers.tools :as tools-h]
    [agent.api.helpers :as h]
    [agent.api.responses :as responses]
    [agent.api.streaming :as streaming]
    [agent.broker.core :as broker]
    [agent.chat :as chat]
-   [agent.cron.service :as cron-service]
    [agent.defaults :as defaults]
-   [agent.memory.core :as memory]
-   [agent.memory.magi-review :as memory-magi-review]
-   [agent.memory.recall :as memory-recall]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.trace :as runtime-trace]
    [agent.sessions.service :as session-service]
-   [agent.tools.approvals :as tool-approvals]
-   [agent.tools.core :as tools]
    [agent.ui :as ui]
-   [agent.ui.cron :as ui-cron]
-   [agent.ui.memory :as ui-memory]
-   [agent.ui.render]
    [clojure.core.async :as async]
-   [clojure.string :as str])
+   [clojure.string :as str]
+   [agent.ui.render]
+   [agent.api.handlers.ui.approvals :as approvals]
+   [agent.api.handlers.ui.cron :as cron]
+   [agent.api.handlers.ui.memory :as memory]
+   [agent.api.handlers.ui.params :as params])
   (:import
    (java.nio.file Files)
    (java.util Base64)))
 
+(def cron cron/cron)
+(def cron-status cron/cron-status)
+(def cron-job-detail cron/cron-job-detail)
+(def cron-run-detail cron/cron-run-detail)
+(def cron-create cron/cron-create)
+(def cron-preview cron/cron-preview)
+(def cron-action cron/cron-action)
+(def memory-workspace memory/memory-workspace)
+(def memory-vault-detail memory/memory-vault-detail)
+(def memory-update-detail memory/memory-update-detail)
+(def memory-search memory/memory-search)
+(def memory-tool-run memory/memory-tool-run)
+(def memory-vault-reindex memory/memory-vault-reindex)
+(def memory-vault-status memory/memory-vault-status)
+(def memory-vault-magi memory/memory-vault-magi)
+(def memory-vault-magi-update memory/memory-vault-magi-update)
+(def memory-proposal-decision memory/memory-proposal-decision)
+(def list-tool-approvals approvals/list-tool-approvals)
+(def tool-approvals-status approvals/tool-approvals-status)
+(def tool-approval-detail approvals/tool-approval-detail)
+(def tool-approval-decision approvals/tool-approval-decision)
+(def tool-approval-run approvals/tool-approval-run)
+
 (def ^:private max-chat-image-bytes (* 10 1024 1024))
+
 (defonce ^:private ui-session-streams (atom {}))
 
 (defonce ^:private ui-chat-posts (atom {}))
@@ -46,17 +65,6 @@
                  (if (> (get owners key 0) 1)
                    (update owners key dec)
                    (dissoc owners key))))))))
-
-(defn- request-ui-limit
-  ([request] (request-ui-limit request 20 100))
-  ([request default maximum]
-   (let [raw (-> request :parameters :query :limit)]
-     (try
-       (-> (if (str/blank? raw) default (Long/parseLong raw))
-           (max 1)
-           (min maximum)
-           long)
-       (catch NumberFormatException _ default)))))
 
 (defn- close-ui-session-stream! [client-id]
   (when-let [ctx (and (not (str/blank? client-id))
@@ -141,123 +149,11 @@
 (defn dashboard [system _request]
   (responses/html-response 200 (ui/dashboard-fragment system)))
 
-(defn cron [system request]
-  (let [query (-> request :parameters :query)
-        limit (request-ui-limit request 20 100)
-        tab (some-> (:tab query) keyword)
-        view (some-> (:view query) keyword)]
-    (responses/html-response 200 (ui/cron-fragment system {:limit limit
-                                                            :tab tab
-                                                            :view view
-                                                            :date (:date query)}))))
-
-(defn cron-status [system request]
-  (let [query (-> request :parameters :query)
-        limit (request-ui-limit request 20 100)
-        tab (or (some-> (:tab query) keyword) :jobs)
-        view (or (some-> (:view query) keyword) :week)]
-    (responses/html-response 200 (ui-cron/status-fragment system limit tab view (:date query)))))
-
-(defn cron-job-detail [system _request job-id]
-  (responses/html-response
-   200
-   (ui-cron/job-editor-detail-fragment
-    system
-    (cron-service/get-job (:cron-service system) job-id))))
-
-(defn cron-run-detail [system _request run-id]
-  (responses/html-response
-   200
-   (ui-cron/run-detail-fragment
-    (cron-service/get-run (:cron-service system) run-id))))
-
-(defn- cron-form-schedule [{:keys [schedule_kind cron_expression at every_seconds anchor_at]}]
-  (case schedule_kind
-    "at" {:kind :at :at at}
-    "interval" {:kind :interval :every-seconds (parse-long every_seconds)
-                 :anchor-at (or (not-empty anchor_at) (str (java.time.Instant/now)))}
-    {:kind :cron :expression cron_expression}))
-
-(defn- cron-model-pin [model-pair]
-  (when-not (str/blank? model-pair)
-    (let [[provider model] (str/split model-pair #"\|" 2)]
-      {:provider (keyword provider) :model model})))
-
-(defn cron-create [system request]
-  (let [{:keys [name prompt timezone max_occurrences tool_profile model_pair
-                notify_policy telegram_recipient] :as body} (h/read-form-body request)
-        target (when-not (str/blank? telegram_recipient)
-                 {:kind :channel :adapter :telegram :recipient telegram_recipient})
-        input (cond-> (merge {:name name :prompt prompt :timezone timezone
-                       :schedule (cron-form-schedule body)
-                       :notification {:policy (keyword (or notify_policy "never")) :target target}}
-                             (cron-model-pin model_pair))
-                (not (str/blank? max_occurrences)) (assoc :max-occurrences (parse-long max_occurrences))
-                (not (str/blank? tool_profile)) (assoc :tool-profile (keyword tool_profile)))]
-    (cron-service/create-job! (:cron-service system) input {:created-by "ui"})
-    (responses/html-response 200 (ui/cron-fragment system {:tab :jobs}))))
-
-(defn cron-preview [system request]
-  (let [{:keys [name prompt timezone max_occurrences tool_profile model_pair
-                notify_policy telegram_recipient] :as body} (h/read-form-body request)
-        target (when-not (str/blank? telegram_recipient)
-                 {:kind :channel :adapter :telegram :recipient telegram_recipient})
-        input (cond-> (merge {:name name :prompt prompt :timezone timezone
-                       :schedule (cron-form-schedule body)
-                       :notification {:policy (keyword (or notify_policy "never")) :target target}}
-                             (cron-model-pin model_pair))
-                (not (str/blank? max_occurrences)) (assoc :max-occurrences (parse-long max_occurrences))
-                (not (str/blank? tool_profile)) (assoc :tool-profile (keyword tool_profile)))
-        preview (cron-service/preview (:cron-service system) input)]
-    (responses/html-response
-     200
-     (agent.ui.render/render
-      [:div#cron-preview.cron-preview
-       [:strong "Next runs"]
-       [:ol (for [instant (:next-runs preview)] [:li instant])]
-       [:small (str (get-in preview [:resolved-model :provider]) "/"
-                    (get-in preview [:resolved-model :model]) " · "
-                    (get-in preview [:resolved-tools :tool-profile]))]]))))
-
-(defn- cron-update! [service id revision body]
-  (let [{:keys [name prompt timezone max_occurrences tool_profile
-                model_pair notify_policy telegram_recipient]} body
-        target (when-not (str/blank? telegram_recipient)
-                 {:kind :channel :adapter :telegram :recipient telegram_recipient})
-        changes (merge {:name name :prompt prompt :timezone timezone
-                        :schedule (cron-form-schedule body)
-                        :notification {:policy (keyword (or notify_policy "never")) :target target}
-                        :max-occurrences (when-not (str/blank? max_occurrences)
-                                           (parse-long max_occurrences))
-                        :tool-profile (when-not (str/blank? tool_profile) (keyword tool_profile))}
-                       (or (cron-model-pin model_pair) {:provider nil :model nil}))]
-    (cron-service/update-job! service id revision changes)))
-
-(defn cron-action [system request]
-  (let [{:keys [id revision action cron_tab] :as body} (h/read-form-body request)
-        service (:cron-service system)
-        revision* (parse-long revision)]
-    (case action
-      "pause" (cron-service/set-status! service id :paused revision*)
-      "resume" (cron-service/set-status! service id :active revision*)
-      "delete" (cron-service/set-status! service id :deleted revision*)
-      "run" (cron-service/run-now! service id)
-      "update" (cron-update! service id revision* body)
-      "update-run" (let [job (cron-update! service id revision* body)]
-                     (cron-service/run-now! service (:id job)))
-      (throw (errors/api-error 400 "bad_request" "Unknown cron action")))
-    (responses/html-response
-     200
-     (ui/cron-fragment system
-                       {:tab (if (contains? #{"run" "update-run"} action)
-                               :runs
-                               (or (some-> cron_tab keyword) :jobs))}))))
-
 (defn operator-board [system _request]
   (responses/html-response 200 (ui/operator-board-fragment system)))
 
 (defn magi [system request]
-  (let [limit (request-ui-limit request 25 200)]
+  (let [limit (params/request-ui-limit request 25 200)]
     (responses/html-response 200 (ui/magi-fragment system {:limit limit}))))
 
 (defn magi-detail [system _request event-id]
@@ -556,7 +452,7 @@
   (responses/html-response 200 (ui/events-fragment system)))
 
 (defn logs [system request]
-  (let [limit (request-ui-limit request 20 200)]
+  (let [limit (params/request-ui-limit request 20 200)]
     (responses/html-response 200 (ui/logs-fragment system {:limit limit}))))
 
 (defn log-detail [system _request source entry-id]
@@ -592,239 +488,3 @@
            (when (streaming/take! ctx ch)
              (streaming/send-datastar-patch! ctx (ui/events-fragment system))
             (recur))))))))
-
-(defn memory-workspace [system request]
-  (let [limit (request-ui-limit request 20 100)
-        {:keys [tab note_id]} (-> request :parameters :query)]
-    (responses/html-response
-     200
-     (ui/memory-workspace-fragment system nil {:limit limit
-                                               :tab tab
-                                               :note-id note_id}))))
-
-(defn memory-vault-detail [system _request note-id]
-  (let [store (get-in system [:memory-service :store])
-        note (sqlite/get-vault-note-by-id store note-id)
-        review (first (sqlite/list-events store
-                                          {:event-type memory-magi-review/review-event-type
-                                           :entity-type :vault_note
-                                           :entity-id note-id
-                                           :limit 1}))]
-    (responses/html-response 200 (ui-memory/vault-note-detail-fragment note review))))
-
-(defn memory-update-detail [system _request update-id]
-  (responses/html-response
-   200
-   (ui-memory/memory-update-detail-fragment
-    (sqlite/get-memory-note-update (get-in system [:memory-service :store]) update-id))))
-
-(defn memory-search [system request]
-  (let [{:keys [query]} (h/read-form-body request)]
-    (responses/html-response 200
-                             (ui/memory-search-results-fragment
-                              (memory-recall/recall (:memory-service system) query)))))
-
-(defn- parse-int-form [value]
-  (when-not (str/blank? (str value))
-    (Integer/parseInt (str value))))
-
-(defn- form-scope [{:keys [scope_type scope_id]}]
-  (when-not (str/blank? (str scope_type))
-    (cond-> {:type scope_type}
-      (not (str/blank? (str scope_id))) (assoc :id scope_id))))
-
-(defn- memory-tool-input [{:keys [action query old_text new_text
-                                  expected_revision]
-                           :as body}]
-  (let [action* (keyword (str/lower-case (str action)))
-        scratchpad-replace? (= :scratchpad-replace action*)]
-    (cond-> {:action action}
-      (not (str/blank? (str query))) (assoc :query query)
-      (parse-int-form (:limit body)) (assoc :limit (parse-int-form (:limit body)))
-      (form-scope body) (assoc :scope (form-scope body))
-      (or (not (str/blank? (str old_text))) scratchpad-replace?)
-      (assoc :old-text (or old_text ""))
-      (or (not (str/blank? (str new_text))) scratchpad-replace?)
-      (assoc :new-text (or new_text ""))
-      (not (str/blank? (str expected_revision))) (assoc :expected-revision expected_revision))))
-
-(defn- memory-tool-target [{:keys [action] :as input}]
-  (case (keyword (str/lower-case (str action)))
-	    :recall [:memory_recall (select-keys input [:query :limit :scope])]
-	    :vault-search [:vault_search (select-keys input [:query :limit])]
-	    :scratchpad-read [:scratchpad_read (select-keys input [:scope])]
-	    :scratchpad-search [:scratchpad_search (select-keys input [:query :scope])]
-	    :scratchpad-replace [:scratchpad_replace (select-keys input [:old-text :new-text :expected-revision :scope])]))
-
-(defn- memory-search-source-json [system {:keys [action query limit scope]}]
-  (when (and (= :recall (keyword (str/lower-case (str action))))
-             (not (str/blank? (str query))))
-    (memory-recall/recall (:memory-service system)
-                          query
-                          (cond-> {}
-                            limit (assoc :limit limit)
-                            scope (assoc :scope scope)))))
-
-(defn memory-tool-run [system request]
-  (try
-    (let [body (h/read-form-body request)
-          input (memory-tool-input body)
-          [tool-name tool-input] (memory-tool-target input)
-          result (tools/execute-tool (:tool-registry system)
-                                     tool-name
-                                     tool-input
-                                     (assoc
-                                      (tools-h/execution-context system :ui tool-name tool-input
-                                                                 {:user "ui-memory"})
-                                      :permissions #{:memory-read :memory-write}))]
-      (responses/html-response
-       200
-       (ui/memory-tool-result-fragment
-        {:ok? true
-         :input input
-         :result result
-         :source-json (memory-search-source-json system input)})))
-    (catch Exception e
-      (responses/html-response
-       200
-       (ui/memory-tool-result-fragment
-        {:ok? false
-         :error (.getMessage e)
-         :details (ex-data e)})))))
-
-(defn- memory-reset-response
-  ([system surface reset!]
-   (memory-reset-response system surface reset! {}))
-  ([system surface reset! opts]
-   (try
-     (responses/html-response
-      200
-      (ui/memory-workspace-fragment system
-                                    {:ok? true
-                                     :surface surface
-                                     :result (reset!)}
-                                    opts))
-     (catch Exception e
-      (responses/html-response
-       200
-       (ui/memory-workspace-fragment system
-                                     {:ok? false
-                                      :surface surface
-                                      :error (.getMessage e)
-                                      :details (ex-data e)}
-                                     opts))))))
-
-(defn memory-vault-reindex [system _request]
-  (memory-reset-response system
-                         "Vault reindex"
-                         #(memory/reindex-vault! (:memory-service system))))
-
-(defn memory-vault-status [system request]
-  (let [body (h/read-form-body request)]
-    (memory-reset-response system
-                           "Vault note"
-                           #(if (= "approved" (:status body))
-                              (memory-magi-review/apply-candidate!
-                               system (:path body) (:scope body))
-                              (memory/update-vault-note-iris!
-                               (:memory-service system)
-                               (:path body)
-                               (select-keys body [:scope :status])))
-                           {:tab :approvals :limit 20})))
-
-(defn memory-vault-magi [system request]
-  (let [{:keys [path action]} (h/read-form-body request)
-        review? (= "review" action)]
-    (memory-reset-response system
-                           (if review? "MAGI review" "MAGI advice")
-                           #(memory-magi-review/review-note!
-                             system
-                             path
-                             {:apply? review?
-                              :source (if review? :manual :advice)})
-                           {:tab :approvals :limit 20})))
-
-(defn memory-vault-magi-update [system request]
-  (let [{:keys [update_id action]} (h/read-form-body request)
-        review? (= "review" action)]
-    (memory-reset-response system
-                           (if review? "MAGI update review" "MAGI update advice")
-                           #(memory-magi-review/review-update!
-                             system
-                             update_id
-                             {:apply? review?
-                              :source (if review? :manual :advice)})
-                           {:tab :approvals :limit 20})))
-
-(defn memory-proposal-decision [system request]
-  (let [{:keys [proposal_id decision]} (h/read-form-body request)]
-    (memory-reset-response
-     system
-     "Memory proposal"
-     #(case decision
-        "apply" (memory-magi-review/apply-proposal! system proposal_id "Operator approved")
-        "reject" (memory/decide-memory-note-update!
-                  (:memory-service system) proposal_id :rejected :no "Operator rejected"))
-     {:tab :approvals :limit 20})))
-
-(defn list-tool-approvals [system request]
-  (let [limit (request-ui-limit request)]
-    (responses/html-response 200
-                             (ui/tool-approvals-fragment
-                              (tool-approvals/list-review-records (:store system) {:limit limit})
-                              {:limit limit}))))
-
-(defn tool-approvals-status [system request]
-  (let [limit (request-ui-limit request)]
-    (responses/html-response
-     200
-     (ui/tool-approvals-status-fragment
-      (tool-approvals/list-review-records (:store system) {:limit 100})
-      limit))))
-
-(defn tool-approval-detail [system _request approval-id]
-  (responses/html-response 200
-                           (ui/tool-approval-detail-fragment
-                            (tool-approvals/get-request (:store system) approval-id))))
-
-(defn tool-approval-decision [system request approval-id status]
-  (let [body (h/read-form-body request)
-        actor (or (:actor body) "operator")
-        reason (:reason body)
-        updated (case status
-                  :approved (tool-approvals/approve! (:store system) approval-id actor reason)
-                  :denied (tool-approvals/deny! (:store system) approval-id actor reason))]
-    (tool-approvals/log-decision! (:event-sink system) updated status actor reason)
-    (responses/html-response 200
-                             (ui/tool-approvals-fragment
-                              (tool-approvals/list-review-records (:store system) {:limit 20})))))
-
-(defn tool-approval-run [system _request approval-id]
-  (let [{:keys [tool-name input permissions approval]} (tool-approvals/resolve-approved-request (:store system) approval-id)
-        user (or (not-empty (:requested-by approval)) "ui")]
-    (try
-      (responses/html-response
-       200
-       (str (ui/tool-approvals-fragment
-             (tool-approvals/list-review-records (:store system) {:limit 20}))
-            (ui/tool-results-fragment
-             tool-name
-             200
-             {:result (tools/execute-tool (:tool-registry system)
-                                          tool-name
-                                          input
-                                          {:permissions permissions
-                                           :approval-id approval-id
-                                           :approval-reason (:decision-reason approval)
-                                           :user user
-                                           :activity (:activity input)})})))
-      (catch Exception e
-        (let [api-e (errors/domain-error->api-error e)]
-          (responses/html-response
-           (:status (ex-data api-e))
-           (ui/tool-results-fragment
-            tool-name
-            (:status (ex-data api-e))
-            {:error (:error (ex-data api-e))
-             :message (.getMessage api-e)
-             :details (:details (ex-data api-e))})))))))

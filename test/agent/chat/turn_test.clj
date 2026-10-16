@@ -4,7 +4,7 @@
    event vocabulary, subscribers, approvals, recall, fallback) so the turn
    composition can be reshaped behind them."
   (:require
-   [agent.chat-test :as chat-test]
+   [agent.chat.test-support :as chat-test]
    [agent.chat.service :as chat-service]
    [agent.chat.turn :as turn]
    [agent.llm.messages :as llm-messages]
@@ -20,9 +20,9 @@
    [clojure.test :refer [deftest is]])
   (:import
    (java.time Duration Instant)))
-
 ;; Reuse the chat-test system builder and response helpers instead of
 ;; duplicating them; they are private there, so go through the vars.
+
 (def ^:private test-system @#'chat-test/test-system)
 (def ^:private tool-call-response @#'chat-test/tool-call-response)
 (def ^:private temp-dir @#'chat-test/temp-dir)

@@ -97,12 +97,9 @@ Lint: 0 errors, 0 warnings вместо 72 errors / 10 warnings.
 Не выполнялись deployment, реальная отправка Telegram и Docker release smoke.
 На сервере остаётся проверить длительный streaming и end-to-end latency.
 
-Оставшиеся архитектурные кандидаты требуют отдельного подтверждения эффекта:
-`memory/core.clj` объединяет поиск, предложения, применение и отчёты;
-`branch-path` читает все entries сессии для построения выбранной ветки.
-Для дальнейшей декомпозиции нужны конкретные независимые контракты, для изменения
-SQL — замер на ветвящихся длинных сессиях. Размер файла сам по себе не основание
-для переписывания.
+Память разделена по независимым контрактам в следующем этапе, описанном ниже.
+`branch-path` пока читает все entries сессии для построения выбранной ветки.
+Изменение его SQL требует замера на ветвящихся длинных сессиях.
 
 ## Основания
 
@@ -140,3 +137,40 @@ scroll действительно работают. Оставшиеся wiring-
 DOM-проверки также обнаружили реальный дефект ARIA: boolean значения Hiccup
 давали `aria-selected="aria-selected"`. Исправлены selected/pressed в Cron и
 Memory, hidden у декоративных элементов чата.
+
+
+## Декомпозиция больших файлов
+
+Разделение по ответственности, без изменения алгоритмов и бизнес-правил:
+
+| Было | Теперь |
+| --- | --- |
+| `memory/core.clj`: 1762 строки | Фасад, поиск, заметки, proposals, extraction, quality, path policy |
+| `ui.clj`: 1248 | Shell плюс overview, sessions, logs, MAGI, approvals и routes |
+| `config.clj`: 1207 | Загрузка/редактирование, defaults, migration, validation |
+| `memory/vault.clj`: 1013 | Файловые операции/индексация, формат заметки, аудит и embeddings |
+| SQLite `sessions.clj`: 907 | Records, messages, entries, channels и общие HugSQL queries |
+| UI handlers: 830 | Chat/live orchestration, cron, memory и approvals |
+| UI renderer: 773 | Message rendering, Markdown sanitation и formatting |
+| Memory tools: 714 | Tool contracts и ограниченные текстовые представления результатов |
+
+Публичные функции фасадов сохранены; модули реализации не требуют свой фасад.
+HugSQL definitions загружаются один раз в `sessions.queries`; транзакции,
+проверки ревизий, rollback и streaming lifecycle остались на прежних границах.
+
+Семь больших тестовых файлов (755–2021 строк) разделены по подсистемам.
+Общие провайдеры/фикстуры находятся в `test-support`, без зависимости тестов
+от других тестовых namespaces. Тела всех 282 перенесённых тестов сравнены
+с исходными: совпадают полностью до обновления одного обращения к перенесённой
+private-функции обработчика. Проверка SQL query plan обращается к новому
+namespace queries. Тела 645 исходных определений также совпадают после обратной
+нормализации квалификаторов namespace и private metadata. Отдельные тесты Telegram streaming сохранены.
+
+Максимум после разделения: исходник 645 строк, тестовый файл 564 строки.
+Разделение не объявляется ускорением: алгоритмы и SQL в этом этапе не менялись.
+
+Финальная проверка: `clojure -M:test -m agent.test-runner` — **818 тестов,
+3283 assertions, 0 failures/errors**, столько же, сколько до разделения.
+`clj-kondo --lint src test dev/user.clj` — 0 errors/warnings;
+`clojure -M:dev -e ':dev-loaded (shutdown-agents)'` и `git diff --check` проходят.
+Deployment и браузерный smoke в этом этапе не выполнялись.

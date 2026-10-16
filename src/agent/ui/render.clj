@@ -4,25 +4,25 @@
    [agent.tools.display :as tool-display]
    [cheshire.core :as json]
    [clojure.string :as str]
-   [hiccup2.core :as h])
+   [hiccup2.core :as h]
+   [agent.ui.format :as ui-format]
+   [agent.ui.markdown :as ui-markdown])
   (:import
-   (java.net URLEncoder)
-   (java.util ArrayDeque IdentityHashMap)
-   (org.commonmark.ext.footnotes FootnotesExtension)
-   (org.commonmark.ext.gfm.strikethrough StrikethroughExtension)
-   (org.commonmark.ext.gfm.tables TablesExtension)
-   (org.commonmark.ext.task.list.items TaskListItemsExtension)
-   (org.commonmark.node HtmlInline)
-   (org.commonmark.parser Parser)
-   (org.commonmark.parser.delimiter DelimiterProcessor)
-   (org.commonmark.renderer.html AttributeProvider AttributeProviderFactory
-                                 HtmlRenderer)
-   (org.jsoup Jsoup)
-   (org.jsoup.nodes Document$OutputSettings)
-   (org.jsoup.safety Safelist)))
+   (java.util ArrayDeque IdentityHashMap)))
+
+(def markdown->html ui-markdown/markdown->html)
+(def pretty-json ui-format/pretty-json)
+(def url-encode ui-format/url-encode)
+(def status-dot ui-format/status-dot)
+(def short-timestamp ui-format/short-timestamp)
+(def short-id ui-format/short-id)
+(def format-tokens ui-format/format-tokens)
+(def format-tps ui-format/format-tps)
 
 (def ^:private max-trusted-fragments 4096)
+
 (defonce ^:private trusted-fragments (IdentityHashMap.))
+
 (defonce ^:private trusted-fragment-order (ArrayDeque.))
 
 (defn- remember-trusted-fragment! [html]
@@ -49,127 +49,6 @@
                     {:type :untrusted-html-fragment})))
   (h/raw html))
 
-(defn- inline-wrap-processor
-  "DelimiterProcessor that brackets ch-delimited runs (==x==, ||x||, ++x++)
-   with raw HTML; the jsoup pass whitelists the emitted tags and unmatched
-   runs stay literal."
-  [ch open-html close-html]
-  (reify DelimiterProcessor
-    (getOpeningCharacter [_] ch)
-    (getClosingCharacter [_] ch)
-    (getMinLength [_] 2)
-    (process [_ opening closing]
-      (if (and (>= (.length opening) 2) (>= (.length closing) 2))
-        (do
-          (.insertAfter (.getOpener opening)
-                        (doto (HtmlInline.) (.setLiteral open-html)))
-          (.insertBefore (.getCloser closing)
-                         (doto (HtmlInline.) (.setLiteral close-html)))
-          2)
-        0))))
-
-(defonce ^:private markdown-extensions
-  [(TablesExtension/create)
-   (StrikethroughExtension/create)
-   (TaskListItemsExtension/create)
-   (FootnotesExtension/create)])
-
-(defonce ^:private markdown-parser
-  (-> (Parser/builder)
-      (.extensions markdown-extensions)
-      (.customDelimiterProcessor (inline-wrap-processor \= "<mark>" "</mark>"))
-      (.customDelimiterProcessor (inline-wrap-processor \| "<span class=\"spoiler\">" "</span>"))
-      (.customDelimiterProcessor (inline-wrap-processor \+ "<ins>" "</ins>"))
-      (.build)))
-
-(defonce ^:private markdown-renderer
-  (-> (HtmlRenderer/builder)
-      (.extensions markdown-extensions)
-      ;; Raw HTML flows through to the jsoup clean below — the single
-      ;; sanitization boundary — so whitelisted inline HTML (details, sub,
-      ;; sup, u) renders instead of displaying as escaped text.
-      (.escapeHtml false)
-      (.attributeProviderFactory
-       (reify AttributeProviderFactory
-         (create [_ _context]
-           (reify AttributeProvider
-             (setAttributes [_ _node tag-name attributes]
-               (when (= "img" tag-name)
-                 (.put attributes "loading" "lazy")))))))
-      (.build)))
-
-(defonce ^:private markdown-safelist
-  (doto (Safelist/none)
-    (.addTags (into-array String ["a" "blockquote" "br" "code" "del" "details"
-                                  "em" "h1" "h2" "h3" "h4" "h5" "h6" "hr" "img"
-                                  "input" "ins" "kbd" "li" "mark" "ol" "p" "pre"
-                                  "s" "section" "span" "strong" "sub" "summary"
-                                  "sup" "table" "tbody" "td" "th" "thead" "tr"
-                                  "u" "ul"]))
-    (.addAttributes "a" (into-array String ["href" "title" "id" "class"
-                                            "data-footnote-ref"
-                                            "data-footnote-backref"
-                                            "data-footnote-backref-idx"
-                                            "aria-label"]))
-    (.addAttributes "code" (into-array String ["class"]))
-    (.addAttributes "details" (into-array String ["open"]))
-    (.addAttributes "img" (into-array String ["src" "alt" "title" "loading"]))
-    (.addAttributes "input" (into-array String ["type" "checked" "disabled"]))
-    (.addAttributes "li" (into-array String ["id"]))
-    (.addAttributes "ol" (into-array String ["start"]))
-    (.addAttributes "section" (into-array String ["class" "data-footnotes"]))
-    (.addAttributes "span" (into-array String ["class"]))
-    (.addAttributes "sup" (into-array String ["id" "class"]))
-    (.addAttributes "td" (into-array String ["align"]))
-    (.addAttributes "th" (into-array String ["align"]))
-    ;; "#" is jsoup's anchor pseudo-protocol: keeps footnote fragment links
-    ;; (#fn-1) while every other relative URL still fails validation.
-    (.addProtocols "a" "href" (into-array String ["http" "https" "mailto" "#"]))
-    (.addProtocols "img" "src" (into-array String ["https"]))))
-
-(defonce ^:private markdown-output-settings
-  (doto (Document$OutputSettings.)
-    (.prettyPrint false)))
-
-;; jsoup safelists cannot constrain attribute values, and a blanket
-;; span[class]/a[class] would let assistant-authored raw HTML adopt the UI's
-;; own classes. Allow only the classes the pipeline itself emits.
-(def ^:private allowed-classes
-  {"span" #{"spoiler"}
-   "sup" #{"footnote-ref"}
-   "a" #{"footnote-ref" "footnote-backref"}
-   "section" #{"footnotes"}})
-
-(def ^:private code-class-rx #"^language-[\w.+#-]+$")
-
-(defn- class-allowed? [tag class]
-  (or (contains? (get allowed-classes tag #{}) class)
-      (and (= "code" tag) (re-matches code-class-rx class))))
-
-(defn- restrict-classes [html]
-  (let [doc (Jsoup/parseBodyFragment html)]
-    (.outputSettings doc markdown-output-settings)
-    (doseq [el (.select doc "[class]")]
-      (let [tag (.normalName el)
-            classes (->> (str/split (.attr el "class") #"\s+")
-                         (filterv #(class-allowed? tag %)))]
-        (if (seq classes)
-          (.attr el "class" (str/join " " classes))
-          (.removeAttr el "class"))))
-    ;; jsoup strips a non-https src but leaves the bare element behind.
-    (doseq [el (.select doc "img:not([src])")]
-      (.remove el))
-    (.html (.body doc))))
-
-(defn markdown->html
-  "Renders markdown (GFM tables, task lists, strikethrough, footnotes,
-   ==mark==, ||spoiler||, ++ins++, whitelisted inline HTML) to sanitized
-   HTML. jsoup clean is the sanitization boundary for all rendered content."
-  [content]
-  (-> (.render markdown-renderer (.parse markdown-parser (str content)))
-      (Jsoup/clean "" markdown-safelist markdown-output-settings)
-      restrict-classes))
-
 (defn- markdown-html [content]
   (markdown->html content))
 
@@ -192,9 +71,6 @@
 
 (defn- media-caption [block fallback]
   (or (:alt block) (:filename block) fallback))
-
-(declare status-dot
-         user-message-content)
 
 (defn- media-block [block]
   (let [type (keyword (:type block))
@@ -230,6 +106,8 @@
       (message-content (media-caption block "[file]"))
 
       nil)))
+
+(declare user-message-content)
 
 (defn- rich-message-content [role content content-blocks]
   (let [blocks (seq content-blocks)]
@@ -302,38 +180,6 @@
           (into [:div.code.message-content--user]
                 (cond-> nodes
                   (< idx (count text)) (conj (subs text idx)))))))))
-
-(defn- keyword-label [value]
-  (if-let [ns (namespace value)]
-    (str ns "/" (name value))
-    (name value)))
-
-(defn- json-ready [value]
-  (cond
-    (keyword? value) (keyword-label value)
-    (map? value) (into {}
-                       (map (fn [[k v]]
-                              [(if (keyword? k) (keyword-label k) k)
-                               (json-ready v)]))
-                       value)
-    (set? value) (mapv json-ready value)
-    (sequential? value) (mapv json-ready value)
-    :else value))
-
-(defn pretty-json [value]
-  (try
-    (json/generate-string (json-ready (if (string? value)
-                                        (json/parse-string value true)
-                                        value))
-                          {:pretty true})
-    (catch Exception _
-      (if (string? value)
-        value
-        (binding [*print-namespace-maps* false]
-          (pr-str value))))))
-
-(defn url-encode [value]
-  (URLEncoder/encode (str value) "UTF-8"))
 
 (defn- safe-dom-id [prefix value]
   (str prefix "-"
@@ -501,101 +347,6 @@
      (tool-entry system message tool-call message)
      [:div.meta (:created-at message)]]))
 
-(def ^:private status-dot-classes
-  {"running" "dot--live"
-   "requested" "dot--live"
-   "completed" "dot--ok"
-   "succeeded" "dot--ok"
-   "success" "dot--ok"
-   "ok" "dot--ok"
-   "done" "dot--ok"
-   "failed" "dot--err"
-   "error" "dot--err"
-   "cancelled" "dot--err"
-   "denied" "dot--err"
-   "pending" "dot--warn"
-   "approved" "dot--ok"})
-
-(defn status-dot
-  "Square status indicator, colored by status keyword/string. Stale items
-   always show as warning regardless of their nominal status."
-  ([status] (status-dot status nil))
-  ([status {:keys [stale?]}]
-   [:span.dot {:class (if stale?
-                        "dot--warn"
-                        (get status-dot-classes (some-> status name str/lower-case) "dot--idle"))
-               :aria-hidden "true"}]))
-
-(defn short-timestamp
-  "Compact 'MM-DD HH:MM' rendering of an ISO-8601 timestamp for list rows."
-  [value]
-  (let [s (str value)]
-    (if-let [[_ mm-dd hh-mm] (re-find #"^\d{4}-(\d{2}-\d{2})T(\d{2}:\d{2})" s)]
-      (str mm-dd " " hh-mm)
-      (not-empty s))))
-
-(def ^:private uuid-rx
-  #"(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-
-(defn short-id
-  "First segment of a UUID for display — pair with a :title attribute
-   carrying the full value. Non-UUID identifiers pass through unchanged."
-  [value]
-  (let [s (str value)]
-    (if (re-matches uuid-rx s)
-      (subs s 0 8)
-      s)))
-
-(defn format-tokens
-  "Compact human-readable token count: 950 -> \"950\", 12345 -> \"12.3k\", 2300000 -> \"2.3M\"."
-  [n]
-  (let [n (long (or n 0))]
-    (cond
-      (>= n 1000000) (format "%.1fM" (/ (double n) 1e6))
-      (>= n 1000) (format "%.1fk" (/ (double n) 1e3))
-      :else (str n))))
-
-(defn- usage-tokens
-  "Total tokens for one message's usage map, if present."
-  [metadata]
-  (some-> (:usage metadata) :tokens long))
-
-(defn- usage-cached-tokens
-  [metadata]
-  (some-> (:usage metadata) :cached-tokens long))
-
-(defn- usage-tps
-  [metadata]
-  (let [{:keys [completion-tokens duration-ms]} (:usage metadata)]
-    (when (and (number? completion-tokens)
-               (pos? completion-tokens)
-               (number? duration-ms)
-               (pos? duration-ms))
-      (/ (* 1000.0 (double completion-tokens))
-         (double duration-ms)))))
-
-(defn format-tps [value]
-  (format "%.1f" (double value)))
-
-(defn- message-meta-suffix
-  "Per-message stats badge text: token count for the turn + tool-call count."
-  [metadata tool-calls]
-  (let [tok (usage-tokens metadata)
-        cached (usage-cached-tokens metadata)
-        tps (usage-tps metadata)
-        n-tools (count tool-calls)]
-    (str (when (and tok (pos? tok)) (str " | " (format-tokens tok) " tok"))
-         (when (and cached (pos? cached)) (str " | " (format-tokens cached) " cache"))
-         (when tps (str " | " (format-tps tps) " t/s"))
-         (when (pos? n-tools) (str " | " n-tools " tool" (when (> n-tools 1) "s"))))))
-
-(defn- message-meta-text
-  [{:keys [created-at metadata excluded-from-context? tool-calls]}]
-  (str (short-timestamp created-at)
-       (when (:queued metadata) " | queued")
-       (when excluded-from-context? " | out-of-context")
-       (message-meta-suffix metadata tool-calls)))
-
 (defn- tool-turn-message
   [system {:keys [id role content content-blocks tool-calls metadata] :as msg} results-by-id]
   (let [thinking (or (:thinking metadata)
@@ -612,12 +363,12 @@
      [:div.tool-calls
       (for [tc tool-calls]
         (tool-entry system msg tc (get results-by-id (tool-call-id tc))))]
-     [:div.meta (message-meta-text msg)]]))
+     [:div.meta (ui-format/message-meta-text msg)]]))
 
 (defn message
   ([msg] (message nil msg))
   ([system {:keys [id role content content-blocks tool-calls metadata] :as msg}]
-   (let [meta-text (message-meta-text msg)
+   (let [meta-text (ui-format/message-meta-text msg)
          thinking (or (:thinking metadata)
                       (content-block-thinking content-blocks)
                       (tagged-thinking content))

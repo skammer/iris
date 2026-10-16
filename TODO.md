@@ -46,4 +46,4 @@ Evidence: [docs/code-audit.md](docs/code-audit.md).
 - [x] Discover all tests; isolate and clean test resources; replace source/document assertions with behavior checks.
 - [x] Restore clean lint and working development REPL helpers.
 - [ ] Profile `branch-path` on long, branching histories before changing its SQL access pattern.
-- [ ] Identify independent search/proposal/report contracts before further splitting `memory/core.clj`.
+- [x] Split memory, vault, UI, configuration and session storage by responsibility; split oversized test suites and share fixtures.

@@ -1,0 +1,397 @@
+(ns agent.config.defaults
+  "Default configuration data; no environment or filesystem access."
+  (:require
+   [agent.defaults :as defaults]))
+
+(def default-config
+  {:llm {:active-provider :ollama
+         :stream-content? true
+         :providers {:ollama {:type :ollama
+                              :base-url "http://localhost:11434"
+                              :model "llama3.2:3b"
+                              :temperature defaults/llm-temperature
+                              :max-tokens defaults/llm-max-tokens
+                              :stream? false
+                              :prompt-cache? true
+                              :stream-structured-output? true
+                              :timeout-ms 60000
+                              :app-name "iris"
+                              :keep-alive "5m"
+                              :embedding-model "nomic-embed-text"}
+                     :openrouter {:type :openrouter
+                                  :api :chat-completions
+                                  :base-url "https://openrouter.ai/api/v1"
+                                  :model "openai/gpt-4o-mini"
+                                  :models {"openai/gpt-4o-mini" {:context-window 128000
+                                                                 :max-output-tokens 16384
+                                                                 :supports-streaming true
+                                                                 :supports-tools true
+                                                                 :supports-vision true}}
+                                  :temperature defaults/llm-temperature
+                                  :max-tokens defaults/llm-max-tokens
+                                  :stream? false
+                                  :prompt-cache? true
+                                  :stream-structured-output? true
+                                  :timeout-ms 60000
+                                  :site-url nil
+                                  :app-name "iris"
+                                  :api-key nil}
+                     :openai-compatible {:type :openai-compatible
+                                         :api :chat-completions
+                                         :base-url "https://api.openai.com/v1"
+                                         :model "gpt-4o-mini"
+                                         :models {"gpt-4o-mini" {:context-window 128000
+                                                                :max-output-tokens 16384
+                                                                :supports-streaming true
+                                                                :supports-tools true
+                                                                :supports-vision true}}
+                                         :temperature defaults/llm-temperature
+                                         :max-tokens defaults/llm-max-tokens
+                                         :stream? false
+                                         :prompt-cache? true
+                                         :stream-structured-output? true
+                                         :timeout-ms 60000
+                                         :site-url nil
+                                         :app-name "iris"
+                                         :api-key nil}}}
+   :storage {:sqlite {:path "data/agent.db"
+                      :journal-mode "WAL"
+                      :maximum-pool-size 8
+                      :minimum-idle 2
+                      :connection-timeout-ms 30000
+                      :destructive-reset-on-drift? false}}
+   :chat {:max-steps defaults/chat-max-steps
+          :profiles {:default {:small-model? false
+                              :respond-tool? false
+                              :force-tool-choice? false
+                              :tool-routing? false
+                              :max-nudges 0
+                              :nudge-budgets {:unknown-tool 0
+                                              :bare-text 0
+                                              :malformed-args 0
+                                              :repeated-tool-call 0
+                                              :missing-prerequisite 0
+                                              :repeated-same-error 0
+                                              :premature-final 0
+                                              :max-token-truncation 0
+                                              :edit-failure 0}
+                              :context-card-budgets {:nudges 0}}
+                     :small-local {:provider :ollama
+                                   :model "llama3.2:3b"
+                                   :small-model? true
+                                   :respond-tool? true
+                                   :force-tool-choice? true
+                                   :tool-routing? true
+                                   :max-nudges 3
+                                   :tool-categories [:read :write :run :search :web :plan :respond :messaging]
+                                   :nudge-budgets {:bare-text 2
+                                                   :unknown-tool 2
+                                                   :malformed-args 2
+                                                   :repeated-tool-call 2
+                                                   :missing-prerequisite 2
+                                                   :repeated-same-error 2
+                                                   :premature-final 2
+                                                   :max-token-truncation 1
+                                                   :edit-failure 2}
+                                   :context-card-budgets {:nudges 2
+                                                         :tool 2
+                                                         :prereq 2}}
+                    }
+	          :guardrails {:doom-loop {:enabled? true
+	                                   :threshold 3
+	                                   :window-size 16
+	                                   :sequence-threshold 3
+	                                   :sequence-window-size 24
+	                                   :max-sequence-length 8}}
+          :compaction {:max-context-tokens 8192
+                       :reserve-output-tokens 1024
+                       :keep-recent-tokens 2048
+                       :max-summary-input-tokens 8192
+                       :warning-threshold 0.8
+                       :destructive-threshold 1.0
+                       :summarizer-input-cap 8192
+                       :summary-max-tokens 512
+                       :tool-result-truncate-chars 2000
+                       :budgets {:system 1200
+                                 :memory 1200
+                                 :recent-conversation 4096
+                                 :tool-schema 1600
+                                 :pending-tool-result 800
+                                 :referenced-file 2400
+                                 :output-reserve 1024}}}
+   :loop {:max-iterations 10
+          :plan-file "LOOP_PLAN.md"
+          :summary-max-chars 1200
+          :validation-max-chars 12000}
+   :magi {:enabled? false
+          :mode :assistive
+          :fallback :human
+          :apply-to #{:tool-approvals}
+          :tool-categories #{:all}
+          :memory-promotion {:mode :manual
+                             :scopes #{:all}
+                             :poll-interval-seconds 60
+                             :failure-cooldown-minutes 15
+                             :max-candidates 10}
+          :tool {:enabled true}
+          :execution :parallel
+          :allow-critical? false
+          :timeout-ms 30000
+          :max-context-chars 12000
+          :file-review {:enabled? true
+                        :max-tool-calls 8
+                        :max-tool-rounds 4
+                        :timeout-ms 90000
+                        :max-evidence-chars 32000
+                        :max-tool-result-chars 12000}
+          :filter {:provider nil :model nil}
+          :judge {:provider nil :model nil}
+          :agents {:melchior {:provider nil :model nil}
+                   :balthasar {:provider nil :model nil}
+                   :casper {:provider nil :model nil}}}
+   :tools {:http {:enabled true
+                  :timeout-ms 30000
+                  :max-timeout-ms 30000
+                  :max-response-bytes 1048576
+                  :allow-private? false
+                  :max-redirects 3
+                  :default-headers {"User-Agent" "iris/0.1"}}
+           :web {:enabled true
+                 :timeout-ms 30000
+                 :max-response-bytes 1048576
+                 :extract-max-chars 7000
+                 :cache-max-entries 256
+                 :tavily {:enabled true
+                          :base-url "https://api.tavily.com"
+                          :api-key nil
+                          :api-key-file "~/.config/iris/secrets/tavily-api-key"}}
+           :yolo? false
+           :max-parallelism 6
+           :permissions {:api [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute :cron-read :cron-manage]
+                         :ui [:filesystem-read :filesystem-write :http-request :system-reload :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute]
+                         :agent [:http-request :memory-read :memory-write :todo-read :todo-write :magi-evaluate :homeassistant :wasm-execute :cron-read :cron-manage]
+                         :chat [:filesystem-read :http-request :memory-read :memory-write :system-reload :todo-read :todo-write :shell-exec :magi-evaluate :homeassistant :wasm-execute :cron-read :cron-manage]}
+           :profiles {:cron-observe {:permissions [:filesystem-read :http-request :memory-read :homeassistant]
+                                     :allowed-tools [:fs_read :fs_list :fs_search :http :memory_recall
+                                                     :vault_search :message_search :message_get :homeassistant]
+                                     :allowed-actions {:http [:get :head]
+                                                       :homeassistant [:get_state :get_states :list_states :search_states :list_services]}}
+                      :cron-memory {:permissions [:memory-read :memory-write]
+                                    :allowed-tools [:memory_recall :vault_search :memory_find_similar
+                                                    :message_search :message_get
+                                                    :memory_extract_session :memory_propose_create
+                                                    :memory_propose_update :memory_propose_move
+                                                    :memory_propose_delete :memory_propose_merge
+                                                    :skill_propose_update :skills_list :skills_read]}
+                      :cron-automation {:permissions [:filesystem-read :filesystem-write :http-request :shell-exec]
+                                        :allowed-tools [:fs_read :fs_list :fs_search :fs_write :http :shell]}}
+           :policy {:allowlist []
+                    :blocklist []
+                    :tool-scopes {}}
+           :approvals {:ttl-seconds 900}
+           :fs {:enabled true
+                :roots ["."]
+                :max-read-bytes 1048576
+                :max-write-bytes 1048576
+                :max-search-files 5000
+                :max-search-file-bytes 1048576
+                :max-search-results 200
+                :max-search-line-chars 500
+                :search-timeout-ms 5000}
+           :homeassistant {:enabled false
+                           :base-url nil
+                           :token nil
+                           :timeout-ms 10000
+                           :allowed-domains #{:light :switch :scene :script}
+                           :global-services #{}}
+           :wasm {:enabled false
+                  :timeout-ms 30000
+                  :max-wasm-bytes 1048576
+                  :max-stdout-bytes 1048576
+                  :max-stderr-bytes 1048576
+                  :max-memory-pages 64
+                  :wasi {:args []
+                         :env {}
+                         :stdin ""
+                         :fs {:mounts []
+                              :allowed-roots []
+                              :max-copy-bytes 10485760}}
+                  :network {:enabled? false
+                            :allowed-hosts []
+                            :allow-private? false
+                            :timeout-ms 10000
+                            :max-response-bytes 1048576}}
+           :wasm-bundles {:enabled? true
+                          :install-dir "bundles/installed"
+                          :package-dir "bundles/packages"
+                          :dev-roots []
+                          :enabled []
+                          :settings {}
+                          :timeout-ms 30000
+                          :max-stdout-bytes 1048576
+                          :max-stderr-bytes 1048576
+                          :max-memory-pages 64
+                          :http {:timeout-ms 10000
+                                 :max-timeout-ms 30000
+                                 :max-response-bytes 1048576}}
+           :todo {:enabled true}
+           :shell {:enabled true
+                   :roots ["."]
+                   :working-dir "."
+                   :timeout-ms 30000
+                   :max-timeout-ms 30000
+                   :default-decision :ask
+                   :rules [{:argv ["pwd"] :decision :allow}
+                           {:argv ["printf" "**"] :decision :allow}
+                           {:argv ["echo" "**"] :decision :allow}
+                           {:argv ["which" "**"] :decision :allow}
+                           {:argv ["type" "**"] :decision :allow}
+                           {:argv ["ls" "**"] :decision :allow}
+                           {:argv ["cat" "**"] :decision :allow}
+                           {:argv ["head" "**"] :decision :allow}
+                           {:argv ["tail" "**"] :decision :allow}
+                           {:argv ["wc" "**"] :decision :allow}
+                           {:argv ["df" "**"] :decision :allow}
+                           {:argv ["sort" "**"] :decision :allow}
+                           {:argv ["uniq" "**"] :decision :allow}
+                           {:argv ["cut" "**"] :decision :allow}
+                           {:argv ["diff" "**"] :decision :allow}
+                           {:argv ["rg" "**"] :decision :allow}
+                           {:argv ["grep" "**"] :decision :allow}
+                           {:argv ["find" "**"] :decision :allow}
+                           {:argv ["git" "status" "**"] :decision :allow}
+                           {:argv ["git" "log" "**"] :decision :allow}
+                           {:argv ["git" "diff" "**"] :decision :allow}
+                           {:argv ["git" "show" "**"] :decision :allow}
+                           {:argv ["git" "branch" "**"] :decision :allow}
+                           {:argv ["cargo" "fmt" "**"] :decision :allow}
+                           {:argv ["rm" "-rf" "/*"] :decision :deny}
+                           {:argv ["sudo" "rm" "-rf" "/*"] :decision :deny}
+                           {:argv ["dd" "**"] :decision :deny}
+                           {:argv ["mkfs" "**"] :decision :deny}
+                           {:argv ["fdisk" "**"] :decision :deny}
+                           {:argv ["mkswap" "**"] :decision :deny}]
+                   :max-output-bytes 65536}
+           :mcp {:enabled false
+                 :servers []}
+           :display {:web {:show-tool-calls? true
+                           :collapsed? true
+                           :preview-chars 800
+                           :args-preview-chars 800
+                           :max-result-height-px 320
+                           :per-tool {}}
+                     :telegram {:show-tool-calls? true
+                                :preview-chars 1600
+                                :args-preview-chars 1200
+                                :per-tool {}}
+                     :api {:show-tool-calls? true
+                           :full? true
+                           :per-tool {}}}}
+   :skills {:dirs ["skills"]}
+   :cron {:enabled true
+          :poll-interval-seconds 15
+          :max-concurrency 2
+          :run-timeout-seconds 1800
+          :misfire-grace-seconds 3600
+          :timezone "UTC"
+          :provider nil
+          :model nil
+          :tool-profile :cron-observe
+          :output-max-chars 200000}
+   :memory {:search {:default-limit 10
+                     :max-limit 10
+                     :min-score 0.3}
+            :vault {:paths ["memory"]
+                    :writable? true}
+            :embeddings {:enabled? false
+                         :surfaces [:vault-notes :vault-chunks]
+                         :batch-size 16
+                         :candidate-limit 1000
+                         :rebuild-mode :replace}
+            :quality {:low-confidence-threshold 0.6
+                      :stale-days 180}
+            :user-profile {:enabled true
+                           :min-confidence 0.9
+                           :max-facts 24
+                           :max-operations 5
+                           :max-transcript-chars 20000
+                           :max-user-md-chars 8000}
+            :notes {:extractor {:enabled true
+                                :provider nil
+                                :model nil
+                                :format :json-schema}
+                    :idle-extraction {:enabled true
+                                      :idle-timeout-minutes 45
+                                      :poll-interval-seconds 60
+                                      :failure-cooldown-minutes 15
+                                      :max-sessions 20
+                                      :max-messages 80
+                                      :max-events 40
+                                      :min-confidence 0.85
+                                      :include-events? true}
+                    :default-scope :session}}
+   :channel-adapters {:telegram {:enabled false
+                                  :bot-token nil
+                                  :rich-messages? true
+                                  :poll-timeout-seconds 30
+                                  :poll-limit 100
+                                  :ask-timeout-seconds 3600
+                                  :max-download-bytes 20971520
+	                                  :document-roots ["."]
+	                                  :max-document-bytes 20971520
+	                                  :session-reset {:mode :none
+	                                                  :idle-minutes 1440
+	                                                  :at-hour 4
+	                                                  :notify? true}
+	                                  :allowlist {:allow-all? false
+	                                              :user-ids []
+	                                              :chat-ids []}}}
+	   :runners {:default-substrate :auto
+             ;; Substrates a remote API caller may request. Excludes
+             ;; :local-unsandboxed (no isolation) so the run API cannot be used
+             ;; as a host-exec endpoint. Internal/system callers are unrestricted.
+             :api-selectable-substrates [:seatbelt :bubblewrap :docker :podman]
+             :docker {:image "clojure:temurin-21-alpine"
+                      :image-mode :mounted-dev
+                      :pull-policy :missing
+                      :container-working-dir "/workspace"
+                      :container-data-dir "/tmp/iris"
+                      :container-home-dir "/tmp/iris/home"
+                      :user "65532:65532"
+                      :host-working-dir "."
+                      :share-network? false}
+             :podman {:image "clojure:temurin-21-alpine"
+                      :image-mode :mounted-dev
+                      :pull-policy :missing
+                      :container-working-dir "/workspace"
+                      :container-data-dir "/tmp/iris"
+                      :container-home-dir "/tmp/iris/home"
+                      :user "65532:65532"
+                      :host-working-dir "."
+                      :share-network? false}}
+   :nrepl {:enabled true
+           :bind "127.0.0.1"
+           :port 0
+           :port-file ".nrepl-port"}
+   :telemetry {:enabled true
+               :max-latency-samples 1000}
+   :observer {:enabled true
+              :best-effort? true
+              :sinks [:telemetry :logging]}
+   :trace {:mode :none
+           :path "runtime-trace.jsonl"
+           :rolling-max-entries 1000}
+   :logging {:enabled false
+             :file {:path "logs/iris.log"
+                    :max-bytes 10485760
+                    :max-files 5}
+             :otel {:enabled false
+                    :url "http://localhost:4318/"
+                    :send [:traces :logs]
+                    :max-items 5000
+                    :publish-delay 5000
+                    :http-opts {:conn-timeout 2000
+                                :socket-timeout 2000}}}
+   :api {:host "127.0.0.1"
+         :key nil
+         :port 8080}})

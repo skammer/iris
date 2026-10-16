@@ -6,15 +6,13 @@
    [agent.persistence.sqlite :as sqlite]
    [agent.skills :as skills]
    [agent.tools.core :as tools]
-   [agent.util :as util]
-   [clojure.string :as str])
+   [clojure.string :as str]
+   [agent.tools.common.memory.format :as format])
   (:import
    [java.time Instant]))
 
-(def ^:private max-line-chars 600)
-(def ^:private max-vault-chars 8000)
-(def ^:private max-message-chars 800)
 (def ^:private max-message-search-limit 100)
+
 (def ^:private max-extract-session-limit 200)
 
 (def ^:private scope-schema
@@ -52,17 +50,6 @@
       since (assoc :since (str since))
       until (assoc :until (str until)))))
 
-(defn- truncate-text [value max-chars]
-  (util/truncate value max-chars #(str " [truncated " % " chars]")))
-
-(defn- compact-whitespace [value]
-  (str/trim (str/replace (str (or value "")) #"\s+" " ")))
-
-(defn- tokens [value]
-  (->> (str/split (str/lower-case (or value "")) #"\W+")
-       (remove str/blank?)
-       set))
-
 (defn- positive-int [value fallback]
   (if (and (integer? value) (pos? value))
     value
@@ -84,133 +71,10 @@
            :metadata
            :project-id))
 
-(defn- first-match-index [query text]
-  (let [query* (str/lower-case (str/trim (or query "")))
-        text* (str/lower-case (or text ""))]
-    (or (when-not (str/blank? query*)
-          (let [idx (str/index-of text* query*)]
-            (when (some? idx) idx)))
-        (some (fn [token]
-                (let [idx (str/index-of text* token)]
-                  (when (some? idx) idx)))
-              (tokens query*)))))
-
-(defn- focused-chunk
-  ([query text] (focused-chunk query text max-line-chars))
-  ([query text max-chars]
-   (let [text* (compact-whitespace text)]
-     (if (<= (count text*) max-chars)
-       text*
-       (let [idx (or (first-match-index query text*) 0)
-             half (quot max-chars 2)
-             start (max 0 (- idx half))
-             end (min (count text*) (+ start max-chars))
-             start* (max 0 (- end max-chars))
-             prefix (when (pos? start*) "... ")
-             suffix (when (< end (count text*)) " ...")]
-         (str prefix (subs text* start* end) suffix))))))
-
-(defn- recall-results-text [query results]
-  (cond
-    (str/blank? (or query ""))
-    "Memory recall skipped: query is blank. Provide a focused query."
-
-    (empty? results)
-    (str "No memory recall results for: " query)
-
-    :else
-    (str "Memory recall for: " query "\n"
-         (str/join
-          "\n"
-          (map (fn [{:keys [surface id text score scope status reason why]}]
-                 (str "- " (name surface)
-                      (when id
-                        (str " #" id))
-                      (format " score=%.3f" (double score))
-                      " " (name status)
-                      " " (name reason)
-                      (when-let [breakdown (:score-breakdown why)]
-                        (str " why=" (pr-str breakdown)))
-                      (when scope
-                        (str " scope=" (name (:type scope))
-                             (when-let [scope-id (:id scope)]
-                               (str "/" scope-id))))
-                      ": "
-                      (truncate-text text max-line-chars)))
-               results)))))
-
-(defn- vault-search-text [query results]
-  (if (empty? results)
-    (str "No vault results for: " query)
-    (str "Vault results for: " query "\n"
-         (str/join
-          "\n"
-          (map (fn [{:keys [path note-id chunk-id heading text iris-status iris-scope revision
-                            reason score-breakdown]}]
-                 (str "- " chunk-id
-                      (when note-id (str " note=" note-id))
-                      " " iris-status
-                      " scope=" iris-scope
-                      (when revision (str " revision=" revision))
-                      (when reason (str " reason=" (name reason)))
-                      (when score-breakdown (str " why=" (pr-str score-breakdown)))
-                      " path=" path
-                      (when heading (str " heading=" heading))
-                      ": "
-                      (truncate-text text max-line-chars)))
-               results)))))
-
-(defn- similar-notes-text [candidates]
-  (if (empty? candidates)
-    "No similar approved memory notes found."
-    (str "Similar approved memory notes; lexical score is candidate generation only. Verify semantic equivalence before proposing a merge.\n"
-         (str/join
-          "\n"
-          (map (fn [{:keys [score score-breakdown scope scope-owner left right]}]
-                 (str "- score=" (format "%.3f" (double score))
-                      " scope=" scope
-                      (when scope-owner (str "/" scope-owner))
-                      " why=" (pr-str score-breakdown)
-                      "\n  left=" (:id left) " revision=" (:revision left)
-                      " title=" (pr-str (:title left))
-                      " body=" (pr-str (truncate-text (:body left) max-line-chars))
-                      "\n  right=" (:id right) " revision=" (:revision right)
-                      " title=" (pr-str (:title right))
-                      " body=" (pr-str (truncate-text (:body right) max-line-chars))))
-               candidates)))))
-
 (def ^:private scratchpad-scope-schema
   [:map {:closed true}
    [:type [:or [:enum :global :session] [:enum "global" "session"]]]
    [:id {:optional true} [:maybe :string]]])
-
-(defn- scratchpad-read-text [{:keys [scope path revision content]}]
-  (str "Scratchpad " (:type scope)
-       (when-let [id (:id scope)] (str "/" id))
-       " revision=" revision
-       " path=" path
-       "\n"
-       (truncate-text content max-vault-chars)))
-
-(defn- scratchpad-search-text [{:keys [query scope revision snippets]}]
-  (if (empty? snippets)
-    (str "No scratchpad results for: " query)
-    (str "Scratchpad results for: " query
-         " scope=" (:type scope)
-         (when-let [id (:id scope)] (str "/" id))
-         " revision=" revision
-         "\n"
-         (str/join "\n"
-                   (map (fn [{:keys [line text]}]
-                          (str "- line " line ": " (truncate-text text max-line-chars)))
-                        snippets)))))
-
-(defn- scratchpad-replace-text [{:keys [scope path revision previous-revision]}]
-  (str "Updated scratchpad " (:type scope)
-       (when-let [id (:id scope)] (str "/" id))
-       " revision=" revision
-       " previous=" previous-revision
-       " path=" path))
 
 (defn create-memory-recall-tool [memory-service]
   (tools/create-tool
@@ -230,7 +94,7 @@
     (fn [{:keys [query limit scope]} context]
       (ensure-permission! context :memory-read)
       (if (str/blank? (or query ""))
-        (recall-results-text query nil)
+        (format/recall-results-text query nil)
         (let [project-id (session-project-id memory-service context)
               results (:results
                        (recall/recall
@@ -241,7 +105,7 @@
                           (:session-id context) (assoc :session-id (:session-id context))
                           project-id (assoc :project-id project-id)
                           (:agent-id context) (assoc :agent-id (:agent-id context)))))]
-          (recall-results-text query results))))}))
+          (format/recall-results-text query results))))}))
 
 (defn create-vault-search-tool [memory-service]
   (tools/create-tool
@@ -260,7 +124,7 @@
     (fn [{:keys [query limit]} context]
       (ensure-permission! context :memory-read)
       (let [project-id (session-project-id memory-service context)]
-        (vault-search-text query
+        (format/vault-search-text query
                            (memory/search-vault memory-service query
                                                 (cond-> {:limit (memory-tool-limit memory-service limit)}
                                                   (:session-id context) (assoc :session-id (:session-id context))
@@ -282,7 +146,7 @@
     :execute-fn
     (fn [{:keys [threshold limit]} context]
       (ensure-permission! context :memory-read)
-      (similar-notes-text
+      (format/similar-notes-text
        (memory/similar-vault-notes
         memory-service
         (cond-> {}
@@ -304,7 +168,7 @@
     :execute-fn
     (fn [{:keys [scope]} context]
       (ensure-permission! context :memory-read)
-      (scratchpad-read-text
+      (format/scratchpad-read-text
        (memory/read-scratchpad memory-service
                                (cond-> {}
                                  scope (assoc :scope scope)
@@ -326,7 +190,7 @@
     :execute-fn
     (fn [{:keys [query scope]} context]
       (ensure-permission! context :memory-read)
-      (scratchpad-search-text
+      (format/scratchpad-search-text
        (memory/search-scratchpad memory-service
                                  query
                                  (cond-> {}
@@ -351,7 +215,7 @@
     :execute-fn
     (fn [{:keys [old-text new-text expected-revision scope]} context]
       (ensure-permission! context :memory-write)
-      (scratchpad-replace-text
+      (format/scratchpad-replace-text
        (memory/replace-scratchpad! memory-service
                                    (cond-> {:old-text old-text
                                             :new-text new-text
@@ -373,19 +237,6 @@
 (defn- update-evidence [context reason]
   {:user (get-in context [:magi-context :user-request])
    :assistant reason})
-
-(defn- memory-update-text [update]
-  (if (:noop update)
-    (str "Memory update is a no-op for " (:target-id update)
-         " revision=" (:base-revision update))
-    (str "Memory proposal " (:id update)
-         " operation=" (:operation update)
-         " status=" (:status update)
-         " target=" (:target-id update)
-         " base=" (:base-revision update)
-         " proposed=" (:proposed-revision update)
-         "\n"
-         (:diff update))))
 
 (defn- proposal-opts [memory-service context reason]
   (cond-> {:source :tool
@@ -443,7 +294,7 @@
     :execute-fn
     (fn [{:keys [note-id expected-revision changes reason]} context]
       (ensure-permission! context :memory-write)
-      (memory-update-text
+      (format/memory-update-text
        (memory/propose-vault-note-update!
         memory-service
         note-id
@@ -468,7 +319,7 @@
     :execute-fn
     (fn [{:keys [note-id expected-revision folder reason]} context]
       (ensure-permission! context :memory-write)
-      (memory-update-text
+      (format/memory-update-text
        (memory/propose-vault-note-move! memory-service note-id expected-revision folder
                                         (proposal-opts memory-service context reason))))}))
 
@@ -487,7 +338,7 @@
     :execute-fn
     (fn [{:keys [note-id expected-revision reason]} context]
       (ensure-permission! context :memory-write)
-      (memory-update-text
+      (format/memory-update-text
        (memory/propose-vault-note-delete! memory-service note-id expected-revision
                                           (proposal-opts memory-service context reason))))}))
 
@@ -509,7 +360,7 @@
     :execute-fn
     (fn [{:keys [target-id source-id expected-target-revision expected-source-revision changes reason]} context]
       (ensure-permission! context :memory-write)
-      (memory-update-text
+      (format/memory-update-text
        (memory/propose-vault-note-merge!
         memory-service target-id source-id expected-target-revision expected-source-revision changes
         (proposal-opts memory-service context reason))))}))
@@ -542,7 +393,7 @@
                            :skill-name skill-name
                            :expected-revision expected-revision
                            :actual-revision actual-revision})))
-        (memory-update-text
+        (format/memory-update-text
          (memory/create-memory-proposal!
           memory-service
           {:operation :skill-update
@@ -556,22 +407,6 @@
                       "--- current\n" before "\n"
                       "+++ proposed\n" content)}
           (proposal-opts memory-service context reason)))))}))
-
-(defn- extract-session-text
-  [{:keys [session-id total-message-count included-message-count note-count
-           created-count update-count paths update-ids user-profile]}]
-  (str "Memory extraction complete for session " session-id
-       ". Messages scanned: " included-message-count "/" total-message-count
-       ". Changes proposed: " note-count
-       " (new: " created-count ", updates: " update-count ")"
-       (when (seq paths)
-         (str "\nNew notes:\n" (str/join "\n" (map #(str "- " %) paths))))
-       (when (seq update-ids)
-         (str "\nUpdate proposals:\n"
-              (str/join "\n" (map #(str "- " %) update-ids))))
-       (when user-profile
-         (str "\nUser profile: " (name (:status user-profile))
-              " (facts: " (:fact-count user-profile) ")"))))
 
 (defn create-memory-extract-session-tool [memory-service provider user-profile-service]
   (tools/create-tool
@@ -603,7 +438,7 @@
             profile-result (when (user-profile/enabled? user-profile-service)
                              (user-profile/learn-session!
                               user-profile-service session-id* limit*))]
-        (extract-session-text (assoc extraction :user-profile profile-result))))}))
+        (format/extract-session-text (assoc extraction :user-profile profile-result))))}))
 
 (defn create-memory-tools
   ([memory-service] (create-memory-tools memory-service nil))
@@ -626,30 +461,6 @@
      provider (conj (create-memory-extract-session-tool memory-service
                                                         provider
                                                         user-profile-service)))))
-
-(defn- message-header [{:keys [id session-id session-kind session-title role created-at]}]
-  (str "message #" id
-       " session=" session-id
-       " kind=" (name session-kind)
-       " role=" role
-       " created-at=" created-at
-       (when-not (str/blank? session-title)
-         (str " title=" (pr-str session-title)))))
-
-(defn- message-search-text [query rows]
-  (if (empty? rows)
-    (str "No messages found" (when-not (str/blank? query) (str " for: " query)))
-    (str "Message results" (when-not (str/blank? query) (str " for: " query)) "\n"
-         (str/join "\n"
-                   (map (fn [row]
-                          (str "- " (message-header row) "\n  "
-                               (focused-chunk query (:content row) max-message-chars)))
-                        rows)))))
-
-(defn- message-get-text [message]
-  (if-not message
-    "Message not found"
-    (str (message-header message) "\ncontent:\n" (:content message))))
 
 (defn create-message-search-tool [memory-service]
   (tools/create-tool
@@ -685,7 +496,7 @@
                                                   :since since
                                                   :until until}
                                            session-id* (assoc :session-id session-id*)))]
-        (message-search-text query rows)))}))
+        (format/message-search-text query rows)))}))
 
 (defn create-message-get-tool [memory-service]
   (tools/create-tool
@@ -708,7 +519,7 @@
                                (and (:cron-run-id context) (nil? session-id)))
             session-id* (when-not cross-session?
                           (or session-id (:session-id context)))]
-        (message-get-text
+        (format/message-get-text
          (sqlite/get-search-message (:store memory-service) id
                                     (cond-> {}
                                       session-id* (assoc :session-id session-id*))))))}))
