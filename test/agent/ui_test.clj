@@ -33,57 +33,21 @@
   (let [html (ui/index-page "/chat/session-1")]
     (is (str/includes? html "/ui/shell?tab=chat&amp;session_id=session-1"))))
 
-(deftest ui-is-dark-only
-  (let [css (slurp (io/file "public/app.css"))
-        js (slurp (io/file "public/web-components.js"))
-        catalog-html (ui-catalog/page)]
-    (is (str/includes? css "color-scheme: dark"))
-    (is (not (str/includes? css ":root[data-theme=\"light\"]")))
-    (is (not (str/includes? css "theme-switching")))
-    (is (not (str/includes? js "ThemeToggle")))
-    (is (not (str/includes? js "iris-theme")))
-    (is (not (str/includes? catalog-html "theme-toggle")))
-    (is (not (str/includes? catalog-html "data-theme=")))))
-
-(deftest ui-catalog-covers-reference-components-and-layouts
-  (let [html (ui-catalog/page)]
-    (is (str/includes? html "IRIS UI SYSTEM"))
-    (is (str/includes? html "Status &amp; progress"))
-    (is (str/includes? html "Cards, metrics &amp; tables"))
-    (is (str/includes? html "Card tabs"))
-    (is (str/includes? html "Horizontal tabs"))
-    (is (str/includes? html "Vertical tabs"))
-    (is (str/includes? html "Bottom tabs"))
-    (is (str/includes? html "Left tabs"))
-    (is (re-find #"/public/app\.css\?v=\d+" html))
-    (is (re-find #"/public/web-components\.js\?v=\d+" html))
-    (is (str/includes? html "Workflow canvas"))
-    (is (str/includes? html "Layout recipes"))
-    (is (str/includes? html "Dialog / onboarding"))))
-
 (deftest ui-catalog-has-valid-structure-and-accessible-controls
   (let [doc (Jsoup/parse (ui-catalog/page))
-        sections (.select doc ".ui-catalog-section")
         ids (mapv #(.id %) (.select doc "[id]"))]
     (is (= 1 (.size (.select doc ".ui-catalog-shell > aside.ui-catalog-nav"))))
     (is (= 1 (.size (.select doc ".ui-catalog-shell > main.ui-catalog-main"))))
-    (is (= ["foundations" "actions" "forms" "status" "data" "navigation" "card-tabs"
-            "layouts" "workflow" "feedback"]
-           (mapv #(.id %) sections)))
-    (is (= 22 (.size (.select doc ".ui-card-tab[role=tab]"))))
-    (is (= 22 (.size (.select doc ".ui-card-tab > .ui-card-tab__label"))))
-    (is (= 22 (.size (.select doc ".ui-catalog-card[role=tabpanel]"))))
-    (is (= 1 (.size (.select doc "clipPath#ui-card-tab-horizontal path"))))
-    (is (= 1 (.size (.select doc "clipPath#ui-card-tab-vertical path"))))
-    (is (= 1 (.size (.select doc "clipPath#ui-card-tab-bottom path"))))
-    (is (= 1 (.size (.select doc "clipPath#ui-card-tab-left path"))))
-    (is (= 4 (.size (.select doc ".ui-card-tab[aria-selected=true]"))))
-    (is (= 4 (.size (.select doc ".ui-card-tab--black"))))
-    (is (= 4 (.size (.select doc ".ui-card-tab--yellow"))))
-    (is (= 4 (.size (.select doc ".ui-card-tab--red"))))
-    (is (= 4 (.size (.select doc ".ui-card-tabs--vertical .ui-card-tab"))))
-    (is (= 4 (.size (.select doc ".ui-card-tabs--left .ui-card-tab"))))
-    (is (= 2 (.size (.select doc ".ui-card-tab-list[aria-orientation=vertical]"))))
+    (let [tabs (.select doc "[role=tab]")
+          panels (.select doc "[role=tabpanel]")]
+      (is (seq tabs))
+      (is (= (count tabs) (count panels)))
+      (is (every? #(not (str/blank? (.text %))) tabs)
+          "tabs need an accessible name")
+      (is (every? #(some? (.getElementById doc (.attr % "aria-controls"))) tabs)
+          "every tab must reference an existing panel")
+      (is (every? #(some? (.getElementById doc (.attr % "aria-labelledby"))) panels)
+          "every panel must reference its tab"))
     (is (= (count ids) (count (distinct ids))) "catalog ids must be unique")
     (is (every? #(not (str/blank? (.attr % "aria-label")))
                 (.select doc ".ui-icon-button"))
@@ -93,19 +57,6 @@
                            (.parents %)))
                 (.select doc "input, textarea, select"))
         "form controls need a label or accessible name")))
-
-(deftest ui-avoids-thick-side-accent-borders
-  (let [css (slurp (io/file "public/app.css"))]
-    (is (not (re-find #"border-(?:left|right)\s*:\s*[2-9][0-9]*px" css)))
-    (is (not (re-find #"border-(?:left|right)-width\s*:\s*[2-9][0-9]*px" css)))))
-
-(deftest card-tab-hover-preserves-ink-color
-  (let [css (slurp (io/file "public/app.css"))
-        [_ hover-rule] (re-find #"(?s)\.ui-card-tab:not\(\[aria-selected=\"true\"\]\):hover\s*\{([^}]*)\}" css)]
-    (is hover-rule)
-    (is (str/includes? css ".ui-card-tab:hover { color: var(--tab-ink); }"))
-    (is (not (str/includes? hover-rule "brightness(")))
-    (is (not (str/includes? hover-rule "saturate(")))))
 
 (deftest shell-brand-is-accessible-text-link
   (with-redefs [sqlite/health-check (constantly {:details {}})
@@ -239,23 +190,6 @@
       (is (.hasClass (.first (.select doc "#workspace-content"))
                      "workspace-content--graphite"))
       (is (not (str/includes? html ".leading"))))))
-
-(deftest shell-navigation-reuses-card-tab-component
-  (let [css (slurp (io/file "public/app.css"))
-        js (slurp (io/file "public/web-components.js"))]
-    (is (str/includes? css ".shell-nav.ui-card-tabs"))
-    (is (str/includes? css ".workspace-content--sky"))
-    (is (str/includes? css "--workspace-bg: var(--card-sky)"))
-    (is (str/includes? css "background: var(--workspace-bg)"))
-    (is (str/includes? css "padding: 16px 8px 8px"))
-    (is (str/includes? css "inset: 16px 8px 8px"))
-    (is (not (str/includes? css ".workspace-content > .workspace-grid,\n.workspace-content > .memory-workspace {\n  height: 100%;")))
-    (is (str/includes? css ".shell-nav.ui-card-tabs .ui-card-tab:not([aria-selected=\"true\"]):hover { filter: none; transform: translateY(7px); }"))
-    (is (not (str/includes? css ".workspace-content {\n  display: contents;")))
-    (is (not (str/includes? css ".shell-nav__pill")))
-    (is (not (str/includes? js "positionNavPill")))
-    (doseq [key ["ArrowLeft" "ArrowRight" "Home" "End"]]
-      (is (str/includes? js key)))))
 
 (deftest create-session-form-posts-explicit-form-and-clears-on-success
   (let [path (temp-db-path)
@@ -652,10 +586,13 @@
                                                          :tab :browser
                                                          :note-id "mem_ui_approved"})]
         (testing "second-level navigation"
-          (doseq [label ["Overview" "Approvals" "Browser"]]
-            (is (str/includes? overview-html (str ">" label "</button>"))))
-          (is (str/includes? overview-html "role=\"tablist\""))
-          (is (str/includes? overview-html "memory-tab--active")))
+          (doseq [[html selected] [[overview-html "Overview"]
+                                  [approvals-html "Approvals"]
+                                  [browser-html "Browser"]]]
+            (let [doc (Jsoup/parse html)
+                  tabs (.select doc "[role=tablist] [role=tab]")]
+              (is (= selected (.text (.select doc "[role=tab][aria-selected=true]"))))
+              (is (every? #{"true" "false"} (map #(.attr % "aria-selected") tabs))))))
         (testing "overview"
           (is (str/includes? overview-html "Memory Tool"))
           (is (str/includes? overview-html "/ui/memory/tool"))

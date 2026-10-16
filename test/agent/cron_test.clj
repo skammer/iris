@@ -18,7 +18,8 @@
    [clojure.java.io :as io]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]])
-  (:import (java.time Instant)))
+  (:import (java.time Instant)
+           (org.jsoup Jsoup)))
 
 (defn- temp-store []
   (let [path (.getAbsolutePath (java.io.File/createTempFile "iris-cron-" ".db"))]
@@ -116,55 +117,32 @@
                                   {:output "Full result"
                                    :notification-status :not-requested})]
     (try
-      (let [jobs-html (ui-cron/fragment system {:tab :jobs :limit 20})
-            runs-html (ui-cron/fragment system {:tab :runs :limit 20})
-            stats-html (ui-cron/fragment system {:tab :stats :limit 20})
-            new-html (ui-cron/fragment system {:tab :new :limit 20})
-            editor-html (ui-cron/job-editor-detail-fragment system job)]
-        (is (= 4 (count (re-seq #"role=\"tab\"" jobs-html))))
-        (is (str/includes? jobs-html "class=\"cron-workspace scroll-fade\""))
-        (is (str/includes? jobs-html "<h2>Jobs</h2>"))
-        (is (str/includes? jobs-html "cron-job-link"))
-        (is (str/includes? jobs-html "<td><div class=\"cron-actions\">"))
-        (is (not (str/includes? jobs-html "<td class=\"cron-actions\">")))
-        (is (= 2 (count (re-seq #"<form class=\"cron-inline-form\"" jobs-html))))
-        (is (not (str/includes? jobs-html "selector: el")))
-        (is (str/includes? jobs-html "scrollIntoView"))
-        (is (not (str/includes? jobs-html "Scheduler")))
-        (is (not (str/includes? jobs-html "Recent runs")))
-        (is (str/includes? runs-html "Recent runs"))
-        (is (str/includes? runs-html "cron-run-row--has-result"))
-        (is (str/includes? runs-html "cron-run-result-row"))
-        (is (str/includes? runs-html "colspan=\"7\""))
-        (is (str/includes? runs-html "cron-audit-links"))
-        (is (not (str/includes? runs-html "<td><span class=\"status-badge status-badge--succeeded\">succeeded</span><details")))
-        (is (not (str/includes? runs-html "Persistent schedules")))
-        (is (str/includes? stats-html "class=\"cron-stats\""))
-        (is (str/includes? stats-html "Active jobs"))
-        (is (not (str/includes? stats-html "Persistent schedules")))
-        (is (str/includes? new-html "Create job"))
-        (is (str/includes? new-html "Telegram — always send result"))
-        (is (str/includes? editor-html "update-run"))
-        (is (str/includes? editor-html "cron-delete-button"))
-        (is (str/includes? editor-html "name=\"action\" type=\"hidden\" value=\"update\""))
-        (is (str/includes? editor-html "name=\"schedule_kind\" type=\"hidden\" value=\"cron\""))
-        (is (str/includes? editor-html "name=\"cron_expression\" value=\"0 9 * * *\""))
-        (is (str/includes? editor-html "data-on:click=\"el.form.elements.action.value=&apos;delete&apos;\""))
-        (is (str/includes? editor-html "data-on:click=\"el.form.elements.action.value=&apos;update&apos;\""))
-        (is (str/includes? editor-html "data-on:click=\"el.form.elements.action.value=&apos;update-run&apos;\""))
-        (is (not (str/includes? editor-html "onclick=")))
-        (is (not (str/includes? editor-html "selector: el")))
-        (is (str/includes? editor-html "Save &amp; run"))
-        (is (str/includes? editor-html "notify_policy.value === &apos;never&apos;")))
+      (let [jobs (Jsoup/parse (ui-cron/fragment system {:tab :jobs :limit 20}))
+            runs (Jsoup/parse (ui-cron/fragment system {:tab :runs :limit 20}))
+            editor (Jsoup/parse (ui-cron/job-editor-detail-fragment system job))
+            actions (.select jobs "form.cron-inline-form")
+            field (fn [doc field-name]
+                    (.attr (.selectFirst doc (str "[name=" field-name "]")) "value"))]
+        (is (= "Jobs" (.text (.select jobs "[role=tab][aria-selected=true]"))))
+        (is (every? #{"true" "false"}
+                    (map #(.attr % "aria-selected") (.select jobs "[role=tab]"))))
+        (is (= #{"pause" "run"} (set (map #(field % "action") actions))))
+        (is (every? #(= (:id job) (field % "id")) actions))
+        (is (every? #(= (str (:revision job)) (field % "revision")) actions)
+            "actions must carry optimistic-concurrency revisions")
+        (is (= (:id job) (field editor "id")))
+        (is (= "update" (field editor "action")))
+        (is (= "cron" (field editor "schedule_kind")))
+        (is (= "0 9 * * *" (field editor "cron_expression")))
+        (is (= #{"never" "always" "agent"}
+               (set (map #(.attr % "value") (.select editor "select[name=notify_policy] option")))))
+        (is (= "never" (.attr (.selectFirst editor "select[name=notify_policy] option[selected]") "value")))
+        (is (= "succeeded" (.text (.select runs ".cron-run-row .status-badge"))))
+        (is (some? (.getElementById runs (str "cron-run-detail-" (:id run))))
+            "lazy result target must correspond to the persisted run"))
       (finally
         (sqlite/close-store! store)
         (io/delete-file path true)))))
-
-(deftest cron-job-table-keeps-themed-text-and-compact-actions-test
-  (let [css (slurp (io/file "public/app.css"))]
-    (is (str/includes? css ".cron-table td { vertical-align: top; color: var(--text-primary); }"))
-    (is (str/includes? css ".cron-actions { display: flex; align-items: stretch; flex-wrap: nowrap; gap: 4px;"))
-    (is (str/includes? css ".cron-editor__actions .cron-delete-button"))))
 
 (deftest cron-stats-renders-week-gantt-and-month-calendar-test
   (let [{:keys [path store]} (temp-store)
@@ -184,6 +162,8 @@
                                                  :date "2026-08-10" :limit 20})
             calendar-html (ui-cron/fragment system {:tab :stats :view :calendar
                                                      :date "2026-08-10" :limit 20})]
+        (is (= "Gantt" (.text (.select (Jsoup/parse week-html) "[aria-pressed=true]"))))
+        (is (= "Calendar" (.text (.select (Jsoup/parse calendar-html) "[aria-pressed=true]"))))
         (is (str/includes? week-html "cron-gantt"))
         (is (= 7 (count (re-seq #"cron-gantt__day-heading" week-html))))
         (is (str/includes? week-html "Mon 10"))

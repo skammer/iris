@@ -109,3 +109,34 @@ SQL — замер на ветвящихся длинных сессиях. Ра
 - [Clojure: atoms](https://clojure.org/reference/atoms): чистые функции обновления состояния.
 - [Clojure: transducers](https://clojure.org/reference/transducers): отделение преобразования от источника/накопления.
 - [SQLite JDBC 3.46.1.3 loader](https://github.com/xerial/sqlite-jdbc/blob/3.46.1.3/src/main/java/org/sqlite/SQLiteJDBCLoader.java): cleanup и `org.sqlite.tmpdir`. Context7 не нашёл документацию JDBC; проверен исходник используемой версии.
+
+## Дополнительный аудит UI-тестов
+
+Первый проход не был полным аудитом качества тестов. Повторный просмотр нашёл
+проверки точного CSS, текста заголовков и фиксированного числа demo-компонентов,
+которые не подтверждали поведение UI.
+
+- Удалены ещё 6 тестов: dark-theme source markers, список подписей каталога,
+  толщина border, текст hover rules, CSS/JS markers навигации и CSS cron actions.
+  В `test` больше нет проверок чтением исходников `src`, `public`, `DESIGN.md`.
+- В каталоге фиксированные числа и цвета заменены связностью tabs/panels,
+  уникальностью IDs и доступными именами.
+- Markdown renderer проверяется через DOM: содержимое таблиц, checked/unchecked
+  конкретных checkbox, разрешение ссылки на footnote, изображения, безопасный HTML,
+  literal code и запрет script/event handlers/iframe/javascript URLs.
+- Cron editor проверяет значения полей, job ID/revision, допустимые notification
+  policies и соответствие lazy-result target сохранённому run. Убраны проверки
+  порядка HTML-атрибутов, точных вложений и текста JavaScript-выражений из этого теста.
+
+Сравнение строк само по себе не бесполезно: текст ответа, escaped content,
+streaming payload и отсутствие утечки чужих данных — проверяемые контракты.
+Но поиск строки в HTML/JS не доказывает, что click, keyboard navigation или
+scroll действительно работают. Оставшиеся wiring-проверки этого не заменяют;
+браузерный прогон в этой доработке не выполнялся.
+
+Проверка доработки: 65 тестов / 415 assertions, 0 failures/errors; lint чистый.
+Две намеренные поломки — все checkbox отмечены и footnote ведёт в отсутствующий
+элемент — обнаружены новыми тестами без runtime exceptions.
+DOM-проверки также обнаружили реальный дефект ARIA: boolean значения Hiccup
+давали `aria-selected="aria-selected"`. Исправлены selected/pressed в Cron и
+Memory, hidden у декоративных элементов чата.

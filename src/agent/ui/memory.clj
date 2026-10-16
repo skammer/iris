@@ -449,7 +449,7 @@
       {:type "button"
        :role "tab"
        :class (when (= id active-tab) "memory-tab--active")
-       :aria-selected (= id active-tab)
+       :aria-selected (str (= id active-tab))
        "data-on:click" (str "@get('/ui/memory?tab=" (name id)
                             "&limit=" limit "')")}
       label])])

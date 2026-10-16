@@ -527,7 +527,7 @@
              "data-on:click" "@post('/ui/chat/stop', {contentType: 'form', selector: '#chat-form'})")
       "Stop"]
      [:div#chat-status.meta.chat-status (assoc visibility :role "status" :aria-label label)
-      [:span.chat-spinner {:aria-hidden true}]
+      [:span.chat-spinner {:aria-hidden "true"}]
       [:span.chat-status__text text]]]))
 
 (defn session-status-fragment [system session-id]
@@ -581,7 +581,7 @@
              "data-chat-scroll-bottom" true
              :aria-label "Scroll to latest message"
              :title "Scroll to latest message"}
-            [:span {:aria-hidden true} "↓"]
+            [:span {:aria-hidden "true"} "↓"]
             "Latest"]]
           [:aside#tool-detail-sidebar.tool-detail-sidebar
            {:hidden true
@@ -707,7 +707,7 @@
          (list (when history? (history-button session-id nil nil "Latest"))
                [:div.empty (if history? "No messages on this page." "No messages yet.")]
                [:div#streaming-message {:hidden true}]))
-       [:div#chat-bottom-anchor.chat-stream__bottom-anchor {:aria-hidden true}]]))))
+       [:div#chat-bottom-anchor.chat-stream__bottom-anchor {:aria-hidden "true"}]]))))
 
 (defn events-fragment [system]
   (ui-render/render

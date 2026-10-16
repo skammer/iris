@@ -89,7 +89,7 @@
       (for [[candidate label] [[:week "Gantt"] [:calendar "Calendar"]]]
         [:button {:type "button"
                   :class (when (= candidate view) "active")
-                  :aria-pressed (= candidate view)
+                  :aria-pressed (str (= candidate view))
                   "data-on:click" (str "@get('" (stats-url candidate anchor limit) "')")}
          label])]
      [:div.cron-schedule-nav
@@ -204,7 +204,7 @@
    {:type "button"
     :class (when (= tab active-tab) "cron-tab--active")
     :role "tab"
-    :aria-selected (= tab active-tab)
+    :aria-selected (str (= tab active-tab))
     "data-on:click" (str "@get('/ui/cron?tab=" (name tab) "&limit=" limit "')")}
    label])
 
