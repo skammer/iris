@@ -2,7 +2,7 @@
   (:require
    [agent.runtime.nudge :as nudge]
    [clojure.string :as str]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (def profile
   {:small-model? true

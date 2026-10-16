@@ -3,6 +3,12 @@
    [agent.persistence.sqlite.common :as common]
    [hugsql.core :as hugsql]))
 
+(declare create-tool-approval-sqlvec
+         get-tool-approval-sqlvec
+         list-tool-approvals-sqlvec
+         decide-tool-approval-sqlvec
+         count-tool-approvals-sqlvec)
+
 (hugsql/def-sqlvec-fns "agent/persistence/sqlite/tools.sql")
 
 (def ^:private statuses #{"pending" "approved" "denied"})

@@ -75,9 +75,11 @@
                  "  status: approved\n"
                  "---\n\n# API update\n\nBefore body.\n"))
       (with-server (fn [config]
-                     (assoc-in config [:memory :vault]
-                               {:paths [(.getAbsolutePath vault-dir)]
-                                :writable? true}))
+                     (-> config
+                         (assoc-in [:tools :fs :roots] [(.getAbsolutePath vault-dir)])
+                         (assoc-in [:memory :vault]
+                                   {:paths [(.getAbsolutePath vault-dir)]
+                                    :writable? true})))
         (fn [{:keys [base-url]}]
           (let [vault-path (str (.getAbsolutePath vault-dir) "/note.md")
                 _ (helpers/http-post (str base-url "/v1/memory/vault/reindex") {})

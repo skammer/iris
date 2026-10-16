@@ -3,7 +3,7 @@
    [agent.loop :as loop]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (deftest loop-prompt-carries-plan-summary-and-validation-test
   (let [plan (java.io.File/createTempFile "iris-loop-" ".md")]

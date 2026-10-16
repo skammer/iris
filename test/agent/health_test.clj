@@ -1,7 +1,7 @@
 (ns agent.health-test
   (:require
    [agent.health :as health]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defn- component-entry [registry component]
   (get-in (health/snapshot registry) [:components component]))

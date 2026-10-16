@@ -3,7 +3,7 @@
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.compaction :as compaction]
    [clojure.java.io :as io]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defn temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-compact-" ".db")))

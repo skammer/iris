@@ -315,8 +315,12 @@ Run tests in isolated config/data directories:
 ```bash
 mkdir -p target/test-iris-config target/test-iris-data
 env IRIS_CONFIG_DIR=target/test-iris-config IRIS_DATA_DIR=target/test-iris-data \
-  clojure -M:test -e "(require 'agent.test-runner :reload) (agent.test-runner/run-all-tests) (shutdown-agents)"
+  clojure -M:test -m agent.test-runner
 ```
+
+The runner discovers `*_test.clj` files under `test` and `export/endive-clj/test`,
+isolates Iris config/data defaults, and exits nonzero on failures. Docker release
+smoke tests run only with `AGENT_RELEASE_SMOKE=1`.
 
 Build and upload the standalone JAR:
 

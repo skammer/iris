@@ -1,157 +1,69 @@
 (ns agent.test-runner
+  "Discover tests once; load and run them inside an isolated Iris home."
   (:require
    [agent.config :as config]
-   [agent.api-test]
-   [agent.api-smoke-test]
-   [agent.api.event-compat-test]
-   [agent.cli-test]
-   [agent.cli.render-test]
-   [agent.broker.local-test]
-   [agent.channels.core-test]
-   [agent.chat-harness-test]
-   [agent.chat.streaming-test]
-   [agent.chat.turn-test]
-   [agent.chat-test]
-   [clojure.test :as t]
-   [endive-clj.core-test]
-   [agent.config-test]
-   [agent.cron-test]
-   [agent.health-test]
-   [agent.system-test]
-   [agent.telegram.format-test]
-   [agent.telegram.rich-test]
-   [agent.telegram.streaming-test]
-   [agent.telegram-test]
-   [agent.telemetry-test]
-   [agent.kernel-test]
-   [agent.logging-test]
-   [agent.memory.core-test]
-   [agent.memory.idle-test]
-   [agent.memory.magi-review-test]
-   [agent.memory.user-profile-test]
-   [agent.mcp.core-test]
-   [agent.persistence.session-entries-test]
-   [agent.persistence.sqlite-test]
-   [agent.planner-test]
-   [agent.release-smoke-test]
-   [agent.restart-handoff-test]
-   [agent.runtime.compaction-test]
-   [agent.runtime.context-pack-test]
-   [agent.runtime.loop-test]
-   [agent.runtime.messages-test]
-   [agent.runtime.nudge-test]
-   [agent.runtime.schema-test]
-   [agent.runtime.tool-router-test]
-   [agent.runtime.tools-test]
-   [agent.runtime.trace-test]
-   [agent.skills-test]
-   [agent.ui-test]
-   [agent.ui-performance-test]
-   [agent.ui.render-test]
-   [agent.tools.common.fs-test]
-   [agent.tools.common.homeassistant-test]
-   [agent.tools.common.memory-test]
-   [agent.tools.common.skills-test]
-   [agent.llm.registry-test]
-   [agent.llm.providers.ollama-test]
-   [agent.llm.core-test]
-   [agent.llm.messages-test]
-   [agent.llm.dsml-test]
-   [agent.llm.providers.openai-compatible-test]
-   [agent.loop-test]
-   [agent.tools.common.http-test]
-   [agent.tools.common.web-test]
-   [agent.tools.common.telegram-test]
-   [agent.tools.common.todo-test]
-   [agent.tools.common.wasm-test]
-   [agent.wasm.bundles-test]
-   [agent.tools.common.shell-test]
-   [agent.tools.core-test]
-   [clojure.java.io :as io]))
+   [clojure.java.io :as io]
+   [clojure.string :as str]
+   [clojure.test :as t]))
 
-(def rewritten-test-namespaces
-  '[agent.api-test
-    agent.api-smoke-test
-    agent.api.event-compat-test
-    agent.cli-test
-    agent.cli.render-test
-    agent.broker.local-test
-    agent.channels.core-test
-    agent.chat-harness-test
-    agent.chat.streaming-test
-    agent.chat.turn-test
-    agent.chat-test
-    endive-clj.core-test
-    agent.config-test
-    agent.cron-test
-    agent.health-test
-    agent.system-test
-    agent.telegram.format-test
-    agent.telegram.rich-test
-    agent.telegram.streaming-test
-    agent.telegram-test
-    agent.telemetry-test
-    agent.kernel-test
-    agent.logging-test
-    agent.memory.core-test
-    agent.memory.idle-test
-    agent.memory.magi-review-test
-    agent.memory.user-profile-test
-    agent.mcp.core-test
-    agent.persistence.session-entries-test
-    agent.persistence.sqlite-test
-    agent.planner-test
-    agent.release-smoke-test
-    agent.restart-handoff-test
-    agent.runtime.compaction-test
-    agent.runtime.context-pack-test
-    agent.runtime.loop-test
-    agent.runtime.messages-test
-    agent.runtime.nudge-test
-    agent.runtime.schema-test
-    agent.runtime.tool-router-test
-    agent.runtime.tools-test
-    agent.runtime.trace-test
-    agent.skills-test
-    agent.ui-test
-    agent.ui-performance-test
-    agent.ui.render-test
-    agent.tools.common.fs-test
-    agent.tools.common.homeassistant-test
-    agent.tools.common.memory-test
-    agent.tools.common.skills-test
-    agent.llm.registry-test
-    agent.llm.providers.ollama-test
-    agent.llm.core-test
-    agent.llm.messages-test
-    agent.llm.dsml-test
-    agent.llm.providers.openai-compatible-test
-    agent.loop-test
-    agent.tools.common.http-test
-    agent.tools.common.web-test
-    agent.tools.common.telegram-test
-    agent.tools.common.todo-test
-    agent.tools.common.wasm-test
-    agent.wasm.bundles-test
-    agent.tools.common.shell-test
-    agent.tools.core-test])
+(def test-roots ["test" "export/endive-clj/test"])
 
-(defn run-all-tests
-  []
+(defn test-namespaces
+  "Discover conventional *_test.clj namespaces in the supplied source roots."
+  ([] (test-namespaces test-roots))
+  ([roots]
+   (->> roots
+        (mapcat (fn [root]
+                  (let [root-path (.toPath (io/file root))]
+                    (for [file (file-seq (io/file root))
+                          :when (and (.isFile file)
+                                     (str/ends-with? (.getName file) "_test.clj"))]
+                      (-> (str (.relativize root-path (.toPath file)))
+                          (str/replace #"\.clj$" "")
+                          (str/replace #"[/\\]" ".")
+                          (str/replace "_" "-")
+                          symbol)))))
+        distinct
+        sort
+        vec)))
+
+(defn with-isolated-home
+  "Run f with temporary config/data defaults, then remove the entire tree."
+  [f]
   (let [root (.toFile (java.nio.file.Files/createTempDirectory
-                       "iris-test-runner-"
-                       (make-array java.nio.file.attribute.FileAttribute 0)))]
+                     "iris-test-runner-"
+                     (make-array java.nio.file.attribute.FileAttribute 0)))
+        home (io/file root "home")
+        native-dir (io/file root "native")
+        sqlite-tmpdir (System/getProperty "org.sqlite.tmpdir")]
     (try
-      (.mkdirs (io/file root "home"))
-      (binding [config/*user-home* (fn [] (.getPath (io/file root "home")))
+      (.mkdirs home)
+      (.mkdirs native-dir)
+      ;; SQLite JDBC scans its extraction directory on first connection. Keep
+      ;; that scan away from a large shared OS temp directory and pool timeout.
+      (System/setProperty "org.sqlite.tmpdir" (.getPath native-dir))
+      (binding [config/*user-home* (constantly (.getPath home))
                 config/*env* (fn [k]
-                               (when-not (#{"IRIS_CONFIG_DIR" "XDG_CONFIG_HOME"} k)
+                               (when-not (#{"IRIS_CONFIG_DIR" "IRIS_DATA_DIR" "XDG_CONFIG_HOME"} k)
                                  (System/getenv k)))]
-        (apply t/run-tests rewritten-test-namespaces))
+        (f))
       (finally
-        (io/delete-file root true)))))
+        (if sqlite-tmpdir
+          (System/setProperty "org.sqlite.tmpdir" sqlite-tmpdir)
+          (System/clearProperty "org.sqlite.tmpdir"))
+        (doseq [file (reverse (file-seq root))]
+          (io/delete-file file true))))))
 
-(defn -main
-  [& _args]
+(defn run-all-tests []
+  (with-isolated-home
+    (fn []
+      (let [namespaces (cond->> (test-namespaces)
+                         (not= "1" (System/getenv "AGENT_RELEASE_SMOKE"))
+                         (remove #{'agent.release-smoke-test}))]
+        (doseq [test-ns namespaces]
+          (require test-ns))
+        (apply t/run-tests namespaces)))))
+
+(defn -main [& _args]
   (let [{:keys [fail error]} (run-all-tests)]
     (System/exit (if (zero? (+ fail error)) 0 1))))

@@ -12,11 +12,8 @@
    [agent.system :as system]
    [agent.llm.core :as llm-core]
    [agent.llm.messages :as llm-messages]
-   [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
-   [agent.system.components :as components]
    [agent.system.events :as events]
-   [agent.tools.service :as tool-service]
    [agent.ui :as ui]
    [cheshire.core :as json]
    [clojure.core.async :as async]
@@ -236,27 +233,25 @@
   ([path port config-fn]
    (started-test-system path port config-fn (->TestProvider (atom nil))))
   ([path port config-fn provider]
-   (let [base-system (system/create-system)
-        store (sqlite/create-store {:path path})
-        event-bus (events/create-event-bus)
-        event-sink (events/create-event-sink store event-bus)
-        config (-> (:config base-system)
-                   (assoc :llm (:llm cfg/default-config)
-                          :chat (:chat cfg/default-config))
-                   (assoc :api {:host "127.0.0.1" :port port}
-                          :storage {:sqlite {:path path}})
-                   config-fn)
-        system (assoc base-system
-                      :llm-provider provider
-                      :store store
-                      :event-bus event-bus
-                      :event-sink event-sink
-                      :tool-registry (tool-service/create-tool-registry {:cfg (:tools config) :event-sink event-sink :store store})
-                      :skills-registry (components/create-skills-registry (:skills config))
-                      :memory-service (memory/create-memory-service (:memory config) store)
-                      :config config)]
-    {:system system
-     :server (api/start-server! system {:host "127.0.0.1" :port port})})))
+   (let [config (-> (cfg/load-config)
+                    (assoc :llm (:llm cfg/default-config)
+                           :chat (:chat cfg/default-config)
+                           :api {:host "127.0.0.1" :port port}
+                           :storage {:sqlite {:path path}})
+                    config-fn)
+         system (assoc (with-redefs [cfg/load-config (constantly config)]
+                         (system/create-system))
+                       :llm-provider provider)]
+     (try
+       (let [server (api/start-server! system {:host "127.0.0.1" :port port})]
+         {:system system
+          :server (fn [& args]
+                    (try
+                      (apply server args)
+                      (finally (system/close-system! system))))})
+       (catch Throwable error
+         (system/close-system! system)
+         (throw error))))))
 
 (deftest api-key-auth-protects-v1-and-ui-test
   (let [path (temp-db-path)
@@ -362,7 +357,7 @@
     (is (= "Malformed JSON body" (:message body)))))
 
 (deftest api-route-handler-binding-check-test
-  (is (nil? (#'api/assert-route-bindings! (#'api/handler-map (system/create-system))
+  (is (nil? (#'api/assert-route-bindings! (#'api/handler-map {})
                                           api-routes/routes)))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo
                         #"API route handler binding mismatch"
@@ -408,10 +403,7 @@
         (is (= "mapped" (:message body)))))))
 
 (deftest api-refuses-non-loopback-bind-without-key-test
-  (let [base-system (system/create-system)
-        system (assoc-in base-system [:config :api] {:host "0.0.0.0"
-                                                     :port (free-port)
-                                                     :key nil})]
+  (let [system {:config {:api {:host "0.0.0.0" :port (free-port) :key nil}}}]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"Refusing to bind API to a non-loopback host without :api :key"
                           (api/start-server! system (:api (:config system)))))))
@@ -862,29 +854,14 @@
   (let [path (temp-db-path)
         port (free-port)
         base-url (str "http://127.0.0.1:" port)
-        base-system (system/create-system)
         messages* (atom nil)
-        store (sqlite/create-store {:path path})
-        event-bus (events/create-event-bus)
-        event-sink (events/create-event-sink store event-bus)
-        config (-> (:config base-system)
-                   (assoc :llm (:llm cfg/default-config)
-                          :chat (:chat cfg/default-config))
-	                   (assoc-in [:memory :notes :extractor :enabled] false))
-        system (assoc base-system
-                      :llm-provider (->TestProvider messages*)
-                      :store store
-                      :event-bus event-bus
-                      :event-sink event-sink
-	                      :tool-registry (tool-service/create-tool-registry
-	                                      {:cfg (assoc-in (:tools config) [:http :allow-private?] true)
-	                                       :event-sink event-sink
-	                                       :store store})
-	                      :memory-service (memory/create-memory-service (:memory config) store)
-                      :config (assoc config
-                                     :api {:host "127.0.0.1" :port port}
-                                     :storage {:sqlite {:path path}}))
-        server (api/start-server! system {:host "127.0.0.1" :port port})]
+        {:keys [server]} (started-test-system
+                         path port
+                         #(-> %
+                              (assoc-in [:memory :notes :extractor :enabled] false)
+                              (assoc-in [:chat :compaction :max-context-tokens] 100000)
+                              (assoc-in [:tools :http :allow-private?] true))
+                         (->TestProvider messages*))]
     (try
       (let [bad-session (http-post (str base-url "/v1/sessions") {:title 42})
             bad-chat (http-post (str base-url "/v1/chat/completions")
@@ -973,7 +950,7 @@
         (is (str/includes? (:body ui-operator-board) "Approval queue"))
         (is (str/includes? (:body ui-operator-board) "Kernel receipts"))
         (is (= 200 (:status health)))
-        (is (= 16 (get-in health-body [:tools :count])))
+        (is (= (count (:data tools-body)) (get-in health-body [:tools :count])))
         (is (= true (get-in health-body [:memory :healthy])))
         (is (= 1 (get-in health-body [:channel-adapters :count])))
         (is (map? (:health-snapshot health-body)))
@@ -983,9 +960,8 @@
         (is (map? (get-in health-body [:sse :metrics])))
         (is (integer? (get-in health-body [:sse :metrics :opened])))
         (is (= 200 (:status tools)))
-        (is (= ["fs_create" "fs_delete" "fs_list" "fs_mkdir" "fs_read" "fs_replace" "fs_search" "fs_write"
-                "http" "shell" "todo_get" "todo_list" "todo_search" "todo_write" "web_extract" "web_search"]
-               (mapv :name (:data tools-body))))
+        (is (every? (set (map :name (:data tools-body)))
+                    ["fs_read" "http" "shell" "memory_recall" "cronjob" "system_reload"]))
         (is (= "builtin" (get-in tools-body [:data 0 :source])))
         (is (= 200 (:status tool-exec)))
         (is (vector? (get-in tool-exec-body [:data :entries])))

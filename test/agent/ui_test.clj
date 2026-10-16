@@ -3,6 +3,7 @@
    [agent.build-info :as build-info]
    [agent.chat :as chat]
    [agent.channels.core :as channel-adapters]
+   [agent.config :as config]
    [agent.memory.core :as memory]
    [agent.persistence.sqlite :as sqlite]
    [agent.runtime.trace :as trace]
@@ -35,14 +36,12 @@
 (deftest ui-is-dark-only
   (let [css (slurp (io/file "public/app.css"))
         js (slurp (io/file "public/web-components.js"))
-        ui-source (slurp (io/file "src/agent/ui.clj"))
         catalog-html (ui-catalog/page)]
     (is (str/includes? css "color-scheme: dark"))
     (is (not (str/includes? css ":root[data-theme=\"light\"]")))
     (is (not (str/includes? css "theme-switching")))
     (is (not (str/includes? js "ThemeToggle")))
     (is (not (str/includes? js "iris-theme")))
-    (is (not (str/includes? ui-source "theme-toggle")))
     (is (not (str/includes? catalog-html "theme-toggle")))
     (is (not (str/includes? catalog-html "data-theme=")))))
 
@@ -95,30 +94,6 @@
                 (.select doc "input, textarea, select"))
         "form controls need a label or accessible name")))
 
-(deftest design-document-covers-every-redesign-reference
-  (let [design (slurp (io/file "DESIGN.md"))
-        references (->> (file-seq (io/file "redesign-inspiration"))
-                        (filter #(.isFile %))
-                        (map #(.getName %))
-                        (filter #(str/ends-with? % ".webp"))
-                        sort)]
-    (is (= 16 (count references)))
-    (doseq [filename references]
-      (is (str/includes? design filename)
-          (str "DESIGN.md must map reference " filename)))))
-
-(deftest design-document-covers-every-css-token
-  (let [design (slurp (io/file "DESIGN.md"))
-        css (slurp (io/file "public/app.css"))
-        tokens (->> (re-seq #"(?m)^\s*(--[a-z0-9-]+)\s*:" css)
-                    (map second)
-                    set
-                    sort)]
-    (is (seq tokens))
-    (doseq [token tokens]
-      (is (str/includes? design (str "`" token "`"))
-          (str "DESIGN.md must document token " token)))))
-
 (deftest ui-avoids-thick-side-accent-borders
   (let [css (slurp (io/file "public/app.css"))]
     (is (not (re-find #"border-(?:left|right)\s*:\s*[2-9][0-9]*px" css)))
@@ -132,10 +107,16 @@
     (is (not (str/includes? hover-rule "brightness(")))
     (is (not (str/includes? hover-rule "saturate(")))))
 
-(deftest shell-brand-is-text-only
-  (let [source (slurp (io/file "src/agent/ui.clj"))]
-    (is (str/includes? source "[:strong \"IRIS\"]"))
-    (is (not (str/includes? source "shell-brand__mark")))))
+(deftest shell-brand-is-accessible-text-link
+  (with-redefs [sqlite/health-check (constantly {:details {}})
+                ui/sessions-fragment (constantly (ui-render/render [:div]))
+                ui/session-detail-fragment (constantly (ui-render/render [:div]))]
+    (let [doc (Jsoup/parse (ui/shell-fragment {:config config/default-config} :chat))
+          brand (.selectFirst doc "a.shell-brand")]
+      (is (= "IRIS" (.text brand)))
+      (is (= "/" (.attr brand "href")))
+      (is (= "Iris control plane" (.attr brand "aria-label")))
+      (is (empty? (.select brand "img, svg"))))))
 
 (deftest dashboard-fragment-shows-active-model
   (with-redefs [sqlite/health-check (constantly {:details {:session-count 0

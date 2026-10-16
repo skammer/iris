@@ -4,6 +4,16 @@
    [clojure.string :as str]
    [hugsql.core :as hugsql]))
 
+(declare insert-event-sqlvec
+         list-events-sqlvec
+         get-event-sqlvec
+         list-memory-events-window-sqlvec
+         search-events-like-sqlvec
+         search-events-fts-sqlvec
+         count-events-sqlvec
+         latest-event-id-sqlvec
+         daily-dashboard-activity-sqlvec)
+
 (hugsql/def-sqlvec-fns "agent/persistence/sqlite/events.sql")
 
 (defn log-event! [store {:keys [event-type entity-type entity-id request-id payload created-at]}]

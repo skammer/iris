@@ -4,6 +4,17 @@
    [clojure.string :as str]
    [hugsql.core :as hugsql]))
 
+(declare get-list-sqlvec
+         insert-list-sqlvec
+         update-list-sqlvec
+         delete-list-items-sqlvec
+         insert-list-item-sqlvec
+         list-items-sqlvec
+         list-lists-sqlvec
+         search-lists-like-sqlvec
+         search-lists-fts-sqlvec
+         count-lists-sqlvec)
+
 (hugsql/def-sqlvec-fns "agent/persistence/sqlite/todos.sql")
 
 (def default-limit 20)

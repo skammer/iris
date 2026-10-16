@@ -1,7 +1,7 @@
 (ns agent.runtime.schema-test
   (:require
    [agent.runtime.schema :as runtime-schema]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (deftest validates-canonical-message-blocks-test
   (doseq [block [{:type :text :text "hello"}

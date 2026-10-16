@@ -1,7 +1,7 @@
 (ns agent.runtime.tool-router-test
   (:require
    [agent.runtime.tool-router :as tool-router]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (def tools
   [{:name :fs_read :category :system :operation :read :routing-categories #{:read}}

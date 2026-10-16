@@ -4,7 +4,7 @@
    [agent.runtime.loop :as runtime-loop]
    [agent.runtime.messages :as runtime-messages]
    [cheshire.core :as json]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defn- complete-step [content]
   {:schema-version kernel-schema/current-step-schema-version

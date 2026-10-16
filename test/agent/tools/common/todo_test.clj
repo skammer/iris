@@ -4,7 +4,7 @@
    [agent.tools.common.todo :as todo-tool]
    [agent.tools.core :as tools]
    [clojure.java.io :as io]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is]]))
 
 (defn- temp-db-path []
   (.getAbsolutePath (java.io.File/createTempFile "iris-todo-tool-" ".db")))
