@@ -1680,7 +1680,8 @@
 (defn- embedding-coverage [memory-service notes chunks]
   (let [enabled? (embeddings-enabled? memory-service)
         desired-notes (filter #(= "approved" (:iris-status %)) notes)
-        desired-chunks (filter #(contains? (set (map :path desired-notes)) (:path %)) chunks)
+        desired-paths (into #{} (map :path) desired-notes)
+        desired-chunks (filter #(contains? desired-paths (:path %)) chunks)
         note-embeddings (sqlite/list-memory-embeddings (:store memory-service)
                                                        {:surface "vault_note"
                                                         :limit 10000})

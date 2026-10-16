@@ -41,7 +41,7 @@
     message)))
 
 (defn- messages-tokens [messages]
-  (reduce + 0 (map message-tokens messages)))
+  (transduce (map message-tokens) + 0 messages))
 
 (defn- tools-tokens [tools]
   (tokens/estimate (or tools [])))
@@ -129,29 +129,32 @@
                            message))
                        messages))))
 
-(defn- system-token-count [messages system-prompt]
-  (+ (tokens/estimate system-prompt)
-     (messages-tokens (filter #(= "system" (role %)) messages))))
-
-(defn- memory-token-count [messages]
-  (messages-tokens (filter memory-message? messages)))
-
 (defn- tool-result-token-count [messages]
   (messages-tokens (filter tool-result-message? messages)))
 
 (defn- budget-report [cfg messages system-prompt tools]
-  (let [budgets (:budgets cfg)]
-    {:system {:used (system-token-count messages system-prompt)
+  (let [budgets (:budgets cfg)
+        used (reduce (fn [acc message]
+                       (let [n (message-tokens message)
+                             category (if (= "system" (role message))
+                                        :system :recent-conversation)]
+                         (cond-> (update acc category + n)
+                           (memory-message? message) (update :memory + n)
+                           (tool-result-message? message) (update :tool-result + n))))
+                     {:system (tokens/estimate system-prompt)
+                      :recent-conversation 0 :memory 0 :tool-result 0}
+                     messages)]
+    {:system {:used (:system used)
               :limit (:system budgets)}
-     :memory {:used (memory-token-count messages)
+     :memory {:used (:memory used)
               :limit (:memory budgets)}
-     :recent-conversation {:used (messages-tokens (remove #(= "system" (role %)) messages))
+     :recent-conversation {:used (:recent-conversation used)
                            :limit (:recent-conversation budgets)}
      :tool-schema {:used (tools-tokens tools)
                    :limit (:tool-schema budgets)}
-     :pending-tool-result {:used (tool-result-token-count messages)
+     :pending-tool-result {:used (:tool-result used)
                            :limit (:pending-tool-result budgets)}
-     :referenced-file {:used (tool-result-token-count messages)
+     :referenced-file {:used (:tool-result used)
                        :limit (:referenced-file budgets)}
      :output-reserve {:used (:reserve-output-tokens cfg)
                       :limit (:output-reserve budgets)}}))
@@ -178,10 +181,10 @@
   (str/includes? (llm-messages/content-text message)
                  "[compacted tool result omitted;"))
 
-(defn- truncate-old-tool-results [messages protected cfg]
+(defn- truncate-tool-results [messages eligible? action cfg]
   (reduce-kv (fn [acc idx message]
                (if (and (tool-result-message? message)
-                        (not (contains? protected idx))
+                        (eligible? idx)
                         (> (message-tokens message)
                            (tokens/estimate (:tool-result-truncate-chars cfg))))
                  (-> acc
@@ -189,34 +192,26 @@
                              (compact-tool-result-message message
                                                           (:tool-result-truncate-chars cfg)
                                                           false))
-                     (update :decisions conj {:action :truncate-tool-result
+                     (update :decisions conj {:action action
                                               :index idx}))
                  acc))
              {:messages (vec messages) :decisions []}
              (vec messages)))
+
+(defn- truncate-old-tool-results [messages protected cfg]
+  (truncate-tool-results messages #(not (contains? protected %))
+                         :truncate-tool-result cfg))
 
 (defn- truncate-active-tool-results [messages active-turn protected cfg]
-  (reduce-kv (fn [acc idx message]
-               (if (and (tool-result-message? message)
-                        (contains? active-turn idx)
-                        (not (contains? protected idx))
-                        (> (message-tokens message)
-                           (tokens/estimate (:tool-result-truncate-chars cfg))))
-                 (-> acc
-                     (update :messages assoc idx
-                             (compact-tool-result-message message
-                                                          (:tool-result-truncate-chars cfg)
-                                                          false))
-                     (update :decisions conj {:action :truncate-active-tool-result
-                                              :index idx}))
-                 acc))
-             {:messages (vec messages) :decisions []}
-             (vec messages)))
+  (truncate-tool-results messages #(and (contains? active-turn %)
+                                        (not (contains? protected %)))
+                         :truncate-active-tool-result cfg))
 
 (defn- compact-excess-tool-results [messages protected cfg]
-  (let [limit (get-in cfg [:budgets :pending-tool-result])]
+  (let [limit (get-in cfg [:budgets :pending-tool-result])
+        initial-tokens (when limit (tool-result-token-count messages))]
     (if (or (nil? limit)
-            (<= (tool-result-token-count messages) limit))
+            (<= initial-tokens limit))
       {:messages (vec messages) :decisions []}
       (loop [messages* (vec messages)
              candidates (filterv (fn [idx]
@@ -224,14 +219,18 @@
                                         (not (contains? protected idx))
                                         (not (compacted-tool-result? (nth messages idx)))))
                                  (range (count messages)))
+             remaining-tokens initial-tokens
              decisions []]
         (if (or (empty? candidates)
-                (<= (tool-result-token-count messages*) limit))
+                (<= remaining-tokens limit))
           {:messages messages* :decisions decisions}
-          (let [idx (first candidates)]
-            (recur (assoc messages* idx
-                          (compact-tool-result-message (nth messages* idx) 0 true))
+          (let [idx (first candidates)
+                before (nth messages* idx)
+                after (compact-tool-result-message before 0 true)]
+            (recur (assoc messages* idx after)
                    (subvec candidates 1)
+                   (+ (- remaining-tokens (message-tokens before))
+                      (message-tokens after))
                    (conj decisions {:action :compact-tool-result-budget
                                     :index idx}))))))))
 
@@ -292,9 +291,8 @@
                                      (or (:summarizer-input-cap cfg)
                                          (:max-summary-input-tokens cfg)))))))
 
-(defn- deterministic-summary [messages cfg]
-  (let [input (summary-input messages (:max-summary-input-tokens cfg))
-        roles (frequencies (map :role input))
+(defn- summarize-input [input]
+  (let [roles (frequencies (map :role input))
         latest-user (some #(when (= "user" (:role %)) (:content %))
                           (reverse input))]
     (str "Compacted earlier context: "
@@ -310,6 +308,9 @@
                           (map (fn [{:keys [role content]}]
                                  (str "- " role ": " content))
                                (take-last 8 input))))))))
+
+(defn- deterministic-summary [messages cfg]
+  (summarize-input (summary-input messages (:max-summary-input-tokens cfg))))
 
 (defn- compact-summary [messages cfg summarizer-fn]
   (let [fallback #(deterministic-summary messages cfg)
@@ -330,8 +331,10 @@
               :text (str "Context summary for compacted earlier conversation:\n"
                          summary)}]})
 
-(defn- pack-by-prefix-summary
-  [{:keys [messages summarizer-fn] :as ctx} cfg decisions]
+(defn- prefix-summary-cut
+  "Choose a safe cut without invoking the summarizer. Token prefix sums avoid
+   serializing the entire retained history for every candidate."
+  [{:keys [messages system-prompt tools]} cfg]
   (let [prefix-count (leading-system-count messages)
         protected (protected-indices messages)
         limit (threshold-tokens (:max-context-tokens cfg)
@@ -339,29 +342,33 @@
         first-protected (apply min
                                (conj (vec (filter #(>= % prefix-count) protected))
                                      (count messages)))
-        max-cut first-protected
-        with-tokens (fn [candidate]
-                      (total-context-tokens (assoc ctx
-                                                   :messages candidate
-                                                   :reserve-output-tokens (:reserve-output-tokens cfg))))
-        choose-cut (fn []
-                     (loop [cut (inc prefix-count)]
-                       (let [cut* (min max-cut (safe-cut-index messages cut))
-                             dropped (subvec messages prefix-count cut*)
-                             summary (summary-message
-                                      (deterministic-summary dropped cfg))
-                             candidate (vec (concat (subvec messages 0 prefix-count)
-                                                    [summary]
-                                                    (subvec messages cut*)))]
-                         (cond
-                           (>= cut* max-cut) max-cut
-                           (and (<= (with-tokens candidate) limit)
-                                (not-any? protected (range prefix-count cut*))) cut*
-                           :else (recur (inc cut*))))))]
-    (if (or (>= prefix-count (count messages))
-            (<= max-cut prefix-count))
-      {:messages messages :decisions decisions :compaction nil}
-      (let [cut (choose-cut)
+        max-cut first-protected]
+    (when (> max-cut prefix-count)
+      (let [prefix-tokens (vec (reductions + 0 (map message-tokens messages)))
+            fixed-tokens (+ (tokens/estimate system-prompt)
+                            (tools-tokens tools)
+                            (long (or (:reserve-output-tokens cfg) 0))
+                            (nth prefix-tokens prefix-count))
+            input (summary-input (subvec messages prefix-count max-cut)
+                                 (:max-summary-input-tokens cfg))]
+        (loop [cut (inc prefix-count)]
+          (let [cut* (min max-cut (safe-cut-index messages cut))]
+            (if (>= cut* max-cut)
+              max-cut
+              (let [summary (summary-message
+                             (summarize-input (subvec input 0 (min (count input)
+                                                                  (- cut* prefix-count)))))
+                    candidate-tokens (+ fixed-tokens
+                                        (- (peek prefix-tokens) (nth prefix-tokens cut*))
+                                        (message-tokens summary))]
+                (if (<= candidate-tokens limit)
+                  cut*
+                  (recur (inc cut*)))))))))))
+
+(defn- pack-by-prefix-summary
+  [{:keys [messages summarizer-fn] :as ctx} cfg decisions]
+  (if-let [cut (prefix-summary-cut ctx cfg)]
+    (let [prefix-count (leading-system-count messages)
             dropped (subvec messages prefix-count cut)
             summary (compact-summary dropped cfg summarizer-fn)
             summary-msg (summary-message summary)
@@ -376,7 +383,8 @@
          :compaction {:summary summary
                       :first-kept-entry-id (:id first-kept)
                       :dropped-count (count dropped)
-                      :tokens-before (:tokens-before ctx)}}))))
+                      :tokens-before (:tokens-before ctx)}})
+    {:messages messages :decisions decisions :compaction nil}))
 
 (defn pack-context
   "Return a ContextPack map. Input keys: :messages, :system-prompt, :tools,

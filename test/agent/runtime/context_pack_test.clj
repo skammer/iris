@@ -2,8 +2,9 @@
   (:require
    [agent.llm.messages :as llm-messages]
    [agent.runtime.context-pack :as context-pack]
+   [agent.runtime.tokens :as tokens]
    [clojure.string :as str]
-   [clojure.test :refer :all]))
+   [clojure.test :refer [deftest is testing]]))
 
 (defn- text [message]
   (llm-messages/content-text message))
@@ -188,3 +189,54 @@
                           :reserve-output-tokens 0}}))]
     (is (= (:tokens-before (pack base-message))
            (:tokens-before (pack bloated-message))))))
+
+(defn- packing-work [n tool-results?]
+  (let [estimate tokens/estimate
+        calls (atom 0)
+        messages (conj (vec (mapcat
+                             (fn [i]
+                               (if tool-results?
+                                 [{:role "assistant"
+                                   :content [{:type :tool-call :id (str i) :name "http" :arguments {}}]}
+                                  {:role "tool"
+                                   :content [{:type :tool-result :tool-call-id (str i)
+                                              :content (big "x" 600)}]}]
+                                 [{:role "assistant" :content (big "x" 600)}]))
+                             (range n)))
+                       {:role "user" :content "keep latest"})
+        result (with-redefs [tokens/estimate (fn [value]
+                                              (swap! calls inc)
+                                              (estimate value))]
+                 (context-pack/pack-context
+                  {:messages messages
+                   :config {:max-context-tokens (if tool-results? 1000000 500)
+                            :reserve-output-tokens 0
+                            :max-summary-input-tokens 128
+                            :budgets {:pending-tool-result 100}}}))]
+    {:calls @calls :pack result}))
+
+(deftest packing-token-estimates-scale-linearly
+  (doseq [tools? [false true]]
+    (testing (if tools? "tool budget" "prefix summary")
+      (let [small (packing-work 40 tools?)
+            large (packing-work 120 tools?)]
+        (is (< (:calls large) (* 4 (:calls small)))
+            "Tripling history must not cause quadratic token serialization")
+        (is (= "keep latest" (text (last (get-in large [:pack :messages])))))
+        (is (some #(= (if tools? :compact-tool-result-budget :summarize-prefix)
+                      (:action %))
+                  (get-in large [:pack :decisions])))))))
+
+(deftest summarizer-failure-preserves-deterministic-fallback
+  (let [ctx {:messages [{:role "user" :content (big "x" 1000)}
+                        {:role "assistant" :content (big "y" 1000)}
+                        {:role "user" :content "latest"}]
+             :config {:max-context-tokens 100 :reserve-output-tokens 0}}
+        calls (atom 0)]
+    (is (= (context-pack/pack-context ctx)
+           (context-pack/pack-context
+            (assoc ctx :summarizer-fn
+                   (fn [_]
+                     (swap! calls inc)
+                     (throw (ex-info "offline" {})))))))
+    (is (= 1 @calls))))
