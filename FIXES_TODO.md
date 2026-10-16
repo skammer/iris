@@ -26,9 +26,15 @@
 ## Проверка исправлений
 
 - [x] Регрессионные тесты: `test/agent/audit_regression_test.clj` — 17 тестов, 98 assertions, 0 failures/errors.
-- [ ] Полный набор тестов в изолированных config/data dirs.
+- [x] Полный набор тестов в изолированных config/data dirs: 835 тестов, 3381 assertions, 0 failures/errors.
 - [x] clj-kondo: 0 errors/warnings; `git diff --check`: чисто.
-- [ ] Коммиты с причиной, реализацией и результатами; чистое рабочее дерево.
+- [x] Аудит: `5791841`; исправления: `5b2f9d7`. Итог проверки зафиксирован отдельным документационным коммитом; рабочее дерево чистое.
+
+Команда полного прогона:
+
+```bash
+env IRIS_CONFIG_DIR=target/test-iris-config IRIS_DATA_DIR=target/test-iris-data clojure -M:test -m agent.test-runner
+```
 
 Деплой не входит в этот запрос.
 
