@@ -36,3 +36,14 @@ Evidence and remaining scope: [docs/ui-ux-audit.md](docs/ui-ux-audit.md).
 - [x] Make all history reachable through bounded cursor pages; preserve the reading window during generation.
 - [x] Verify populated secondary screens and representative runtime render performance against production data.
 - [ ] Verify long streaming runs, lifecycle patch frequency and idle traffic with an explicit production interaction.
+
+## Clojure code audit
+
+Evidence: [docs/code-audit.md](docs/code-audit.md).
+
+- [x] Remove quadratic context token accounting; separate pure prefix selection from summarizer execution.
+- [x] Reuse approved-note paths when computing embedding coverage.
+- [x] Discover all tests; isolate and clean test resources; replace source/document assertions with behavior checks.
+- [x] Restore clean lint and working development REPL helpers.
+- [ ] Profile `branch-path` on long, branching histories before changing its SQL access pattern.
+- [ ] Identify independent search/proposal/report contracts before further splitting `memory/core.clj`.

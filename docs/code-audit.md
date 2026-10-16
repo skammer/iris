@@ -1,0 +1,111 @@
+# Clojure-аудит и исправления — 2026-10-16
+
+База сравнения: `1c90074`. Проверены структура `src`/`test`, сборка контекста,
+метрики памяти, API-fixtures, runner, SQL-обёртки и REPL-helpers. Очередь чата,
+streaming и чтение веток истории просмотрены на уровне границ и контрактов;
+полной проверки каждой функции репозитория этот проход не заменяет.
+
+## Исправленные проблемы
+
+| Приоритет | Причина | Изменение |
+|---|---|---|
+| P1 | `compact-excess-tool-results` сериализовал все tool results после каждого сокращения | Начальная сумма + разница стоимости изменённого сообщения |
+| P1 | Выбор prefix summary пересчитывал всю оставшуюся историю для каждой границы | Prefix sums; ограниченный summary input вычисляется один раз |
+| P1 | Ручной список runner пропускал `magi.core-test`, `tools.approvals-test`, `telegram.tool-summary-test` | Автопоиск `*_test.clj`, сортировка и загрузка внутри изоляции |
+| P1 | API-fixtures создавали систему, заменяли её store и сервисы, оставляли первоначальные ресурсы открытыми | Одна система с заданной конфигурацией; закрытие системы после HTTP-сервера, включая ошибку запуска |
+| P1 | Первый SQLite connection истекал через 30 секунд | Стек показал `SQLiteJDBCLoader.cleanup → Files.list → readdir` общего temp-каталога. Runner задаёт собственный `org.sqlite.tmpdir`, затем восстанавливает property |
+| P2 | `IRIS_DATA_DIR` обходил изоляцию; непустой временный каталог оставался после runner | Изолированы config/data defaults; рекурсивная очистка в `finally` |
+| P2 | `embedding-coverage` строил множество approved paths для каждого chunk | Множество строится один раз: O(notes + chunks) вместо O(notes × chunks) |
+| P2 | Дублирование механизма truncation и повторная оценка сообщений в budget report | Единый механизм с явным predicate/action; один проход для категорий бюджета |
+| P2 | Lint не видел HugSQL-generated vars | Явные `declare`, как в остальных SQL namespaces; проверки не отключены |
+| P2 | `clojure -M:dev` не компилировался из-за удалённых API | Events направлены в SQLite; удалены устаревшие fact/prompt helpers; memory tool использует `memory_recall` |
+
+## Архитектура
+
+В `context-pack` чистый выбор границы вынесен в `prefix-summary-cut`.
+Вызов внешнего summarizer остаётся в orchestration-функции и выполняется один раз
+после выбора границы. Общий механизм truncation принимает правило применимости
+и тип решения явно. Состояние расчёта — immutable local values; глобального кеша
+сообщений или новых runtime atoms нет.
+
+Изменения сохраняют порядок сообщений, защищённый последний user turn/tool loop,
+решения о сокращении, token/budget reports и fallback при отказе summarizer.
+Пороговые значения и политика удаления контекста не менялись.
+
+## Тесты
+
+Удалены две проверки содержания `DESIGN.md`: количество reference images и
+перечисление CSS tokens. Проверка текста Clojure-исходника для бренда заменена
+проверкой отрендеренной ссылки, текста и доступного имени. Убрана ещё одна
+проверка исходника `ui.clj` из dark-theme теста.
+
+API теперь тестируется с настоящей компоновкой сервисов. Вместо фиксированного
+числа 16 tools проверяются соответствие `/health` каталогу и наличие ключевых
+инструментов. Fixture теста истории явно задаёт достаточный лимит контекста;
+vault smoke явно разрешает свой временный корень в filesystem policy.
+
+Docker smoke исключён из обычного runner без фиктивного успешного assertion;
+включается `AGENT_RELEASE_SMOKE=1`. Сохранены тесты протокола, security, ветвления,
+streaming и конкурентности. Добавлены проверки discovery/cleanup, fallback и
+масштабирования работы без хрупких wall-clock порогов.
+
+## Производительность
+
+Один JVM, одинаковые детерминированные входы и конфигурация для обеих версий:
+600 символов на сообщение/result, summary input cap 128, 3 прогрева, медиана
+7 чередующихся пар замеров. `scripts/benchmark_context_pack.clj` также сравнивает
+полные результаты в 72 сценариях, включая отказ summarizer: все совпали.
+
+| Сценарий | Сообщений | До, мс | После, мс | Ускорение |
+|---|---:|---:|---:|---:|
+| Prefix summary | 102 | 109.99 | 13.54 | 8.1× |
+| Prefix summary | 302 | 886.65 | 38.19 | 23.2× |
+| Prefix summary | 602 | 3442.43 | 76.20 | 45.2× |
+| Tool-result budget | 202 | 167.57 | 15.53 | 10.8× |
+| Tool-result budget | 602 | 1242.67 | 48.47 | 25.6× |
+| Tool-result budget | 1202 | 4446.43 | 79.97 | 55.6× |
+
+Проверка количества вызовов token estimator при увеличении истории 40 → 120:
+
+- Prefix summary: до 1192 → 8352; после 269 → 749.
+- Tool budget: до 2173 → 16093; после 611 → 1811.
+
+Новый тест масштабирования действительно отвергает старый алгоритм.
+Это синтетические локальные замеры, не latency LLM и не production throughput.
+Размер cap влияет на стоимость построения текста summary; абсолютные цифры
+нельзя переносить на другие конфигурации.
+
+Воспроизведение:
+
+```bash
+git show 1c90074:src/agent/runtime/context_pack.clj > target/context-pack-before.clj
+clojure -M scripts/benchmark_context_pack.clj target/context-pack-before.clj
+clojure -M:test -m agent.test-runner
+clj-kondo --lint src test dev/user.clj scripts/benchmark_context_pack.clj
+clojure -M:dev -e ':dev-loaded (shutdown-agents)'
+```
+
+## Проверка и границы
+
+Базовый runner: 802 теста, 3369 assertions, 0 failures, 1 SQLite timeout.
+Итоговый runner: **824 теста, 3358 assertions, 0 failures, 0 errors**.
+Тестов стало больше за счёт ранее пропущенных namespaces; лишние проверки
+документации удалены. Первое SQLite-подключение больше не истекает по таймауту.
+Lint: 0 errors, 0 warnings вместо 72 errors / 10 warnings.
+`-M:dev` загружается; `git diff --check` проходит.
+
+Не выполнялись deployment, реальная отправка Telegram и Docker release smoke.
+На сервере остаётся проверить длительный streaming и end-to-end latency.
+
+Оставшиеся архитектурные кандидаты требуют отдельного подтверждения эффекта:
+`memory/core.clj` объединяет поиск, предложения, применение и отчёты;
+`branch-path` читает все entries сессии для построения выбранной ветки.
+Для дальнейшей декомпозиции нужны конкретные независимые контракты, для изменения
+SQL — замер на ветвящихся длинных сессиях. Размер файла сам по себе не основание
+для переписывания.
+
+## Основания
+
+- [Clojure: atoms](https://clojure.org/reference/atoms): чистые функции обновления состояния.
+- [Clojure: transducers](https://clojure.org/reference/transducers): отделение преобразования от источника/накопления.
+- [SQLite JDBC 3.46.1.3 loader](https://github.com/xerial/sqlite-jdbc/blob/3.46.1.3/src/main/java/org/sqlite/SQLiteJDBCLoader.java): cleanup и `org.sqlite.tmpdir`. Context7 не нашёл документацию JDBC; проверен исходник используемой версии.
