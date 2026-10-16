@@ -170,6 +170,7 @@
         ch (:channel subscription)
         result-ch (async/chan 1)
         saw-delta? (atom false)
+        finalized? (atom false)
         suppress-approval-final? (atom false)
         finalize! (:finalize! stream-controls)
         flush-tool-calls! (:flush! tool-call-controls)]
@@ -185,18 +186,27 @@
           (catch Throwable t
             (async/>!! result-ch {:error t}))))
       (loop [result-value nil
-             terminal? false]
+             terminal? false
+             fallback-ch nil]
         (if (and result-value terminal?)
           (if-let [error (:error result-value)]
             (throw error)
-            (:result result-value))
-          (let [[value port] (async/alts!! [result-ch ch])]
+            (do
+              (when (and finalize! (not @finalized?) (not @suppress-approval-final?))
+                (finalize! (:content (:result result-value))))
+              (:result result-value)))
+          (let [[value port] (async/alts!! (cond-> [ch]
+                                            (nil? result-value) (conj result-ch)
+                                            fallback-ch (conj fallback-ch)))]
             (cond
               (= port result-ch)
               ;; An error from chat/run! means the runtime loop may never have
               ;; started, so no terminal agent-end event is coming — waiting
               ;; for one would spin this loop (and the typing indicator) forever.
-              (recur value (or terminal? (some? (:error value))))
+              (recur value (or terminal? (some? (:error value))) (async/timeout 250))
+
+              (= port fallback-ch)
+              (recur result-value true nil)
 
               (= port ch)
               (let [event (:payload value)
@@ -235,7 +245,9 @@
                     (reset! suppress-approval-final? false)
                     ;; The final content is authoritative even if preview
                     ;; deltas were dropped or delayed by the event transport.
-                    (when finalize! (finalize! (:content payload))))
+                    (when finalize!
+                      (finalize! (:content payload))))
+                  (reset! finalized? true)
                   (reset! saw-delta? false))
                 (when (and event
                            (session-event? event session-id "tool-execution-update")
@@ -267,7 +279,7 @@
                   (flush-tool-calls!))
                 (recur result-value (or terminal?
                                         (and event
-                                             (terminal-session-event? event session-id)))))))))
+                                             (terminal-session-event? event session-id))) fallback-ch))))))
       (finally
         (broker/unsubscribe! broker-instance subscription)))))
 

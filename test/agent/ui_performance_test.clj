@@ -2,6 +2,7 @@
   (:require [agent.api.handlers.ui :as handler]
             [agent.api.middleware :as middleware]
             [agent.api.streaming :as streaming]
+            [agent.api.ui-state :as ui-state]
             [agent.chat :as chat]
             [agent.persistence.sqlite :as sqlite]
             [agent.persistence.sqlite.common :as db]
@@ -41,7 +42,8 @@
       (is (not (str/includes? html "session-messages-panel"))))))
 
 (deftest token-bursts-coalesce-and-final-message-flushes-immediately
-  (let [channel (async/chan 256)
+  (let [system {:ui-state (ui-state/create-state)}
+        channel (async/chan 256)
         open? (atom true)
         patches (atom [])
         sent (promise)
@@ -58,7 +60,7 @@
                                                   true)
                   ui/session-streaming-fragment (fn [& _] "streaming")
                   ui/session-messages-fragment (fn [& _] "final")]
-      (let [worker (future (handler/session-live-response {} {:parameters {:query {:session_id "session"}}}))]
+      (let [worker (future (handler/session-live-response system {:parameters {:query {:session_id "session"}}}))]
         (try
           (dotimes [_ 100] (async/>!! channel (event "message-update" {:delta "x"})))
           (is (= true (deref sent 3000 :timeout)))

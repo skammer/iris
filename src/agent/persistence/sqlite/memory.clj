@@ -326,9 +326,10 @@
 (defn update-memory-note-update-status!
   [store update-id expected-status status decision reason]
   (let [now (common/now-str)]
-    (common/with-connection
+    (common/with-transaction
       store
-      #(common/execute! %
+      (fn [conn]
+        (common/execute! conn
                         (update-memory-note-update-status-sqlvec
                          {:id update-id
                           :expected_status (common/normalize-name expected-status)
@@ -336,8 +337,9 @@
                           :decision (common/normalize-name decision)
                           :decision_reason reason
                           :updated_at now
-                          :decided_at now})))
-    (get-memory-note-update store update-id)))
+                          :decided_at now}))
+        (some-> (common/select-one conn (get-memory-note-update-sqlvec {:id update-id}) identity)
+                row->memory-note-update)))))
 
 (defn count-vault-notes [store]
   (common/count-rows store (count-vault-notes-sqlvec)))

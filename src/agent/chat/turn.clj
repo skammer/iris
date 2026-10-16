@@ -332,6 +332,7 @@
   (let [{:keys [request-id prompt] :as env} (prepare-turn-env system opts)
         persisted (atom {})
         subscribers [{:operation :persistence
+                      :required? true
                       :f (subscribers/persistence-subscriber system session-id prompt request-id persisted)}
                      {:operation :streaming-callback
                       :f (subscribers/streaming-subscriber system session-id on-delta)}

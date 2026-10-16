@@ -67,7 +67,11 @@
 
 (defn take! [ctx ch]
   (when (open? ctx)
-    (async/<!! ch)))
+    (let [message (async/<!! ch)]
+      (when (pos? (get message :broker/dropped-count 0))
+        (throw (ex-info "Event stream overflow; reconnect and refresh state"
+                        {:type :event-stream-gap :dropped (:broker/dropped-count message)})))
+      message)))
 
 (defn run-task! [ctx f]
   (let [ch (async/chan 1)

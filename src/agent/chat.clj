@@ -9,8 +9,9 @@
 
 (def stopped-content service/stopped-content)
 
-(defn create-service []
-  (service/create-service))
+(defn create-service
+  ([] (service/create-service))
+  ([opts] (service/create-service opts)))
 
 (defn stop! [chat-service]
   (service/stop! chat-service))

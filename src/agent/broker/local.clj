@@ -5,9 +5,26 @@
   (:require
    [agent.broker.core :as broker]
    [agent.defaults :as defaults]
-   [clojure.core.async :as async])
+   [clojure.core.async :as async]
+   [clojure.core.async.impl.protocols :as impl])
   (:import
    (java.util UUID)))
+
+(defn- counted-buffer [buffer size dropped]
+  (reify
+    impl/UnblockingBuffer
+    impl/Buffer
+    (full? [_] false)
+    (remove! [_]
+      (let [message (impl/remove! buffer)]
+        (cond-> message (pos? @dropped) (assoc :broker/dropped-count @dropped))))
+    (add!* [this message]
+      (when (>= (count buffer) size) (swap! dropped inc))
+      (impl/add!* buffer message)
+      this)
+    (close-buf! [_] (impl/close-buf! buffer))
+    clojure.lang.Counted
+    (count [_] (count buffer))))
 
 (defn- channel-buffer [{:keys [buffer-size buffer-strategy]
                         :or {buffer-size defaults/broker-channel-buffer-size
@@ -17,10 +34,10 @@
                              ;; A slow subscriber must not be able to abort event emission for
                              ;; every other subscriber (publish! runs synchronously on the
                              ;; event-sink thread).
-                             buffer-strategy :sliding}}]
+                             buffer-strategy :sliding}} dropped]
   (case (keyword buffer-strategy)
-    :dropping (async/dropping-buffer buffer-size)
-    :sliding (async/sliding-buffer buffer-size)
+    :dropping (counted-buffer (async/dropping-buffer buffer-size) buffer-size dropped)
+    :sliding (counted-buffer (async/sliding-buffer buffer-size) buffer-size dropped)
     :fixed buffer-size
     buffer-size))
 
@@ -51,11 +68,12 @@
   (subscribe! [_ pattern]
     (broker/subscribe! _ pattern {}))
   (subscribe! [_ pattern opts]
-    (let [subscription {:id (str (UUID/randomUUID))
+    (let [dropped (atom 0)
+          subscription {:id (str (UUID/randomUUID))
                         :pattern pattern
                         :opts opts
-                        :dropped-count (atom 0)
-                        :channel (async/chan (channel-buffer opts))}]
+                        :dropped-count dropped
+                        :channel (async/chan (channel-buffer opts dropped))}]
       (swap! subscriptions assoc (:id subscription) subscription)
       subscription))
   (unsubscribe! [_ {:keys [id channel]}]

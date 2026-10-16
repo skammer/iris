@@ -8,6 +8,7 @@
    [agent.llm.messages :as llm-messages]
    [agent.planner :as planner]
    [agent.runtime.cancel :as cancel]
+   [agent.runtime.turn-policy :as turn-policy]
    [agent.runtime.doom-loop :as doom-loop]
    [agent.runtime.events :as runtime-events]
    [agent.runtime.messages :as runtime-messages]
@@ -77,57 +78,6 @@
                   y))
               (or a {})
               (or b {})))
-
-(defn- directive-tool-name [directive]
-  (keyword (get-in directive [:payload :tool-name])))
-
-(defn- respond-directive? [directive]
-  (and (= :tool-call (keyword (:type directive)))
-       (= :respond (directive-tool-name directive))))
-
-(defn- respond-content [directive]
-  (or (get-in directive [:payload :input :content])
-      (get-in directive [:payload :input "content"])
-      ""))
-
-(defn- strip-respond-when-mixed [step llm-response]
-  (let [directives (vec (:directives step))
-        respond-only? (and (seq directives) (every? respond-directive? directives))
-        mixed? (and (some respond-directive? directives)
-                    (some #(and (= :tool-call (keyword (:type %)))
-                                (not (respond-directive? %)))
-                          directives))]
-    (cond
-      respond-only?
-      (let [content (respond-content (first directives))]
-        (-> step
-            (assoc :directives [{:type :complete
-                                 :payload {:result content}}])
-            (assoc :llm-response (assoc llm-response
-                                        :content content
-                                        :tool-calls []
-                                        :synthetic-respond? true))))
-
-      mixed?
-      (let [keep-directives (remove respond-directive? directives)
-            keep-tools (remove #(= :respond (keyword (:name (runtime-messages/normalize-tool-call-block "respond" 0 %))))
-                               (:tool-calls llm-response))]
-        (-> step
-            (assoc :directives (vec keep-directives))
-            (assoc :llm-response (assoc llm-response :tool-calls (vec keep-tools)))))
-
-      :else step)))
-
-(defn- attach-allowed-tools [step allowed-tools]
-  (if (some? allowed-tools)
-    (update step :directives
-            (fn [directives]
-              (mapv (fn [directive]
-                      (if (= :tool-call (keyword (:type directive)))
-                        (update-in directive [:payload :context] merge {:allowed-tools allowed-tools})
-                        directive))
-                    directives)))
-    step))
 
 (defn- retry-events! [sink base verdict step-no]
   (runtime-events/emit! sink :guardrail-blocked base {:step step-no
@@ -259,6 +209,123 @@
                    [] {} :cancelled stream?
                    {:cancelled? true}))
 
+(defn- plan-turn!
+  [{:keys [planner-messages fallback-messages context-pack-fn planner-fn
+           system-prompt tools model provider-config request-id session-id step-no
+           chat-profile* state telemetry observer trace agent-id* on-content-delta
+           stream?* emit-thinking! event-sink base]}]
+  (let [{planner-messages* :messages repairs :repairs} (runtime-messages/normalize-chat-history planner-messages)
+        _ (reset! fallback-messages planner-messages*)
+        _ (when (seq repairs)
+            (runtime-events/emit! event-sink :message-update base {:kind :history-repaired :repairs repairs}))
+        context-pack-raw (context-pack-fn {:messages planner-messages*
+                                           :system-prompt system-prompt
+                                           :tools tools
+                                           :model model
+                                           :provider-config provider-config
+                                           :request-id request-id
+                                           :session-id session-id
+                                           :step step-no})
+        context-pack (cond
+                       (vector? context-pack-raw) {:messages context-pack-raw}
+                       (map? context-pack-raw) context-pack-raw
+                       :else {:messages planner-messages*})
+        planner-visible-messages (or (:messages context-pack) planner-messages*)
+        routed (tool-router/route-tools {:tools tools
+                                         :profile chat-profile*
+                                         :messages planner-visible-messages})
+        routed-tools (:tools routed)
+        allowed-tools (:allowed-tools routed)
+        _ (when (contains? context-pack :tokens-before)
+            (runtime-events/emit! event-sink :message-update base
+                                  {:kind :context-budget
+                                   :step step-no
+                                   :tokens-before (:tokens-before context-pack)
+                                   :tokens-after (:tokens-after context-pack)
+                                   :budgets (:budgets context-pack)
+                                   :decisions (:decisions context-pack)}))
+        _ (doseq [warning (:warnings context-pack)]
+            (runtime-events/emit! event-sink :message-update base {:kind :context-warning
+                                                                   :step step-no
+                                                                   :warning warning}))
+        _ (when-let [compaction (:compaction context-pack)]
+            (runtime-events/emit! event-sink :message-update base {:kind :context-compacted
+                                                                   :step step-no
+                                                                   :compaction compaction}))
+        step (planner-fn provider-config
+                         {:messages planner-visible-messages
+                          :state state
+                          :tools routed-tools
+                          :telemetry telemetry
+                          :observer observer
+                          :trace trace
+                          :agent-id agent-id*
+                          :request-id request-id
+                          :session-id session-id
+                          :model model
+                          :system-prompt system-prompt
+                          :context-pack context-pack
+                          :tool-choice (when (and (:force-tool-choice? chat-profile*) (seq routed-tools))
+                                         "required")
+                          :on-content-delta on-content-delta
+                          :on-thinking-delta (when stream?* emit-thinking!)})]
+    {:step step :planner-visible-messages planner-visible-messages :allowed-tools allowed-tools}))
+
+(defn- recover!
+  [{:keys [cancellation-token env fallback-fn result-tool? delta-emitted? event-sink base fallback-messages stream?* emit-delta! request-id]} e]
+  (if (or (cancel/cancelled? cancellation-token)
+          (= :chat-cancelled (some-> e ex-data :type)))
+    (cancelled-terminal! env e)
+    (if (and fallback-fn (not result-tool?))
+      (try
+        (reset! delta-emitted? false)
+        (runtime-events/emit! event-sink :message-start base {:role "assistant"
+                                                              :fallback? true
+                                                              :reason (.getMessage e)})
+        (let [fallback (fallback-fn {:messages @fallback-messages
+                                     :error e
+                                     :stream? stream?*
+                                     :emit-delta emit-delta!})
+              content (:content fallback)]
+          (when-not @delta-emitted?
+            (emit-delta! content))
+          (runtime-events/emit! event-sink :message-end base {:role "assistant"
+                                                              :content content
+                                                              :final? true
+                                                              :fallback? true
+                                                              :stop-reason (if (:error? fallback) :error :completed)})
+          (runtime-events/emit! event-sink :agent-end base {:stop-reason (if (:error? fallback) :error :completed)
+                                                            :fallback? true
+                                                            :stream stream?*})
+          (merge (terminal-result content request-id
+                                  [{:role "assistant" :content content}]
+                                  [] (:usage fallback {})
+                                  (if (:error? fallback) :error :completed) stream?*)
+                 fallback))
+        (catch Exception fallback-error
+          (when (= :chat-persistence-failed (:type (ex-data fallback-error))) (throw fallback-error))
+          (let [content (str "Chat failed: " (.getMessage fallback-error))]
+            (runtime-events/emit! event-sink :message-end base {:role "assistant"
+                                                                :content content
+                                                                :final? true
+                                                                :fallback? true
+                                                                :stop-reason :error})
+            (runtime-events/emit! event-sink :agent-end base {:stop-reason :error
+                                                              :fallback? true
+                                                              :message (.getMessage fallback-error)
+                                                              :initial-error (.getMessage e)
+                                                              :stream stream?*})
+            (terminal-result content request-id
+                             [{:role "assistant" :content content}]
+                             [] {} :error stream?*
+                             {:error? true}))))
+      (do
+        (runtime-events/emit! event-sink :agent-end base {:stop-reason :planner-error
+                                                          :message (.getMessage e)
+                                                          :type (some-> e ex-data :type)
+                                                          :stream stream?*})
+        (throw e)))))
+
 (defn run!
   [{:keys [messages context-injectors system-prompt tools model provider-config
            telemetry observer planner-fn context-pack-fn execute-step-fn approval-fn fallback-fn event-sink
@@ -320,66 +387,34 @@
                 _ (reset! delta-emitted? false)
                 _ (discard-pending-deltas!)
                 _ (runtime-events/emit! event-sink :message-start base {:role "assistant" :step step-no})
-                {planner-messages* :messages repairs :repairs} (runtime-messages/normalize-chat-history planner-messages)
-                _ (reset! fallback-messages planner-messages*)
-                _ (when (seq repairs)
-                    (runtime-events/emit! event-sink :message-update base {:kind :history-repaired :repairs repairs}))
-                context-pack-raw (context-pack-fn {:messages planner-messages*
-                                                   :system-prompt system-prompt
-                                                   :tools tools
-                                                   :model model
-                                                   :provider-config provider-config
-                                                   :request-id request-id
-                                                   :session-id session-id
-                                                   :step step-no})
-                context-pack (cond
-                               (vector? context-pack-raw) {:messages context-pack-raw}
-                               (map? context-pack-raw) context-pack-raw
-                               :else {:messages planner-messages*})
-                planner-visible-messages (or (:messages context-pack) planner-messages*)
-                routed (tool-router/route-tools {:tools tools
-                                                 :profile chat-profile*
-                                                 :messages planner-visible-messages})
-                routed-tools (:tools routed)
-                allowed-tools (:allowed-tools routed)
-                _ (when (contains? context-pack :tokens-before)
-                    (runtime-events/emit! event-sink :message-update base
-                                          {:kind :context-budget
-                                           :step step-no
-                                           :tokens-before (:tokens-before context-pack)
-                                           :tokens-after (:tokens-after context-pack)
-                                           :budgets (:budgets context-pack)
-                                           :decisions (:decisions context-pack)}))
-                _ (doseq [warning (:warnings context-pack)]
-                    (runtime-events/emit! event-sink :message-update base {:kind :context-warning
-                                                                           :step step-no
-                                                                           :warning warning}))
-                _ (when-let [compaction (:compaction context-pack)]
-                    (runtime-events/emit! event-sink :message-update base {:kind :context-compacted
-                                                                           :step step-no
-                                                                           :compaction compaction}))
-                step (planner-fn provider-config
-                                 {:messages planner-visible-messages
-                                  :state state
-                                  :tools routed-tools
-                                  :telemetry telemetry
-                                  :observer observer
-                                  :trace trace
-                                  :agent-id agent-id*
-                                  :request-id request-id
-                                  :session-id session-id
-                                  :model model
-                                  :system-prompt system-prompt
-                                  :context-pack context-pack
-                                  :tool-choice (when (and (:force-tool-choice? chat-profile*) (seq routed-tools))
-                                                 "required")
-                                  :on-content-delta on-content-delta
-                                  :on-thinking-delta (when stream?* emit-thinking!)})
+                {:keys [step planner-visible-messages allowed-tools]}
+                (plan-turn! {:planner-messages planner-messages
+                              :fallback-messages fallback-messages
+                              :context-pack-fn context-pack-fn
+                              :planner-fn planner-fn
+                              :system-prompt system-prompt
+                              :tools tools
+                              :model model
+                              :provider-config provider-config
+                              :request-id request-id
+                              :session-id session-id
+                              :step-no step-no
+                              :chat-profile* chat-profile*
+                              :state state
+                              :telemetry telemetry
+                              :observer observer
+                              :trace trace
+                              :agent-id* agent-id*
+                              :on-content-delta on-content-delta
+                              :stream?* stream?*
+                              :emit-thinking! emit-thinking!
+                              :event-sink event-sink
+                              :base base})
                 _ (cancel/throw-if-cancelled! cancellation-token)
                 llm-response0 (:llm-response step)
                 step* (-> step
-                          (strip-respond-when-mixed llm-response0)
-                          (attach-allowed-tools allowed-tools))
+                          (turn-policy/strip-respond-when-mixed llm-response0)
+                          (turn-policy/attach-allowed-tools allowed-tools))
                 executable-step (select-keys step* [:schema-version :state :directives :receipts])
                 llm-response (:llm-response step*)
                 usage* (usage+ usage (:usage llm-response))
@@ -401,8 +436,9 @@
                                                       :llm-response llm-response
                                                       :allowed-tools allowed-tools
                                                       :max-token? max-token?})]
-            (cond
-              submission
+            (case (turn-policy/next-action {:submission submission :pre-verdict pre-verdict
+                                                 :max-token-terminal? max-token-terminal?})
+              :submission
               (let [_ (discard-pending-deltas!)
                     error (:error submission)
                     receipts (result-tool/receipts llm-response0 error)
@@ -433,7 +469,7 @@
                     (assoc (completed-terminal! env content llm-response0 step-no final-messages* trace* usage*)
                            :result-submitted? true))))
 
-              (= :retry (:action pre-verdict))
+              :retry
               (do
                 (discard-pending-deltas!)
                 (retry-events! event-sink base pre-verdict step-no)
@@ -441,18 +477,18 @@
                        trace final-messages usage* doom-loop-state
                        (nudge/record-retry nudge-state pre-verdict)))
 
-              (= :fatal (:action pre-verdict))
+              :fatal
               (do
                 (discard-pending-deltas!)
                 (retry-events! event-sink base pre-verdict step-no)
                 (fatal-guardrail! env pre-verdict step-no final-messages trace usage*))
 
-              max-token-terminal?
+              :max-tokens
               (do
                 (discard-pending-deltas!)
                 (max-tokens-terminal! env llm-response step-no final-messages trace usage*))
 
-              :else
+              :execute
               (let [doom-check (doom-loop/check-step doom-loop-state doom-loop-config* executable-step)
                     doom-loop-state* (:state doom-check)]
                 (if (:detected? doom-check)
@@ -527,54 +563,5 @@
                                        doom-loop-state*
                                        (nudge/record-execution nudge-state executable-step receipts*)))))))))))))))
       (catch Exception e
-        (if (or (cancel/cancelled? cancellation-token)
-                (= :chat-cancelled (some-> e ex-data :type)))
-          (cancelled-terminal! env e)
-          (if (and fallback-fn (not result-tool?))
-            (try
-              (reset! delta-emitted? false)
-              (runtime-events/emit! event-sink :message-start base {:role "assistant"
-                                                                    :fallback? true
-                                                                    :reason (.getMessage e)})
-              (let [fallback (fallback-fn {:messages @fallback-messages
-                                           :error e
-                                           :stream? stream?*
-                                           :emit-delta emit-delta!})
-                    content (:content fallback)]
-                (when-not @delta-emitted?
-                  (emit-delta! content))
-                (runtime-events/emit! event-sink :message-end base {:role "assistant"
-                                                                    :content content
-                                                                    :final? true
-                                                                    :fallback? true
-                                                                    :stop-reason (if (:error? fallback) :error :completed)})
-                (runtime-events/emit! event-sink :agent-end base {:stop-reason (if (:error? fallback) :error :completed)
-                                                                  :fallback? true
-                                                                  :stream stream?*})
-                (merge (terminal-result content request-id
-                                        [{:role "assistant" :content content}]
-                                        [] (:usage fallback {})
-                                        (if (:error? fallback) :error :completed) stream?*)
-                       fallback))
-              (catch Exception fallback-error
-                (let [content (str "Chat failed: " (.getMessage fallback-error))]
-                  (runtime-events/emit! event-sink :message-end base {:role "assistant"
-                                                                      :content content
-                                                                      :final? true
-                                                                      :fallback? true
-                                                                      :stop-reason :error})
-                  (runtime-events/emit! event-sink :agent-end base {:stop-reason :error
-                                                                    :fallback? true
-                                                                    :message (.getMessage fallback-error)
-                                                                    :initial-error (.getMessage e)
-                                                                    :stream stream?*})
-                  (terminal-result content request-id
-                                   [{:role "assistant" :content content}]
-                                   [] {} :error stream?*
-                                   {:error? true}))))
-            (do
-              (runtime-events/emit! event-sink :agent-end base {:stop-reason :planner-error
-                                                                :message (.getMessage e)
-                                                                :type (some-> e ex-data :type)
-                                                                :stream stream?*})
-              (throw e))))))))
+        (when (= :chat-persistence-failed (:type (ex-data e))) (throw e))
+        (recover! {:cancellation-token cancellation-token :env env :fallback-fn fallback-fn :result-tool? result-tool? :delta-emitted? delta-emitted? :event-sink event-sink :base base :fallback-messages fallback-messages :stream?* stream?* :emit-delta! emit-delta! :request-id request-id} e)))))

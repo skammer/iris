@@ -41,6 +41,7 @@
    :not-directory [400 "not_directory"]
    :file-too-large [400 "file_too_large"]
    :timeout [408 "timeout"]
+   :chat-overloaded [429 "chat_overloaded"]
    :approval-not-found [404 "approval_not_found"]
    :approval-not-approved [409 "approval_not_approved"]
    :approval-decision-conflict [409 "approval_decision_conflict"]

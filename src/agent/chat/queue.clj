@@ -5,6 +5,9 @@
   (:refer-clojure :exclude [run!])
   (:require
    [agent.chat.history :as history]
+   [agent.chat.queue-state :as state]
+   [agent.runtime.cancel :as cancel]
+   [agent.logging :as logging]
    [agent.chat.loop-control :as loop-control]
    [agent.chat.service :as service]
    [agent.chat.turn :as turn]
@@ -34,8 +37,14 @@
         future (try
                  (service/submit! service #(run-active-item! system item))
                  (catch Throwable t
-                   (when result
-                     (deliver result {:error t}))
+                   (let [failed (locking (:manager-lock service)
+                                  (let [{:keys [active queue]} (get @(:session-runtimes service) (get-in item [:opts :session-id]))]
+                                    (when (= request-id (:request-id active))
+                                      (swap! (:session-runtimes service) dissoc (get-in item [:opts :session-id]))
+                                      (cons active queue))))]
+                     (doseq [pending failed]
+                       (when-let [p (:result pending)] (deliver p {:error t})))
+                     (when result (deliver result {:error t})))
                    (throw t)))]
     (locking (:manager-lock service)
       (when (= request-id (get-in @(:session-runtimes service)
@@ -49,20 +58,11 @@
 (defn- start-next-queued! [system session-id request-id terminal-reason]
   (let [service (service/require-service system)
         {:keys [item cleared?]} (locking (:manager-lock service)
-                                  (let [{:keys [active queue]} (get @(:session-runtimes service) session-id)]
-                                    (when (= request-id (:request-id active))
-                                      (if (and (not (service/stopping? service)) (seq queue))
-                                        (let [item (peek queue)
-                                              queue* (pop queue)]
-                                          (swap! (:session-runtimes service) assoc session-id
-                                                 {:active (active-turn (:request-id item)
-                                                                       (:cancelled? item)
-                                                                       (:result item))
-                                                  :queue queue*})
-                                          {:item item})
-                                        (do
-                                          (swap! (:session-runtimes service) dissoc session-id)
-                                          {:cleared? true})))))]
+                                  (let [transition (state/advance @(:session-runtimes service)
+                                                                  session-id request-id (service/stopping? service)
+                                                                  #(active-turn (:request-id %) (:cancelled? %) (:result %)))]
+                                    (reset! (:session-runtimes service) (:runtimes transition))
+                                    transition))]
     (cond
       item
       (do
@@ -81,7 +81,8 @@
 (defn- run-active-item! [system {:keys [opts request-id cancelled? queued-message result]}]
   (let [terminal-reason (atom :complete)]
     (try
-      (let [activated-message (history/activate-queued-message! system {:queued-message queued-message
+      (let [_ (cancel/throw-if-cancelled! cancelled?)
+            activated-message (history/activate-queued-message! system {:queued-message queued-message
                                                                         :request-id request-id})
             result* (turn/run-turn! system
                                     (cond-> (assoc opts
@@ -98,12 +99,13 @@
         (if (and cancelled? @cancelled?)
           (let [result* (service/stopped-result request-id)]
             (reset! terminal-reason :cancel)
-            (when-let [session-id (:session-id opts)]
-              (history/append-message! system
-                                       session-id
-                                       "assistant"
-                                       service/stopped-content
-                                       {:metadata {:request-id request-id}}))
+            (try
+              (when-let [session-id (:session-id opts)]
+                (history/append-message! system session-id "assistant" service/stopped-content
+                                         {:metadata {:request-id request-id}}))
+              (catch Throwable persistence-error
+                (when result (deliver result {:error persistence-error}))
+                (throw persistence-error)))
             (when result
               (deliver result {:result result*}))
             result*)
@@ -118,6 +120,8 @@
   (let [service (service/require-service system)]
     (locking (:manager-lock service)
       (service/ensure-running! service)
+      (when (state/full? @(:session-runtimes service) session-id (:limits service))
+        (throw (ex-info "Chat queue is full" {:type :chat-overloaded :session-id session-id})))
       (if (get-in @(:session-runtimes service) [session-id :active])
         (let [queued-message (or (when (false? (:persist-user? opts))
                                    (:user-message opts))
@@ -129,13 +133,16 @@
                     :queued-message queued-message
                     :result result}]
           (swap! (:session-runtimes service) update session-id enqueue-item item)
-          (chat-util/emit! system {:event-type :turn-queued
+          (try
+            (chat-util/emit! system {:event-type :turn-queued
                                    :entity-type :session
                                    :entity-id session-id
                                    :request-id request-id
                                    :payload {:message-id (:id queued-message)
                                              :queued-count (get-in (service/session-state system session-id)
                                                                    [:queued-count])}})
+            (catch Exception e
+              (logging/log-error! :agent.chat/queue-notification-failed e {:session-id session-id})))
           (service/emit-session-state! system session-id :queued)
           :queued)
         (do
@@ -162,14 +169,16 @@
   (let [prompt (history/latest-user-prompt (:messages opts))]
     (cond
       (not session-id)
-      (turn/run-turn! system opts)
+      (try
+        (.get (service/submit! (service/require-service system) #(turn/run-turn! system opts)))
+        (catch java.util.concurrent.ExecutionException e (throw (.getCause e))))
 
       (and (not (:loop-turn? opts))
            (loop-support/control-command prompt))
       (loop-control/loop-command! system session-id prompt run!)
 
       (and (not (:loop-turn? opts))
-           (loop-support/active? session-id))
+           (loop-support/active? (get-in system [:chat-service :loop-state]) session-id))
       (loop-control/block-while-loop-active! system session-id prompt)
 
       :else

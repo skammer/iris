@@ -2,43 +2,13 @@
   "Local shell execution tool with bounded working roots."
   (:require
    [agent.tools.core :as tools]
+   [agent.tools.shell-policy :as policy]
    [clojure.java.io :as io]
    [clojure.string :as str])
   (:import
    (java.util.regex Pattern)))
 
-(def default-rules
-  [{:argv ["pwd"] :decision :allow}
-   {:argv ["printf" "**"] :decision :allow}
-   {:argv ["echo" "**"] :decision :allow}
-   {:argv ["which" "**"] :decision :allow}
-   {:argv ["type" "**"] :decision :allow}
-   {:argv ["ls" "**"] :decision :allow}
-   {:argv ["cat" "**"] :decision :allow}
-   {:argv ["head" "**"] :decision :allow}
-   {:argv ["tail" "**"] :decision :allow}
-   {:argv ["wc" "**"] :decision :allow}
-   {:argv ["df" "**"] :decision :allow}
-   {:argv ["uname" "**"] :decision :allow}
-   {:argv ["sort" "**"] :decision :allow}
-   {:argv ["uniq" "**"] :decision :allow}
-   {:argv ["cut" "**"] :decision :allow}
-   {:argv ["diff" "**"] :decision :allow}
-   {:argv ["rg" "**"] :decision :allow}
-   {:argv ["grep" "**"] :decision :allow}
-   {:argv ["find" "**"] :decision :allow}
-   {:argv ["git" "status" "**"] :decision :allow}
-   {:argv ["git" "log" "**"] :decision :allow}
-   {:argv ["git" "diff" "**"] :decision :allow}
-   {:argv ["git" "show" "**"] :decision :allow}
-   {:argv ["git" "branch" "**"] :decision :allow}
-   {:argv ["cargo" "fmt" "**"] :decision :allow}
-   {:argv ["rm" "-rf" "/*"] :decision :deny}
-   {:argv ["sudo" "rm" "-rf" "/*"] :decision :deny}
-   {:argv ["dd" "**"] :decision :deny}
-   {:argv ["mkfs" "**"] :decision :deny}
-   {:argv ["fdisk" "**"] :decision :deny}
-   {:argv ["mkswap" "**"] :decision :deny}])
+(def default-rules policy/default-rules)
 
 (defn- canonical-path [path]
   (.getCanonicalPath (io/file path)))
@@ -255,13 +225,13 @@
   (with-open [in stream]
     (let [buffer (byte-array 4096)
           out (java.io.ByteArrayOutputStream.)]
-      (loop [remaining max-bytes]
-        (when (pos? remaining)
-          (let [read-count (.read in buffer 0 (min (alength buffer) remaining))]
-            (when (pos? read-count)
-              (.write out buffer 0 read-count)
-              (recur (- remaining read-count))))))
-      (.toString out "UTF-8"))))
+      (loop [remaining max-bytes truncated? false]
+        (let [n (.read in buffer)]
+          (if (neg? n)
+            {:text (.toString out "UTF-8") :truncated? truncated?}
+            (let [kept (min remaining n)]
+              (when (pos? kept) (.write out buffer 0 kept))
+              (recur (- remaining kept) (or truncated? (> n kept))))))))))
 
 (defn create-shell-tool
   [opts]
@@ -321,15 +291,23 @@
                                 (.directory (io/file working-dir))))
               stdout (future (slurp-limited (.getInputStream process) (:max-output-bytes config)))
               stderr (future (slurp-limited (.getErrorStream process) (:max-output-bytes config)))
-              finished? (wait-for process timeout-ms)]
-          (when-not finished?
-            (.destroyForcibly process)
-            (throw (tools/tool-error :timeout
-                                     "Shell command timed out"
-                                     {:argv argv
-                                      :timeout-ms timeout-ms})))
-          {:argv argv
-           :working-dir working-dir
-           :exit (.exitValue process)
-           :stdout @stdout
-           :stderr @stderr}))})))
+              deadline (+ (System/nanoTime) (* 1000000 timeout-ms))
+              timeout! #(throw (tools/tool-error :timeout "Shell command timed out"
+                                                 {:argv argv :timeout-ms timeout-ms}))
+              output! (fn [task]
+                        (let [remaining (max 0 (quot (- deadline (System/nanoTime)) 1000000))
+                              result (deref task remaining ::timeout)]
+                          (if (= ::timeout result) (timeout!) result)))]
+          (try
+            (when-not (wait-for process timeout-ms) (timeout!))
+            (let [out (output! stdout) err (output! stderr)]
+              {:argv argv :working-dir working-dir :exit (.exitValue process)
+               :stdout (:text out) :stderr (:text err)
+               :stdout-truncated? (:truncated? out) :stderr-truncated? (:truncated? err)})
+            (finally
+              (when (.isAlive process) (.destroyForcibly process))
+              (.close (.getOutputStream process))
+              (future-cancel stdout)
+              (future-cancel stderr)
+              (.close (.getInputStream process))
+              (.close (.getErrorStream process))))))})))

@@ -21,6 +21,7 @@
    [agent.api.helpers :as h]
    [agent.api.middleware :as middleware]
    [agent.api.responses :as responses]
+   [agent.api.ui-state :as ui-state]
    [agent.api.routes :as routes]
    [agent.logging :as logging]
    [agent.ui :as ui-views]
@@ -257,7 +258,9 @@
     (logging/log! :agent.http/server-started
                   {:host host
                    :port port})
-    server))
+    (fn [& args]
+      (ui-state/close! (:ui-state system*))
+      (apply server args))))
 
 (defn stop-server!
   [server]

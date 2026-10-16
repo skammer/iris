@@ -5,6 +5,7 @@
   (:require
    [agent.channels.core :as channel-adapters]
    [agent.chat :as chat]
+   [agent.api.ui-state :as ui-state]
    [agent.config :as config]
    [agent.cron.service :as cron]
    [agent.llm.registry :as llm-registry]
@@ -169,7 +170,7 @@
                                                  llm-cfg
                                                  llm-provider))
         chat-service (system-health/with-component-health health-registry :chat
-                       #(chat/create-service))
+                       #(chat/create-service (:chat cfg)))
         cron-service (cron/create-service system-ref store (:cron cfg))
         telegram-reply-keyboards (atom {})]
     (logging/log! :agent.system.lifecycle/created
@@ -195,6 +196,7 @@
                        :broker broker-instance
                        :event-sink event-sink
                        :chat-service chat-service
+                       :ui-state (ui-state/create-state)
                        :cron-service cron-service
                        :telegram-reply-keyboards telegram-reply-keyboards
                        :memory-idle-service (create-memory-idle-service system-ref)

@@ -4,6 +4,7 @@
    runtime config without forcing callers to know component wiring."
   (:require
    [agent.api :as api]
+   [agent.api.ui-state :as ui-state]
    [agent.channels.core :as channel-adapters]
    [agent.chat :as chat]
    [agent.config :as config]
@@ -114,6 +115,7 @@
 
 (defn- stop-runtime-edges!
   [system]
+  (safe-stop! :agent.system.lifecycle/ui-stop-failed #(ui-state/close! (:ui-state system)))
   (safe-stop! :agent.system.lifecycle/cron-stop-failed
               #(some-> (:cron-service system) cron/stop!))
   (safe-stop! :agent.system.lifecycle/memory-magi-review-stop-failed

@@ -284,7 +284,7 @@
   (locking (:update-lock memory-service)
     (let [result (sqlite/update-memory-note-update-status!
                   (:store memory-service) update-id "pending" status decision reason)]
-      (when (= "pending" (:status result))
+      (when-not (= (name status) (:status result))
         (throw (ex-info "Memory update proposal decision conflict"
                         {:type :memory-update-decision-conflict
                          :update-id update-id})))
@@ -321,30 +321,27 @@
                                           :base-revision (:base-revision update)
                                           :actual-revision actual-revision}})
             result)
-          (try
-            (vault/replace-note-content! path actual-revision (:proposed-content update))
-            (let [index-result (notes/reindex-vault! memory-service)]
-              (when-not (:ok? index-result)
-                (throw (ex-info "Vault reindex failed after memory update"
-                                {:type :vault-reindex-failed
-                                 :report index-result})))
-              (let [result (decide-memory-note-update!
-                            memory-service update-id :applied :yes reason)]
-                (sqlite/log-event! (:store memory-service)
-                                   {:event-type :memory.vault.update_applied
-                                    :entity-type :memory_note_update
-                                    :entity-id update-id
-                                    :payload {:target-id (:target-id update)
-                                              :path path
-                                              :base-revision actual-revision
-                                              :revision (:proposed-revision update)}})
-                result))
-            (catch Exception e
-              (when (= (:proposed-revision update)
-                       (vault/content-revision (slurp path)))
-                (vault/replace-note-content! path (:proposed-revision update) before)
-                (notes/reindex-vault! memory-service))
-              (throw e))))))))
+          (let [result
+                (try
+                  (vault/replace-note-content! path actual-revision (:proposed-content update))
+                  (let [index-result (notes/reindex-vault! memory-service)]
+                    (when-not (:ok? index-result)
+                      (throw (ex-info "Vault reindex failed after memory update"
+                                      {:type :vault-reindex-failed :report index-result})))
+                    (decide-memory-note-update! memory-service update-id :applied :yes reason))
+                  (catch Exception e
+                    (when (= (:proposed-revision update) (vault/content-revision (slurp path)))
+                      (vault/replace-note-content! path (:proposed-revision update) before)
+                      (notes/reindex-vault! memory-service))
+                    (throw e)))]
+            ;; The applied decision is committed. Audit failures must not undo its file.
+            (sqlite/log-event! (:store memory-service)
+                               {:event-type :memory.vault.update_applied
+                                :entity-type :memory_note_update :entity-id update-id
+                                :payload {:target-id (:target-id update) :path path
+                                          :base-revision actual-revision
+                                          :revision (:proposed-revision update)}})
+            result))))))
 
 (defn- proposal-current-content! [memory-service proposal path-key revision-key]
   (let [path (paths/ensure-vault-path! memory-service (get proposal path-key))

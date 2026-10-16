@@ -60,9 +60,10 @@
     (is (str/includes? output "[truncated"))))
 
 (deftest loop-run-command-does-not-change-validation-command-test
-  (let [session-id (str "loop-test-" (java.util.UUID/randomUUID))]
-    (loop/start! session-id {} "ship")
-    (let [result (loop/handle-control! session-id {} "/loop run rm -rf /")]
+  (let [service (loop/create-service)
+        session-id (str "loop-test-" (java.util.UUID/randomUUID))]
+    (loop/start! service session-id {} "ship")
+    (let [result (loop/handle-control! service session-id {} "/loop run rm -rf /")]
       (is (str/includes? (:content result) "disabled"))
-      (is (nil? (:run-cmd (loop/active-state session-id)))))
-    (loop/stop! session-id)))
+      (is (nil? (:run-cmd (loop/active-state service session-id)))))
+    (loop/stop! service session-id)))

@@ -3,12 +3,14 @@
    cancellation tokens, and helpers that emit state changes for UI/API clients."
   (:require
    [agent.chat.util :as chat-util]
+   [agent.chat.queue-state :as queue-state]
    [agent.config :as config]
+   [agent.logging :as logging]
    [agent.loop :as loop-support]
    [agent.runtime.messages :as runtime-messages])
   (:import
    (java.util UUID)
-   (java.util.concurrent Callable Executors ThreadFactory TimeUnit)
+   (java.util.concurrent Callable Executors LinkedBlockingQueue ThreadPoolExecutor ThreadFactory TimeUnit RejectedExecutionException)
    (java.util.concurrent.atomic AtomicLong)))
 
 (def stopped-content runtime-messages/stopped-content)
@@ -23,17 +25,32 @@
         (doto (Thread. runnable (str prefix "-" (.incrementAndGet counter)))
           (.setDaemon true))))))
 
+(def default-limits
+  {:max-concurrent-turns 16 :max-active-sessions 64
+   :max-queued-per-session 32 :max-pending-turns 256})
+
+(defn- bounded-executor [threads capacity prefix]
+  (ThreadPoolExecutor. threads threads 0 TimeUnit/MILLISECONDS
+                       (LinkedBlockingQueue. capacity) (daemon-thread-factory prefix)))
+
 (defn create-service
-  []
-  {:stream-flush-scheduler (Executors/newSingleThreadScheduledExecutor
-                            (daemon-thread-factory "iris-chat-stream-flush"))
-   :turn-executor (Executors/newCachedThreadPool
-                   (daemon-thread-factory "iris-chat-turn"))
-   :streaming-state (atom {})
-   :session-runtimes (atom {})
-   :loop-workers (atom {})
-   :stopping? (atom false)
-   :manager-lock (Object.)})
+  ([] (create-service {}))
+  ([opts]
+   (let [limits (merge default-limits (select-keys opts (keys default-limits)))]
+     (doseq [[k v] limits]
+       (when-not (and (integer? v) (pos? v))
+         (throw (ex-info "Chat limits must be positive integers" {:type :validation-failed :key k :value v}))))
+     {:stream-flush-scheduler (Executors/newSingleThreadScheduledExecutor
+                               (daemon-thread-factory "iris-chat-stream-flush"))
+      :turn-executor (bounded-executor (:max-concurrent-turns limits) (:max-pending-turns limits) "iris-chat-turn")
+      :loop-executor (bounded-executor 4 16 "iris-chat-loop")
+      :limits limits
+      :loop-state (loop-support/create-service)
+      :streaming-state (atom {})
+      :session-runtimes (atom {})
+      :loop-workers (atom {})
+      :stopping? (atom false)
+      :manager-lock (Object.)})))
 
 (defn require-service [system]
   (or (:chat-service system)
@@ -63,15 +80,22 @@
 
 (defn submit! [service f]
   (ensure-running! service)
-  (.submit (:turn-executor service)
-           ^Callable (reify Callable
-                       (call [_] (f)))))
+  (let [task (bound-fn [] (f))]
+    (try
+      (.submit (:turn-executor service)
+               ^Callable (reify Callable (call [_] (task))))
+      (catch RejectedExecutionException e
+        (throw (ex-info "Chat executor is full or stopped" {:type :chat-overloaded} e))))))
+
+(defn submit-loop! [service f]
+  (submit! (assoc service :turn-executor (:loop-executor service)) f))
 
 (defn stop!
   [service]
   (if service
     (let [{:keys [active queued workers]} (locking (:manager-lock service)
                                             (reset! (:stopping? service) true)
+                                            (reset! (get-in service [:loop-state :states]) {})
                                             (let [runtimes @(:session-runtimes service)
                                                   workers (vals @(:loop-workers service))]
                                               (reset! (:session-runtimes service) {})
@@ -88,6 +112,7 @@
         (deliver-stopped! item))
       (doseq [worker workers]
         (.cancel worker true))
+      (.shutdownNow (:loop-executor service))
       (when-let [scheduler (:stream-flush-scheduler service)]
         (.shutdown scheduler)
         (when-not (.awaitTermination scheduler 1 TimeUnit/SECONDS)
@@ -121,7 +146,7 @@
         {:keys [active queue]} (some-> service :session-runtimes deref
                                        (get session-id))
         llm (when system (active-llm system))
-        loop-state (loop-support/active-state session-id)
+        loop-state (loop-support/active-state (get-in system [:chat-service :loop-state]) session-id)
         streaming (some-> service :streaming-state deref (get session-id))]
     (cond-> {:working? (boolean active)
              :queued-count (count queue)
@@ -145,24 +170,28 @@
 
 (defn emit-session-state! [system session-id reason]
   (when (and system session-id)
-    (chat-util/emit! system {:event-type :session-state-changed
+    (try
+      (chat-util/emit! system {:event-type :session-state-changed
                              :entity-type :session
                              :entity-id session-id
                              :payload (state-event-payload (session-state system session-id)
-                                                           reason)})))
+                                                           reason)})
+      (catch Exception e
+        (logging/log-error! :agent.chat/session-notification-failed e {:session-id session-id})))))
 
 (defn cancel-session!
   [system session-id]
   (if-let [service (:chat-service system)]
     (let [{:keys [active queued loop-worker]} (locking (:manager-lock service)
-                                                (let [{:keys [active queue]} (get @(:session-runtimes service)
-                                                                                  session-id)
+                                                (let [{:keys [active queued runtimes]}
+                                                      (queue-state/cancel @(:session-runtimes service) session-id)
                                                       loop-worker (get @(:loop-workers service) session-id)]
-                                                  (swap! (:session-runtimes service) dissoc session-id)
+                                                  (when-let [token (:cancelled? active)] (reset! token true))
+                                                  (reset! (:session-runtimes service) runtimes)
                                                   (swap! (:streaming-state service) dissoc session-id)
                                                   (swap! (:loop-workers service) dissoc session-id)
                                                   {:active active
-                                                   :queued (vec queue)
+                                                   :queued queued
                                                    :loop-worker loop-worker}))]
       (when-let [{:keys [cancelled?]} active]
         (reset! cancelled? true))
@@ -189,7 +218,11 @@
       (when (map? value)
         (select-keys value [:content :thinking])))))
 
-(defn clear-streaming! [system session-id]
-  (when session-id
-    (when-let [state (some-> system :chat-service :streaming-state)]
-      (swap! state dissoc session-id))))
+(defn clear-streaming!
+  ([system session-id] (clear-streaming! system session-id nil))
+  ([system session-id request-id]
+   (when session-id
+     (when-let [state (some-> system :chat-service :streaming-state)]
+       (swap! state (fn [states]
+                      (if (or (nil? request-id) (= request-id (get-in states [session-id :request-id])))
+                        (dissoc states session-id) states)))))))

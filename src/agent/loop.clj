@@ -10,8 +10,8 @@
 (def default-summary-max-chars 1200)
 (def default-validation-max-chars 12000)
 
-(defonce ^:private loop-states (atom {}))
-(def ^:private state-lock (Object.))
+(defn create-service []
+  {:states (atom {}) :lock (Object.)})
 
 (def instructions
   ["Choose ONE task from the plan. Do not implement multiple things."
@@ -179,16 +179,16 @@
                     "plan" {:action :plan :value tail*}
                     {:action :start :prompt rest*})))))))
 
-(defn active-state [session-id]
-  (when-let [state (and session-id (get @loop-states session-id))]
+(defn active-state [service session-id]
+  (when-let [state (and session-id (some-> service :states deref (get session-id)))]
     (when (:active? state) state)))
 
-(defn active? [session-id]
-  (boolean (active-state session-id)))
+(defn active? [service session-id]
+  (boolean (active-state service session-id)))
 
 (defn status-text
-  [session-id]
-  (if-let [{:keys [iteration max-iterations plan-file run-cmd last-run-output]} (active-state session-id)]
+  [service session-id]
+  (if-let [{:keys [iteration max-iterations plan-file run-cmd last-run-output]} (active-state service session-id)]
     (str "Loop active: " (iteration-label {:iteration iteration :max-iterations max-iterations})
          ". Plan: " plan-file
          ". Run: " (or run-cmd "none")
@@ -199,79 +199,79 @@
     "No active loop. Usage: /loop <prompt> | /loop status | /loop stop | /loop plan <path>."))
 
 (defn start!
-  [session-id cfg prompt]
+  [service session-id cfg prompt]
   (let [opts (options cfg {})
         max-iterations (validate-max-iterations! (:max-iterations opts))]
-    (locking state-lock
-      (if (active-state session-id)
-        {:content (status-text session-id)
+    (locking (:lock service)
+      (if (active-state service session-id)
+        {:content (status-text service session-id)
          :started? false}
         (let [state (new-state {:prompt prompt
                                 :plan-file (:plan-file opts)
                                 :max-iterations max-iterations
                                 :run-cmd (:run-cmd opts)})]
-          (swap! loop-states assoc session-id state)
+          (swap! (:states service) assoc session-id state)
           {:content (str "Loop started: " (iteration-label state)
                          ". Plan: " (:plan-file state) ".")
            :started? true
            :state state})))))
 
 (defn stop!
-  [session-id]
-  (locking state-lock
-    (let [state (active-state session-id)]
-      (swap! loop-states update session-id assoc :active? false :stopped-at (util/now-str))
+  [service session-id]
+  (locking (:lock service)
+    (let [state (active-state service session-id)]
+      (swap! (:states service) update session-id assoc :active? false :stopped-at (util/now-str))
       {:content (if state "Loop stopped." "No active loop.")
        :stopped? (boolean state)})))
 
 (defn update-run!
-  [session-id cmd]
-  (locking state-lock
-    (if (and (active-state session-id) (not (str/blank? cmd)))
+  [service session-id cmd]
+  (locking (:lock service)
+    (if (and (active-state service session-id) (not (str/blank? cmd)))
       {:content "Loop validation commands are disabled. Use approved shell/tool execution outside /loop."}
       {:content "Loop validation commands are disabled."})))
 
 (defn update-plan!
-  [session-id path]
-  (locking state-lock
-    (if (and (active-state session-id) (not (str/blank? path)))
+  [service session-id path]
+  (locking (:lock service)
+    (if (and (active-state service session-id) (not (str/blank? path)))
       (do
-        (swap! loop-states assoc-in [session-id :plan-file] path)
+        (swap! (:states service) assoc-in [service session-id :plan-file] path)
         {:content (str "Loop plan: " path ".")})
       {:content "Usage: /loop plan <path>."})))
 
 (defn handle-control!
-  [session-id cfg text]
+  [service session-id cfg text]
   (when-let [{:keys [action prompt value]} (control-command text)]
     (case action
-      :start (start! session-id cfg prompt)
-      :status {:content (status-text session-id)}
-      :stop (stop! session-id)
-      :run (update-run! session-id value)
-      :plan (update-plan! session-id value))))
+      :start (start! service session-id cfg prompt)
+      :status {:content (status-text service session-id)}
+      :stop (stop! service session-id)
+      :run (update-run! service session-id value)
+      :plan (update-plan! service session-id value))))
 
 (defn prepare-iteration!
-  [session-id]
-  (locking state-lock
-    (when-let [state (active-state session-id)]
+  [service session-id]
+  (locking (:lock service)
+    (when-let [state (active-state service session-id)]
       (if (should-stop? state)
         (do
-          (swap! loop-states assoc-in [session-id :active?] false)
+          (swap! (:states service) assoc-in [service session-id :active?] false)
           nil)
         (let [state* (update state :iteration inc)]
-          (swap! loop-states assoc session-id state*)
+          (swap! (:states service) assoc session-id state*)
           state*)))))
 
 (defn record-result!
-  [session-id response validation-output cfg]
+  [service session-id response validation-output cfg]
   (let [opts (options cfg {})
-        state (active-state session-id)
+        state (active-state service session-id)
         summary (progress-summary {:response response
                                    :validation-output validation-output
                                    :plan-file (:plan-file state)
                                    :summary-max-chars (:summary-max-chars opts)})]
-    (locking state-lock
-      (when-let [state* (active-state session-id)]
+    (locking (:lock service)
+      (when-let [state* (active-state service session-id)]
         (let [updated (assoc state*
                              :last-summary summary
                              :last-run-output validation-output
@@ -279,7 +279,7 @@
               stopped? (should-stop? updated)
               updated* (cond-> updated stopped? (assoc :active? false
                                                        :stopped-at (util/now-str)))]
-          (swap! loop-states assoc session-id updated*)
+          (swap! (:states service) assoc session-id updated*)
           {:state updated*
            :stopped? stopped?
            :content (when stopped?

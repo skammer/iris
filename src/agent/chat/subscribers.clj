@@ -11,10 +11,13 @@
 (defn loop-event-sink
   [system subscribers]
   (fn [event]
-    (doseq [{:keys [operation f]} subscribers]
+    (doseq [{:keys [operation f required?]} subscribers]
       (try
         (f event)
         (catch Exception e
+          (when required?
+            (throw (ex-info "Required chat persistence failed"
+                            {:type :chat-persistence-failed :operation operation} e)))
           (chat-util/emit-operation-failed! system
                                            (:entity-id event)
                                            (:request-id event)
@@ -82,34 +85,40 @@
 (defn streaming-subscriber
   [system session-id on-delta]
   (fn [event]
-    (let [payload (chat-util/event-payload event)]
-      (cond
-        (and (chat-util/same-event-type? event :message-update)
-             (string? (:delta payload))
-             (not= "" (:delta payload)))
-        (do
-          (when session-id
-            (swap! (:streaming-state (service/require-service system))
-                   update session-id
-                   (fn [state]
-                     (update (or state {})
-                             :content (fnil str "") (:delta payload)))))
-          (when on-delta
-            (on-delta (:delta payload))))
+    (let [payload (chat-util/event-payload event)
+          service (service/require-service system)
+          request-id (:request-id event)]
+      (locking (:manager-lock service)
+        (when (let [owner (or (get-in @(:session-runtimes service) [session-id :active :request-id])
+                             (get-in @(:streaming-state service) [session-id :request-id]))]
+                (or (nil? owner) (= owner request-id)))
+          (cond
+            (and (chat-util/same-event-type? event :message-update)
+                 (string? (:delta payload))
+                 (not= "" (:delta payload)))
+            (do
+              (when session-id
+                (swap! (:streaming-state (service/require-service system))
+                       update session-id
+                       (fn [state]
+                         (update (assoc (or state {}) :request-id request-id)
+                                 :content (fnil str "") (:delta payload)))))
+              (when on-delta
+                (on-delta (:delta payload))))
 
-        (and (chat-util/same-event-type? event :message-update)
-             (string? (:thinking-delta payload))
-             (not= "" (:thinking-delta payload)))
-        (when session-id
-          (swap! (:streaming-state (service/require-service system))
-                 update session-id
-                 (fn [state]
-                   (update (or state {})
-                           :thinking (fnil str "") (:thinking-delta payload)))))
+            (and (chat-util/same-event-type? event :message-update)
+                 (string? (:thinking-delta payload))
+                 (not= "" (:thinking-delta payload)))
+            (when session-id
+              (swap! (:streaming-state (service/require-service system))
+                     update session-id
+                     (fn [state]
+                       (update (assoc (or state {}) :request-id request-id)
+                               :thinking (fnil str "") (:thinking-delta payload)))))
 
-        (and (chat-util/same-event-type? event :message-end)
-             (or (:final? payload) (:tool-turn? payload)))
-        (service/clear-streaming! system session-id)))))
+            (and (chat-util/same-event-type? event :message-end)
+                 (or (:final? payload) (:tool-turn? payload)))
+            (service/clear-streaming! system session-id request-id)))))))
 
 (defn tool-call-subscriber
   [on-tool-call]

@@ -19,7 +19,7 @@
         system (test-system path provider identity)
         session (sessions/create-session! system "loop-block")]
     (try
-      (loop/start! (:id session) (:config system) "work plan")
+      (loop/start! (get-in system [:chat-service :loop-state]) (:id session) (:config system) "work plan")
       (let [result (chat/run! system {:session-id (:id session)
                                       :messages [{:role "user" :content "hello"}]})
             messages (sqlite/list-messages (:store system) (:id session))]
@@ -28,7 +28,7 @@
         (is (= ["hello" "Loop active. Use /loop status or /loop stop."]
                (mapv :content messages))))
       (finally
-        (loop/stop! (:id session))
+        (loop/stop! (get-in system [:chat-service :loop-state]) (:id session))
         (io/delete-file path true)))))
 
 (deftest chat-loop-slash-starts-worker-and-stops-at-max-test
@@ -57,7 +57,7 @@
         (is (some #(str/includes? (message-text %) "Loop Context")
                   (get-in (first @requests) [:request :messages]))))
       (finally
-        (loop/stop! (:id session))
+        (loop/stop! (get-in system [:chat-service :loop-state]) (:id session))
         (io/delete-file plan true)
         (io/delete-file path true)))))
 

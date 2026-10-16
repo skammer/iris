@@ -1,7 +1,8 @@
 (ns agent.config.defaults
   "Default configuration data; no environment or filesystem access."
   (:require
-   [agent.defaults :as defaults]))
+   [agent.defaults :as defaults]
+   [agent.tools.shell-policy :as shell-policy]))
 
 (def default-config
   {:llm {:active-provider :ollama
@@ -241,36 +242,7 @@
                    :timeout-ms 30000
                    :max-timeout-ms 30000
                    :default-decision :ask
-                   :rules [{:argv ["pwd"] :decision :allow}
-                           {:argv ["printf" "**"] :decision :allow}
-                           {:argv ["echo" "**"] :decision :allow}
-                           {:argv ["which" "**"] :decision :allow}
-                           {:argv ["type" "**"] :decision :allow}
-                           {:argv ["ls" "**"] :decision :allow}
-                           {:argv ["cat" "**"] :decision :allow}
-                           {:argv ["head" "**"] :decision :allow}
-                           {:argv ["tail" "**"] :decision :allow}
-                           {:argv ["wc" "**"] :decision :allow}
-                           {:argv ["df" "**"] :decision :allow}
-                           {:argv ["sort" "**"] :decision :allow}
-                           {:argv ["uniq" "**"] :decision :allow}
-                           {:argv ["cut" "**"] :decision :allow}
-                           {:argv ["diff" "**"] :decision :allow}
-                           {:argv ["rg" "**"] :decision :allow}
-                           {:argv ["grep" "**"] :decision :allow}
-                           {:argv ["find" "**"] :decision :allow}
-                           {:argv ["git" "status" "**"] :decision :allow}
-                           {:argv ["git" "log" "**"] :decision :allow}
-                           {:argv ["git" "diff" "**"] :decision :allow}
-                           {:argv ["git" "show" "**"] :decision :allow}
-                           {:argv ["git" "branch" "**"] :decision :allow}
-                           {:argv ["cargo" "fmt" "**"] :decision :allow}
-                           {:argv ["rm" "-rf" "/*"] :decision :deny}
-                           {:argv ["sudo" "rm" "-rf" "/*"] :decision :deny}
-                           {:argv ["dd" "**"] :decision :deny}
-                           {:argv ["mkfs" "**"] :decision :deny}
-                           {:argv ["fdisk" "**"] :decision :deny}
-                           {:argv ["mkswap" "**"] :decision :deny}]
+                   :rules shell-policy/default-rules
                    :max-output-bytes 65536}
            :mcp {:enabled false
                  :servers []}

@@ -7,7 +7,9 @@
    [clj-http.client :as http]
    [clojure.string :as str])
   (:import
+   [java.io ByteArrayInputStream ByteArrayOutputStream InputStream]
    [java.net Inet4Address Inet6Address InetAddress URI UnknownHostException]
+   [java.nio.charset Charset StandardCharsets]
    [org.apache.http.conn DnsResolver]))
 
 (def ^:private allowed-methods
@@ -99,6 +101,42 @@
 (defn- response-location [response]
   (or (get-in response [:headers "Location"])
       (get-in response [:headers "location"])))
+
+(defn- origin [url]
+  (let [uri (URI. url)
+        scheme (str/lower-case (.getScheme uri))]
+    [scheme (str/lower-case (.getHost uri))
+     (if (neg? (.getPort uri)) (if (= scheme "https") 443 80) (.getPort uri))]))
+
+(defn- redirect-headers [headers from to]
+  (if (= (origin from) (origin to))
+    headers
+    ;; Custom headers can carry credentials too. Forward only public metadata.
+    (into {} (filter (fn [[k _]]
+                       (contains? #{"accept" "accept-language" "user-agent" "content-type"}
+                                  (str/lower-case (name k))))) headers)))
+
+(defn- close-body! [response]
+  (when (instance? InputStream (:body response))
+    (.close ^InputStream (:body response))))
+
+(defn- bounded-response [response limit url]
+  (with-open [in (if (instance? InputStream (:body response))
+                  (:body response)
+                  (ByteArrayInputStream. (.getBytes (str (:body response)) StandardCharsets/UTF_8)))]
+    (let [out (ByteArrayOutputStream.)
+          buffer (byte-array 8192)
+          charset-name (second (re-find #"(?i)charset\s*=\s*\"?([^;\s\"]+)"
+                                       (or (header-value (:headers response) "content-type") "")))
+          charset (if charset-name (Charset/forName charset-name) StandardCharsets/UTF_8)]
+      (loop [total 0]
+        (let [n (.read ^InputStream in buffer 0 (int (min (alength buffer) (inc (- limit total)))))]
+          (cond
+            (neg? n) (assoc response :body (.toString out charset))
+            (> (+ total n) limit)
+            (throw (tools/tool-error :response-too-large "HTTP response exceeds max-response-bytes"
+                                     {:url url :max-response-bytes limit}))
+            :else (do (.write out buffer 0 n) (recur (+ total n)))))))))
 
 (defn- validate-url! [config url]
   (let [uri (parse-uri! url)
@@ -192,28 +230,32 @@
       (fn [input _context]
         (let [timeout-ms (min (long (or (:timeout-ms input) (:timeout-ms config)))
                               (long (:max-timeout-ms config)))
-              request-opts (fn [{:keys [url host addresses]}]
+              request-opts (fn [{:keys [url host addresses]} headers initial?]
                              (cond-> {:method (:method input)
                                       :url url
-                                      :headers (merge (:default-headers config) (:headers input))
-                                      :query-params (:params input)
+                                      :headers headers
+                                      :as :stream
                                       :socket-timeout timeout-ms
                                       :conn-timeout timeout-ms
                                       :dns-resolver (pinned-dns-resolver host addresses)
-                                      :follow-redirects false
+                                      :redirect-strategy :none
                                       :throw-exceptions false}
+                               initial? (assoc :query-params (:params input))
                                (contains? input :body)
                                (assoc :body (json/generate-string (:body input))
                                       :content-type :json
                                       :accept :json)))
               response (loop [url (:url input)
-                              redirects-left (:max-redirects config)]
+                              redirects-left (:max-redirects config)
+                              headers (merge (:default-headers config) (:headers input))]
                          (let [target (validate-url! config url)
-                               response (http/request (request-opts target))
+                               response (http/request (request-opts target headers
+                                                                   (= redirects-left (:max-redirects config))))
                                status (:status response)]
                            (if (and (<= 300 status 399)
                                     (response-location response))
                              (do
+                               (close-body! response)
                                (when (zero? redirects-left)
                                  (throw (tools/tool-error :too-many-redirects
                                                           "HTTP redirect limit exceeded"
@@ -221,16 +263,10 @@
                                                            :max-redirects (:max-redirects config)})))
                                (let [next-url (str (.resolve (URI. url)
                                                               (response-location response)))]
-                                 (recur next-url (dec redirects-left))))
-                             response)))
+                                 (recur next-url (dec redirects-left)
+                                        (redirect-headers headers url next-url))))
+                             (bounded-response response (:max-response-bytes config) url))))
               status (:status response)
-              body-size (alength (.getBytes (str (:body response)) "UTF-8"))
-              _ (when (> body-size (:max-response-bytes config))
-                  (throw (tools/tool-error :response-too-large
-                                           "HTTP response exceeds max-response-bytes"
-                                           {:url (:url input)
-                                            :size body-size
-                                            :max-response-bytes (:max-response-bytes config)})))
               parsed-body (parse-response-body response)]
           (if (<= 200 status 299)
             {:status status

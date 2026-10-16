@@ -96,7 +96,7 @@
         port (free-port)
         {:keys [server system]} (started-test-system path port identity)
         sid (:id (sqlite/create-session! (:store system) "disconnect"))
-        streams (deref (ns-resolve 'agent.api.handlers.ui 'ui-session-streams))
+        streams (get-in system [:ui-state :session-streams])
         client-id (str "disconnect-" sid)
         await-state (fn [pred]
                       (loop [attempt 0]
