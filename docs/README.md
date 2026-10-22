@@ -13,5 +13,7 @@
 - [Events](events.md): persistence, cancellation, routing, overflow and recovery.
 - [Code audit](code-audit.md): findings, remediation and verification evidence.
 - [UI/UX audit](ui-ux-audit.md): interface checks and remaining acceptance scope.
+- [Frontend code audit](frontend-code-audit.md): maintainability findings,
+  performance opportunities and verification limits.
 
 Deployed installations receive this directory at `~/.config/iris/docs`.
