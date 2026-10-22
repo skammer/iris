@@ -59,6 +59,17 @@
                           :payload {:title title}}))
     session))
 
+(defn set-generated-title!
+  "Commit only if the title has not changed while the LLM was running."
+  [system session-id expected-title title]
+  (when (sqlite/compare-and-set-session-title! (:store system) session-id expected-title title)
+    (events/log-event! system
+                       {:event-type :session.title.updated
+                        :entity-type :session
+                        :entity-id session-id
+                        :payload {:title title}})
+    (sqlite/get-session (:store system) session-id)))
+
 (defn set-project!
   [system session-id project-id]
   (let [session (or (sqlite/get-session (:store system) session-id)

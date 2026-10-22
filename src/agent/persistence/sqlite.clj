@@ -99,6 +99,9 @@
 (defn set-session-active-mode! [store session-id mode]
   (sessions/set-session-active-mode! store session-id mode))
 
+(defn compare-and-set-session-title! [store session-id expected-title title]
+  (sessions/compare-and-set-session-title! store session-id expected-title title))
+
 (defn set-session-title-if-blank! [store session-id title]
   (sessions/set-session-title-if-blank! store session-id title))
 

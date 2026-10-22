@@ -90,6 +90,15 @@
                          :title title}))))
   (get-session store session-id))
 
+(defn compare-and-set-session-title!
+  [store session-id expected-title title]
+  (common/with-connection
+    store
+    (fn [conn]
+      (pos? (common/execute! conn
+                            (queries/compare-and-set-session-title-sqlvec
+                             {:id session-id :expected_title expected-title :title title}))))))
+
 (defn update-session-metadata!
   [store session-id metadata]
   (common/with-connection

@@ -1,5 +1,5 @@
 (ns agent.chat.title
-  "Best-effort title generation for blank sessions after initial messages."
+  "Best-effort titles for blank and default Telegram sessions."
   (:require
    [agent.config :as config]
    [agent.llm.core :as llm]
@@ -13,8 +13,19 @@
 (def max-title-messages 6)
 (def max-message-chars 1200)
 
-(defn- blank-title? [session]
-  (str/blank? (or (:title session) "")))
+(defn default-title?
+  "Legacy Telegram sessions use their contact name as a placeholder."
+  [session]
+  (and (= :chat (:kind session))
+       (or (str/blank? (:title session))
+           (str/starts-with? (or (:title session) "") "Telegram: "))))
+
+(defn- enough-messages? [session messages]
+  (let [counts (frequencies (map (comp name :role)
+                                 (filter #(not (str/blank? (llm-messages/content-text %))) messages)))
+        turns (if (str/blank? (:title session)) 1 2)]
+    (and (>= (get counts "user" 0) turns)
+         (>= (get counts "assistant" 0) turns))))
 
 (defn- message-line [{:keys [role content]}]
   (let [text (-> (llm-messages/content-text {:role role :content content})
@@ -78,15 +89,12 @@
   (when session-id
     (try
       (let [session (sqlite/get-session (:store system) session-id)]
-        (when (blank-title? session)
+        (when (default-title? session)
           (let [messages (sqlite/current-llm-context (:store system) session-id)
-                title (when (>= (count (filter #(contains? #{"user" "assistant"}
-                                                          (name (:role %)))
-                                               messages))
-                                2)
+                title (when (enough-messages? session messages)
                         (generate-title! system session-id messages))]
             (when title
-              (sessions/set-title-if-blank! system session-id title)))))
+              (sessions/set-generated-title! system session-id (:title session) title)))))
       (catch Exception e
         (when-let [sink (:event-sink system)]
           (sink {:event-type :chat.operation.failed

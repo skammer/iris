@@ -42,6 +42,11 @@ set title = :title
 where id = :id
   and (title is null or trim(title) = '')
 
+-- :name compare-and-set-session-title :! :n
+update sessions
+set title = :title
+where id = :id and title is :expected_title
+
 -- :name update-session-metadata :! :n
 update sessions
 set metadata_json = :metadata_json

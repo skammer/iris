@@ -14,6 +14,7 @@
 (def count-sessions records/count-sessions)
 (def get-session records/get-session)
 (def set-session-active-mode! records/set-session-active-mode!)
+(def compare-and-set-session-title! records/compare-and-set-session-title!)
 (def set-session-title-if-blank! records/set-session-title-if-blank!)
 (def update-session-metadata! records/update-session-metadata!)
 (def session-exists? records/session-exists?)

@@ -112,7 +112,7 @@
   }
 
   .chat-titlebar {
-    flex-wrap: wrap; gap: 6px; padding: 8px;
+    flex-wrap: wrap; gap: 2px 6px; padding: 6px 8px;
   }
 
   .session-project-form {

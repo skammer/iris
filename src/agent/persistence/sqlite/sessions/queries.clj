@@ -8,6 +8,7 @@
          session-project-ids-sqlvec
          get-session-sqlvec
          update-session-active-mode-sqlvec
+         compare-and-set-session-title-sqlvec
          update-session-title-sqlvec
          update-session-metadata-sqlvec
          session-exists-sqlvec
