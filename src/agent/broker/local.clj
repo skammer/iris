@@ -57,12 +57,32 @@
 
     (async/put! channel message)))
 
+(defn- subscription-index [pattern]
+  (if (broker/wildcard-pattern? pattern) [:wildcards] [:exact pattern]))
+
+(defn- add-subscription [state subscription]
+  (let [{:keys [id pattern]} subscription]
+    (-> state
+        (assoc-in [:by-id id] subscription)
+        (assoc-in (conj (subscription-index pattern) id) subscription))))
+
+(defn- remove-subscription [state id]
+  (if-let [subscription (get-in state [:by-id id])]
+    (let [path (subscription-index (:pattern subscription))
+          next-state (-> state (update :by-id dissoc id) (update-in path dissoc id))]
+      (if (and (= :exact (first path)) (empty? (get-in next-state path)))
+        (update next-state :exact dissoc (:pattern subscription))
+        next-state))
+    state))
+
 (defrecord LocalBroker [subscriptions published-count replay-fn]
   broker/IBroker
   (publish! [_ {:keys [subject] :as message}]
     (swap! published-count inc)
-    (doseq [[_ {:keys [pattern] :as subscription}] @subscriptions]
-      (when (broker/match-subject? pattern subject)
+    (let [{:keys [exact wildcards]} @subscriptions]
+      (doseq [subscription (concat (vals (get exact (str subject)))
+                                   (filter #(broker/match-subject? (:pattern %) subject)
+                                           (vals wildcards)))]
         (publish-to-subscriber! subscription message)))
     message)
   (subscribe! [_ pattern]
@@ -70,14 +90,14 @@
   (subscribe! [_ pattern opts]
     (let [dropped (atom 0)
           subscription {:id (str (UUID/randomUUID))
-                        :pattern pattern
+                        :pattern (str pattern)
                         :opts opts
                         :dropped-count dropped
                         :channel (async/chan (channel-buffer opts dropped))}]
-      (swap! subscriptions assoc (:id subscription) subscription)
+      (swap! subscriptions add-subscription subscription)
       subscription))
   (unsubscribe! [_ {:keys [id channel]}]
-    (swap! subscriptions dissoc id)
+    (swap! subscriptions remove-subscription id)
     (async/close! channel)
     true)
   (replay! [_ pattern]
@@ -119,10 +139,10 @@
   (health-check [_]
     {:healthy true
      :backend :local
-     :subscription_count (count @subscriptions)
+     :subscription_count (count (:by-id @subscriptions))
      :published_count @published-count}))
 
 (defn create-broker
   ([] (create-broker {}))
   ([{:keys [replay-fn]}]
-   (->LocalBroker (atom {}) (atom 0) replay-fn)))
+   (->LocalBroker (atom {:by-id {} :exact {} :wildcards {}}) (atom 0) replay-fn)))

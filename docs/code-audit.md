@@ -302,3 +302,47 @@ runtime loop, доставка событий UI/Telegram, чтение исто
 Нагрузочные замеры, браузер, настоящий Telegram и production не проверялись.
 Уверенность: высокая для перечисленных расхождений кода; эффект оптимизаций
 требует измерений.
+
+
+## Исправления по повторному аудиту — 2026-10-22
+
+Все восемь пунктов реализованы. Deployment не выполнялся.
+
+| Пункт | Исправление | Проверка |
+|---|---|---|
+| 1. Startup/reload parity | Общий `rebuild-runtime-components`: MAGI callback, bundle skills, observer/trace/event sink | `system.lifecycle-test`: реальный каталог bundle skills, актуальный registry, вызовы нового observer/trace; chat queue сохраняется |
+| 2. Partial startup/reload | `system.resources/with-rollback`, обратная очистка, восстановление предыдущего runtime | Fault injection после DB, после HTTP, при запуске cron/Telegram и нового runtime; исходное исключение сохраняется |
+| 3. CI | Активный `tests.yml`: тесты, lint, минимальные permissions; без deploy/уведомлений | YAML разобран; реальные упавшие тесты дают exit 1 через `check-test-runner-exit.sh`; обычный suite даёт exit 0 |
+| 4. Stream gap | Общая проверка envelope, resync наблюдающей вкладки, authoritative state после потери POST deltas | Реальное переполнение broker, вытеснение terminal event, один resync на loss count; history window сохраняется; существующие final fallback тесты проходят |
+| 5. Branch reads | Session-scoped recursive CTE, разбор только предков, защита от циклов | Паритет benchmark, selected leaf, compaction, excluded messages, чужая сессия, отсутствующий leaf и цикл |
+| 6. Broker scope | Session subjects вне `events.>`, индекс точных подписок, scoped replay | Одна доставка оператору, отсутствие чужих событий/overflow, replay с after-id, benchmark |
+| 7. Runtime policy | Общий чистый `advance`, result retry budget и terminal decision; отдельные эффекты submission/execution | Таблица переходов плюс существующие runtime/persistence/cancellation/approval/result-tool регрессии |
+| 8. Vector degradation | Сохранён lexical fallback, структурированное событие с безопасной фиксированной причиной | Ошибка DB/embedding search отличается от пустого результата; запрос и текст исключения не логируются |
+
+Документация: [development](development.md), [events](events.md),
+[матрица reload](configuration.md#reload-boundaries); обновлён индекс docs.
+`TODO.md` отмечает выполненный profiling веток.
+
+### Замеры
+
+Локально, синтетические данные, один JVM для сравниваемых вариантов, 2 прогрева
+и медиана 5 измерений. Воспроизведение — команды в `docs/development.md`.
+
+| Сценарий | До | После |
+|---|---|---|
+| 1 ветка × 500 entries | 14,46 мс; 500 decoded rows | 14,98 мс; 500 decoded rows |
+| 10 веток × 500 entries, выбрана одна | 93,47 мс; 5000 decoded rows | 10,23 мс; 500 decoded rows |
+| 100 подписчиков, 500 событий: общий поток против session scope + exact index | 10,62 мс; 50 000 доставок | 0,81 мс; 500 доставок |
+
+Первый broker-прогон без exact index сократил доставки, но не CPU-время
+(10,75 против 11,65 мс). Поэтому добавлен индекс, а не заявлено ускорение только
+на основании меньшего числа доставок. На линейной истории SQL-изменение не
+показало ускорения; выигрыш относится к чтению одной ветки среди многих.
+
+### Границы подтверждения
+
+Полный изолированный suite: 851 тест, 3474 assertions, 0 failures/errors. Lint и
+`git diff --check` чистые. CI workflow проверен локально; запуск GitHub Actions
+потребует публикации коммита и здесь не заявляется. Browser, настоящий Telegram,
+production и длительная нагрузка не проверялись. Новые тесты доказывают
+перечисленные локальные сценарии, а не end-to-end приёмку развёрнутой системы.

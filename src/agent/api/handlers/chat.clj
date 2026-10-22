@@ -118,7 +118,7 @@
      (fn [ctx]
        (let [subscription (streaming/subscribe! ctx
                                                broker-instance
-                                               (broker/all-events-subject)
+                                               (broker/session-events-subject session-id)
                                                 {:buffer-size defaults/event-stream-buffer-size
                                                  :buffer-strategy :sliding
                                                  :slow-client :drop-new})
@@ -161,7 +161,7 @@
                  (finish! ctx result-value)
 
                  (= port events-ch)
-                 (if-let [event (:payload value)]
+                 (if-let [event (:payload (streaming/check-message! value))]
                    (do
                      (send-event! ctx event)
                      (let [terminal?* (or terminal?

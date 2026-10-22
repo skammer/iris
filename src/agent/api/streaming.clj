@@ -65,13 +65,20 @@
         (record! ctx :unsubscribed)))
      subscription)))
 
+(defn check-message!
+  "Validate a broker envelope after take/alts. on-gap may resync instead of throwing."
+  ([message]
+   (check-message! message
+     (fn [dropped] (throw (ex-info "Event stream overflow; reconnect and refresh state"
+                                  {:type :event-stream-gap :dropped dropped})))))
+  ([message on-gap]
+   (when (pos? (get message :broker/dropped-count 0))
+     (on-gap (:broker/dropped-count message)))
+   message))
+
 (defn take! [ctx ch]
   (when (open? ctx)
-    (let [message (async/<!! ch)]
-      (when (pos? (get message :broker/dropped-count 0))
-        (throw (ex-info "Event stream overflow; reconnect and refresh state"
-                        {:type :event-stream-gap :dropped (:broker/dropped-count message)})))
-      message)))
+    (check-message! (async/<!! ch))))
 
 (defn run-task! [ctx f]
   (let [ch (async/chan 1)

@@ -182,15 +182,22 @@
         entry))))
 
 (defn branch-path
+  "Read only the selected leaf's ancestors. Reject corrupt cycles rather than hang."
   ([store session-id]
    (branch-path store session-id (some-> (leaf-entry store session-id) :id)))
   ([store session-id leaf-id]
-   (let [entries (list-entries store session-id)
+   (let [entries (common/with-connection
+                 store (fn [conn]
+                         (common/select-many conn
+                           (queries/session-ancestor-entries-sqlvec
+                            {:session_id session-id :leaf_id leaf-id}) row->entry)))
          by-id (into {} (map (juxt :id identity)) entries)]
-     (loop [entry (get by-id leaf-id)
-            path ()]
+     (loop [entry (get by-id leaf-id) path () seen #{}]
        (if entry
-         (recur (get by-id (:parent-id entry)) (conj path entry))
+         (do
+           (when (contains? seen (:id entry))
+             (throw (ex-info "Cycle in session history" {:type :session-entry-cycle :session-id session-id})))
+           (recur (get by-id (:parent-id entry)) (conj path entry) (conj seen (:id entry))))
          (vec path))))))
 
 (defn- latest-labels [entries]

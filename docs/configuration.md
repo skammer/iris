@@ -169,6 +169,40 @@ changes. It preserves the active chat queue. Use full reload only when a
 component cannot be safely hot-swapped; the turn requesting a full reload may
 be interrupted while the runtime is rebuilt.
 
+### Reload boundaries
+
+| Component / setting | Soft reload | Full reload |
+|---|---|---|
+| Providers, model registry, MAGI tools | Rebuilt using shared startup factories | Rebuilt |
+| Tools, filesystem policy, skills including WASM bundle skills | Rebuilt | Rebuilt |
+| Memory, user profile, prompts | Rebuilt/refreshed | Rebuilt |
+| Observer, trace and event sink | Rebuilt together | Rebuilt |
+| Cron and memory background services | Recreated; running services restarted | Recreated and started with API |
+| Telegram | Replaced only when adapter config changes | Replaced |
+| Chat queue, active turns, executor capacity | Retained | Replaced; old turns may be interrupted |
+| Chat turn policy / model settings | New turns use refreshed config | Refreshed |
+| SQLite store, broker, telemetry collector, UI state | Retained | Replaced |
+| HTTP listener address/port | Retained | Rebound |
+| Logging | Reconfigured | Reconfigured |
+
+Changes to `:chat` executor/queue limits (`:max-concurrent-turns`,
+`:max-active-sessions`, `:max-queued-per-session`, `:max-pending-turns`), storage,
+HTTP binding or telemetry collector settings require full reload. An active turn
+can retain references captured before a soft reload; refreshing configuration
+is not an instruction to restart that turn.
+
+Construction and partial startup close acquired resources in reverse order on
+failure. Soft reload restores the old system reference and background services
+if replacement startup fails. Full reload keeps the old chat queue available
+until the new API/runtime starts. If startup fails, the new runtime is closed
+and the old API/services are restarted. If that recovery also fails, both sets
+of resources are closed; external restart is required. The reload state reports
+failure, not successful replacement. A committed full replacement is not rolled back just
+because the subsequent audit-event write fails.
+
+See [development and lifecycle](development.md) and [event contracts](events.md)
+before changing these boundaries.
+
 ## Debug checklist
 
 1. Read root `config.edn` and its `:config/includes`; do not guess filenames.

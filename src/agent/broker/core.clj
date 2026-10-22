@@ -30,9 +30,20 @@
 (defn all-events-subject [] "events.>")
 (defn reply-subject [request-id] (str "reply." request-id))
 
+(defn session-events-subject [session-id]
+  (str "session.events." session-id ".events"))
+
+(defn subject-session-id [subject]
+  (let [value (str subject) prefix "session.events." suffix ".events"]
+    (when (and (str/starts-with? value prefix) (str/ends-with? value suffix)
+               (> (count value) (+ (count prefix) (count suffix))))
+      (subs value (count prefix) (- (count value) (count suffix))))))
+
 (defn event->subjects
-  [_event]
-  ["events.all"])
+  [event]
+  (cond-> ["events.all"]
+    (and (= "session" (some-> (:entity-type event) name)) (:entity-id event))
+    (conj (session-events-subject (:entity-id event)))))
 
 (defn event->messages [event]
   (mapv (fn [subject] {:subject subject :payload event})

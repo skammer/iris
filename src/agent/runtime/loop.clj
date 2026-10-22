@@ -326,11 +326,124 @@
                                                           :stream stream?*})
         (throw e)))))
 
+(defn- submit-result!
+  [{:keys [env event-sink base request-id tool-output-max-chars discard-pending-deltas! emit-delta!]}
+   {:keys [step-no trace final-messages nudge-state] :as turn}
+   {:keys [submission llm-response0 step planner-visible-messages usage*]}]
+  (let [_ (discard-pending-deltas!)
+        error (:error submission)
+        receipts (result-tool/receipts llm-response0 error)
+        protocol (if (seq (:tool-calls llm-response0))
+                   (runtime-events/emit-tool-turn! event-sink base request-id llm-response0
+                                                  (:tool-calls llm-response0) receipts tool-output-max-chars)
+                   (do
+                     (runtime-events/emit! event-sink :message-end base
+                                          {:role "assistant" :content (:content llm-response0 "")
+                                           :audit? true :final? false})
+                     [{:role "assistant" :content (:content llm-response0 "")}]))
+        trace* (conj trace {:step step-no :directives (:directives step) :receipts receipts})
+        final-messages* (into final-messages protocol)]
+    (runtime-events/emit! event-sink :turn-end base
+                         {:step step-no :directives (:directives step) :receipts receipts})
+    (if error
+      (let [verdict (turn-policy/result-verdict nudge-state error)]
+        (retry-events! event-sink base verdict step-no)
+        (if (= :retry (:action verdict))
+          {:next-turn (turn-policy/advance turn
+                       {:planner-messages planner-visible-messages :protocol protocol
+                        :prompt {:role "user" :content error} :trace-entry (peek trace*)
+                        :usage usage* :nudge-state (update nudge-state :result-retries (fnil inc 0))})}
+          (fatal-guardrail! env verdict step-no final-messages* trace* usage*)))
+      (let [content (:content submission)]
+        (emit-delta! content)
+        (assoc (completed-terminal! env content llm-response0 step-no final-messages* trace* usage*)
+               :result-submitted? true)))))
+
+(defn- execute-turn!
+  [{:keys [env event-sink base request-id doom-loop-config* execute-step-fn cancellation-token
+           chat-profile* approval-fn tool-output-max-chars delta-emitted? emit-delta!
+           discard-pending-deltas! flush-pending-deltas!]}
+   {:keys [step-no doom-loop-state trace final-messages nudge-state] :as turn}
+   {:keys [executable-step step* llm-response planner-visible-messages usage*]}]
+  (let [doom-check (doom-loop/check-step doom-loop-state doom-loop-config* executable-step)
+        doom-loop-state* (:state doom-check)]
+    (if (:detected? doom-check)
+      (do
+        (discard-pending-deltas!)
+        (doom-loop-terminal! env doom-check doom-loop-config* step-no
+                             final-messages trace usage*))
+      (let [executed (execute-step-fn executable-step)
+            _ (cancel/throw-if-cancelled! cancellation-token)
+            receipts (:receipts executed)
+            post-verdict (nudge/check-after-exec chat-profile* nudge-state {:receipts receipts})
+            trace-entry {:step step-no :directives (:directives step*) :receipts receipts}
+            trace* (conj trace trace-entry)]
+        (case (turn-policy/post-action post-verdict)
+          :retry
+          (do
+            (discard-pending-deltas!)
+            (retry-events! event-sink base post-verdict step-no)
+            (runtime-events/emit! event-sink :turn-end base {:step step-no
+                                                             :directives (:directives step*)
+                                                             :receipts receipts})
+            {:next-turn (turn-policy/advance turn
+                    {:planner-messages planner-visible-messages
+                     :execution-state (:state executed) :prompt (nudge/nudge-message post-verdict)
+                     :trace-entry trace-entry :usage usage* :doom-loop-state doom-loop-state*
+                     :nudge-state (-> nudge-state
+                                      (nudge/record-execution executable-step receipts)
+                                      (nudge/record-retry post-verdict))})})
+
+          :fatal
+          (do
+            (discard-pending-deltas!)
+            (retry-events! event-sink base post-verdict step-no)
+            (fatal-guardrail! env post-verdict step-no final-messages trace* usage*))
+
+          :accept
+          (do
+            (flush-pending-deltas!)
+            (let [approval-needed (vec (approval-receipts receipts))
+                  approvals (when (seq approval-needed)
+                              (if approval-fn (approval-fn approval-needed) approval-needed))
+                  receipts* (if (seq approvals)
+                              (align-approval-reasons receipts approvals)
+                              receipts)
+                  approval-needed* (vec (approval-receipts receipts*))]
+              (runtime-events/emit! event-sink :turn-end base {:step step-no
+                                                               :directives (:directives step*)
+                                                               :receipts receipts*})
+              (let [provider-tool-calls (seq (:tool-calls llm-response))
+                    protocol-messages (when provider-tool-calls
+                                        (runtime-events/emit-tool-turn! event-sink base request-id llm-response
+                                                                        provider-tool-calls receipts* tool-output-max-chars))
+                    final-messages* (into final-messages protocol-messages)
+                    receipt (complete-receipt receipts)]
+                (case (turn-policy/terminal-action receipt approval-needed*)
+                  :complete
+                  (let [content (util/result-content (:result receipt))]
+                    (when-not @delta-emitted?
+                      (emit-delta! content))
+                    (completed-terminal! env content llm-response step-no
+                                         final-messages* trace* usage*))
+                  :approval
+                  (approval-terminal! env approvals approval-needed* step-no
+                                      final-messages* trace* usage*)
+                  :continue
+                  {:next-turn (turn-policy/advance turn
+                               {:planner-messages planner-visible-messages
+                                :protocol protocol-messages
+                                :execution-state (:state executed) :trace-entry trace-entry :usage usage*
+                                :doom-loop-state doom-loop-state*
+                                :nudge-state (nudge/record-execution nudge-state executable-step receipts*)})})))))))))
+
+
 (defn run!
-  [{:keys [messages context-injectors system-prompt tools model provider-config
-           telemetry observer planner-fn context-pack-fn execute-step-fn approval-fn fallback-fn event-sink
+  [{:keys [messages context-injectors tools
+           planner-fn context-pack-fn event-sink
            cancellation-token request-id session-id agent-id max-steps stream?
            tool-output-max-chars doom-loop-config chat-profile on-thinking-delta result-tool?]
+    :as opts
     :or {planner-fn planner/plan-step!
          context-pack-fn identity
          max-steps defaults/chat-max-steps
@@ -369,199 +482,66 @@
                              (when (and (string? chunk) (not= "" chunk))
                                (if buffer-deltas?
                                  (swap! pending-deltas conj chunk)
-                                 (emit-delta! chunk)))))]
+                                 (emit-delta! chunk)))))
+        ctx (merge opts {:env env :base base :agent-id* agent-id* :tools tools
+                         :planner-fn planner-fn :context-pack-fn context-pack-fn
+                         :chat-profile* chat-profile* :doom-loop-config* doom-loop-config*
+                         :tool-output-max-chars tool-output-max-chars
+                         :fallback-messages fallback-messages :delta-emitted? delta-emitted?
+                         :stream?* stream?* :emit-delta! emit-delta! :emit-thinking! emit-thinking!
+                         :on-content-delta on-content-delta
+                         :flush-pending-deltas! flush-pending-deltas!
+                         :discard-pending-deltas! discard-pending-deltas!})]
     (runtime-events/emit! event-sink :agent-start base {:message-count (count messages*) :stream stream?*})
     (try
-      (loop [step-no 0
-             state {}
-             planner-messages messages*
-             trace []
-             final-messages []
-             usage {}
-             doom-loop-state (doom-loop/new-state)
-             nudge-state (nudge/new-state)]
+      (loop [turn (turn-policy/initial-turn messages* (doom-loop/new-state) (nudge/new-state))]
         (cancel/throw-if-cancelled! cancellation-token)
-        (if (>= step-no max-steps)
-          (max-steps-terminal! env step-no final-messages trace usage)
-          (let [_ (runtime-events/emit! event-sink :turn-start base {:step step-no})
-                _ (reset! delta-emitted? false)
-                _ (discard-pending-deltas!)
-                _ (runtime-events/emit! event-sink :message-start base {:role "assistant" :step step-no})
-                {:keys [step planner-visible-messages allowed-tools]}
-                (plan-turn! {:planner-messages planner-messages
-                              :fallback-messages fallback-messages
-                              :context-pack-fn context-pack-fn
-                              :planner-fn planner-fn
-                              :system-prompt system-prompt
-                              :tools tools
-                              :model model
-                              :provider-config provider-config
-                              :request-id request-id
-                              :session-id session-id
-                              :step-no step-no
-                              :chat-profile* chat-profile*
-                              :state state
-                              :telemetry telemetry
-                              :observer observer
-                              :trace trace
-                              :agent-id* agent-id*
-                              :on-content-delta on-content-delta
-                              :stream?* stream?*
-                              :emit-thinking! emit-thinking!
-                              :event-sink event-sink
-                              :base base})
-                _ (cancel/throw-if-cancelled! cancellation-token)
-                llm-response0 (:llm-response step)
-                step* (-> step
-                          (turn-policy/strip-respond-when-mixed llm-response0)
-                          (turn-policy/attach-allowed-tools allowed-tools))
-                executable-step (select-keys step* [:schema-version :state :directives :receipts])
-                llm-response (:llm-response step*)
-                usage* (usage+ usage (:usage llm-response))
-                max-token? (runtime-events/max-token-stop-reason? (:stop-reason llm-response))
-                ;; A length-truncated turn is only terminal when it produced no
-                ;; executable tool calls. finish_reason="length" frequently rides
-                ;; along with a complete tool_calls array (the model emitted the
-                ;; call, then hit the output cap) — discarding those makes the
-                ;; agent dead-end on turns that actually produced work. When the
-                ;; tool calls are present we fall through and execute them; only
-                ;; a tool-call-free truncation surfaces as a max-tokens stop.
-                max-token-terminal? (and max-token?
-                                         (empty? (:tool-calls llm-response)))
-                submission (when (and result-tool? (not max-token-terminal?))
-                             (result-tool/check llm-response0))
-                pre-verdict (nudge/check-before-exec chat-profile*
-                                                     nudge-state
-                                                     {:step executable-step
-                                                      :llm-response llm-response
-                                                      :allowed-tools allowed-tools
-                                                      :max-token? max-token?})]
-            (case (turn-policy/next-action {:submission submission :pre-verdict pre-verdict
-                                                 :max-token-terminal? max-token-terminal?})
-              :submission
-              (let [_ (discard-pending-deltas!)
-                    error (:error submission)
-                    receipts (result-tool/receipts llm-response0 error)
-                    protocol (if (seq (:tool-calls llm-response0))
-                               (runtime-events/emit-tool-turn! event-sink base request-id llm-response0
-                                                              (:tool-calls llm-response0) receipts tool-output-max-chars)
-                               (do
-                                 (runtime-events/emit! event-sink :message-end base
-                                                      {:role "assistant" :content (:content llm-response0 "")
-                                                       :audit? true :final? false})
-                                 [{:role "assistant" :content (:content llm-response0 "")}]))
-                    trace* (conj trace {:step step-no :directives (:directives step) :receipts receipts})
-                    final-messages* (into final-messages protocol)]
-                (runtime-events/emit! event-sink :turn-end base
-                                     {:step step-no :directives (:directives step) :receipts receipts})
-                (if error
-                  (let [verdict {:action (if (< (get nudge-state :result-retries 0) 2) :retry :fatal)
-                                 :reason :invalid-result :content error}]
-                    (retry-events! event-sink base verdict step-no)
-                    (if (= :retry (:action verdict))
-                      (recur (inc step-no) state
-                             (conj (into planner-visible-messages protocol) {:role "user" :content error})
-                             trace* final-messages* usage* doom-loop-state
-                             (update nudge-state :result-retries (fnil inc 0)))
-                      (fatal-guardrail! env verdict step-no final-messages* trace* usage*)))
-                  (let [content (:content submission)]
-                    (emit-delta! content)
-                    (assoc (completed-terminal! env content llm-response0 step-no final-messages* trace* usage*)
-                           :result-submitted? true))))
-
-              :retry
-              (do
-                (discard-pending-deltas!)
-                (retry-events! event-sink base pre-verdict step-no)
-                (recur (inc step-no) state (conj planner-visible-messages (nudge/nudge-message pre-verdict))
-                       trace final-messages usage* doom-loop-state
-                       (nudge/record-retry nudge-state pre-verdict)))
-
-              :fatal
-              (do
-                (discard-pending-deltas!)
-                (retry-events! event-sink base pre-verdict step-no)
-                (fatal-guardrail! env pre-verdict step-no final-messages trace usage*))
-
-              :max-tokens
-              (do
-                (discard-pending-deltas!)
-                (max-tokens-terminal! env llm-response step-no final-messages trace usage*))
-
-              :execute
-              (let [doom-check (doom-loop/check-step doom-loop-state doom-loop-config* executable-step)
-                    doom-loop-state* (:state doom-check)]
-                (if (:detected? doom-check)
-                  (do
-                    (discard-pending-deltas!)
-                    (doom-loop-terminal! env doom-check doom-loop-config* step-no
-                                         final-messages trace usage*))
-                  (let [executed (execute-step-fn executable-step)
-                        _ (cancel/throw-if-cancelled! cancellation-token)
-                        receipts (:receipts executed)
-                        post-verdict (nudge/check-after-exec chat-profile* nudge-state {:receipts receipts})
-                        trace-entry {:step step-no :directives (:directives step*) :receipts receipts}
-                        trace* (conj trace trace-entry)]
-                    (cond
-                      (= :retry (:action post-verdict))
-                      (do
-                        (discard-pending-deltas!)
-                        (retry-events! event-sink base post-verdict step-no)
-                        (runtime-events/emit! event-sink :turn-end base {:step step-no
-                                                                         :directives (:directives step*)
-                                                                         :receipts receipts})
-                        (recur (inc step-no)
-                               (merge state (:state executed))
-                               (conj planner-visible-messages (nudge/nudge-message post-verdict))
-                               trace*
-                               final-messages
-                               usage*
-                               doom-loop-state*
-                               (-> nudge-state
-                                   (nudge/record-execution executable-step receipts)
-                                   (nudge/record-retry post-verdict))))
-
-                      (= :fatal (:action post-verdict))
-                      (do
-                        (discard-pending-deltas!)
-                        (retry-events! event-sink base post-verdict step-no)
-                        (fatal-guardrail! env post-verdict step-no final-messages trace* usage*))
-
-                      :else
-                      (do
-                        (flush-pending-deltas!)
-                        (let [approval-needed (vec (approval-receipts receipts))
-                              approvals (when (seq approval-needed)
-                                          (if approval-fn (approval-fn approval-needed) approval-needed))
-                              receipts* (if (seq approvals)
-                                          (align-approval-reasons receipts approvals)
-                                          receipts)
-                              approval-needed* (vec (approval-receipts receipts*))]
-                          (runtime-events/emit! event-sink :turn-end base {:step step-no
-                                                                           :directives (:directives step*)
-                                                                           :receipts receipts*})
-                          (let [provider-tool-calls (seq (:tool-calls llm-response))
-                                protocol-messages (when provider-tool-calls
-                                                    (runtime-events/emit-tool-turn! event-sink base request-id llm-response
-                                                                                    provider-tool-calls receipts* tool-output-max-chars))
-                                final-messages* (into final-messages protocol-messages)]
-                            (if-let [receipt (complete-receipt receipts)]
-                              (let [content (util/result-content (:result receipt))]
-                                (when-not @delta-emitted?
-                                  (emit-delta! content))
-                                (completed-terminal! env content llm-response step-no
-                                                     final-messages* trace* usage*))
-                              (if (seq approval-needed*)
-                                (approval-terminal! env approvals approval-needed* step-no
-                                                    final-messages* trace* usage*)
-                                (recur (inc step-no)
-                                       (merge state (:state executed))
-                                       (into planner-visible-messages protocol-messages)
-                                       trace*
-                                       final-messages*
-                                       usage*
-                                       doom-loop-state*
-                                       (nudge/record-execution nudge-state executable-step receipts*)))))))))))))))
+        (let [{:keys [step-no trace final-messages usage nudge-state]} turn]
+          (if (>= step-no max-steps)
+            (max-steps-terminal! env step-no final-messages trace usage)
+            (let [_ (runtime-events/emit! event-sink :turn-start base {:step step-no})
+                  _ (reset! delta-emitted? false)
+                  _ (discard-pending-deltas!)
+                  _ (runtime-events/emit! event-sink :message-start base {:role "assistant" :step step-no})
+                  {:keys [step planner-visible-messages allowed-tools]} (plan-turn! (merge ctx turn))
+                  _ (cancel/throw-if-cancelled! cancellation-token)
+                  llm-response0 (:llm-response step)
+                  step* (-> step (turn-policy/strip-respond-when-mixed llm-response0)
+                            (turn-policy/attach-allowed-tools allowed-tools))
+                  executable-step (select-keys step* [:schema-version :state :directives :receipts])
+                  llm-response (:llm-response step*)
+                  usage* (usage+ usage (:usage llm-response))
+                  max-token? (runtime-events/max-token-stop-reason? (:stop-reason llm-response))
+                  ;; Length truncation must not discard complete executable tool calls.
+                  max-token-terminal? (and max-token? (empty? (:tool-calls llm-response)))
+                  submission (when (and result-tool? (not max-token-terminal?)) (result-tool/check llm-response0))
+                  pre-verdict (nudge/check-before-exec chat-profile* nudge-state
+                               {:step executable-step :llm-response llm-response
+                                :allowed-tools allowed-tools :max-token? max-token?})
+                  plan {:step step :step* step* :executable-step executable-step
+                        :llm-response llm-response :llm-response0 llm-response0 :usage* usage*
+                        :submission submission :planner-visible-messages planner-visible-messages}
+                  action (turn-policy/next-action {:submission submission :pre-verdict pre-verdict
+                                                   :max-token-terminal? max-token-terminal?})
+                  outcome
+                  (case action
+                    :submission (submit-result! ctx turn plan)
+                    :execute (execute-turn! ctx turn plan)
+                    :retry (do
+                             (discard-pending-deltas!)
+                             (retry-events! event-sink base pre-verdict step-no)
+                             {:next-turn (turn-policy/advance turn
+                                           {:planner-messages planner-visible-messages
+                                            :prompt (nudge/nudge-message pre-verdict) :usage usage*
+                                            :nudge-state (nudge/record-retry nudge-state pre-verdict)})})
+                    :fatal (do
+                             (discard-pending-deltas!)
+                             (retry-events! event-sink base pre-verdict step-no)
+                             (fatal-guardrail! env pre-verdict step-no final-messages trace usage*))
+                    :max-tokens (do
+                                  (discard-pending-deltas!)
+                                  (max-tokens-terminal! env llm-response step-no final-messages trace usage*)))]
+              (if-let [next-turn (:next-turn outcome)] (recur next-turn) outcome)))))
       (catch Exception e
         (when (= :chat-persistence-failed (:type (ex-data e))) (throw e))
-        (recover! {:cancellation-token cancellation-token :env env :fallback-fn fallback-fn :result-tool? result-tool? :delta-emitted? delta-emitted? :event-sink event-sink :base base :fallback-messages fallback-messages :stream?* stream?* :emit-delta! emit-delta! :request-id request-id} e)))))
+        (recover! ctx e)))))

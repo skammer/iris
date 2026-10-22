@@ -27,7 +27,7 @@
     (broker/unsubscribe! instance wildcard)))
 
 (deftest event-routing-subjects-test
-  (is (= ["events.all"]
+  (is (= ["events.all" (broker/session-events-subject "session-1")]
          (broker/event->subjects {:event-type :session.created
                                   :entity-type :session
                                   :entity-id "session-1"}))))

@@ -13,6 +13,7 @@
     (try
       (f store)
       (finally
+        (sqlite/close-store! store)
         (io/delete-file path true)))))
 
 (deftest append-entry-test
@@ -130,3 +131,17 @@
         (is (= 2 (count entries)))
         (is (= ["one" "two"] (mapv #(get-in % [:payload :content]) entries)))
         (is (= [(:id m1) (:id m2)] (mapv #(get-in % [:payload :message-id]) entries)))))))
+
+(deftest selected-context-keeps-excluded-messages-out
+  (with-store
+    (fn [store]
+      (let [sid (:id (sqlite/create-session! store "excluded"))
+            a (sqlite/append-entry! store sid :message {:role "user" :content "kept"})
+            _ (sqlite/append-entry! store sid :message {:role "user" :content "queued" :excluded-from-context? true})
+            b (sqlite/append-entry! store sid :message {:role "assistant" :content "answer"})]
+        (is (= [{:role "user" :content "kept"} {:role "assistant" :content "answer"}]
+               (sqlite/current-llm-context store sid)))
+        (sqlite/select-leaf! store sid (:id a))
+        (is (= [{:role "user" :content "kept"}] (sqlite/current-llm-context store sid)))
+        (sqlite/select-leaf! store sid (:id b))
+        (is (= 2 (count (sqlite/current-llm-context store sid))))))))

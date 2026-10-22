@@ -2,6 +2,7 @@
   "Lexical and vector recall, scoring and bounded result selection."
   (:require
    [agent.llm.core :as llm]
+   [agent.logging :as logging]
    [agent.persistence.sqlite :as sqlite]
    [cheshire.core :as json]
    [clojure.set :as set]
@@ -177,6 +178,7 @@
                vec)
           []))
       (catch Exception _
+        (logging/log! :agent.memory/vector-search-degraded {:reason :embedding-search-failed})
         []))
     []))
 

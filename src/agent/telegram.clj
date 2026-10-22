@@ -163,7 +163,7 @@
   [system config opts chat-id session-id messages stream-controls tool-call-controls
    reply-keyboard-active?]
   (let [broker-instance (or (:event-bus system) (:broker system))
-        subscription (broker/subscribe! broker-instance (broker/all-events-subject)
+        subscription (broker/subscribe! broker-instance (broker/session-events-subject session-id)
                                          {:buffer-strategy :sliding
                                           :buffer-size defaults/event-stream-buffer-size
                                           :slow-client :drop-new})

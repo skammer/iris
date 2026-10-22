@@ -44,6 +44,7 @@
          insert-session-entry-sqlvec
          get-session-entry-sqlvec
          list-session-entries-sqlvec
+         session-ancestor-entries-sqlvec
          latest-session-entry-sqlvec
          get-session-leaf-selection-sqlvec
          upsert-session-leaf-selection-sqlvec

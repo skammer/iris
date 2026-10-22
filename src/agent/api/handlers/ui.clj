@@ -271,12 +271,22 @@
        (register-ui-session-stream! system client-id ctx)
        (let [subscription (streaming/subscribe! ctx
                                                 broker-instance
-                                                (broker/all-events-subject)
+                                                (broker/session-events-subject session-id)
                                                 {:buffer-size defaults/event-stream-buffer-size
                                                  :buffer-strategy :sliding
                                                  :slow-client :drop-new})
              ch (:channel subscription)
-             heartbeat-ms 5000]
+             heartbeat-ms 5000
+             seen-drops (atom 0)
+             resync! (fn [dropped]
+                       (when (> dropped @seen-drops)
+                         (reset! seen-drops dropped)
+                         (streaming/send-datastar-patch!
+                          ctx (str (ui/session-title-fragments system session-id)
+                                   (when (and (not= session-id (history-session system client-id))
+                                              (not (owns-chat-stream? system client-id session-id)))
+                                     (ui/session-messages-fragment system session-id))
+                                   (ui/session-status-fragment system session-id)))))]
          ;; Coalesce token bursts into at most 20 paints/s. A fixed deadline
          ;; prevents continuous input from postponing delivery indefinitely.
          (loop [pending nil]
@@ -292,7 +302,7 @@
                    (recur nil))
 
                  value
-                 (let [event (:payload value)]
+                 (let [event (:payload (streaming/check-message! value resync!))]
                    (cond
                      (message-stream-update-event? event session-id)
                      (recur (if (or (= session-id (history-session system client-id))
@@ -348,12 +358,13 @@
              final-fallback-ms 1000
              subscription (streaming/subscribe! ctx
                                                 broker-instance
-                                                (broker/all-events-subject)
+                                                (broker/session-events-subject session_id)
                                                 {:buffer-size defaults/event-stream-buffer-size
                                                  :buffer-strategy :sliding
                                                  :slow-client :drop-new})
              ch (:channel subscription)
              streaming-state (atom {})
+             lost-deltas? (atom false)
              push! (fn
                      ([]
                       (when-not (= session_id (history-session system client_id))
@@ -394,18 +405,21 @@
                  (push-final!)
 
                  (= port ch)
-                 (if-let [event (:payload value)]
+                 (if-let [event (:payload (streaming/check-message! value (fn [_] (reset! lost-deltas? true))))]
                    (let [terminal?* (or terminal?
                                         (terminal-session-event? event session_id))]
                      (cond
                        (message-stream-update-event? event session_id)
                        (let [{:keys [delta thinking-delta]} (:payload event)]
                          (reset! final-pushed? false)
-                         (push! (swap! streaming-state
+                         (if @lost-deltas?
+                           (when-not (= session_id (history-session system client_id))
+                             (streaming/send-datastar-patch! ctx (ui/session-streaming-fragment system session_id)))
+                           (push! (swap! streaming-state
                                        (fn [state]
                                          (cond-> state
                                            (string? delta) (update :content (fnil str "") delta)
-                                           (string? thinking-delta) (update :thinking (fnil str "") thinking-delta))))))
+                                           (string? thinking-delta) (update :thinking (fnil str "") thinking-delta)))))))
 
                        (stream-ending-message-event? event session_id)
                        (do

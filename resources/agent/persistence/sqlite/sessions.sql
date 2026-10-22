@@ -316,6 +316,17 @@ from session_entries
 where session_id = :session_id
 order by created_at asc, rowid asc
 
+-- :name session-ancestor-entries :? :*
+with recursive ancestors(id, parent_id) as (
+  select id, parent_id from session_entries where id = :leaf_id and session_id = :session_id
+  union
+  select parent.id, parent.parent_id
+  from session_entries parent join ancestors child on parent.id = child.parent_id
+  where parent.session_id = :session_id
+)
+select entry.id, entry.session_id, entry.parent_id, entry.type, entry.payload_json, entry.created_at
+from ancestors join session_entries entry on entry.id = ancestors.id
+
 -- :name latest-session-entry :? :1
 select id, session_id, parent_id, type, payload_json, created_at
 from session_entries

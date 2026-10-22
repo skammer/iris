@@ -12,18 +12,16 @@
    [agent.telemetry.observer :as telemetry-observer]))
 
 (defn- replay-broker-messages
-  [store pattern {:keys [limit after-id]
-                  :or {limit 100}}]
-  (let [pattern* (str pattern)]
-    (cond
-      (nil? store) []
-
-      (= pattern* (broker/all-events-subject))
-      (mapv (fn [event] {:subject "events.all" :payload event})
-            (reverse (sqlite/list-events store {:limit limit
-                                                :after-id after-id})))
-
-      :else [])))
+  [store pattern {:keys [limit after-id] :or {limit 100}}]
+  (let [pattern* (str pattern)
+        session-id (broker/subject-session-id pattern*)
+        all? (contains? #{"events.all" (broker/all-events-subject)} pattern*)]
+    (if (and store (or all? session-id))
+      (mapv (fn [event] {:subject (if all? "events.all" pattern*) :payload event})
+            (reverse (sqlite/list-events store
+                      (cond-> {:limit limit :after-id after-id}
+                        session-id (assoc :entity-type :session :entity-id session-id)))))
+      [])))
 
 (defn create-broker
   [store]
