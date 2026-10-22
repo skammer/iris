@@ -125,4 +125,3 @@ document.addEventListener("keydown", (event) => {
   tabs[nextIndex].focus();
   tabs[nextIndex].click();
 });
-

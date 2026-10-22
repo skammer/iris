@@ -1000,4 +1000,3 @@ iris-markdown { display: block; }
 .connection-status { display: flex; align-items: center; gap: 8px; padding: 6px 12px; color: var(--warning); }
 .connection-status[hidden], #connection-notice[hidden] { display: none; }
 #connection-notice { position: fixed; top: 8px; right: 8px; z-index: 100; max-width: 360px; padding: 12px; background: var(--surface-raised); color: var(--warning); }
-

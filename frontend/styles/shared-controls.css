@@ -16,4 +16,3 @@
 }
 @media (max-width: 900px) { .cron-form-grid { grid-template-columns: 1fr; } .cron-prompt { grid-column: auto; } .cron-schedule-head { align-items: start; } .cron-schedule-controls { justify-content: flex-start; } }
 @media (max-width: 900px) { .memory-browser { grid-template-columns: 1fr; overflow: visible; } .memory-browser-sidebar { max-height: 300px; border-right: 0; border-bottom: 1px solid var(--border); } .memory-browser-preview { min-height: 420px; } }
-

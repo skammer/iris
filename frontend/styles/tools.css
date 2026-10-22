@@ -232,4 +232,3 @@
 .tool-row__name { overflow-wrap: anywhere; font-size: 12px; }
 .tool-row__id { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-result__args { color: var(--text-secondary); }
-

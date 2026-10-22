@@ -540,4 +540,3 @@ chat-stream {
   color: var(--warning);
 }
 button:focus-visible, summary:focus-visible, a:focus-visible { outline: 1px solid var(--text-primary); outline-offset: 2px; }
-
