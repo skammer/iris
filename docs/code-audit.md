@@ -174,3 +174,131 @@ namespace queries. Тела 645 исходных определений такж
 `clj-kondo --lint src test dev/user.clj` — 0 errors/warnings;
 `clojure -M:dev -e ':dev-loaded (shutdown-agents)'` и `git diff --check` проходят.
 Deployment и браузерный smoke в этом этапе не выполнялись.
+
+## Повторный аудит сопровождения — 2026-10-22
+
+Срез: `d5a49ae`, исходное рабочее дерево чистое. Проверены сборка/reload системы,
+runtime loop, доставка событий UI/Telegram, чтение истории, поиск памяти,
+тестовый runner, CI и документация. Ниже — результаты статического анализа;
+новые сценарии отказов отдельно не воспроизводились. Это не построчная проверка
+всего репозитория. Runtime-код в рамках этого прохода не изменялся.
+
+### Приоритеты
+
+1. **P1: устранить расхождение startup и soft reload.**
+   `system/components.clj:create-system-components` передаёт MAGI
+   `:tool-registry-fn`, использует `create-skills-registry-from-config` и собирает
+   event sink с observer/trace. `system.clj:rebuild-hot-system` не передаёт
+   callback MAGI, создаёт skills без вычисленных WASM bundle dirs и сохраняет
+   старый event sink при замене observer/trace. Следствия: file review после
+   reload получает пустой список инструментов, bundle skills могут исчезнуть,
+   системные события продолжают использовать старые observer/trace.
+   До: две независимые сборки зависимостей. После: общие фабрики MAGI/skills/
+   event sink, явно переданные сохраняемые ресурсы и таблица hot/full reload.
+   Сохранение активной chat queue обязательно. Проверка: одинаковые зависимости
+   при startup/reload, доступность bundle skill, file-review tools и новый trace.
+
+2. **P1: гарантировать очистку при частичном старте и неудачном reload.**
+   В `system.clj:start-api!` HTTP запускается до Telegram; ошибка Telegram
+   пробрасывается без остановки уже запущенного HTTP. В `full-reload-now!`
+   старые сервисы остановлены до запуска новых; при ошибке нет компенсации
+   или закрытия нового store. В `components/create-system-components` также
+   нет очистки store при ошибке последующей фабрики.
+   До: последовательность side effects в `let`. После: учёт приобретённых
+   ресурсов и закрытие в обратном порядке при исключении; явное состояние
+   failed reload и определённая стратегия восстановления. Общий механизм
+   оправдан наличием нескольких путей запуска. Проверка: инъекция отказа
+   после открытия DB, после запуска HTTP и при запуске нового runtime.
+
+3. **P1: восстановить автоматический тестовый барьер.**
+   В `.github/workflows` активен `public-release-scan.yml`; build/test/lint
+   находятся в `ci-cd.yml.disabled`. В отключённом workflow тесты вызываются
+   через `run-all-tests` без преобразования failure count в exit code.
+   Создать небольшой workflow только для изолированного
+   `clojure -M:test -m agent.test-runner` и lint. Не требуется включать вместе
+   с ним публикацию Docker и уведомления. Проверка: заведомо упавший тест
+   делает job красным.
+
+4. **P2: единая обработка потерь событий для разных способов чтения.**
+   `api/streaming.clj:take!` проверяет `:broker/dropped-count`, но
+   `api/handlers/ui.clj:session-live-response` читает через `async/alts!!`
+   и сразу извлекает `:payload`, обходя эту проверку. Потерянное событие
+   завершения/обновления может оставить наблюдающую вкладку устаревшей;
+   heartbeat сам по себе историю не обновляет. POST chat имеет отдельный
+   fallback по результату задачи — его нужно сохранить.
+   До: проверка потери встроена только в блокирующий take. После: отдельная
+   проверка envelope, применяемая после take/alts, с полной синхронизацией UI
+   или явным reconnect. Проверка: переполнение, потеря terminal event,
+   восстановление вкладки без нового пользовательского сообщения.
+
+5. **P2: измерить стоимость чтения выбранной ветки.**
+   `persistence/sqlite/sessions/entries.clj:branch-path` загружает и разбирает
+   JSON всех entries сессии, строит `by-id`, затем выбирает одну ветку.
+   `current-llm-context` применяет compaction только после этого чтения.
+   Стоимость зависит от всей сессии, включая чужие ветки и старую историю.
+   Сначала benchmark длинной ветвящейся сессии с allocation/числом строк;
+   затем сравнить выборку предков в SQL с текущим алгоритмом. Сохранить
+   порядок, selected leaf, compaction и excluded messages. Ускорение пока
+   не измерено; задача уже отмечена в TODO, это не новое поручение на её реализацию.
+
+6. **P2: ограничить рассылку событий областью подписчика.**
+   `broker/core.clj:event->subjects` всегда возвращает `events.all`.
+   UI и Telegram подписываются на все события и фильтруют session-id после
+   получения. С ростом числа активных клиентов каждое событие доставляется
+   всем подписчикам; чужая генерация расходует их буферы.
+   До: общая очередь с локальной фильтрацией. После: session subjects для
+   session consumers и общий поток для операторского журнала. Нужны проверки
+   отсутствия дублей, сохранения replay и сопоставление нагрузки до/после.
+   Это кандидат оптимизации, не утверждение о текущем production bottleneck.
+
+7. **P2: продолжить отделение решений runtime от выполнения эффектов.**
+   `runtime/loop.clj:run!` остаётся примерно 240 строками: submission,
+   pre/post validation, retries, approvals, streaming buffers, persistence
+   events и переходы состояния. Повторяются сборка следующего состояния,
+   terminal/retry events и решения flush/discard.
+   Развить существующий `turn-policy`: чистые решения о следующем состоянии
+   и действиях, отдельное выполнение событий/инструментов. Не вводить новый
+   framework и не менять порядок persistence/terminal events. Проверять
+   таблицей сценариев retry, cancellation, approval, truncated tool calls,
+   invalid result и persistence failure; перенос строк между файлами сам
+   по себе проблему не решает.
+
+8. **P2: сделать деградацию vector search наблюдаемой.**
+   `memory/search.clj:vector-vault-results` превращает любое Exception в `[]`.
+   Ошибка provider/DB выглядит как отсутствие semantic matches.
+   Сохранить lexical fallback, добавить метрику/структурированное событие
+   причины деградации без содержимого запроса и секретов. Проверка: сбой
+   embeddings не ломает recall, но отличается от корректного пустого результата.
+
+### Документация для сопровождения
+
+- Дополнить `docs/configuration.md` матрицей soft/full reload: что заменяется,
+  что сохраняется, когда применяются лимиты chat, что происходит при отказе.
+  Сейчас рекомендация soft reload для skills не описывает найденное расхождение.
+- Добавить developer architecture: component graph, владельцы DB/executors/
+  subscriptions, порядок start/stop, допустимые зависимости между фасадами
+  и реализацией. Список namespaces в README этого не объясняет.
+- Описать контракт событий: request-id/session-id, порядок message/turn/agent
+  events, обязательная persistence, terminal semantics, cancellation ownership,
+  overflow/reconnect и различия UI/Telegram.
+- Добавить руководство contributor: изолированные и focused tests, lint,
+  fault injection, benchmark и отдельные границы browser/Telegram/production
+  acceptance. В `docs/README.md` добавить ссылки на memory architecture и аудиты.
+
+### Порядок работ
+
+Сначала reload parity и очистка ресурсов, затем CI и stream gap recovery.
+После этого — runtime policy refactor. SQL и broker оптимизировать после
+замеров. Документировать контракты вместе с соответствующими изменениями.
+
+### Проверка этого прохода
+
+- Изолированный `clojure -M:test -m agent.test-runner`: 835 тестов,
+  3381 assertions, 0 failures/errors.
+- `clj-kondo --lint src test dev/user.clj`: 0 errors/warnings.
+- `git diff --check`: без замечаний.
+
+Зелёный текущий suite не доказывает покрытие перечисленных сценариев отказа.
+Нагрузочные замеры, браузер, настоящий Telegram и production не проверялись.
+Уверенность: высокая для перечисленных расхождений кода; эффект оптимизаций
+требует измерений.
