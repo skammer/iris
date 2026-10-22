@@ -287,6 +287,14 @@
                                               (not (owns-chat-stream? system client-id session-id)))
                                      (ui/session-messages-fragment system session-id))
                                    (ui/session-status-fragment system session-id)))))]
+         ;; Reconnect only the live subscription, retaining the composer.
+         (when (= "true" (:resync query))
+           (streaming/send-datastar-patch!
+            ctx (str (ui/session-title-fragments system session-id)
+                     (when (and (not= session-id (history-session system client-id))
+                                (not (owns-chat-stream? system client-id session-id)))
+                       (ui/session-messages-fragment system session-id))
+                     (ui/session-status-fragment system session-id))))
          ;; Coalesce token bursts into at most 20 paints/s. A fixed deadline
          ;; prevents continuous input from postponing delivery indefinitely.
          (loop [pending nil]

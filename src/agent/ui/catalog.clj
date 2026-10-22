@@ -213,6 +213,7 @@
      [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
      [:title "Iris UI system"]
      [:link {:rel "stylesheet" :href (asset-href "/public/app.css")}]
+     [:link {:rel "stylesheet" :href (asset-href "/public/catalog.css")}]
      [:script {:type "module" :src (asset-href "/public/web-components.js")}]]
     [:body.ui-catalog-page
      (card-tab-clip-defs)

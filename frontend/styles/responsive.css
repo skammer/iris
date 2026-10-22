@@ -1,0 +1,184 @@
+
+
+@media (max-width: 1180px) {
+  .workspace-grid.two-up,
+  .memory-tab-grid,
+  .stats,
+  .dual,
+  .memory-result-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .memory-note-actions {
+    display: grid;
+  }
+
+  .memory-workspace {
+    align-content: start;
+    grid-template-rows: auto auto;
+    overflow-y: auto;
+  }
+
+  .memory-browser {
+    grid-template-columns: minmax(220px, 0.75fr) minmax(0, 1.25fr);
+  }
+
+  .memory-left-stack,
+  .memory-right-stack {
+    overflow: visible;
+  }
+
+  .memory-note-actions__controls {
+    justify-content: flex-start;
+  }
+
+  .stat.stat--wide {
+    grid-column: span 1;
+  }
+
+  .status-bar {
+    display: flex;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+
+  .status-block {
+    border-right: 1px solid var(--border);
+    border-bottom: 0;
+    flex: 0 0 auto;
+  }
+}
+
+@media (max-width: 760px) {
+  main {
+    padding: 8px;
+    gap: 8px;
+  }
+
+  .workspace-stack {
+    gap: 8px;
+  }
+
+  .workspace-grid.chat-workspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  #sessions-panel.sessions-sidebar {
+    padding: 8px;
+  }
+
+  .session-kind-tabs {
+    display: flex;
+  }
+
+  .compact-form-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .compact-form-row button,
+  #chat-form > button,
+  #chat-form > .chat-file-input {
+    width: 100%;
+  }
+
+  .session-link {
+    padding: 8px;
+  }
+
+  .session-link strong {
+    font-size: 11px;
+  }
+
+  .session-meta {
+    display: block;
+  }
+
+  .panel {
+    padding: 12px;
+  }
+
+  #chat-form {
+    grid-template-columns: minmax(0, 1fr) auto auto; padding: 8px; gap: 6px;
+  }
+
+  #chat-form .chat-input {
+    grid-column: 1 / -1;
+    font-size: 16px;
+  }
+
+  .chat-titlebar .meta {
+    display: none;
+  }
+
+  .chat-titlebar {
+    flex-wrap: wrap; gap: 6px; padding: 8px;
+  }
+
+  .session-project-form {
+    flex: 1 1 100%; min-width: 0; width: 130px;
+  }
+
+  .memory-form-grid,
+  .memory-stats {
+    grid-template-columns: 1fr;
+  }
+  .overview-intro {
+    gap: var(--space-3);
+  }
+
+  .overview-action-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
+  }
+
+  .overview-action-tile {
+    min-height: 108px;
+  }
+
+  .runtime-card__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .runtime-card__header .panel-head__form {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .overview-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .overview-metric {
+    min-height: 92px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .overview-metric:nth-child(2n) { border-right: 0; }
+  .overview-metric:last-child { border-bottom: 0; }
+
+  .overview-operations .board {
+    grid-template-columns: 1fr;
+  } .cron-summary .overview-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .shell-header { gap: 8px; padding: 8px 10px; }
+  .shell-header__actions { display: none; }
+  .shell-header .status-bar { min-width: 0; }
+  .shell-header .status-block { padding: 4px 6px; }
+  .shell-header .status-block:nth-child(n+3) { display: none; }
+  .chat-sessions-toggle { display: block; text-align: left; text-transform: none; }
+  .chat-workspace #sessions-panel { display: none; }
+  .workspace-grid.chat-workspace--sessions-open { grid-template-rows: auto minmax(150px, 35%) minmax(0, 1fr); }
+  .chat-workspace--sessions-open #sessions-panel { display: grid; }
+  .session-sidebar-heading h2 { display: none; }
+  .session-project-form input { padding: 6px; font-size: 11px; }
+  .chat-titlebar > .meta { display: block; }
+  #session-messages-panel { padding-inline: 10px; gap: 10px; }
+  .thread-stats { margin-inline: -10px; padding-inline: 10px; font-size: 10px; }
+  #chat-form > button, #chat-form > .chat-file-input { width: auto; min-width: 60px; }
+  .tool-row__id { display: none; }
+  .shell-nav.ui-card-tabs { overflow-x: auto; overflow-y: hidden; }
+  .shell-nav.ui-card-tabs .ui-card-tab-list { min-width: 490px; }
+  .shell-nav.ui-card-tabs .ui-card-tab { min-width: 70px; }
+  .shell-nav .ui-card-tab__label { font-size: 10px; max-width: none; }
+}

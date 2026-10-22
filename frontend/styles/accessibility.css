@@ -1,0 +1,80 @@
+
+
+/* --- empty + value states --- */
+.empty-line {
+  font: 400 11px/1.4 "IoskeleyMono", "Space Mono", monospace;
+  color: var(--text-disabled);
+}
+
+.empty-line::before {
+  content: "— ";
+}
+
+.value--warn {
+  color: var(--warning);
+}
+
+/* --- reduced motion (required by every transitions.dev snippet) --- */
+@media (prefers-reduced-motion: reduce) {
+  .reload-status {
+    transition: none !important;
+  }
+
+  .is-animating > .t-digit,
+  .workspace-grid.is-entering > *,
+  .dot--live,
+  .chat-spinner,
+  #chat-form.is-loading button[type="submit"]::after {
+    animation: none !important;
+  }
+
+  button:active,
+  .session-link:active,
+  .tool-button:active,
+  .chat-file-input:active {
+    transform: none;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  button,
+  .session-link,
+  .tool-button,
+  button.row--link {
+    transition-property: transform;
+  }
+}
+
+@media (max-width: 980px) {
+  .magi-console__header,
+  .magi-head {
+    display: grid;
+  }
+
+  .magi-section-head span {
+    display: none;
+  }
+
+  .magi-agent-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .magi-details {
+    grid-template-columns: 1fr;
+  }
+
+  .magi-invocation__head,
+  .magi-invocation__summary {
+    grid-template-columns: 40px 58px 62px 88px minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .magi-invocation__head span:nth-child(n+6),
+  .magi-invocation__summary > span:nth-child(n+6) {
+    display: none;
+  }
+
+  .magi-invocation__detail {
+    grid-template-columns: 1fr;
+  }
+}

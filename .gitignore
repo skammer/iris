@@ -20,3 +20,4 @@ export/*
 __pycache__/
 *.pyc
 redesign-inspiration/
+node_modules/

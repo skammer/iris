@@ -1,0 +1,16 @@
+/* Cascade order is intentional. Component rules precede shared tabs. */
+@import "./foundation.css";
+@import "./chat.css";
+@import "./workspaces.css";
+@import "./tools.css";
+@import "./components.css";
+@import "./overview.css";
+@import "./approvals.css";
+@import "./logs.css";
+@import "./magi.css";
+@import "./accessibility.css";
+@import "./shared-controls.css";
+@import "./cron.css";
+@import "./memory-browser.css";
+@import "./tabs.css";
+@import "./responsive.css";

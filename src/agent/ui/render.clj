@@ -53,7 +53,7 @@
   (markdown->html content))
 
 (defn message-content [content]
-  [:div.message-content.markdown (h/raw (markdown-html content))])
+  [:iris-markdown.message-content.markdown (h/raw (markdown-html content))])
 
 (defn- source-url [{:keys [type value media-type]}]
   (case (keyword type)

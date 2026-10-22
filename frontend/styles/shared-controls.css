@@ -1,0 +1,19 @@
+
+.ui-segmented { display: inline-flex; padding: 3px; border-radius: var(--radius-md); background: var(--surface-raised); }
+.ui-segmented button { border: 0; border-radius: 5px; color: var(--text-secondary); }
+.ui-segmented button.active { background: var(--surface); color: var(--text-display); box-shadow: var(--shadow-sm); }
+.ui-table { width: 100%; border-collapse: collapse; }
+.ui-table th,
+.ui-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; font-size: 11px; }
+.ui-table th { color: var(--text-secondary); font: 500 9px/1.2 "IoskeleyMono", monospace; letter-spacing: 0.08em; text-transform: uppercase; }
+.ui-table tbody tr:hover { background: var(--surface-raised); }
+@media (max-width: 1180px) {
+  .memory-workspace { display: block; overflow-y: auto; }
+  .memory-tabs { margin-bottom: 12px; }
+  .memory-tab-grid { display: flex; flex-direction: column; overflow: visible; }
+  .memory-tab-grid > .memory-left-stack,
+  .memory-tab-grid > .memory-right-stack { flex: 0 0 auto; overflow: visible; }
+}
+@media (max-width: 900px) { .cron-form-grid { grid-template-columns: 1fr; } .cron-prompt { grid-column: auto; } .cron-schedule-head { align-items: start; } .cron-schedule-controls { justify-content: flex-start; } }
+@media (max-width: 900px) { .memory-browser { grid-template-columns: 1fr; overflow: visible; } .memory-browser-sidebar { max-height: 300px; border-right: 0; border-bottom: 1px solid var(--border); } .memory-browser-preview { min-height: 420px; } }
+

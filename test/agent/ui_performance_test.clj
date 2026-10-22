@@ -189,3 +189,20 @@
           (is (str/includes? html "data-history=\"true\""))
           (is (not (str/includes? html "foreign")))))
       (finally (sqlite/close-store! store) (io/delete-file path true)))))
+
+(deftest reconnect-resync-does-not-replace-composer
+  (let [system {:ui-state (ui-state/create-state)}
+        channel (async/chan)
+        patches (atom [])]
+    (async/close! channel)
+    (with-redefs [sqlite/session-exists? (constantly true)
+                  streaming/managed-response (fn [_ _ f] (f :ctx))
+                  streaming/subscribe! (fn [& _] {:channel channel})
+                  streaming/open? (constantly true)
+                  streaming/send-datastar-patch! (fn [_ html] (swap! patches conj html) true)
+                  ui/session-title-fragments (fn [& _] "title|")
+                  ui/session-messages-fragment (fn [& _] "messages|")
+                  ui/session-status-fragment (fn [& _] "status")
+                  ui/session-detail-fragment (fn [& _] (throw (ex-info "Composer replaced" {})))]
+      (handler/session-live-response system {:parameters {:query {:session_id "session" :resync "true"}}})
+      (is (= ["title|messages|status"] @patches)))))

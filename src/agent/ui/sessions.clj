@@ -171,10 +171,10 @@
              [stop-node status-node] (chat-status-nodes state)]
          [:agent-chat-panel#session-detail-panel.panel
           {:data-session-id (:id session)
-           ;; Generous retry budget: the default 10 retries can be exhausted
-           ;; by server restarts, after which the transcript silently freezes.
            "data-init" (str "@get('/ui/session/live?session_id=" (:id session)
-                            "&client_id=' + window.irisUiClientId, {requestCancellation: window.irisChatStreamController, openWhenHidden: true, retryMaxCount: 1000, retryMaxWaitMs: 10000})")}
+                            "&resync=true&client_id=' + window.irisUiClientId, {requestCancellation: window.irisChatStreamController, openWhenHidden: true, retry: 'always', retryMaxCount: 10, retryMaxWaitMs: 10000})")
+           "data-on:iris-reconnect" (str "@get('/ui/session/live?session_id=" (:id session)
+                                         "&resync=true&client_id=' + window.irisUiClientId, {requestCancellation: window.irisChatStreamController, openWhenHidden: true, retry: 'always', retryMaxCount: 10, retryMaxWaitMs: 10000})")}
           [:div.chat-titlebar
            (session-title-node session true)
            [:form.session-project-form
@@ -227,6 +227,10 @@
           ;; @post serializes the FormData synchronously, so el.reset() right
           ;; after it deterministically clears the prompt (and any attached
           ;; image) without depending on submit-listener ordering.
+          [:iris-chat-composer {:data-session-id (:id session)}
+          [:div.connection-status {:hidden true :role "status" :data-connection-status true}
+           [:span "Connection lost."]
+           [:button {:type "button" :data-chat-reconnect true} "Reconnect"]]
           [:form#chat-form
            {"data-on:submit" "@post('/ui/chat', {contentType: 'form'}); el.reset()"
             "data-indicator" "chatLoading"
@@ -255,7 +259,7 @@
            [:button {:type "submit"
                      "data-attr:disabled" "$chatLoading"}
             "Send"]
-           status-node]])))))
+           status-node]]])))))
 
 (defn- streaming-message [{:keys [content thinking]}]
   [:article#streaming-message.message.message--assistant.message--streaming

@@ -1,16 +1,17 @@
+const baseUrl='http://127.0.0.1:'+(process.env.IRIS_UI_PORT || '17331');
 // Uses the isolated dev/ui_review.clj fixture. Removes only sessions seeded here.
-const {chromium}=require('playwright');
+const {openBrowser}=require('./browser.cjs');
 const {execFileSync}=require('node:child_process');
 const assert=require('node:assert/strict');
-const repl=code=>execFileSync('clj-nrepl-eval',['-p','17332',code],{encoding:'utf8'});
+const repl=code=>execFileSync(process.execPath,[require.resolve('./nrepl-eval.cjs'),process.env.IRIS_UI_NREPL_PORT || '17332',code],{encoding:'utf8'});
 (async()=>{
- const b=await chromium.launch({channel:'chrome',headless:true});
+ const b=await openBrowser();
  try {
-  repl(`(assert (= "target/ui-review/review.db" (:path review-store)))
+  repl(`(assert (= (str (or (System/getenv "IRIS_UI_REVIEW_DIR") "target/ui-review") "/review.db") (:path review-store)))
         (def review-page-sessions (mapv (fn [n] (agent.persistence.sqlite/create-session! review-store (str "Page review " n) {:metadata {:project-id (format "review-project-%03d" n)}})) (range 120)))`);
   const p=await b.newPage({viewport:{width:390,height:844}});const errors=[];
   p.on('pageerror',e=>errors.push(e.message));
-  await p.goto('http://127.0.0.1:17331/chat');
+  await p.goto(baseUrl+'/chat');
   await p.locator('.chat-sessions-toggle').click();
   await p.locator('.session-link').first().waitFor();
   assert.equal(await p.locator('.session-link').count(),50);

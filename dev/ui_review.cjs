@@ -1,20 +1,22 @@
+const baseUrl='http://127.0.0.1:'+(process.env.IRIS_UI_PORT || '17331');
 // Run with NODE_PATH pointing to an installed Playwright package. Uses dev/ui_review.clj.
-const { chromium } = require('playwright');
+const {openBrowser}=require('./browser.cjs');
 const assert = require('node:assert/strict');
 (async () => {
- const browser = await chromium.launch({headless:true,channel:'chrome'});
+ const browser = await openBrowser();
  const page=await browser.newPage(); const errors=[];
  page.on('pageerror',e=>errors.push(e.message));
  for (const [w,h] of [[1440,900],[768,1024],[390,844],[320,640],[844,390]]) {
   await page.setViewportSize({width:w,height:h});
   for (const tab of ['chat','overview','cron','tools','memory','magi','logs']) {
-   await page.goto(`http://127.0.0.1:17331/${tab}`);
+   await page.goto(`${baseUrl}/${tab}`);
    await page.locator('#workspace-content > *').first().waitFor();
    await page.evaluate(()=>document.fonts.ready);
    await page.waitForFunction(()=>!document.querySelector('.workspace-grid.is-entering'));
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`${tab} ${w}`);
    const offenders=await page.locator('.workspace-content .panel').evaluateAll(els=>els.filter(e=>e.clientWidth>0 && e.scrollWidth>e.clientWidth+1).map(e=>({html:e.outerHTML.slice(0,1800),children:[...e.querySelectorAll('*')].filter(c=>c.getBoundingClientRect().right>e.getBoundingClientRect().right).map(c=>({tag:c.tagName,cls:c.className,width:c.clientWidth})).slice(0,15)})));
    if(offenders.length) console.log(JSON.stringify(offenders));
+   assert.equal(await page.locator('.workspace-content .panel').evaluateAll(els=>els.some(e=>e.clientWidth>0 && e.getBoundingClientRect().right>innerWidth+1)),false,`panel clipped ${tab} ${w}`);
    assert.equal(await page.locator('.workspace-content .panel').evaluateAll(els=>els.some(e=>e.clientWidth>0 && e.scrollWidth>e.clientWidth+1)),false,`panel overflow ${tab} ${w}`);
    console.log(JSON.stringify({tab,w,panels:await page.locator('.workspace-content .panel').evaluateAll(els=>els.map(el=>({id:el.id,w:el.clientWidth,overflow:el.scrollWidth-el.clientWidth})))}));
    await page.screenshot({path:`target/ui-review/iris-${tab}-${w}.png`});
@@ -40,9 +42,9 @@ const assert = require('node:assert/strict');
  }
  assert.deepEqual(errors,[]);
  const {execFileSync}=require('node:child_process');
- const repl=code=>execFileSync('clj-nrepl-eval',['-p','17332',code],{encoding:'utf8'});
+ const repl=code=>execFileSync(process.execPath,[require.resolve('./nrepl-eval.cjs'),process.env.IRIS_UI_NREPL_PORT || '17332',code],{encoding:'utf8'});
  await page.setViewportSize({width:1280,height:800});
- await page.goto('http://127.0.0.1:17331/chat');
+ await page.goto(baseUrl+'/chat');
  await page.locator('#streaming-message').waitFor({state:'attached'});
  const proof=`Browser stream proof ${Date.now()}`;
  const sid=await page.locator('#session-detail-panel').getAttribute('data-session-id');
@@ -55,5 +57,17 @@ const assert = require('node:assert/strict');
   assert.equal(await page.locator('.message-content').filter({hasText:proof}).count(),1);
   console.log('Streaming: live update and terminal replacement passed, no duplicate.');
  } finally { repl("(alter-var-root #'agent.chat/streaming-state (constantly review-original-streaming))"); }
+ for(const width of [1440,390]) {
+  await page.setViewportSize({width,height:900});
+  await page.goto(`${baseUrl}/ui`);
+  await page.locator('.ui-catalog-shell').waitFor();
+  const tabs=page.locator('catalog-card-tabs').first();
+  await tabs.locator('[data-card-tab]').nth(1).click();
+  assert.equal(await tabs.locator('[data-card-tab]').nth(1).getAttribute('aria-selected'),'true');
+  assert.equal(await tabs.locator('[data-card-panel]:not([hidden])').count(),1);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`catalogue ${width}`);
+  await page.screenshot({path:`target/ui-review/catalogue-${width}.png`});
+ }
+ assert.deepEqual(errors,[]);
  await browser.close();
 })();

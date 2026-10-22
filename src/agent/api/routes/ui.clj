@@ -80,6 +80,7 @@
 
 (def ^:private session-id-query
   [:map
+   [:resync {:optional true} :string]
    [:session_id schemas/NonBlankString]
    [:client_id {:optional true} :string]
    [:offset {:optional true} :string]])

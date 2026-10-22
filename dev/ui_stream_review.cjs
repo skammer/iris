@@ -1,17 +1,18 @@
-const {chromium}=require('playwright');
+const baseUrl='http://127.0.0.1:'+(process.env.IRIS_STREAM_PORT || '17431');
+const {openBrowser}=require('./browser.cjs');
 const {execFileSync}=require('node:child_process');
 const assert=require('node:assert/strict');
 const port=process.env.IRIS_STREAM_NREPL_PORT || '17432';
-const repl=code=>execFileSync('clj-nrepl-eval',['-p',port,code],{encoding:'utf8'});
+const repl=code=>execFileSync(process.execPath,[require.resolve('./nrepl-eval.cjs'),port,code],{encoding:'utf8'});
 (async()=>{
- const browser=await chromium.launch({channel:'chrome',headless:true});
+ const browser=await openBrowser();
  const errors=[];
  try {
-  assert.match(repl(`(count @(deref #'agent.api.handlers.ui/ui-session-streams))`), /=> 0/);
+  assert.match(repl(`(count @(get-in post-review [:system :ui-state :session-streams]))`), /=> 0/);
   const sender=await browser.newPage(), observer=await browser.newPage();
   for(const p of [sender,observer]) {
    p.on('pageerror',e=>errors.push(e.message));
-   await p.goto('http://127.0.0.1:17431/chat');
+   await p.goto(baseUrl+'/chat');
    await p.locator('#session-messages-panel').waitFor();
    await p.evaluate(()=>{
     window.streamSamples=[];
@@ -49,13 +50,13 @@ const repl=code=>execFileSync('clj-nrepl-eval',['-p',port,code],{encoding:'utf8'
   assert.deepEqual(errors,[]);
   console.log(JSON.stringify({elapsedMs:finished-started,postBytes:Buffer.byteLength(body),fullPatches:2}));
   assert.match(repl(`@stream-review-full`), /=> 4/);
-  assert.match(repl(`@(deref #'agent.api.handlers.ui/ui-chat-posts)`), /=> \{\}/);
+  assert.match(repl(`@(get-in post-review [:system :ui-state :chat-posts])`), /=> \{\}/);
   await browser.close();
   for(let n=0;n<30;n++) {
-   if(repl(`(count @(deref #'agent.api.handlers.ui/ui-session-streams))`).includes('=> 0')) break;
+   if(repl(`(count @(get-in post-review [:system :ui-state :session-streams]))`).includes('=> 0')) break;
    await new Promise(resolve=>setTimeout(resolve,100));
   }
-  assert.match(repl(`(count @(deref #'agent.api.handlers.ui/ui-session-streams))`), /=> 0/);
+  assert.match(repl(`(count @(get-in post-review [:system :ui-state :session-streams]))`), /=> 0/);
   console.log('4 total history renders; both SSE subscriptions released');
  } finally {
   repl(`(when (bound? #'stream-review-original) (alter-var-root #'agent.ui/session-messages-fragment (constantly stream-review-original)))`);

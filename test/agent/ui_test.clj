@@ -17,7 +17,9 @@
 
 (deftest index-page-uses-datastar-and-web-components
   (let [html (ui/index-page)]
-    (is (str/includes? html "datastar.js"))
+    (is (str/starts-with? html "<!doctype html>"))
+    (is (not (str/includes? html "cdn.jsdelivr.net")))
+    (is (not (str/includes? html "katex.min.js")))
     (is (str/includes? html "/public/web-components.js"))
     (is (str/includes? html "/ui/shell?tab=chat"))
     (is (not (str/includes? html "/public/app.js")))))

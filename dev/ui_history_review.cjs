@@ -1,17 +1,18 @@
+const baseUrl='http://127.0.0.1:'+(process.env.IRIS_STREAM_PORT || '17431');
 // Isolated fixture: dev/ui_stream_review.clj, nREPL 17432.
-const {chromium}=require('playwright');
+const {openBrowser}=require('./browser.cjs');
 const {execFileSync}=require('node:child_process');
 const assert=require('node:assert/strict');
-const repl=code=>execFileSync('clj-nrepl-eval',['-p','17432',code],{encoding:'utf8'});
+const repl=code=>execFileSync(process.execPath,[require.resolve('./nrepl-eval.cjs'),process.env.IRIS_STREAM_NREPL_PORT || '17432',code],{encoding:'utf8'});
 (async()=>{
- const browser=await chromium.launch({channel:'chrome',headless:true});
+ const browser=await openBrowser();
  const page=await browser.newPage({viewport:{width:390,height:844}});
  let sid;
  try {
   sid=repl(`(def history-sid (:id (agent.persistence.sqlite/create-session! post-store "History pagination review")))
     (dotimes [n 605] (agent.persistence.sqlite/append-message! post-store history-sid "user" (str "history-row-" n))) history-sid`).match(/=> "([^"]+)"/g).at(-1).slice(4,-1);
   const errors=[]; page.on('pageerror',e=>errors.push(e.message));
-  await page.goto(`http://127.0.0.1:17431/chat/${sid}`);
+  await page.goto(`${baseUrl}/chat/${sid}`);
   await page.locator('#session-messages-panel article.message').first().waitFor();
   const rows=async()=>(await page.locator('#session-messages-panel article.message .message-content').allTextContents()).map(v=>v.trim());
   const seen=new Set(await rows());

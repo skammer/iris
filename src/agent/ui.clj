@@ -53,7 +53,7 @@
          (str "&session_id=" (ui-render/url-encode session-id)))))
 
 (defn router-state-fragment [path]
-  (ui-render/render [:div#router-state {:hidden true
+  (ui-render/render [:iris-router-state#router-state {:hidden true
                               "data-route-path" path}]))
 
 ;; Static assets are served with a 1h cache; the version param makes each
@@ -144,27 +144,23 @@
   ([] (index-page "/"))
   ([path]
    (let [route-state (ui-routes/route-state-from-path path)]
-  (ui-render/render
+  (str "<!doctype html>" (ui-render/render
    [:html {:lang "en"}
     [:head
      [:meta {:charset "utf-8"}]
      [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
      [:title "iris control plane"]
      [:link {:rel "stylesheet" :href (asset-href "/public/app.css")}]
-     [:link {:rel "stylesheet" :href (asset-href "/public/katex/katex.min.css")}]
-     [:script {:defer true :src (asset-href "/public/katex/katex.min.js")}]
-     [:script {:defer true :src (asset-href "/public/katex/auto-render.min.js")}]
-     [:script {:type "module"
-               :src "https://cdn.jsdelivr.net/gh/starfederation/datastar@1.0.0-RC.8/bundles/datastar.js"}]
      [:script {:type "module" :src (asset-href "/public/web-components.js")}]
      ]
     [:body
+     [:div#connection-notice {:role "status" :hidden true}]
      [:main
       [:div#shell-fragment
        {"data-init" (str "@get('" (shell-url route-state) "')")}
        ;; data-shimmer-text, not data-text: Datastar owns data-text as an
        ;; expression attribute and would evaluate the content as JS.
-       [:span.t-shimmer.boot-shimmer {"data-shimmer-text" "[LOADING...]"} "[LOADING...]"]]]]]))))
+       [:span.t-shimmer.boot-shimmer {"data-shimmer-text" "[LOADING...]"} "[LOADING...]"]]]]])))))
 
 (defn shell-fragment [system active-route]
   (let [route (if (map? active-route) active-route {:tab active-route})
