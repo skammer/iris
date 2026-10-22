@@ -14,6 +14,7 @@
    [agent.restart-handoff :as restart-handoff]
    [agent.skills :as skills]
    [agent.system :as system]
+   [agent.system.events :as events]
    [agent.system.components :as components]
    [agent.system.health :as system-health]
    [agent.telegram :as telegram]
@@ -107,6 +108,7 @@
     (reset! system-ref old-system)
     (with-redefs [config/load-config (fn [_] new-cfg)
                   llm-registry/create-registry (fn [llm-cfg] {:fresh? true :llm-cfg llm-cfg})
+                  events/create-event-sink (fn [& _] #(swap! events conj %))
                   components/create-memory-service (fn [& _] ::memory)
                   components/create-observer (fn [& _] ::observer)
                   components/create-trace (fn [& _] ::trace)
@@ -177,7 +179,7 @@
       (let [result (#'system/full-reload-now! old-system {:source "test"})
             new-system @system-ref]
         (is (= :reloaded (:status result)))
-        (is (= [:stop-old-chat :stop-old-api :start-new-api :close-old-store] @order))
+        (is (= [:stop-old-api :start-new-api :stop-old-chat :close-old-store] @order))
         (is (= ::new-api (:api-server new-system)))
         (is (= ::new-tools (:tool-registry new-system)))
         (is (= system-ref (:system-ref new-system)))
