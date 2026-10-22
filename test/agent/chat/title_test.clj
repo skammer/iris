@@ -3,6 +3,7 @@
             [agent.llm.core :as llm]
             [agent.persistence.sqlite :as sqlite]
             [agent.sessions.service :as sessions]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]))
 
 (defn- with-store [f]
@@ -16,7 +17,7 @@
 (defn- system-for [store]
   {:store store :event-sink #(sqlite/log-event! store %) :config {:llm {:provider :test :model "test"}}})
 
-(deftest telegram-title-after-two-exchanges-test
+(deftest telegram-title-after-one-completed-exchange-test
   (with-store
     (fn [store]
       (let [session (sqlite/create-session! store "Telegram: skammer")
@@ -26,15 +27,20 @@
         (with-redefs [llm/invoke (fn [_ request]
                                   (swap! calls conj request)
                                   {:content "\"Ускорение поиска по заметкам\""})]
-          (exchange! store id)
+          (sqlite/append-message! store id "user" "Как ускорить поиск по заметкам?")
+          (dotimes [_ 5]
+            (sqlite/append-message! store id "assistant" "" {:tool-calls [{:id "call" :type "function" :function {:name "search" :arguments "{}"}}]})
+            (sqlite/append-message! store id "tool" "Результаты поиска" {:tool-call-id "call"}))
           (title/maybe-generate-title! system id "test")
           (is (empty? @calls))
           (is (= "Telegram: skammer" (:title (sqlite/get-session store id))))
-          (exchange! store id)
+          (sqlite/append-message! store id "assistant" "Добавить индекс и проверить план запроса.")
           (title/maybe-generate-title! system id "test")
           (is (= "Ускорение поиска по заметкам" (:title (sqlite/get-session store id))))
           (is (= 1 (count @calls)))
           (is (true? (get-in (first @calls) [:metadata :chat-title])))
+          (is (str/includes? (get-in (first @calls) [:messages 1 :content])
+                             "Добавить индекс и проверить план запроса."))
           (title/maybe-generate-title! system id "test")
           (is (= 1 (count @calls))))))))
 

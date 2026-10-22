@@ -20,12 +20,11 @@
        (or (str/blank? (:title session))
            (str/starts-with? (or (:title session) "") "Telegram: "))))
 
-(defn- enough-messages? [session messages]
+(defn- enough-messages? [messages]
   (let [counts (frequencies (map (comp name :role)
-                                 (filter #(not (str/blank? (llm-messages/content-text %))) messages)))
-        turns (if (str/blank? (:title session)) 1 2)]
-    (and (>= (get counts "user" 0) turns)
-         (>= (get counts "assistant" 0) turns))))
+                                 (filter #(not (str/blank? (llm-messages/content-text %))) messages)))]
+    (and (pos? (get counts "user" 0))
+         (pos? (get counts "assistant" 0)))))
 
 (defn- message-line [{:keys [role content]}]
   (let [text (-> (llm-messages/content-text {:role role :content content})
@@ -41,8 +40,8 @@
 (defn- transcript [messages]
   (->> messages
        (filter #(contains? #{"user" "assistant"} (name (:role %))))
-       (take max-title-messages)
        (keep message-line)
+       (take max-title-messages)
        (str/join "\n")))
 
 (defn- strip-wrapping-quotes [title]
@@ -91,7 +90,7 @@
       (let [session (sqlite/get-session (:store system) session-id)]
         (when (default-title? session)
           (let [messages (sqlite/current-llm-context (:store system) session-id)
-                title (when (enough-messages? session messages)
+                title (when (enough-messages? messages)
                         (generate-title! system session-id messages))]
             (when title
               (sessions/set-generated-title! system session-id (:title session) title)))))
