@@ -13,6 +13,13 @@ const assert = require('node:assert/strict');
    await page.locator('#workspace-content > *').first().waitFor();
    await page.evaluate(()=>document.fonts.ready);
    await page.waitForFunction(()=>!document.querySelector('.workspace-grid.is-entering'));
+   const tabJoin=await page.evaluate(()=>{
+    const selected=document.querySelector('#shell-nav [aria-selected="true"]');
+    return {bottom:selected.getBoundingClientRect().bottom,
+     labelBottom:selected.querySelector('.ui-card-tab__label').getBoundingClientRect().bottom,
+     panelTop:document.querySelector('#workspace-content').getBoundingClientRect().top};
+   });
+   assert.ok(tabJoin.bottom>tabJoin.panelTop && tabJoin.labelBottom<tabJoin.panelTop,`tab joins panel without hiding label: ${tab} ${w}`);
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`${tab} ${w}`);
    const offenders=await page.locator('.workspace-content .panel').evaluateAll(els=>els.filter(e=>e.clientWidth>0 && e.scrollWidth>e.clientWidth+1).map(e=>({html:e.outerHTML.slice(0,1800),children:[...e.querySelectorAll('*')].filter(c=>c.getBoundingClientRect().right>e.getBoundingClientRect().right).map(c=>({tag:c.tagName,cls:c.className,width:c.clientWidth})).slice(0,15)})));
    if(offenders.length) console.log(JSON.stringify(offenders));

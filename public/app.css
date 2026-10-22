@@ -4730,6 +4730,9 @@ button.row--link:focus-visible {
   box-shadow: none;
   overflow: visible;
 }
+.ui-card-tab-clip-defs {
+  position: absolute;
+}
 .shell-nav.ui-card-tabs .ui-card-tab-list {
   right: var(--space-4);
   overflow-x: auto;

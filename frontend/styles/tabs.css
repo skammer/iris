@@ -101,6 +101,9 @@
   overflow: visible;
 }
 
+/* SVG definitions must not create an inline line box below the tab strip. */
+.ui-card-tab-clip-defs { position: absolute; }
+
 .shell-nav.ui-card-tabs .ui-card-tab-list {
   right: var(--space-4);
   overflow-x: auto;
