@@ -3,23 +3,19 @@
    concrete adapter, and builds the note-extraction provider used by memory."
   (:require
    [agent.config :as config]
+   [agent.llm.fallback :as fallback]
    [agent.llm.providers.ollama :as ollama]
    [agent.llm.providers.openai-compatible :as openai-compatible]))
 
-(defn create-llm-provider
+(defn- create-single-provider
   [cfg]
-  (let [{:keys [provider type model base-url stream-structured-output?
-                embedding-model keep-alive]
+  (let [{:keys [provider type model]
          :as provider-cfg}
         (config/active-provider-config cfg)]
     (case type
       :ollama
       (ollama/create-ollama-provider
-       {:base-url base-url
-        :default-model model
-        :embedding-model embedding-model
-        :keep-alive keep-alive
-        :stream-structured-output? stream-structured-output?})
+       (assoc provider-cfg :default-model model))
 
       :openrouter
       (openai-compatible/create-openrouter-provider
@@ -36,6 +32,33 @@
       (throw (ex-info (str "Unsupported provider type: " type)
                       {:provider provider
                        :type type})))))
+
+(defn create-llm-provider
+  "Build primary plus the global ordered :fallbacks vector.
+   Each fallback explicitly names a configured provider and model."
+  [cfg]
+  (let [primary (config/active-provider-key cfg)
+        chain (:fallbacks cfg [])]
+    (when-not (and (vector? chain)
+                   (every? #(and (map? %)
+                                 (keyword? (:provider %))
+                                 (contains? (:providers cfg) (:provider %))
+                                 (string? (:model %))
+                                 (seq (:model %))) chain))
+      (throw (ex-info "Invalid LLM fallback chain"
+                      {:type :invalid-fallback-config})))
+    (let [selections (distinct (cons {:provider primary
+                                      :model (config/active-model cfg)} chain))
+          candidates (mapv (fn [{:keys [provider model] :as selection}]
+                             (assoc selection :client
+                                    (create-single-provider
+                                     (-> cfg
+                                         (assoc :active-provider provider)
+                                         (assoc-in [:providers provider :model] model)))))
+                           selections)]
+      (if (seq chain)
+        (fallback/->FallbackProvider candidates)
+        (:client (first candidates))))))
 
 (defn resolve-provider-selection
   [llm-cfg {:keys [provider model]}]

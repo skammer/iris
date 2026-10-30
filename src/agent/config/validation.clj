@@ -126,6 +126,21 @@
         {:path [:tools :profiles profile-key :allowed-actions tool]
          :message (str "unsupported allowed action for " tool)})))))
 
+(defn- fallback-config-errors [cfg]
+  (let [chain (get-in cfg [:llm :fallbacks] [])]
+    (if-not (vector? chain)
+      [{:path [:llm :fallbacks] :message "must be a vector of provider/model maps"}]
+      (vec
+       (mapcat
+        (fn [[index entry]]
+          (if-not (and (map? entry) (keyword? (:provider entry))
+                       (string? (:model entry)) (not (str/blank? (:model entry))))
+            [{:path [:llm :fallbacks index]
+              :message "requires a keyword :provider and nonblank :model"}]
+            (missing-provider-keys (:provider entry)
+                                   (get-in cfg [:llm :providers (:provider entry)]))))
+        (map-indexed vector chain))))))
+
 (defn ^:no-doc config-validation-errors [cfg]
   (let [llm-cfg (:llm cfg)
         provider (:active-provider llm-cfg)
@@ -144,6 +159,9 @@
 
       llm-cfg
       (into (legacy-llm-config-errors llm-cfg))
+
+      llm-cfg
+      (into (fallback-config-errors cfg))
 
       true
       (into (cron-config-errors cfg))

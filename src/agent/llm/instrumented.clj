@@ -81,7 +81,7 @@
                     trace
                     {:event-type :llm.call
                      :turn-id (:request-id attrs*)
-                     :provider (:provider attrs*)
+                     :provider (:provider observation)
                      :model (:model observation)
                      :success (not (false? (:success? observation)))
                      :error-message (some-> (:error observation) .getMessage)
@@ -89,7 +89,7 @@
                                            [:agent-id :duration-ms :tokens
                                             :prompt-tokens :completion-tokens
                                             :cached-tokens :cost-usd
-                                            :tool-calls :stop-reason])}))]
+                                            :tool-calls :stop-reason :llm-attempts])}))]
     (try
       ;; Route through invoke (not complete) so tool calls and provider-reported
       ;; usage survive. complete returns string-only content, dropping both.
@@ -100,6 +100,7 @@
                          (turn-usage->observation (:usage turn)))
             observation (merge attrs*
                                usage
+                               (select-keys turn [:provider :model :llm-attempts])
                                {:duration-ms (util/duration-ms start-ns)
                                 :success? true
                                 :tool-calls tool-calls
@@ -111,6 +112,7 @@
                                  (usage-estimate provider messages "" opts*)
                                  {:duration-ms (util/duration-ms start-ns)
                                   :success? false
+                                  :llm-attempts (:llm-attempts (ex-data e))
                                   :error e})]
           (observe! observation))
         (throw e)))))

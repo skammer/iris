@@ -83,7 +83,8 @@
   (merge
    (:opts request)
    (select-keys request
-                [:model :api :temperature :max-tokens :top-p :frequency-penalty
+                [:timeout-ms :connect-timeout-ms :max-retries :initial-delay :max-delay
+                 :model :api :temperature :max-tokens :top-p :frequency-penalty
                  :presence-penalty :tools :tool-choice :structured-output
                  :response-format :cache-control :cache_control :modalities
                  :metadata :extra-body :user :session-id :session_id
@@ -240,10 +241,25 @@
 
 (defn retryable-status?
   [status]
-  (contains? #{429 503} status))
+  (contains? #{408 429 500 502 503 504} status))
 
-(defn- retryable-exception? [e]
-  (retryable-status? (:status (ex-data e))))
+(defn retryable-exception?
+  "Transient transport/service failure, including wrapped transport exceptions.
+   Cancellation and TLS/configuration errors are deliberately excluded."
+  [e]
+  (let [causes (take-while some? (iterate ex-cause e))]
+    (and (not-any? #(or (instance? InterruptedException %)
+                        (instance? java.util.concurrent.CancellationException %)
+                        (instance? javax.net.ssl.SSLException %)) causes)
+         (boolean
+          (some #(or (retryable-status? (:status (ex-data %)))
+                     (instance? java.net.ConnectException %)
+                     (instance? java.net.UnknownHostException %)
+                     (instance? java.net.SocketTimeoutException %)
+                     (instance? java.net.SocketException %)
+                     (instance? org.apache.http.conn.ConnectTimeoutException %)
+                     (instance? org.apache.http.NoHttpResponseException %))
+                causes)))))
 
 (defn retry-with-backoff
   "Retry function with exponential backoff and Retry-After support."
@@ -261,7 +277,7 @@
       (cond
         (not (instance? Exception result)) result
         :else (do
-                (Thread/sleep (or (retry-after-ms (ex-data result))
-                                  delay))
+                (Thread/sleep (long (max 0 (min max-delay
+                                               (or (retry-after-ms (ex-data result)) delay)))))
                 (recur (inc retry)
                        (min (* delay 2) max-delay)))))))

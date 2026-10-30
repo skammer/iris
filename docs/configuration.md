@@ -215,3 +215,46 @@ before changing these boundaries.
    scheduler health.
 8. For approval failures, inspect latest approval record and event sequence;
    do not assume an approved record is still pending.
+
+
+### LLM retries and fallback chain
+
+Set `:llm :fallbacks` to an ordered vector of explicit provider/model pairs.
+All entries must reference configured providers. An empty vector disables fallback.
+The same chain applies to chat, Cron, MAGI and memory extraction, including calls
+that override the primary provider. Each invocation starts with its primary;
+duplicate identical provider/model pairs are removed.
+
+```clojure
+{:llm
+ {:fallbacks [{:provider :deepseek :model "deepseek-v4-flash-vision-exp"}]}}
+```
+
+Choose fallback models that support the tools, structured output and input
+modalities required by your workloads. Each fallback uses its own provider API,
+credentials and model settings. Embeddings never switch providers, since doing
+so would mix incompatible vector spaces.
+
+Provider options:
+- `:connect-timeout-ms`: TCP connection timeout; defaults to `:timeout-ms`
+  when supplied, otherwise 10000 ms. Set explicitly for a short connection
+  deadline independent of generation time.
+- `:timeout-ms`: socket/read timeout.
+- `:max-retries`: retries after the initial HTTP attempt (default 3).
+- `:initial-delay` / `:max-delay`: backoff milliseconds (1000 / 60000).
+  Retry-After is capped at max-delay.
+
+Connection failures, DNS failures, socket failures/timeouts and HTTP
+408/429/500/502/503/504 are retried. After retries are exhausted, generation
+tries the next fallback. Authentication, invalid requests, TLS errors and
+cancellation do not trigger fallback. The HTTP client's implicit retries are
+disabled so this budget is authoritative.
+
+Fallback never replays a conversation turn or tool execution; it resends only
+the current LLM request with the existing history. Once content or thinking
+has reached a streaming callback, failure is returned without switching.
+An unanswered request can still incur provider charges.
+
+Successful turns and telemetry include actual `:provider`, `:model` and
+`:llm-attempts`; exhausted chains carry attempts in exception data.
+Health checks describe the primary provider, not fallback readiness.

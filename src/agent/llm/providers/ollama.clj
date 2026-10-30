@@ -207,7 +207,8 @@
                                               :temperature
                                               :max-tokens
                                               :max_tokens
-                                              :timeout-ms
+                                              :connect-timeout-ms
+                                                   :timeout-ms
                                               :max-retries
                                               :initial-delay
                                               :max-delay])

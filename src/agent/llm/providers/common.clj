@@ -36,7 +36,7 @@
                        :content-type (header-value (:headers response) "Content-Type")}))
 
 (def ^:private transport-option-keys
-  [:timeout-ms :max-retries :initial-delay :max-delay])
+  [:timeout-ms :connect-timeout-ms :max-retries :initial-delay :max-delay])
 
 (defn with-transport-options
   [request config opts]
@@ -45,9 +45,11 @@
          (select-keys opts transport-option-keys)))
 
 (defn http-request-options [request]
-  (cond-> (apply dissoc request transport-option-keys)
-    (:timeout-ms request) (assoc :socket-timeout (:timeout-ms request)
-                                 :connection-timeout (:timeout-ms request))))
+  (cond-> (assoc (apply dissoc request transport-option-keys)
+                 :connection-timeout (or (:connect-timeout-ms request)
+                                         (:timeout-ms request) 10000)
+                 :retry-handler (fn [_ _ _] false))
+    (:timeout-ms request) (assoc :socket-timeout (:timeout-ms request))))
 
 (defn- retry-args [request]
   (mapcat (fn [k]
