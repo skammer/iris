@@ -110,9 +110,11 @@
        :usage (:usage turn)
        :fallback? true})
     (catch Exception fallback-error
-      {:content (error-content fallback-error)
+      {:content (str (error-content error)
+                     " (fallback failed: " (.getMessage fallback-error) ")")
        :fallback? true
        :error? true
+       :fallback-error (.getMessage fallback-error)
        :initial-error (.getMessage error)
        :initial-type (some-> error ex-data :type)})))
 

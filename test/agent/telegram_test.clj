@@ -94,6 +94,76 @@
         (sqlite/close-store! store)
         (io/delete-file path true)))))
 
+(deftest telegram-start-notification-precedes-polling-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        notifying (promise)
+        release-notification (promise)
+        polling (promise)
+        service (telegram/create-service
+                 {:store store
+                  :config {:channel-adapters {:telegram {:enabled true :bot-token "token"}}}
+                  :event-sink (constantly nil)}
+                 {:get-updates-fn (fn [_] (deliver polling true) (Thread/sleep 10) [])
+                  :send-message-fn (fn [_ _] (deliver notifying true) @release-notification)})]
+    (try
+      (sqlite/ensure-channel-session! store {:source :telegram :external-chat-id 100 :title "test"})
+      (let [starting (future (telegram/start! service))]
+        (is (= true (deref notifying 1000 ::timeout)))
+        (is (= ::not-polling (deref polling 100 ::not-polling)))
+        (deliver release-notification true)
+        (is (= service (deref starting 1000 ::timeout)))
+        (is (= true (deref polling 1000 ::timeout))))
+      (finally
+        (deliver release-notification true)
+        (telegram/stop! service 1000)
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
+(deftest telegram-stop-drains-replies-and-discards-late-polled-updates-test
+  (let [path (temp-db-path)
+        store (sqlite/create-store {:path path})
+        sent (atom [])
+        processed (atom [])
+        polling (promise)
+        release-poll (promise)
+        release-reply (promise)
+        stopped (promise)
+        active-tasks (atom {})
+        service (telegram/create-service
+                 {:store store
+                  :config {:channel-adapters {:telegram {:enabled true :bot-token "token"}}}
+                  :event-sink (constantly nil)}
+                 {:active-tasks active-tasks
+                  :get-updates-fn (fn [_]
+                                    (deliver polling true)
+                                    @release-poll
+                                    [(update-for 1 100 7 "late update")])
+                  :send-message-fn (fn [_ text]
+                                     (swap! sent conj text)
+                                     (when (= "Agent stopped." text) (deliver stopped true)))})]
+    (try
+      (sqlite/ensure-channel-session! store {:source :telegram :external-chat-id 100 :title "test"})
+      (with-redefs [telegram/process-update! (fn [& args] (swap! processed conj args))]
+        (telegram/start! service)
+        (is (= true (deref polling 1000 ::timeout)))
+        (swap! active-tasks assoc 100
+               {:future (future @release-reply (swap! sent conj "old reply"))})
+        (let [stopping (future (telegram/stop! service 1000))]
+          (is (eventually #(false? @(:running? service))))
+          (deliver release-poll true)
+          (is (= ::draining (deref stopped 100 ::draining)))
+          (deliver release-reply true)
+          (is (= service (deref stopping 2000 ::timeout)))
+          (is (empty? @processed))
+          (is (= ["Agent started." "old reply" "Agent stopped."] @sent))))
+      (finally
+        (deliver release-poll true)
+        (deliver release-reply true)
+        (telegram/stop! service 1000)
+        (sqlite/close-store! store)
+        (io/delete-file path true)))))
+
 (deftest telegram-service-resolves-reloaded-system
   (let [system-ref (atom nil)
         old-system {:version :old

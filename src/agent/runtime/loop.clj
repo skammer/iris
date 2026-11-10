@@ -26,7 +26,13 @@
   (= :approval-required (keyword (:status receipt))))
 
 (defn- complete-receipt [receipts]
-  (some #(when (= :completed (keyword (:status %))) %) receipts))
+  (some (fn [receipt]
+          (cond
+            (= :completed (keyword (:status receipt))) receipt
+            (and (= :ok (keyword (:status receipt)))
+                 (true? (get-in receipt [:result :terminate])))
+            (assoc receipt :result (get-in receipt [:result :content]))))
+        receipts))
 
 (defn- approval-message [approvals]
   (str "Tool approval required: "
@@ -294,9 +300,11 @@
                                                               :final? true
                                                               :fallback? true
                                                               :stop-reason (if (:error? fallback) :error :completed)})
-          (runtime-events/emit! event-sink :agent-end base {:stop-reason (if (:error? fallback) :error :completed)
-                                                            :fallback? true
-                                                            :stream stream?*})
+          (runtime-events/emit! event-sink :agent-end base
+                                (merge {:stop-reason (if (:error? fallback) :error :completed)
+                                        :fallback? true
+                                        :stream stream?*}
+                                       (select-keys fallback [:initial-error :initial-type :fallback-error])))
           (merge (terminal-result content request-id
                                   [{:role "assistant" :content content}]
                                   [] (:usage fallback {})

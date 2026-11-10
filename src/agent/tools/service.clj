@@ -128,7 +128,7 @@
    {:description
     (tools/create-tool-description
      :system_reload
-     "Reload Iris runtime configuration from disk. Soft reload applies hot-safe runtime config. Full reload schedules a process-local rebuild; resume_message atomically schedules the next automatic turn before that rebuild."
+     "Reload Iris runtime configuration from disk. Soft reload applies hot-safe runtime config. Full reload rebuilds components inside the existing JVM; it does not restart the process or load a new JAR. A scheduled full reload ends the current turn; resume_message schedules a new automatic turn after the rebuild."
      :category :system
      :required-permissions #{:system-reload}
      :input-schema [:map
@@ -151,6 +151,8 @@
                       {:mode mode*
                        :source (or (:user context) "tool")})]
           (cond-> result
+            (and (= :full mode*) (= :scheduled (:status result)))
+            (assoc :terminate true :content "Iris runtime reload scheduled.")
             handoff (assoc :handoff-id (:id handoff))))))
     :health-fn
     (fn [] {:healthy true})}))

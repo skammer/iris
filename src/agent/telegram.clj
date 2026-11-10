@@ -611,6 +611,9 @@
                              @last-offset)]
       (when-not @running?
         (reset! last-offset initial-offset)
+        (notify-lifecycle! system config opts
+                           :agent-start-notification
+                           agent-started-content)
         (reset! running? true)
         (reset! worker
                 (future
@@ -619,7 +622,7 @@
                       (let [updates (get-updates-fn {:offset @last-offset
                                                      :timeout poll-timeout
                                                      :limit poll-limit})]
-                        (doseq [update updates]
+                        (doseq [update updates :while @running?]
                           (process-polled-update! system config opts last-offset update)))
                       (catch Exception e
                         ((:event-sink (current-system system))
@@ -627,27 +630,39 @@
                           :entity-type :telegram
                           :payload {:message (.getMessage e)
                                     :type (some-> e ex-data :type)}})
-                        (Thread/sleep 1000))))))
-        (notify-lifecycle! system config opts
-                           :agent-start-notification
-                           agent-started-content))))
+                        (Thread/sleep 1000)))))))))
   service)
+
+(defn- drain-active-tasks!
+  [service timeout-ms]
+  (let [deadline (+ (System/nanoTime) (* 1000000 (long timeout-ms)))
+        system (current-system (:system service))
+        opts (:opts service)]
+    (doseq [[chat-id {:keys [future session-id]}] @(:active-tasks opts)]
+      (when future
+        (let [remaining (max 0 (quot (- deadline (System/nanoTime)) 1000000))
+              result (try (deref future remaining ::timeout)
+                          (catch java.util.concurrent.CancellationException _ nil)
+                          (catch java.util.concurrent.ExecutionException _ nil))]
+          (when (= ::timeout result)
+            (stop-chat! system opts chat-id session-id)))))))
 
 (defn stop!
   ([service] (stop! service 5000))
   ([service timeout-ms]
    (when service
      (let [was-running? @(:running? service)]
+       (reset! (:running? service) false)
+       (when-let [f @(:future service)]
+         (deref f timeout-ms ::timeout)
+         (future-cancel f))
+       (reset! (:future service) nil)
        (when was-running?
+         (drain-active-tasks! service timeout-ms)
          (cancel-all-pending-reply-keyboards! (current-system (:system service)))
          (notify-lifecycle! (:system service) (:config service) (:opts service)
                             :agent-stop-notification
-                            agent-stopped-content)))
-     (reset! (:running? service) false)
-     (when-let [f @(:future service)]
-       (deref f timeout-ms ::timeout)
-       (future-cancel f))
-     (reset! (:future service) nil))
+                            agent-stopped-content))))
    service))
 
 (defn health-check [service]

@@ -33,6 +33,7 @@ Tool-use policy for Iris agents.
 - Prefer a minimal root config plus focused include files. Do not copy built-in defaults into every fragment.
 - Run `iris config validate` before every reload/restart. Continue only after exit code 0 and `:status :valid`.
 - Before restarting the Iris process, call `system_handoff` in a separate completed tool step with the exact verification/work message for the next turn. For `system_reload` with `mode=full`, pass `resume_message` instead; Iris persists it before scheduling the reload.
+- `system_reload mode=full` rebuilds runtime components inside the existing JVM. It does not restart the process or load a new JAR. Report a runtime reload accurately; use an external service restart when a process restart is required.
 
 ## Cron
 

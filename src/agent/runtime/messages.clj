@@ -47,12 +47,13 @@
       (str "Memory tool failed: " (or (:reason receipt) (:error-type receipt) "unknown error")))))
 
 (defn- mcp-result-text [receipt]
-  (let [{:keys [content isError]} (:result receipt)]
-    (when (and (contains? #{:ok :completed} (keyword (:status receipt)))
-               (not (contains? (:result receipt) :structuredContent))
-               (sequential? content) (seq content)
-               (every? #(and (= "text" (:type %)) (string? (:text %))) content))
-      (str (when isError "MCP tool error: ") (str/join "\n" (map :text content))))))
+  (when (map? (:result receipt))
+    (let [{:keys [content isError] :as result} (:result receipt)]
+      (when (and (contains? #{:ok :completed} (keyword (:status receipt)))
+                 (not (contains? result :structuredContent))
+                 (sequential? content) (seq content)
+                 (every? #(and (= "text" (:type %)) (string? (:text %))) content))
+        (str (when isError "MCP tool error: ") (str/join "\n" (map :text content)))))))
 
 (defn- receipt-result-text [receipt]
   (or (:result-text receipt)

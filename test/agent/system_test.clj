@@ -212,23 +212,29 @@
 (deftest api-start-dispatches-pending-restart-handoffs-test
   (let [system-ref (atom nil)
         dispatched (promise)
+        order (atom [])
         system* {:config (assoc config/default-config :api {:host "127.0.0.1" :port 0})
                  :system-ref system-ref
                  :health-registry (health/create-registry)
-                 :telegram-service nil
+                 :telegram-service ::telegram
                  :memory-idle-service ::memory-idle
                  :memory-magi-review-service ::memory-review
                  :cron-service ::cron}]
     (with-redefs [api/start-server! (fn [& _] ::api)
+                  channel-adapters/start-adapter! (fn [adapter]
+                                                    (swap! order conj :telegram-start)
+                                                    adapter)
                   memory-idle/start! (constantly nil)
                   memory-magi-review/start! (constantly nil)
                   cron/start! (constantly nil)
                   restart-handoff/dispatch-pending! (fn [started-system]
+                                                      (swap! order conj :handoff-dispatch)
                                                       (deliver dispatched started-system)
                                                       0)]
       (let [started (system/start-api! system*)]
         (is (= ::api (:api-server started)))
         (is (= started @system-ref))
+        (is (= [:telegram-start :handoff-dispatch] @order))
         (is (= started (deref dispatched 1000 ::timeout)))))))
 
 (deftest system-handoff-tool-persists-current-session-test
@@ -266,10 +272,14 @@
                                                  :resume_message "verify new runtime"}
                                                 context)]
         (is (= :scheduled (:status reloaded)))
+        (is (true? (:terminate reloaded)))
+        (is (= "Iris runtime reload scheduled." (:content reloaded)))
         (is (string? (:handoff-id reloaded)))
         (is (= "verify new runtime"
                (:message (sqlite/get-session-restart-handoff store (:id session)))))
         (is (= [{:mode :full :source "system"}] @reload-calls)))
+      (is (not (:terminate (tool-service/execute-tool system* :system_reload
+                                                     {:mode "soft"} context))))
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"requires mode=full"
                             (tool-service/execute-tool system* :system_reload

@@ -20,3 +20,15 @@
   (let [image {:content [{:type "image" :mimeType "image/png" :data "bytes"}]}
         result (json/parse-string (messages/tool-output-content {:status :ok :result image}) true)]
     (is (= image (:result result)))))
+
+(deftest non-mcp-results-preserve-their-value
+  (doseq [value ["skill instructions" nil 42 true ["item"]]]
+    (let [output (messages/tool-output-content
+                  {:status :ok :tool-name :skills_read :result value})]
+      (is (= value (:result (json/parse-string output true)))))))
+
+(deftest structured-mcp-results-preserve-both-representations
+  (let [value {:content [{:type "text" :text "summary"}]
+               :structuredContent {:items [1 2]}}
+        output (messages/tool-output-content {:status :ok :result value})]
+    (is (= value (:result (json/parse-string output true))))))

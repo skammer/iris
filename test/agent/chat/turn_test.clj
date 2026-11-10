@@ -506,10 +506,65 @@
             fallback-request (second (invoke-requests @requests))]
         (is (true? (:error? result)))
         (is (= :error (:stop-reason result)))
+        (is (str/starts-with? (:content result) "Chat failed: LLM request failed: 503"))
         (is (str/includes? (:content result) "Fallback response attempted tool calls"))
+        (is (some #(and (= "agent-end" (:event-type %))
+                        (= "LLM request failed: 503" (get-in % [:payload :initial-error]))
+                        (str/includes? (get-in % [:payload :fallback-error] "")
+                                       "Fallback response attempted tool calls"))
+                  (session-events system (:id session))))
         (is (not-any? #(str/includes? (str (:content %)) "DSML") messages))
         (is (str/includes? (message-text (first (get-in fallback-request [:request :messages])))
                            "Do not call tools")))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest run-turn-continues-after-string-tool-result-test
+  (let [path (harness/temp-db-path)
+        requests (atom [])
+        provider (chat-test/->PlannerProvider
+                  (atom [(tool-call-response :skills_read {:value 1}) "skill loaded"])
+                  requests)
+        system (assoc (test-system path provider no-extractor)
+                      :tool-registry (chat-test/custom-registry
+                                      (chat-test/custom-tool
+                                       :skills_read (fn [_ _] "skill instructions")
+                                       {:operation :observe})))
+        session (sessions/create-session! system "string tool result")]
+    (try
+      (let [result (turn/run-turn! system {:session-id (:id session)
+                                          :messages [{:role "user" :content "read skill"}]})
+            second-messages (get-in (second (invoke-requests @requests)) [:request :messages])]
+        (is (= "skill loaded" (:content result)))
+        (is (not (:fallback? result)))
+        (is (= 2 (count (invoke-requests @requests))))
+        (is (some #(and (= "tool" (:role %))
+                        (str/includes? (message-text %) "skill instructions")) second-messages)))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest run-turn-stops-after-terminating-tool-without-another-model-call-test
+  (let [path (harness/temp-db-path)
+        requests (atom [])
+        provider (chat-test/->PlannerProvider
+                  (atom [(tool-call-response :system_reload {:value 1})
+                         "must not answer before reload"])
+                  requests)
+        system (assoc (test-system path provider no-extractor)
+                      :tool-registry (chat-test/custom-registry
+                                      (chat-test/custom-tool
+                                       :system_reload
+                                       (fn [_ _] {:status :scheduled :mode :full
+                                                  :terminate true
+                                                  :content "Iris runtime reload scheduled."})
+                                       {:operation :observe})))
+        session (sessions/create-session! system "reload boundary")]
+    (try
+      (let [result (turn/run-turn! system {:session-id (:id session)
+                                          :messages [{:role "user" :content "reload"}]})]
+        (is (= "Iris runtime reload scheduled." (:content result)))
+        (is (= :completed (:stop-reason result)))
+        (is (= 1 (count (invoke-requests @requests)))))
       (finally
         (io/delete-file path true)))))
 

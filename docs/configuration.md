@@ -187,8 +187,15 @@ validation fails.
 
 Use soft reload for normal provider, model, tool, skill, cron, and prompt config
 changes. It preserves the active chat queue. Use full reload only when a
-component cannot be safely hot-swapped; the turn requesting a full reload may
-be interrupted while the runtime is rebuilt.
+component cannot be safely hot-swapped. A scheduled full reload ends the
+requesting turn without another model call. `resume_message` starts a new turn
+after the replacement runtime and Telegram adapter have started.
+
+Full reload rebuilds components inside the existing JVM. It does not restart
+the OS process or load a replacement JAR. For a process restart, persist a
+`system_handoff` first, then restart the service externally. Telegram drains
+outgoing replies before `Agent stopped.` and sends `Agent started.` before
+polling for new updates or dispatching a pending handoff.
 
 ### Reload boundaries
 
