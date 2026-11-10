@@ -46,9 +46,18 @@
       :approval-required (str "Memory tool approval required: " (:reason receipt))
       (str "Memory tool failed: " (or (:reason receipt) (:error-type receipt) "unknown error")))))
 
+(defn- mcp-result-text [receipt]
+  (let [{:keys [content isError]} (:result receipt)]
+    (when (and (contains? #{:ok :completed} (keyword (:status receipt)))
+               (not (contains? (:result receipt) :structuredContent))
+               (sequential? content) (seq content)
+               (every? #(and (= "text" (:type %)) (string? (:text %))) content))
+      (str (when isError "MCP tool error: ") (str/join "\n" (map :text content))))))
+
 (defn- receipt-result-text [receipt]
   (or (:result-text receipt)
-      (get-in receipt [:result :result-text])))
+      (get-in receipt [:result :result-text])
+      (mcp-result-text receipt)))
 
 (defn tool-output-content
   ([receipt] (tool-output-content receipt defaults/tool-output-max-chars))
