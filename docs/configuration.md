@@ -83,6 +83,27 @@ use `:chat-completions`. Keep API keys in an ignored, permission-restricted
 `config/secrets.edn` or a supported environment variable. Never paste secrets
 into chat, logs, prompts, or tool purposes.
 
+Declare native input capabilities per model, for example:
+
+```clojure
+{:llm {:providers
+       {:deepseek {:models
+                   {"deepseek-v4-flash-vision-exp"
+                    {:input-modalities #{:text :image}}}}}}}
+```
+
+OpenAI-compatible and OpenRouter models default to text input. Per-model
+`:supports-vision`, `:supports-audio`, `:supports-video`, and `:supports-files`
+flags also work and override the corresponding modality. Enable only inputs the
+specific model and endpoint accept; image support does not imply PDF support.
+
+Unsupported attachments become text references with a filename and local path
+(or the original URL). Telegram's existing local copy is reused. Older inline
+attachments are saved unchanged under the Iris data directory's `attachments/`
+folder. Iris does not extract text, run OCR, or otherwise interpret these files;
+the model chooses tools when it needs to read them. The original rich history is
+preserved, and capabilities are checked separately for each fallback candidate.
+
 ## Tools, permissions, and profiles
 
 These are different identifiers:

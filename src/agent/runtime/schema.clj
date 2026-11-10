@@ -67,6 +67,7 @@
   [:map {:closed true}
    [:type [:enum :url :base64 :file]]
    [:value :string]
+   [:local-path {:optional true} [:maybe :string]]
    [:media-type {:optional true} [:maybe :string]]])
 
 (def ^:private image-source-schema media-source-schema)

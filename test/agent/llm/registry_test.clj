@@ -63,6 +63,16 @@
     (is (= 1000 (:timeout-ms opts)))
     (is (= 2 (:max-retries opts)))))
 
+(deftest modality-capabilities-are-explicit-and-model-specific
+  (is (= #{:text} (:input-modalities (registry/model-metadata :openai-compatible {} "plain"))))
+  (is (= #{:text} (:input-modalities (registry/model-metadata :openrouter {} "plain"))))
+  (let [cfg {:input-modalities #{:text :image :file}
+             :supports-vision true
+             :models {"vision" {:supports-files false}
+                      "plain" {:input-modalities #{:text}}}}]
+    (is (= #{:text :image} (:input-modalities (registry/model-metadata :openai-compatible cfg "vision"))))
+    (is (= #{:text} (:input-modalities (registry/model-metadata :openai-compatible cfg "plain"))))))
+
 (deftest unknown-provider-type-error-test
   (is (thrown-with-msg? clojure.lang.ExceptionInfo
                         #"Unknown LLM provider type"

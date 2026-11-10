@@ -2,6 +2,7 @@
   "Native Ollama provider."
   (:require
    [agent.llm.core :as llm-core]
+   [agent.llm.attachments :as attachments]
    [agent.llm.dsml :as dsml]
    [agent.llm.messages :as llm-messages]
    [agent.llm.providers.common :as provider-common]
@@ -139,7 +140,9 @@
                     {:body (json/generate-string
                             (structured-chat-body (:default-model this)
                                                   (:keep-alive this)
-                                                  (:messages request)
+                                                  (attachments/prepare-messages
+                                                   (:messages request)
+                                                   (llm-core/get-capabilities this (or (:model opts) (:default-model this))))
                                                   opts
                                                   stream?))
                      :content-type :json

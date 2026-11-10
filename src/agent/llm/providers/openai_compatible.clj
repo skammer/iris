@@ -2,6 +2,8 @@
   "OpenAI-compatible provider, used for OpenRouter first and other compatible APIs."
   (:require
    [agent.llm.core :as llm-core]
+   [agent.llm.attachments :as attachments]
+   [agent.llm.registry :as registry]
    [agent.llm.dsml :as dsml]
    [agent.llm.providers.common :as provider-common]
    [agent.llm.providers.openai-compatible.parse :as parse]
@@ -110,15 +112,17 @@
         [])))
 
   (get-capabilities [_ model]
-    (let [model-cfg (get-in config [:models model] {})]
+    (let [model-cfg (get-in config [:models model] {})
+          modalities (:input-modalities (registry/model-metadata :openai-compatible config model))]
       {:model model
        :supports-streaming (capability model-cfg :supports-streaming true)
        :supports-embedding (capability model-cfg :supports-embedding false)
        :supports-tools (capability model-cfg :supports-tools true)
-       :supports-vision (capability model-cfg :supports-vision false)
-       :supports-audio (capability model-cfg :supports-audio false)
-       :supports-video (capability model-cfg :supports-video false)
-       :supports-files (capability model-cfg :supports-files false)}))
+       :input-modalities modalities
+       :supports-vision (contains? modalities :image)
+       :supports-audio (contains? modalities :audio)
+       :supports-video (contains? modalities :video)
+       :supports-files (contains? modalities :file)}))
 
   (estimate-cost [_ messages model]
     {:tokens (llm-core/count-tokens-estimate messages)
@@ -129,6 +133,9 @@
   llm-core/ILLMProviderInvoke
   (invoke [this request]
     (let [opts (llm-core/request->completion-opts request)
+          messages (attachments/prepare-messages
+                    (:messages request)
+                    (llm-core/get-capabilities this (or (:model opts) (:default-model this))))
           stream-with-delta? (or (some? (:on-content-delta opts))
                                  (some? (:on-thinking-delta opts)))
           stream-request? (or (request/request-stream? (:config this) opts)
@@ -149,7 +156,7 @@
                                     (request/responses-stream-body (:base-url this)
                                                                    (:default-model this)
                                                                    (:config this)
-                                                                   (:messages request)
+                                                                   messages
                                                                    opts)))
                       on-content-delta
                       on-thinking-delta)
@@ -162,7 +169,7 @@
                                                     (request/responses-body (:base-url this)
                                                                            (:default-model this)
                                                                            (:config this)
-                                                                           (:messages request)
+                                                                           messages
                                                                            opts))
                                              :as :json))]
                        (parse/responses->turn (:body response*)))
@@ -175,7 +182,7 @@
                                     (request/stream-body (:base-url this)
                                                          (:default-model this)
                                                          (:config this)
-                                                         (:messages request)
+                                                         messages
                                                          opts)))
                       on-content-delta
                       on-thinking-delta)
@@ -188,7 +195,7 @@
                                                     (request/completion-body (:base-url this)
                                                                              (:default-model this)
                                                                              (:config this)
-                                                                             (:messages request)
+                                                                             messages
                                                                              opts))
                                              :as :json))]
                        (parse/message->turn (:body response*))))]
@@ -248,6 +255,11 @@
                                                    :structured-output-format
                                                    :structured_output_format
                                                    :models
+                                                   :input-modalities
+                                                   :supports-vision
+                                                   :supports-audio
+                                                   :supports-video
+                                                   :supports-files
                                                    :user
                                                    :extra-body])
                                      config)
@@ -280,6 +292,12 @@
                         :top_p
                         :structured-output-format
                         :structured_output_format
+                        :models
+                        :input-modalities
+                        :supports-vision
+                        :supports-audio
+                        :supports-video
+                        :supports-files
                         :user
                         :extra-headers
                         :extra-body])

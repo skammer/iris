@@ -166,9 +166,10 @@
             media-type (or (:media-type descriptor) "application/octet-stream")
             local-path (persist-media! (:media-dir opts) message index filename bytes)]
         {:block (cond-> {:type (:kind descriptor)
-                         :source {:type :base64
-                                  :media-type media-type
-                                  :value (.encodeToString (Base64/getEncoder) bytes)}}
+                         :source (cond-> {:type :base64
+                                          :media-type media-type
+                                          :value (.encodeToString (Base64/getEncoder) bytes)}
+                                   local-path (assoc :local-path local-path))}
                   (:alt descriptor) (assoc :alt (:alt descriptor))
                   filename (assoc :filename filename))
          :local-path local-path}))))

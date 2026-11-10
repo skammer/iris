@@ -28,7 +28,7 @@
     :display-name "OpenRouter"
     :context-window nil
     :max-output-tokens nil
-    :input-modalities #{:text :image :audio :video :file}
+    :input-modalities #{:text}
     :tool-support {:native? true}
     :reasoning-levels #{:off :low :medium :high}
     :cache-support {:prompt-cache? true :retention #{:ephemeral :in-memory}}
@@ -40,7 +40,7 @@
     :display-name "OpenAI compatible"
     :context-window nil
     :max-output-tokens nil
-    :input-modalities #{:text :image :audio :video :file}
+    :input-modalities #{:text}
     :tool-support {:native? true}
     :reasoning-levels #{:off :low :medium :high :xhigh}
     :cache-support {:prompt-cache? true :retention #{:ephemeral}}
@@ -122,6 +122,15 @@
       (sequential? models) (some #(when (= model-id (:model-id %)) %) models)
       :else nil)))
 
+(defn- declared-modalities [defaults declaration]
+  (reduce (fn [modalities [flag modality]]
+            (if (contains? declaration flag)
+              ((if (true? (get declaration flag)) conj disj) modalities modality)
+              modalities))
+          (conj (set (or (:input-modalities declaration) defaults)) :text)
+          [[:supports-vision :image] [:supports-audio :audio]
+           [:supports-video :video] [:supports-files :file]]))
+
 (defn model-metadata
   [provider-key provider-cfg model-id]
   (let [provider-key* (normalize-provider-key provider-key)
@@ -144,7 +153,10 @@
                                     (:max-output-tokens provider-cfg)
                                     (:max-tokens provider-cfg)
                                     (:max-output-tokens defaults))}
-            override)
+            override
+            {:input-modalities (-> (:input-modalities defaults)
+                                   (declared-modalities provider-cfg)
+                                   (declared-modalities override))})
      model-fields)))
 
 (defn normalize-options

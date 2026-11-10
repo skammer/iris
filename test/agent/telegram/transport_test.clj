@@ -209,6 +209,7 @@
         (is (= [{:type :image
                  :source {:type :base64
                           :media-type "image/jpeg"
+                          :local-path (.getAbsolutePath saved-file)
                           :value "aW1hZ2UtYnl0ZXM="}
                  :alt "Telegram photo"
                  :filename "big.jpg"}]
