@@ -22,7 +22,8 @@
 
 (defn new-state []
   {:recent []
-   :recent-steps []})
+   :recent-steps []
+   :outcomes {}})
 
 (declare canonical-value)
 
@@ -50,7 +51,7 @@
     :else value))
 
 (defn canonical-input [input]
-  (pr-str (canonical-value input)))
+  (pr-str (canonical-value (if (map? input) (dissoc input :purpose "purpose") input))))
 
 (defn normalize-tool-name [tool-name]
   (cond
@@ -134,3 +135,59 @@
       (if (:detected? call-check)
         call-check
         (record-step (:state call-check) config step)))))
+
+
+(defn- successful-result? [receipt]
+  (let [result (:result receipt)]
+    (and (contains? #{:ok :completed :succeeded} (keyword (:status receipt)))
+         (contains? receipt :result)
+         (not (and (map? result)
+                   (or (:isError result)
+                       (:error result)
+                       (and (number? (:exit result)) (not (zero? (:exit result))))
+                       (and (number? (:status result)) (>= (:status result) 400))
+                       (contains? #{:error :failed :denied "error" "failed" "denied"}
+                                  (:status result))))))))
+
+(defn- outcome-value [tool-name result]
+  (case (normalize-tool-name tool-name)
+    "http" (if (and (map? result) (contains? result :status))
+             (select-keys result [:status :body])
+             result)
+    "shell" (if (and (map? result) (contains? result :exit))
+              (select-keys result [:exit :stdout :stderr :stdout-truncated? :stderr-truncated?])
+              result)
+    result))
+
+(defn observe-results
+  "Credit changed successful results as progress. Never let changing error text
+   or receipt telemetry reset the guard. Kernel receipts follow directive order."
+  [state step receipts]
+  (let [observations (keep (fn [[directive receipt]]
+                             (when (and (= :tool-call (some-> (:type directive) keyword))
+                                        (successful-result? receipt))
+                               [(fingerprint (:payload directive))
+                                (security/sha256-hex
+                                 (pr-str (canonical-value
+                                          (outcome-value (get-in directive [:payload :tool-name])
+                                                         (:result receipt)))))]))
+                           (map vector (:directives step) receipts))
+        changed (set (keep (fn [[key value]]
+                             (when (and (contains? (:outcomes state) key)
+                                        (not= value (get-in state [:outcomes key])))
+                               key))
+                           observations))
+        ;; Keep the current execution as the first sample of the new outcome.
+        recent (->> (:recent state)
+                    reverse
+                    (reduce (fn [{:keys [seen] :as acc} call]
+                              (let [key (:fingerprint call)]
+                                (if (and (contains? changed key) (contains? seen key))
+                                  acc
+                                  (-> acc (update :seen conj key) (update :calls conj call)))))
+                            {:seen #{} :calls []})
+                    :calls reverse vec)
+        live-keys (set (map :fingerprint recent))]
+    (cond-> (assoc state :recent recent
+                   :outcomes (select-keys (into (or (:outcomes state) {}) observations) live-keys))
+      (seq changed) (assoc :recent-steps []))))

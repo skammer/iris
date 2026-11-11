@@ -383,6 +383,7 @@
       (let [executed (execute-step-fn executable-step)
             _ (cancel/throw-if-cancelled! cancellation-token)
             receipts (:receipts executed)
+            doom-loop-state* (doom-loop/observe-results doom-loop-state* executable-step receipts)
             post-verdict (nudge/check-after-exec chat-profile* nudge-state {:receipts receipts})
             trace-entry {:step step-no :directives (:directives step*) :receipts receipts}
             trace* (conj trace trace-entry)]

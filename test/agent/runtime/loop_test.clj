@@ -562,3 +562,89 @@
                                     :planner-fn (fn [_ _] (throw (ex-info "provider down" {})))
                                     :fallback-fn (fn [_] (swap! fallbacks inc) {:content "draft"})})))
     (is (zero? @fallbacks))))
+
+(deftest doom-loop-ignores-purpose-test
+  (let [calls (atom 0)
+        {:keys [result]}
+        (run-loop {:max-steps 6
+                   :planner-fn (fn [_ _]
+                                 (tool-step (str "call_" @calls) :shell
+                                            {:argv ["false"] :purpose (str "attempt " @calls)}))
+                   :execute-step-fn (fn [step]
+                                      (swap! calls inc)
+                                      (execute-step step))})]
+    (is (= 2 @calls))
+    (is (= :doom-loop (:stop-reason result)))))
+
+(deftest doom-loop-allows-changing-results-then-stops-stalled-progress-test
+  (let [calls (atom 0)
+        {:keys [result]}
+        (run-loop {:max-steps 8
+                   :planner-fn (fn [_ _]
+                                 (tool-step (str "call_" @calls) :job_status {:job "1"}))
+                   :execute-step-fn (fn [step]
+                                      (let [n (swap! calls inc)]
+                                        (assoc-in (execute-step step) [:receipts 0 :result]
+                                                  {:progress (min 75 (* 25 n))})))})]
+    ;; 25 -> 50 -> 75 are progress. A second 75 is allowed; the next is blocked.
+    (is (= 4 @calls))
+    (is (= :doom-loop (:stop-reason result)))))
+
+(deftest doom-loop-allows-read-write-verification-test
+  (let [files (atom [])
+        steps (atom [(tool-step "read1" :fs_list {:path "."})
+                     (tool-step "write1" :fs_create {:path "a" :content "a"})
+                     (tool-step "read2" :fs_list {:path "."})
+                     (tool-step "write2" :fs_create {:path "b" :content "b"})
+                     (tool-step "read3" :fs_list {:path "."})
+                     (complete-step "verified")])
+        {:keys [result]}
+        (run-loop {:max-steps 7
+                   :planner-fn (fn [_ _] (let [s (first @steps)] (swap! steps rest) s))
+                   :execute-step-fn
+                   (fn [step]
+                     (let [{:keys [tool-name input]} (get-in step [:directives 0 :payload])]
+                       (when (= :fs_create tool-name) (swap! files conj (:path input)))
+                       (cond-> (execute-step step)
+                         (= :fs_list tool-name) (assoc-in [:receipts 0 :result] @files))))})]
+    (is (= :completed (:stop-reason result)))
+    (is (= "verified" (:content result)))))
+
+(deftest doom-loop-changing-errors-do-not-count-as-progress-test
+  (doseq [make-result [(fn [n] {:exit 1 :stderr (str "failure at " n)})
+                       (fn [n] {:isError true :content [{:type "text" :text (str "failure " n)}]})
+                       (fn [n] {:status 503 :body (str "request " n)})]]
+    (let [calls (atom 0)
+          {:keys [result]}
+          (run-loop {:max-steps 6
+                     :planner-fn (fn [_ _] (tool-step (str "call_" @calls) :probe {}))
+                     :execute-step-fn (fn [step]
+                                        (assoc-in (execute-step step) [:receipts 0 :result]
+                                                  (make-result (swap! calls inc))))})]
+      (is (= 2 @calls))
+      (is (= :doom-loop (:stop-reason result))))))
+
+(deftest doom-loop-receipt-metadata-does-not-count-as-progress-test
+  (let [calls (atom 0)
+        {:keys [result]}
+        (run-loop {:max-steps 6
+                   :planner-fn (fn [_ _] (tool-step (str "call_" @calls) :fs_list {:path "."}))
+                   :execute-step-fn (fn [step]
+                                      (let [n (swap! calls inc)]
+                                        (-> (execute-step step)
+                                            (assoc-in [:receipts 0 :duration-ms] n)
+                                            (assoc-in [:receipts 0 :output-ref] (str n)))))})]
+    (is (= 2 @calls))
+    (is (= :doom-loop (:stop-reason result)))))
+
+(deftest doom-loop-http-transport-headers-do-not-count-as-progress-test
+  (let [calls (atom 0)
+        {:keys [result]}
+        (run-loop {:max-steps 6
+                   :planner-fn (fn [_ _] (tool-step (str "call_" @calls) :http {:method "GET" :url "https://example.invalid/status"}))
+                   :execute-step-fn (fn [step]
+                                      (assoc-in (execute-step step) [:receipts 0 :result]
+                                                {:status 200 :body "pending"
+                                                 :headers {"Date" (str (swap! calls inc))}}))})]
+    (is (= 2 @calls))
+    (is (= :doom-loop (:stop-reason result)))))
