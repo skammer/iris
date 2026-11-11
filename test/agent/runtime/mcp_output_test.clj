@@ -8,7 +8,7 @@
            :input {:limit 20} :result {:content [{:type "text" :text "{\"items\":[]}"}]}})))
   (let [result (messages/tool-output-content {:status :ok :tool-name :inventory_find
                  :result {:content [{:type "text" :text (apply str (repeat 100 "x"))}]}} 20)]
-    (is (= "xxxxxxxxxxxxxxxxxxxx\n\n[truncated 80 chars]" result))
+    (is (= (apply str (repeat 100 "x")) result))
     (is (not (.contains result "preview")))))
 (deftest mcp-errors-and-blocks-survive
   (is (= "MCP tool error: not found"

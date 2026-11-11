@@ -28,6 +28,7 @@
    [agent.skills :as skills]
    [agent.tools.approvals :as tool-approvals]
    [agent.tools.core :as tools]
+   [agent.tools.common.tool-results :as tool-results]
    [agent.util :as util]
    [clojure.string :as str]))
 
@@ -304,7 +305,7 @@
    :event-sink event-sink
    :on-thinking-delta on-thinking-delta
    :execute-step-fn (fn [executable-step]
-                      (kernel-runtime/execute-step!
+                      (update (kernel-runtime/execute-step!
                        ops
                        (or session-id "chat")
                        (kernel-schema/normalize-step executable-step)
@@ -312,7 +313,11 @@
                         :cancellation-token cancelled?
                         :event-sink event-sink
                         :max-parallelism max-parallelism
-                        :yolo? yolo?}))
+                        :yolo? yolo?})
+                              :receipts
+                              #(mapv (partial tool-results/preserve!
+                                              (get-in system [:config :iris :data-dir])
+                                              session-id) %)))
    :approval-fn (fn [receipts]
                   (mapv #(request-approval! system session-id %) receipts))
    :fallback-fn (fn [{:keys [messages error stream? emit-delta]}]

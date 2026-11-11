@@ -8,7 +8,6 @@
    [agent.util :as util]
    [clojure.string :as str]))
 
-(def history-message-max-chars 8000)
 (def queued-message-metadata-key :queued)
 
 (defn- with-request-metadata [extra request-id]
@@ -72,18 +71,9 @@
   (some-> (latest-user-message messages)
           llm-messages/content-text))
 
-(defn- db-message-content [role content]
-  (let [content* (or content "")]
-    (if (and (= "tool" role) (string? content*))
-      (util/truncate content* history-message-max-chars
-                     #(str "\n\n[truncated " % " chars]"))
-      content*)))
-
 (defn session-messages [system session-id]
   (if session-id
-    (mapv (fn [{:keys [role content] :as message}]
-            (llm-messages/message->internal
-             (assoc message :content (db-message-content role content))))
+    (mapv llm-messages/message->internal
           (sqlite/current-llm-context (:store system)
                                       session-id
                                       {:include-entry-id? true}))

@@ -117,6 +117,7 @@
    [:name {:optional true} [:maybe [:or :keyword :string]]]
    [:status {:optional true} [:maybe [:or :keyword :string]]]
    [:content :any]
+   [:output-ref {:optional true} [:maybe :string]]
    [:raw {:optional true} :any]])
 
 (def ^:private custom-block-schema
@@ -405,6 +406,7 @@
                             :content (:content block*)}
                      (contains? block* :name) (assoc :name (:name block*))
                      (contains? block* :status) (assoc :status (:status block*))
+                     (contains? block* :output-ref) (assoc :output-ref (:output-ref block*))
                      (contains? block* :raw) (assoc :raw (:raw block*)))
       :custom {:type :custom
                :kind (or (:kind block*) :unknown)

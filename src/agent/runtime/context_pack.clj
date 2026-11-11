@@ -3,6 +3,7 @@
   (:require
    [agent.llm.messages :as llm-messages]
    [agent.runtime.schema :as runtime-schema]
+   [agent.runtime.messages :as runtime-messages]
    [agent.runtime.tokens :as tokens]
    [agent.util :as util]
    [clojure.string :as str]
@@ -168,11 +169,13 @@
         blocks* (mapv (fn [block]
                         (if (= :tool-result (:type block))
                           (assoc block :content
-                                 (if compact?
-                                   (str "[compacted tool result omitted; tool-call-id="
-                                        (:tool-call-id block)
-                                        "]")
-                                   (truncate (:content block) max-chars)))
+                                 (if-let [reference (:output-ref block)]
+                                   (runtime-messages/output-reference-text reference)
+                                   (if compact?
+                                     (str "[compacted tool result omitted; tool-call-id="
+                                          (:tool-call-id block)
+                                          "]")
+                                     (truncate (:content block) max-chars))))
                           block))
                       blocks)]
     (assoc message :content blocks*)))

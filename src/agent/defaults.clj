@@ -5,7 +5,7 @@
 (def llm-max-tokens 1024)
 
 (def chat-max-steps 64)
-(def tool-output-max-chars 8000)
+(def tool-output-max-chars 32000)
 
 (def broker-channel-buffer-size 64)
 (def broker-block-timeout-ms 1000)

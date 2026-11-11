@@ -21,6 +21,7 @@
    [agent.tools.common.skills :as skills-tool]
    [agent.tools.common.telegram :as telegram-tool]
    [agent.tools.common.todo :as todo-tool]
+   [agent.tools.common.tool-results :as tool-results]
    [agent.tools.common.wasm :as wasm-tool]
    [agent.tools.common.web :as web-tool]
    [agent.tools.core :as tools]
@@ -199,7 +200,7 @@
   "Build the production tool registry from a dependency map:
    {:cfg <:tools config> :event-sink :store :telemetry :memory-service
     :skills-registry :channel-adapters-cfg :system-control :observer :trace}"
-  [{:keys [cfg event-sink store memory-service skills-registry channel-adapters-cfg cron-service
+  [{:keys [cfg data-dir event-sink store memory-service skills-registry channel-adapters-cfg cron-service
            system-control observer trace magi-service note-llm-provider llm-provider
            user-profile-service telegram-reply-keyboards]
     telemetry-collector :telemetry}]
@@ -249,6 +250,9 @@
                                                    :result result}}))
                                      hook)})]
      (cond-> registry
+       data-dir
+       (tools/register-tool (tool-results/create-read-tool data-dir))
+
        (not= false (:enabled http-cfg))
        (tools/register-tool (http-tool/create-http-tool http-cfg))
 

@@ -111,6 +111,7 @@
   (system-health/with-component-health health-registry :tools
     #(tool-service/create-tool-registry
       {:cfg (:tools cfg)
+       :data-dir (get-in cfg [:iris :data-dir])
        :event-sink (:event-sink system)
        :store (:store system)
        :telemetry (:telemetry system)

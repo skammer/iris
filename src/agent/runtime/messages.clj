@@ -60,32 +60,38 @@
       (get-in receipt [:result :result-text])
       (mcp-result-text receipt)))
 
+(defn full-tool-output-content
+  "Render the complete model-facing result, before any size policy."
+  [receipt]
+  (if (str/starts-with? (or (some-> (:tool-name receipt) name) "") "memory")
+    (memory-tool-output-content receipt Long/MAX_VALUE)
+    (or (receipt-result-text receipt)
+        (json/generate-string
+         (select-keys receipt [:status :tool-name :result :reason :error-type :input])))))
+
+(defn output-reference-text [reference]
+  (str "Full result saved. Read with tool_result_read using result_id=" reference
+       " and offset=0; follow next_offset until eof=true. Do not repeat the original tool call."))
+
 (defn tool-output-content
   ([receipt] (tool-output-content receipt defaults/tool-output-max-chars))
   ([receipt tool-output-max-chars]
-   (if (str/starts-with? (or (some-> (:tool-name receipt) name) "") "memory")
-     (memory-tool-output-content receipt tool-output-max-chars)
-     (if-let [text (receipt-result-text receipt)]
-       (util/truncate text tool-output-max-chars
-                      #(str "\n\n[truncated " % " chars]"))
-       (let [payload (select-keys receipt
-                                  [:status :tool-name :result :reason :error-type :input])
-             text (json/generate-string payload)]
-         (if (> (count text) tool-output-max-chars)
-           (json/generate-string
-            (assoc (select-keys receipt [:status :tool-name :reason :error-type :input])
-                   :truncated true
-                   :original-chars (count text)
-                   :preview (subs text 0 tool-output-max-chars)))
-           text))))))
+   (let [text (full-tool-output-content receipt)]
+     (if (and (> (count text) tool-output-max-chars) (:output-ref receipt))
+       (str (output-reference-text (:output-ref receipt))
+            "\nTotal characters: " (count text) "\nPreview (incomplete):\n"
+            (subs text 0 (min 2000 tool-output-max-chars)))
+       ;; Never discard a result that has no durable recovery reference.
+       text))))
 
 (defn- tool-output-message [tool-call receipt tool-output-max-chars]
   {:role "tool"
-   :content [{:type :tool-result
-              :tool-call-id (:id tool-call)
-              :name (:name tool-call)
-              :status (:status receipt)
-              :content (tool-output-content receipt tool-output-max-chars)}]})
+   :content [(cond-> {:type :tool-result
+                      :tool-call-id (:id tool-call)
+                      :name (:name tool-call)
+                      :status (:status receipt)
+                      :content (tool-output-content receipt tool-output-max-chars)}
+               (:output-ref receipt) (assoc :output-ref (:output-ref receipt)))]})
 
 (defn tool-protocol-messages
   ([request-id content tool-calls receipts]
